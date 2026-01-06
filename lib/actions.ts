@@ -858,6 +858,30 @@ function mapClientFromDB(c: any): ClientProfile {
         authorizedAmount: c.authorized_amount ?? null,
         expirationDate: c.expiration_date || null,
         activeOrder: c.active_order, // Metadata matches structure
+        // New fields from dietfantasy
+        firstName: c.first_name || null,
+        lastName: c.last_name || null,
+        apt: c.apt || null,
+        city: c.city || null,
+        state: c.state || null,
+        zip: c.zip || null,
+        county: c.county || null,
+        clientIdExternal: c.client_id_external || null,
+        caseIdExternal: c.case_id_external || null,
+        medicaid: c.medicaid ?? false,
+        paused: c.paused ?? false,
+        complex: c.complex ?? false,
+        bill: c.bill ?? true,
+        delivery: c.delivery ?? true,
+        dislikes: c.dislikes || null,
+        latitude: c.latitude ?? null,
+        longitude: c.longitude ?? null,
+        lat: c.lat ?? null,
+        lng: c.lng ?? null,
+        geocodedAt: c.geocoded_at || null,
+        billings: c.billings || null,
+        visits: c.visits || null,
+        signToken: c.sign_token || null,
         createdAt: c.created_at,
         updatedAt: c.updated_at
     };
@@ -917,7 +941,31 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         service_type: data.serviceType,
         approved_meals_per_week: data.approvedMealsPerWeek || 0,
         authorized_amount: data.authorizedAmount ?? null,
-        expiration_date: data.expirationDate || null
+        expiration_date: data.expirationDate || null,
+        // New fields from dietfantasy
+        first_name: data.firstName || null,
+        last_name: data.lastName || null,
+        apt: data.apt || null,
+        city: data.city || null,
+        state: data.state || null,
+        zip: data.zip || null,
+        county: data.county || null,
+        client_id_external: data.clientIdExternal || null,
+        case_id_external: data.caseIdExternal || null,
+        medicaid: data.medicaid ?? false,
+        paused: data.paused ?? false,
+        complex: data.complex ?? false,
+        bill: data.bill ?? true,
+        delivery: data.delivery ?? true,
+        dislikes: data.dislikes || null,
+        latitude: data.latitude ?? null,
+        longitude: data.longitude ?? null,
+        lat: data.lat ?? null,
+        lng: data.lng ?? null,
+        geocoded_at: data.geocodedAt || null,
+        billings: data.billings ? JSON.stringify(data.billings) : null,
+        visits: data.visits ? JSON.stringify(data.visits) : null,
+        sign_token: data.signToken || null
     };
 
     // Save active_order if provided (ClientProfile component handles validation)
@@ -929,10 +977,12 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
 
     const id = generateUUID();
     const activeOrderJson = JSON.stringify(payload.active_order || {});
+    const billingsJson = payload.billings;
+    const visitsJson = payload.visits;
     
     await insert(
-        `INSERT INTO clients (id, full_name, email, address, phone_number, secondary_phone_number, navigator_id, end_date, screening_took_place, screening_signed, notes, status_id, service_type, approved_meals_per_week, authorized_amount, expiration_date, active_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, payload.full_name, payload.email, payload.address, payload.phone_number, payload.secondary_phone_number, payload.navigator_id, payload.end_date, payload.screening_took_place, payload.screening_signed, payload.notes, payload.status_id, payload.service_type, payload.approved_meals_per_week, payload.authorized_amount, payload.expiration_date, activeOrderJson]
+        `INSERT INTO clients (id, full_name, email, address, phone_number, secondary_phone_number, navigator_id, end_date, screening_took_place, screening_signed, notes, status_id, service_type, approved_meals_per_week, authorized_amount, expiration_date, active_order, first_name, last_name, apt, city, state, zip, county, client_id_external, case_id_external, medicaid, paused, complex, bill, delivery, dislikes, latitude, longitude, lat, lng, geocoded_at, billings, visits, sign_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, payload.full_name, payload.email, payload.address, payload.phone_number, payload.secondary_phone_number, payload.navigator_id, payload.end_date, payload.screening_took_place, payload.screening_signed, payload.notes, payload.status_id, payload.service_type, payload.approved_meals_per_week, payload.authorized_amount, payload.expiration_date, activeOrderJson, payload.first_name, payload.last_name, payload.apt, payload.city, payload.state, payload.zip, payload.county, payload.client_id_external, payload.case_id_external, payload.medicaid, payload.paused, payload.complex, payload.bill, payload.delivery, payload.dislikes, payload.latitude, payload.longitude, payload.lat, payload.lng, payload.geocoded_at, billingsJson, visitsJson, payload.sign_token]
     );
 
     const res = await queryOne<any>('SELECT * FROM clients WHERE id = ?', [id]);
@@ -1080,6 +1130,30 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
     if (data.authorizedAmount !== undefined) payload.authorized_amount = data.authorizedAmount ?? null;
     if (data.expirationDate !== undefined) payload.expiration_date = data.expirationDate || null;
     if (data.activeOrder) payload.active_order = data.activeOrder;
+    // New fields from dietfantasy
+    if (data.firstName !== undefined) payload.first_name = data.firstName || null;
+    if (data.lastName !== undefined) payload.last_name = data.lastName || null;
+    if (data.apt !== undefined) payload.apt = data.apt || null;
+    if (data.city !== undefined) payload.city = data.city || null;
+    if (data.state !== undefined) payload.state = data.state || null;
+    if (data.zip !== undefined) payload.zip = data.zip || null;
+    if (data.county !== undefined) payload.county = data.county || null;
+    if (data.clientIdExternal !== undefined) payload.client_id_external = data.clientIdExternal || null;
+    if (data.caseIdExternal !== undefined) payload.case_id_external = data.caseIdExternal || null;
+    if (data.medicaid !== undefined) payload.medicaid = data.medicaid;
+    if (data.paused !== undefined) payload.paused = data.paused;
+    if (data.complex !== undefined) payload.complex = data.complex;
+    if (data.bill !== undefined) payload.bill = data.bill;
+    if (data.delivery !== undefined) payload.delivery = data.delivery;
+    if (data.dislikes !== undefined) payload.dislikes = data.dislikes || null;
+    if (data.latitude !== undefined) payload.latitude = data.latitude ?? null;
+    if (data.longitude !== undefined) payload.longitude = data.longitude ?? null;
+    if (data.lat !== undefined) payload.lat = data.lat ?? null;
+    if (data.lng !== undefined) payload.lng = data.lng ?? null;
+    if (data.geocodedAt !== undefined) payload.geocoded_at = data.geocodedAt || null;
+    if (data.billings !== undefined) payload.billings = data.billings ? JSON.stringify(data.billings) : null;
+    if (data.visits !== undefined) payload.visits = data.visits ? JSON.stringify(data.visits) : null;
+    if (data.signToken !== undefined) payload.sign_token = data.signToken || null;
 
     payload.updated_at = new Date().toISOString();
 
@@ -1088,9 +1162,9 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
     
     for (const [key, value] of Object.entries(payload)) {
         if (value !== undefined) {
-            if (key === 'active_order') {
-                updates.push('active_order = ?');
-                params.push(JSON.stringify(value));
+            if (key === 'active_order' || key === 'billings' || key === 'visits') {
+                updates.push(`${key} = ?`);
+                params.push(typeof value === 'string' ? value : JSON.stringify(value));
             } else {
                 updates.push(`${key} = ?`);
                 params.push(value);

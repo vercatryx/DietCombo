@@ -36,6 +36,31 @@ export interface ClientProfile {
   // Order Configuration (Active Request)
   activeOrder?: OrderConfiguration;
 
+  // New fields from dietfantasy
+  firstName?: string | null;
+  lastName?: string | null;
+  apt?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  county?: string | null;
+  clientIdExternal?: string | null;
+  caseIdExternal?: string | null;
+  medicaid?: boolean;
+  paused?: boolean;
+  complex?: boolean;
+  bill?: boolean;
+  delivery?: boolean;
+  dislikes?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  lat?: number | null;
+  lng?: number | null;
+  geocodedAt?: string | null; // ISO Date string
+  billings?: any; // JSON data
+  visits?: any; // JSON data
+  signToken?: string | null;
+
   createdAt: string;
   updatedAt: string;
 }

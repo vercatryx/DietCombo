@@ -1544,6 +1544,34 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     <input className="input" value={formData.address || ''} onChange={e => setFormData({ ...formData, address: e.target.value })} />
                                 </div>
 
+                                {/* Address Components from dietfantasy */}
+                                <div className={styles.formGroup}>
+                                    <label className="label">Apt/Unit</label>
+                                    <input className="input" value={formData.apt || ''} onChange={e => setFormData({ ...formData, apt: e.target.value })} />
+                                    <div style={{ height: '1rem' }} /> {/* Spacer */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div>
+                                            <label className="label">City</label>
+                                            <input className="input" value={formData.city || ''} onChange={e => setFormData({ ...formData, city: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className="label">State</label>
+                                            <input className="input" value={formData.state || ''} onChange={e => setFormData({ ...formData, state: e.target.value })} maxLength={2} style={{ textTransform: 'uppercase' }} />
+                                        </div>
+                                    </div>
+                                    <div style={{ height: '1rem' }} /> {/* Spacer */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div>
+                                            <label className="label">ZIP Code</label>
+                                            <input className="input" value={formData.zip || ''} onChange={e => setFormData({ ...formData, zip: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className="label">County</label>
+                                            <input className="input" value={formData.county || ''} onChange={e => setFormData({ ...formData, county: e.target.value })} />
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <div className={styles.formGroup}>
                                     <label className="label">Phone</label>
                                     <input className="input" value={formData.phoneNumber || ''} onChange={e => setFormData({ ...formData, phoneNumber: e.target.value })} />
@@ -1553,6 +1581,68 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     <div style={{ height: '1rem' }} /> {/* Spacer */}
                                     <label className="label">Email</label>
                                     <input className="input" value={formData.email || ''} onChange={e => setFormData({ ...formData, email: e.target.value })} />
+                                </div>
+
+                                {/* External IDs from dietfantasy */}
+                                <div className={styles.formGroup}>
+                                    <label className="label">Client ID (External)</label>
+                                    <input className="input" value={formData.clientIdExternal || ''} onChange={e => setFormData({ ...formData, clientIdExternal: e.target.value })} />
+                                    <div style={{ height: '1rem' }} /> {/* Spacer */}
+                                    <label className="label">Case ID (External)</label>
+                                    <input className="input" value={formData.caseIdExternal || ''} onChange={e => setFormData({ ...formData, caseIdExternal: e.target.value })} />
+                                </div>
+
+                                {/* Status Flags from dietfantasy */}
+                                <div className={styles.formGroup}>
+                                    <label className="label">Status Flags</label>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '0.5rem' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={formData.medicaid ?? false}
+                                                onChange={e => setFormData({ ...formData, medicaid: e.target.checked })}
+                                            />
+                                            <span>Medicaid</span>
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={formData.paused ?? false}
+                                                onChange={e => setFormData({ ...formData, paused: e.target.checked })}
+                                            />
+                                            <span>Paused</span>
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={formData.complex ?? false}
+                                                onChange={e => setFormData({ ...formData, complex: e.target.checked })}
+                                            />
+                                            <span>Complex</span>
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={formData.bill ?? true}
+                                                onChange={e => setFormData({ ...formData, bill: e.target.checked })}
+                                            />
+                                            <span>Bill</span>
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={formData.delivery ?? true}
+                                                onChange={e => setFormData({ ...formData, delivery: e.target.checked })}
+                                            />
+                                            <span>Delivery</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {/* Dietary Preferences from dietfantasy */}
+                                <div className={styles.formGroup}>
+                                    <label className="label">Dislikes / Dietary Restrictions</label>
+                                    <textarea className="input" style={{ height: '80px' }} value={formData.dislikes || ''} onChange={e => setFormData({ ...formData, dislikes: e.target.value })} placeholder="Enter any food dislikes or dietary restrictions" />
                                 </div>
 
                                 <div className={styles.formGroup}>
@@ -3602,6 +3692,30 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     approvedMealsPerWeek: formData.approvedMealsPerWeek ?? 21,
                     authorizedAmount: formData.authorizedAmount ?? null,
                     expirationDate: formData.expirationDate ?? null,
+                    // New fields from dietfantasy
+                    firstName: formData.firstName ?? null,
+                    lastName: formData.lastName ?? null,
+                    apt: formData.apt ?? null,
+                    city: formData.city ?? null,
+                    state: formData.state ?? null,
+                    zip: formData.zip ?? null,
+                    county: formData.county ?? null,
+                    clientIdExternal: formData.clientIdExternal ?? null,
+                    caseIdExternal: formData.caseIdExternal ?? null,
+                    medicaid: formData.medicaid ?? false,
+                    paused: formData.paused ?? false,
+                    complex: formData.complex ?? false,
+                    bill: formData.bill ?? true,
+                    delivery: formData.delivery ?? true,
+                    dislikes: formData.dislikes ?? null,
+                    latitude: formData.latitude ?? null,
+                    longitude: formData.longitude ?? null,
+                    lat: formData.lat ?? null,
+                    lng: formData.lng ?? null,
+                    geocodedAt: formData.geocodedAt ?? null,
+                    billings: formData.billings ?? null,
+                    visits: formData.visits ?? null,
+                    signToken: formData.signToken ?? null,
                     activeOrder: undefined // Create without order first
                 };
 
@@ -3645,6 +3759,30 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     approvedMealsPerWeek: formData.approvedMealsPerWeek ?? 21,
                     authorizedAmount: formData.authorizedAmount ?? null,
                     expirationDate: formData.expirationDate ?? null,
+                    // New fields from dietfantasy
+                    firstName: formData.firstName ?? null,
+                    lastName: formData.lastName ?? null,
+                    apt: formData.apt ?? null,
+                    city: formData.city ?? null,
+                    state: formData.state ?? null,
+                    zip: formData.zip ?? null,
+                    county: formData.county ?? null,
+                    clientIdExternal: formData.clientIdExternal ?? null,
+                    caseIdExternal: formData.caseIdExternal ?? null,
+                    medicaid: formData.medicaid ?? false,
+                    paused: formData.paused ?? false,
+                    complex: formData.complex ?? false,
+                    bill: formData.bill ?? true,
+                    delivery: formData.delivery ?? true,
+                    dislikes: formData.dislikes ?? null,
+                    latitude: formData.latitude ?? null,
+                    longitude: formData.longitude ?? null,
+                    lat: formData.lat ?? null,
+                    lng: formData.lng ?? null,
+                    geocodedAt: formData.geocodedAt ?? null,
+                    billings: formData.billings ?? null,
+                    visits: formData.visits ?? null,
+                    signToken: formData.signToken ?? null,
                     activeOrder: hasOrderData ? prepareActiveOrder() : undefined
                 };
 
