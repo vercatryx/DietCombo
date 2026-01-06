@@ -1015,27 +1015,25 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
 }
 
 export async function getRegularClients() {
-    // Get all clients that are not dependents (parent_client_id is NULL)
-    // If the column doesn't exist yet (migration not run), return all clients
-    const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .is('parent_client_id', null)
-        .order('full_name');
+    try {
+        // Get all clients that are not dependents (parent_client_id is NULL)
+        // If the column doesn't exist yet (migration not run), return all clients
+        const data = await query<any>(
+            'SELECT * FROM clients WHERE parent_client_id IS NULL ORDER BY full_name'
+        );
 
-    if (error) {
+        return data.map(mapClientFromDB);
+    } catch (error: any) {
         // If error (e.g., column doesn't exist), fall back to getting all clients
         // This handles the case where the migration hasn't been run yet
-        const { data: allData, error: allError } = await supabase
-            .from('clients')
-            .select('*')
-            .order('full_name');
-
-        if (allError) return [];
-        return allData.map(mapClientFromDB);
+        try {
+            const allData = await query<any>('SELECT * FROM clients ORDER BY full_name');
+            return allData.map(mapClientFromDB);
+        } catch (allError) {
+            console.error('Error fetching clients:', allError);
+            return [];
+        }
     }
-
-    return data.map(mapClientFromDB);
 }
 
 export async function getDependentsByParentId(parentClientId: string) {
