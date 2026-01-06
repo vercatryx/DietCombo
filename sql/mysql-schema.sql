@@ -133,14 +133,46 @@ CREATE TABLE IF NOT EXISTS admins (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- Clients
+-- Clients (merged with User fields from dietfantasy)
 CREATE TABLE IF NOT EXISTS clients (
     id VARCHAR(36) PRIMARY KEY,
     full_name VARCHAR(255) NOT NULL,
+    -- Additional name fields from dietfantasy (can be derived from full_name or stored separately)
+    first_name VARCHAR(255) NULL,
+    last_name VARCHAR(255) NULL,
     email VARCHAR(255) NULL,
     address TEXT NULL,
+    -- Address components from dietfantasy
+    apt VARCHAR(50) NULL,
+    city VARCHAR(100) NULL,
+    state VARCHAR(2) NULL,
+    zip VARCHAR(10) NULL,
+    county VARCHAR(100) NULL,
     phone_number VARCHAR(255) NULL,
     secondary_phone_number VARCHAR(255) NULL,
+    -- External identifiers from dietfantasy
+    client_id_external VARCHAR(100) NULL,
+    case_id_external VARCHAR(100) NULL,
+    -- Status flags from dietfantasy
+    medicaid BOOLEAN DEFAULT FALSE,
+    paused BOOLEAN DEFAULT FALSE,
+    complex BOOLEAN DEFAULT FALSE,
+    bill BOOLEAN DEFAULT TRUE,
+    delivery BOOLEAN DEFAULT TRUE,
+    -- Dietary preferences
+    dislikes TEXT NULL,
+    -- Geocoding fields from dietfantasy
+    latitude DOUBLE NULL,
+    longitude DOUBLE NULL,
+    lat DOUBLE NULL,
+    lng DOUBLE NULL,
+    geocoded_at TIMESTAMP NULL,
+    -- JSON data fields from dietfantasy
+    billings JSON NULL,
+    visits JSON NULL,
+    -- Signature token for digital signatures
+    sign_token VARCHAR(255) NULL UNIQUE,
+    -- Original DietCombo fields
     navigator_id VARCHAR(36) NULL,
     end_date DATE NULL,
     screening_took_place BOOLEAN DEFAULT FALSE,
@@ -159,7 +191,10 @@ CREATE TABLE IF NOT EXISTS clients (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (navigator_id) REFERENCES navigators(id) ON DELETE SET NULL,
     FOREIGN KEY (status_id) REFERENCES client_statuses(id) ON DELETE SET NULL,
-    FOREIGN KEY (parent_client_id) REFERENCES clients(id) ON DELETE SET NULL
+    FOREIGN KEY (parent_client_id) REFERENCES clients(id) ON DELETE SET NULL,
+    INDEX idx_clients_client_id_external (client_id_external),
+    INDEX idx_clients_case_id_external (case_id_external),
+    INDEX idx_clients_sign_token (sign_token)
 );
 
 -- Orders
@@ -395,6 +430,116 @@ CREATE TABLE IF NOT EXISTS passwordless_codes (
     INDEX idx_passwordless_codes_email (email)
 );
 
+-- Schedule (from dietfantasy - delivery schedule per client)
+CREATE TABLE IF NOT EXISTS schedules (
+    id VARCHAR(36) PRIMARY KEY,
+    client_id VARCHAR(36) NOT NULL UNIQUE,
+    monday BOOLEAN DEFAULT TRUE,
+    tuesday BOOLEAN DEFAULT TRUE,
+    wednesday BOOLEAN DEFAULT TRUE,
+    thursday BOOLEAN DEFAULT TRUE,
+    friday BOOLEAN DEFAULT TRUE,
+    saturday BOOLEAN DEFAULT TRUE,
+    sunday BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+    INDEX idx_schedules_client_id (client_id)
+);
+
+-- Stops (from dietfantasy - delivery stops for routing)
+CREATE TABLE IF NOT EXISTS stops (
+    id VARCHAR(36) PRIMARY KEY,
+    day VARCHAR(20) NOT NULL,
+    client_id VARCHAR(36) NULL,
+    `order` INT NULL,
+    name VARCHAR(255) NOT NULL,
+    address VARCHAR(500) NOT NULL,
+    apt VARCHAR(50) NULL,
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(2) NOT NULL,
+    zip VARCHAR(10) NOT NULL,
+    phone VARCHAR(20) NULL,
+    dislikes TEXT NULL,
+    lat DOUBLE NULL,
+    lng DOUBLE NULL,
+    completed BOOLEAN DEFAULT FALSE,
+    proof_url VARCHAR(500) NULL,
+    assigned_driver_id VARCHAR(36) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL,
+    INDEX idx_stops_day (day),
+    INDEX idx_stops_client_id (client_id)
+);
+
+-- Drivers (from dietfantasy - driver management)
+CREATE TABLE IF NOT EXISTS drivers (
+    id VARCHAR(36) PRIMARY KEY,
+    day VARCHAR(20) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    color VARCHAR(7) NULL,
+    stop_ids JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_drivers_day (day)
+);
+
+-- Routes (from dietfantasy - route configurations)
+CREATE TABLE IF NOT EXISTS routes (
+    id VARCHAR(36) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    color VARCHAR(7) NULL,
+    stop_ids JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Route Runs (from dietfantasy - historical route snapshots)
+CREATE TABLE IF NOT EXISTS route_runs (
+    id VARCHAR(36) PRIMARY KEY,
+    day VARCHAR(20) NOT NULL,
+    snapshot JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_route_runs_day (day),
+    INDEX idx_route_runs_created_at (created_at)
+);
+
+-- Signatures (from dietfantasy - digital signatures)
+CREATE TABLE IF NOT EXISTS signatures (
+    id VARCHAR(36) PRIMARY KEY,
+    client_id VARCHAR(36) NOT NULL,
+    slot INT NOT NULL,
+    strokes JSON NOT NULL,
+    signed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ip VARCHAR(45) NULL,
+    user_agent VARCHAR(500) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_client_slot (client_id, slot),
+    INDEX idx_signatures_client_id (client_id)
+);
+
+-- City Colors (from dietfantasy - city color coding for maps)
+CREATE TABLE IF NOT EXISTS city_colors (
+    id VARCHAR(36) PRIMARY KEY,
+    city VARCHAR(100) NOT NULL UNIQUE,
+    color VARCHAR(7) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Settings (from dietfantasy - key-value configuration storage)
+-- Note: This is separate from app_settings which has specific fields
+CREATE TABLE IF NOT EXISTS settings (
+    id VARCHAR(36) PRIMARY KEY,
+    `key` VARCHAR(255) NOT NULL UNIQUE,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_settings_key (`key`)
+);
+
 -- Create indexes for better performance
 CREATE INDEX idx_orders_client_id ON orders(client_id);
 CREATE INDEX idx_orders_status ON orders(status);
@@ -407,6 +552,11 @@ CREATE INDEX idx_order_vendor_selections_order_id ON order_vendor_selections(ord
 CREATE INDEX idx_order_items_vendor_selection_id ON order_items(vendor_selection_id);
 CREATE INDEX idx_form_submissions_token ON form_submissions(token);
 CREATE INDEX idx_form_submissions_client_id ON form_submissions(client_id);
+-- Additional indexes for new tables from dietfantasy
+CREATE INDEX idx_stops_completed ON stops(completed);
+CREATE INDEX idx_drivers_name ON drivers(name);
+CREATE INDEX idx_routes_name ON routes(name);
+CREATE INDEX idx_signatures_signed_at ON signatures(signed_at);
 
 -- Insert default app settings
 INSERT INTO app_settings (id, weekly_cutoff_day, weekly_cutoff_time, enable_passwordless_login)
