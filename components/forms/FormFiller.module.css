@@ -1,0 +1,390 @@
+.container {
+    max-width: 42rem;
+    /* max-w-2xl */
+    margin: 0 auto;
+    padding-bottom: 5rem;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+
+.backButton {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    transition: color 0.2s;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.backButton:hover {
+    color: var(--text-primary);
+}
+
+.headerCard {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    /* border-white/5 */
+    border-top: 8px solid var(--color-primary);
+    /* blue-500 */
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-lg);
+}
+
+.title {
+    font-size: 2.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+    line-height: 1.2;
+}
+
+.description {
+    color: var(--text-secondary);
+}
+
+.error {
+    background-color: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.2);
+    color: var(--color-danger);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.formGrid {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.questionCard {
+    background-color: var(--bg-surface);
+    padding: 1.5rem;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow-sm);
+    transition: all 0.3s;
+}
+
+.questionCard:focus-within {
+    border-color: var(--color-primary);
+    /* blue-500/50 */
+    box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.3);
+}
+
+.questionLabel {
+    display: block;
+    font-size: 1.125rem;
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+    /* gray-200 */
+    transition: color 0.2s;
+}
+
+.questionCard:focus-within .questionLabel {
+    color: var(--text-primary);
+    /* Keep black for contrast */
+}
+
+.questionNumber {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    font-weight: 400;
+    margin-right: 0.5rem;
+    vertical-align: top;
+}
+
+.textInput {
+    width: 100%;
+    background-color: var(--bg-panel);
+    border: none;
+    border-bottom: 2px solid var(--border-color);
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    color: var(--text-primary);
+    font-size: 1rem;
+    outline: none;
+    box-sizing: border-box;
+    /* Crucial for width: 100% */
+    transition: all 0.2s;
+}
+
+.textInput:focus {
+    border-bottom-color: var(--color-primary);
+    background-color: var(--bg-surface-hover);
+}
+
+.radioGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.radioLabel {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background-color 0.2s;
+}
+
+.radioLabel:hover {
+    background-color: var(--bg-surface-hover);
+    border-color: var(--border-color);
+}
+
+.radioInputWrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.radioInput {
+    appearance: none;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 50%;
+    border: 2px solid var(--text-secondary);
+    transition: all 0.2s;
+    background-color: transparent;
+}
+
+.radioInput:checked {
+    border-color: var(--color-primary);
+    background-color: var(--color-primary);
+}
+
+.radioDot {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background-color: white;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+}
+
+.radioInput:checked+.radioDot {
+    opacity: 1;
+}
+
+.optionText {
+    color: var(--text-secondary);
+    /* gray-300 */
+}
+
+.optionTextSelected {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.conditionalTextContainer {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.conditionalTextInput {
+    width: 100%;
+    background-color: var(--bg-panel);
+    border: none;
+    border-bottom: 2px solid var(--border-color);
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    outline: none;
+    box-sizing: border-box;
+    transition: all 0.2s;
+}
+
+.conditionalTextInput:focus {
+    border-bottom-color: var(--color-primary);
+    background-color: var(--bg-surface-hover);
+}
+
+.stickyFooter {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: var(--glass-bg);
+    backdrop-filter: blur(var(--backdrop-blur));
+    border-top: 1px solid var(--border-color);
+    padding: 1rem;
+    z-index: 40;
+}
+
+.footerContent {
+    max-width: 42rem;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.progressContainer {
+    flex: 1;
+    display: none;
+}
+
+@media (min-width: 640px) {
+    .progressContainer {
+        display: block;
+    }
+}
+
+.progressLabels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+.track {
+    height: 0.375rem;
+    width: 100%;
+    background-color: var(--bg-surface-hover);
+    border-radius: 9999px;
+    overflow: hidden;
+}
+
+.bar {
+    height: 100%;
+    background-color: var(--color-primary);
+    transition: width 0.5s ease-out;
+}
+
+.submitBtn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 2rem;
+    background-color: var(--color-primary);
+    /* blue-600 */
+    color: #000000;
+    font-weight: 600;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    box-shadow: var(--shadow-md);
+    transition: all 0.2s;
+}
+
+.submitBtn:hover {
+    background-color: var(--color-primary-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+.submitBtn:active {
+    transform: translateY(0);
+}
+
+.submitBtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Success View */
+.successContainer {
+    max-width: 36rem;
+    margin: 0 auto;
+    min-height: 50vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    animation: fadeIn 0.5s ease-out;
+}
+
+.successIconWrapper {
+    width: 5rem;
+    height: 5rem;
+    background-color: rgba(22, 163, 74, 0.1);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 1rem;
+}
+
+.successTitle {
+    font-size: 1.875rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+
+.successText {
+    color: var(--text-secondary);
+    margin-bottom: 2rem;
+}
+
+.returnBtn {
+    padding: 0.75rem 1.5rem;
+    background-color: var(--bg-surface-hover);
+    color: var(--text-primary);
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.returnBtn:hover {
+    background-color: var(--border-color-light);
+    border-color: var(--border-color-light);
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.spinner {
+    width: 1.25rem;
+    height: 1.25rem;
+    border: 2px solid rgba(226, 232, 240, 0.5);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}

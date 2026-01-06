@@ -1,0 +1,423 @@
+.container {
+    width: 100%;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.headerActions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-lg);
+}
+
+.title {
+    font-size: 1.875rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.viewToggle {
+    display: flex;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 2px;
+}
+
+.viewBtn {
+    background: none;
+    border: none;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.viewBtn:hover {
+    color: var(--text-primary);
+}
+
+.viewBtnActive {
+    background-color: var(--color-primary);
+    color: #000000;
+    box-shadow: var(--shadow-sm);
+    font-weight: 600;
+}
+
+.filters {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.searchBox {
+    position: relative;
+    max-width: 400px;
+}
+
+.searchIcon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
+}
+
+.list {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    /* Enable horizontal scroll */
+}
+
+.listHeader {
+    display: flex;
+    padding: var(--spacing-md);
+    background-color: var(--bg-surface-hover);
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    min-width: 1400px;
+    /* Ensure wide enough for all columns */
+    gap: 1rem;
+    /* Space between columns */
+}
+
+.clientRow {
+    display: flex;
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+    align-items: center;
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: background-color 0.2s;
+    min-width: 1400px;
+    /* Match header width */
+    white-space: nowrap;
+    /* Keep on one line */
+    gap: 1rem;
+    /* Space between columns */
+}
+
+.clientRow:last-child {
+    border-bottom: none;
+}
+
+.clientRow:hover {
+    background-color: var(--bg-app);
+}
+
+.clientRowDependent {
+    background-color: var(--bg-surface-hover);
+    padding-left: calc(var(--spacing-md) + 24px);
+    border-left: 3px solid var(--color-primary);
+}
+
+.empty {
+    padding: var(--spacing-xl);
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+/* Loading State */
+.loadingContainer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem;
+    color: var(--text-secondary);
+    gap: 1rem;
+}
+
+/* Modal */
+.createModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+}
+
+.createCard {
+    position: relative;
+    z-index: 51;
+    background-color: var(--bg-panel);
+    padding: var(--spacing-xl);
+    border-radius: var(--radius-lg);
+    width: 400px;
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border-color);
+}
+
+.createCard h3 {
+    margin-bottom: var(--spacing-md);
+    font-size: 1.25rem;
+}
+
+.formGroup {
+    margin-bottom: var(--spacing-md);
+}
+
+.modalActions {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-top: var(--spacing-md);
+    justify-content: flex-end;
+}
+
+.profileModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-md);
+}
+
+.profileCard {
+    position: relative;
+    z-index: 101;
+    background-color: var(--bg-app);
+    width: 95%;
+    max-width: 1000px;
+    height: 90vh;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    padding: var(--spacing-xs);
+}
+
+/* Label and input overrides for modal */
+.profileCard :global(.label) {
+    margin-bottom: 0.25rem !important;
+}
+
+.profileCard :global(.input) {
+    padding: 0.5rem 0.75rem !important;
+}
+
+.redTab {
+    width: 4px;
+    height: 20px;
+    background-color: var(--color-danger);
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+/* Recent Orders Section */
+.weekOrdersSection {
+    margin-bottom: var(--spacing-xl);
+}
+
+.weekOrdersHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.weekOrdersTitle {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.weekOrdersCount {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.refreshIndicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: #422006;
+    /* Dark brown/black for contrast on yellow */
+    background-color: rgba(253, 235, 35, 0.2);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* Column Header Styles */
+.columnHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.columnHeader>span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.headerButtons {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sortButton {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.sortButton:hover {
+    background-color: var(--bg-surface-hover);
+    color: var(--text-primary);
+}
+
+.sortButtonActive {
+    color: #000000;
+    /* Black */
+    background-color: rgba(253, 235, 35, 0.4);
+    /* Stronger yellow tint */
+}
+
+.sortButtonActive:hover {
+    background-color: rgba(253, 235, 35, 0.5);
+}
+
+.filterDropdown {
+    position: relative;
+}
+
+.filterButton {
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.filterButton:hover {
+    background-color: var(--bg-surface-hover);
+    color: var(--text-primary);
+}
+
+.filterButtonActive {
+    color: #000000;
+    background-color: rgba(253, 235, 35, 0.4);
+}
+
+.filterButtonActive:hover {
+    background-color: rgba(253, 235, 35, 0.5);
+}
+
+.filterMenu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    min-width: 160px;
+    max-width: 250px;
+    max-height: 300px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+}
+
+.filterOption {
+    background: none;
+    border: none;
+    padding: 8px 12px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    border-radius: var(--radius-sm);
+    transition: background-color 0.2s;
+}
+
+.filterOption:hover {
+    background-color: var(--bg-surface-hover);
+}
+
+.filterOptionActive {
+    background-color: rgba(253, 235, 35, 0.2);
+    color: #000000;
+    font-weight: 600;
+}
+
+.filterOptionActive:hover {
+    background-color: rgba(253, 235, 35, 0.3);
+}
+
+.clearButton {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.clearButton:hover {
+    color: var(--text-primary);
+}

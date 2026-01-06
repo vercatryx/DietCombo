@@ -1,0 +1,131 @@
+.container {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-lg);
+}
+
+.header {
+    margin-bottom: var(--spacing-lg);
+}
+
+.title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.list {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: var(--spacing-xl);
+    border: 1px solid var(--border-color);
+    /* Add border around list */
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    /* Clip corners */
+}
+
+.listHeader {
+    display: flex;
+    padding: 0.75rem 1rem;
+    background-color: var(--bg-surface-hover);
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.listHeader>span:first-child {
+    flex: 1;
+}
+
+.listHeader>span:nth-child(2) {
+    width: 150px;
+}
+
+.item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem;
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+}
+
+.item:last-child {
+    border-bottom: none;
+}
+
+.statusInfo {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.statusName {
+    font-weight: 500;
+}
+
+.toggleLabel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.toggleLabel input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+}
+
+.actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+}
+
+.iconBtn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    transition: all 0.2s;
+    display: flex;
+}
+
+.iconBtn:hover {
+    background-color: var(--bg-surface-hover);
+    color: var(--text-primary);
+}
+
+.danger:hover {
+    color: var(--color-danger);
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+.editRow {
+    display: flex;
+    width: 100%;
+    gap: var(--spacing-md);
+    align-items: center;
+}
+
+.addForm {
+    display: flex;
+    gap: var(--spacing-md);
+    padding-top: var(--spacing-lg);
+    border-top: 1px solid var(--border-color);
+    /* Keep separate or merge? merge might be nicer but this is fine */
+}

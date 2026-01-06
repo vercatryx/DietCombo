@@ -1,0 +1,69 @@
+{
+  "clients": [
+    {
+      "fullName": "Auto Client",
+      "address": "",
+      "phoneNumber": "",
+      "navigatorId": "",
+      "endDate": "",
+      "screeningTookPlace": false,
+      "screeningSigned": false,
+      "notes": "",
+      "statusId": "1",
+      "serviceType": "Food",
+      "id": "5f40a8a2-b559-45b8-9848-cad3e6909c68",
+      "createdAt": "2025-12-22T23:31:57.833Z",
+      "updatedAt": "2025-12-22T23:31:57.833Z"
+    }
+  ],
+  "statuses": [
+    {
+      "id": "1",
+      "name": "Waiting for assessment",
+      "isSystemDefault": true
+    },
+    {
+      "id": "2",
+      "name": "Assessment completed but not eligible",
+      "isSystemDefault": true
+    },
+    {
+      "id": "3",
+      "name": "Case opened",
+      "isSystemDefault": true
+    },
+    {
+      "id": "2f4b7681-962e-450b-95ac-430b4f7cb436",
+      "name": "Active Test",
+      "isSystemDefault": false
+    }
+  ],
+  "vendors": [
+    {
+      "name": "Auto Vendor",
+      "isActive": true,
+      "deliveryDays": [
+        "Monday"
+      ],
+      "allowsMultipleDeliveries": false,
+      "serviceType": "Food",
+      "id": "5c1a4f32-7f24-4614-9872-1483fdb69d03"
+    }
+  ],
+  "menuItems": [
+    {
+      "name": "Apple",
+      "value": 5,
+      "isActive": true,
+      "vendorId": "5c1a4f32-7f24-4614-9872-1483fdb69d03",
+      "id": "560bfb48-4680-476f-9068-8063594271bd"
+    }
+  ],
+  "boxTypes": [],
+  "navigators": [],
+  "deliveryHistory": [],
+  "settings": {
+    "weeklyCutoffDay": "Friday",
+    "weeklyCutoffTime": "17:00"
+  }
+}

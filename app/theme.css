@@ -1,0 +1,75 @@
+:root {
+    /* 
+    Brand Color Configuration 
+    Uncomment the preferred shade or add your own to experiment.
+  */
+
+    /* Option 1: Original Bright Yellow (Highlighter) */
+    /* --color-brand: #fdeb23; */
+
+    /* Option 2: Slightly Darker Yellow (Current Selection - Yellow 400) */
+    --color-brand: #facc15;
+
+    /* Option 3: Rich Amber (Yellow 500 - More Golden) */
+    /* --color-brand: #eab308; */
+
+    /* Option 4: Gold (Yellow 600 - Darker) */
+    /* --color-brand: #ca8a04; */
+
+
+    /* 
+    System Colors derived from Brand Color 
+  */
+    --color-primary: var(--color-brand);
+
+    /* Hover state: One shade darker than the brand color */
+    --color-primary-hover: #eab308;
+
+
+    /* 
+    Other Theme Colors 
+  */
+    --bg-app: #f8fafc;
+    /* Slate 50 */
+    --bg-surface: #ffffff;
+    --bg-surface-hover: #f1f5f9;
+    /* Slate 100 */
+    --bg-panel: #ffffff;
+
+    --text-primary: #020617;
+    /* Slate 950 - Almost Black */
+    --text-secondary: #334155;
+    /* Slate 700 */
+    --text-tertiary: #64748b;
+    /* Slate 500 */
+
+    --color-accent: #4f46e5;
+    /* Indigo */
+    --color-danger: #ef4444;
+    /* Red */
+    --color-success: #15803d;
+    /* Dark Emerald */
+    --color-warning: #b45309;
+    /* Dark Amber */
+
+    --border-color: #cbd5e1;
+    /* Slate 300 */
+    --border-color-light: #e2e8f0;
+    /* Slate 200 */
+
+    /* 
+    Effects & Spacing 
+  */
+    --glass-bg: rgba(255, 255, 255, 0.9);
+    --glass-border: rgba(0, 0, 0, 0.1);
+    --backdrop-blur: 12px;
+
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+    --radius-xl: 1rem;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
