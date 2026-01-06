@@ -1,59 +1,36 @@
 'use server';
 
-import { createClient } from '@supabase/supabase-js';
+import { query, queryOne, insert, execute, generateUUID } from './mysql';
 import { FormSchema, Question, FilledForm, Answer, QuestionType } from './form-types';
 import { revalidatePath } from 'next/cache';
-
-// Initialize a supabase client with the Service Role Key to bypass RLS.
-// This is crucial for admin actions (saving form) and ensuring public access (getting form) works reliably regardless of RLS complexity.
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-// Use a getter to potentially handle missing key gracefully or throw
-const getAdminClient = () => {
-    if (!supabaseServiceKey) {
-        console.error("SUPABASE_SERVICE_ROLE_KEY is missing. Falling back to anon key, which may fail due to RLS.");
-        // Fallback to anon key if service role is missing, though this likely won't work for admin writes if RLS is strict.
-        return createClient(supabaseUrl, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
-    }
-    return createClient(supabaseUrl, supabaseServiceKey);
-};
-
-const supabase = getAdminClient();
 
 // --- FORM ACTIONS ---
 
 export async function saveForm(schema: FormSchema) {
     try {
         // 1. Insert Form
-        const { data: formData, error: formError } = await supabase
-            .from('forms')
-            .insert({
-                title: schema.title,
-                description: 'Created via Form Builder' // We could add a description field later
-            })
-            .select()
-            .single();
-
-        if (formError) throw formError;
-
-        const formId = formData.id;
+        const formId = generateUUID();
+        await insert(
+            'INSERT INTO forms (id, title, description) VALUES (?, ?, ?)',
+            [formId, schema.title, 'Created via Form Builder']
+        );
 
         // 2. Insert Questions
-        const questionsToInsert = schema.questions.map((q, index) => ({
-            form_id: formId,
-            text: q.text,
-            type: q.type,
-            options: q.options ? JSON.stringify(q.options) : null,
-            conditional_text_inputs: q.conditionalTextInputs ? JSON.stringify(q.conditionalTextInputs) : null,
-            "order": index
-        }));
-
-        const { error: questionsError } = await supabase
-            .from('questions')
-            .insert(questionsToInsert);
-
-        if (questionsError) throw questionsError;
+        for (const [index, q] of schema.questions.entries()) {
+            const questionId = generateUUID();
+            await insert(
+                'INSERT INTO questions (id, form_id, text, type, options, conditional_text_inputs, `order`) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [
+                    questionId,
+                    formId,
+                    q.text,
+                    q.type,
+                    q.options ? JSON.stringify(q.options) : null,
+                    q.conditionalTextInputs ? JSON.stringify(q.conditionalTextInputs) : null,
+                    index
+                ]
+            );
+        }
 
         revalidatePath('/forms');
         return { success: true, formId };
@@ -65,12 +42,7 @@ export async function saveForm(schema: FormSchema) {
 
 export async function getForms() {
     try {
-        const { data, error } = await supabase
-            .from('forms')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-        if (error) throw error;
+        const data = await query<any>('SELECT * FROM forms ORDER BY created_at DESC');
         return { success: true, data };
     } catch (error: any) {
         console.error('Error fetching forms:', error);
@@ -81,22 +53,14 @@ export async function getForms() {
 export async function getForm(formId: string): Promise<{ success: boolean; data?: FormSchema; error?: string }> {
     try {
         // Fetch form details
-        const { data: form, error: formError } = await supabase
-            .from('forms')
-            .select('*')
-            .eq('id', formId)
-            .single();
-
-        if (formError) throw formError;
+        const form = await queryOne<any>('SELECT * FROM forms WHERE id = ?', [formId]);
+        if (!form) throw new Error('Form not found');
 
         // Fetch questions
-        const { data: questionsData, error: questionsError } = await supabase
-            .from('questions')
-            .select('*')
-            .eq('form_id', formId)
-            .order('"order"', { ascending: true }); // Quote "order" because it's a reserved word
-
-        if (questionsError) throw questionsError;
+        const questionsData = await query<any>(
+            'SELECT * FROM questions WHERE form_id = ? ORDER BY `order` ASC',
+            [formId]
+        );
 
         // Map to FormSchema
         const questions: Question[] = questionsData.map((q: any) => ({

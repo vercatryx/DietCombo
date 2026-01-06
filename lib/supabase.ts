@@ -1,7 +1,5 @@
+// Supabase has been removed - using MySQL instead
+// This file is kept for backward compatibility but should not be used
+// All database operations should use lib/mysql.ts instead
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = null as any;
