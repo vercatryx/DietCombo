@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, Truck, Utensils, Box as BoxIcon, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, Store, History, PlayCircle, AlertCircle, RefreshCw, Mail, ChevronDown, ChevronUp } from 'lucide-react';
+import { Users, Truck, Utensils, Box as BoxIcon, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, Store, History, PlayCircle, AlertCircle, RefreshCw, Mail, ChevronDown, ChevronUp, Route } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -15,6 +15,7 @@ const navItems = [
     { label: 'Client Dashboard', href: '/clients', icon: Users },
     { label: 'My History', href: '/navigator-history', icon: History, role: 'navigator' },
     { label: 'Vendors', href: '/vendors', icon: Store },
+    { label: 'Routes', href: '/routes', icon: Route },
     { label: 'Admin Control', href: '/admin', icon: Settings },
 ];
 

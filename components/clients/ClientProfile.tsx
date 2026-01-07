@@ -1833,7 +1833,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     <input
                                         type="date"
                                         className="input"
-                                        value={formData.expirationDate ? (formData.expirationDate.includes('T') ? formData.expirationDate.split('T')[0] : formData.expirationDate) : ''}
+                                        value={(() => {
+                                            const date = formData.expirationDate;
+                                            if (!date) return '';
+                                            if (typeof date === 'string') {
+                                                return date.includes('T') ? date.split('T')[0] : date;
+                                            }
+                                            // Handle Date object case
+                                            try {
+                                                const dateObj = date instanceof Date ? date : new Date(date);
+                                                return dateObj.toISOString().split('T')[0];
+                                            } catch {
+                                                return '';
+                                            }
+                                        })()}
                                         onChange={e => setFormData({ ...formData, expirationDate: e.target.value || null })}
                                     />
                                 </div>
