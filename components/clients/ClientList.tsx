@@ -900,7 +900,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     function getScreeningStatus(client: ClientProfile) {
         const status = client.screeningStatus || 'not_started';
 
-        const statusConfig = {
+        const statusConfig: Record<string, { label: string; color: string; bgColor: string; icon: JSX.Element }> = {
             not_started: {
                 label: 'Not Started',
                 color: 'var(--text-tertiary)',
@@ -927,7 +927,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             }
         };
 
-        const config = statusConfig[status];
+        const config = statusConfig[status] || statusConfig.not_started;
 
         return (
             <span

@@ -29,7 +29,34 @@ export async function query<T = any>(sql: string, params?: any[]): Promise<T[]> 
     const connection = await getPool().getConnection();
     try {
         const [rows] = await connection.execute(sql, params);
-        return rows as T[];
+        // mysql2 should automatically parse JSON fields, but ensure they're objects
+        const parsedRows = (rows as any[]).map((row: any) => {
+            if (!row || typeof row !== 'object') return row;
+            const parsed: any = { ...row };
+            // Handle JSON fields that might come as strings or Buffers
+            ['active_order', 'billings', 'visits', 'delivery_days', 'delivery_distribution', 'items', 'options', 'conditional_text_inputs', 'snapshot', 'strokes', 'stop_ids', 'data'].forEach(field => {
+                if (parsed[field] !== null && parsed[field] !== undefined) {
+                    if (Buffer.isBuffer(parsed[field])) {
+                        try {
+                            parsed[field] = JSON.parse(parsed[field].toString());
+                        } catch (e) {
+                            // Keep as is if parsing fails
+                        }
+                    } else if (typeof parsed[field] === 'string' && (parsed[field].startsWith('{') || parsed[field].startsWith('['))) {
+                        try {
+                            parsed[field] = JSON.parse(parsed[field]);
+                        } catch (e) {
+                            // Keep as is if parsing fails
+                        }
+                    }
+                }
+            });
+            return parsed;
+        });
+        return parsedRows as T[];
+    } catch (error) {
+        console.error('[mysql.query] Error executing query:', error, { sql, params });
+        throw error;
     } finally {
         connection.release();
     }

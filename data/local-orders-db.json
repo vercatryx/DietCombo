@@ -1,115 +1,127 @@
 {
-  "orders": [],
+  "orders": [
+    {
+      "id": "order222-2222-2222-2222-222222222222",
+      "client_id": "client222-2222-2222-2222-22222222222",
+      "service_type": "Boxes",
+      "case_id": "CASE-002",
+      "status": "pending",
+      "scheduled_delivery_date": "2026-01-08T16:00:00.000Z",
+      "actual_delivery_date": null,
+      "delivery_day": "Tuesday",
+      "delivery_distribution": {
+        "Tuesday": 1
+      },
+      "total_value": "45.00",
+      "total_items": 1,
+      "notes": "Standard box order",
+      "proof_of_delivery_url": null,
+      "last_updated": "2026-01-07T13:51:58.000Z",
+      "updated_by": "navigator1",
+      "created_at": "2026-01-07T13:51:58.000Z"
+    }
+  ],
   "upcomingOrders": [
     {
-      "id": "0af4b6f7-89ec-4811-b905-647c548e265d",
-      "client_id": "CLIENT-002",
-      "service_type": "Boxes",
-      "case_id": "cxv",
+      "id": "upco1111-1111-1111-1111-111111111111",
+      "client_id": "client444-4444-4444-4444-44444444444",
+      "service_type": "Meals",
+      "case_id": "CASE-004",
       "status": "scheduled",
-      "last_updated": "2026-01-06T15:23:52.301+00:00",
-      "updated_by": "Avraham ",
-      "created_at": "2026-01-06T15:23:53.814535+00:00",
-      "take_effect_date": "2026-01-11",
-      "total_value": 0,
-      "total_items": 1,
-      "notes": null,
-      "processed_order_id": null,
-      "processed_at": null,
-      "delivery_day": "Tuesday",
-      "order_number": 100112
-    },
-    {
-      "id": "ec265062-708c-435a-8d88-d7142cb940bc",
-      "client_id": "CLIENT-001",
-      "service_type": "Food",
-      "case_id": "svd",
-      "status": "scheduled",
-      "last_updated": "2026-01-06T17:20:44.692+00:00",
-      "updated_by": "Avraham ",
-      "created_at": "2026-01-06T12:52:55.763857+00:00",
-      "take_effect_date": "2026-01-11",
-      "total_value": 160,
-      "total_items": 10,
-      "notes": null,
-      "processed_order_id": null,
-      "processed_at": null,
+      "scheduled_delivery_date": "2026-01-13T16:00:00.000Z",
+      "take_effect_date": "2026-01-13T16:00:00.000Z",
       "delivery_day": "Monday",
-      "order_number": 100109
+      "delivery_distribution": {
+        "Monday": 6,
+        "Wednesday": 6
+      },
+      "total_value": "77.94",
+      "total_items": 12,
+      "notes": "Starting next week",
+      "last_updated": "2026-01-07T13:51:58.000Z",
+      "updated_by": "navigator2",
+      "created_at": "2026-01-07T13:51:58.000Z"
     },
     {
-      "id": "5138bcc8-ea4b-46a9-95b9-d05695096d30",
-      "client_id": "CLIENT-001",
-      "service_type": "Food",
-      "case_id": "svd",
+      "id": "upco2222-2222-2222-2222-222222222222",
+      "client_id": "client666-6666-6666-6666-66666666666",
+      "service_type": "Boxes",
+      "case_id": "CASE-006",
       "status": "scheduled",
-      "last_updated": "2026-01-06T17:20:44.692+00:00",
-      "updated_by": "Avraham ",
-      "created_at": "2026-01-06T12:52:57.20225+00:00",
-      "take_effect_date": "2026-01-11",
-      "total_value": 160,
-      "total_items": 10,
-      "notes": null,
-      "processed_order_id": null,
-      "processed_at": null,
-      "delivery_day": "Wednesday",
-      "order_number": 100110
+      "scheduled_delivery_date": "2026-01-16T16:00:00.000Z",
+      "take_effect_date": "2026-01-16T16:00:00.000Z",
+      "delivery_day": "Tuesday",
+      "delivery_distribution": {
+        "Tuesday": 1
+      },
+      "total_value": "45.00",
+      "total_items": 1,
+      "notes": "Pending activation",
+      "last_updated": "2026-01-07T13:51:58.000Z",
+      "updated_by": "navigator3",
+      "created_at": "2026-01-07T13:51:58.000Z"
     }
   ],
-  "orderVendorSelections": [],
-  "orderItems": [],
-  "orderBoxSelections": [],
+  "orderVendorSelections": [
+    {
+      "id": "ovs22222-2222-2222-2222-222222222222",
+      "order_id": "order222-2222-2222-2222-222222222222",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "created_at": "2026-01-07T13:51:58.000Z"
+    }
+  ],
+  "orderItems": [
+    {
+      "id": "oi222222-2222-2222-2222-222222222221",
+      "vendor_selection_id": "ovs22222-2222-2222-2222-222222222222",
+      "menu_item_id": "item2222-2222-2222-2222-222222222221",
+      "quantity": 1,
+      "created_at": "2026-01-07T13:51:58.000Z"
+    }
+  ],
+  "orderBoxSelections": [
+    {
+      "id": "obs11111-1111-1111-1111-111111111111",
+      "order_id": "order222-2222-2222-2222-222222222222",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "box_type_id": "box11111-1111-1111-1111-111111111111",
+      "quantity": 1,
+      "items": {
+        "item2222-2222-2222-2222-222222222221": 1,
+        "item2222-2222-2222-2222-222222222222": 1,
+        "item2222-2222-2222-2222-222222222223": 1
+      },
+      "created_at": "2026-01-07T13:51:58.000Z"
+    }
+  ],
   "upcomingOrderVendorSelections": [
     {
-      "id": "f6cef0dc-090e-47d6-98dc-43903c0433ce",
-      "upcoming_order_id": "ec265062-708c-435a-8d88-d7142cb940bc",
-      "vendor_id": "1e9e2218-fdff-434f-b279-93d9d7bf4bd2",
-      "created_at": "2026-01-06T17:20:46.790383+00:00"
+      "id": "uovs1111-1111-1111-1111-111111111111",
+      "upcoming_order_id": "upco1111-1111-1111-1111-111111111111",
+      "vendor_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "created_at": "2026-01-07T13:51:58.000Z"
     },
     {
-      "id": "2a13dce0-5808-4d3a-8634-206a5a720eea",
-      "upcoming_order_id": "5138bcc8-ea4b-46a9-95b9-d05695096d30",
-      "vendor_id": "1e9e2218-fdff-434f-b279-93d9d7bf4bd2",
-      "created_at": "2026-01-06T17:20:48.360296+00:00"
+      "id": "uovs2222-2222-2222-2222-222222222222",
+      "upcoming_order_id": "upco2222-2222-2222-2222-222222222222",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "created_at": "2026-01-07T13:51:58.000Z"
     }
   ],
-  "upcomingOrderItems": [
-    {
-      "id": "d8dcad4f-cd0f-4c36-b654-5b4007b3e8ad",
-      "upcoming_order_id": "ec265062-708c-435a-8d88-d7142cb940bc",
-      "vendor_selection_id": "f6cef0dc-090e-47d6-98dc-43903c0433ce",
-      "menu_item_id": "983d647c-b6c2-436d-9552-843ea6bb28a3",
-      "quantity": 10,
-      "unit_value": 16,
-      "total_value": 160,
-      "created_at": "2026-01-06T17:20:46.951713+00:00"
-    },
-    {
-      "id": "ac5f68c1-b2f2-4c31-8ab8-f26cd20e215d",
-      "upcoming_order_id": "5138bcc8-ea4b-46a9-95b9-d05695096d30",
-      "vendor_selection_id": "2a13dce0-5808-4d3a-8634-206a5a720eea",
-      "menu_item_id": "983d647c-b6c2-436d-9552-843ea6bb28a3",
-      "quantity": 10,
-      "unit_value": 16,
-      "total_value": 160,
-      "created_at": "2026-01-06T17:20:48.501781+00:00"
-    }
-  ],
+  "upcomingOrderItems": [],
   "upcomingOrderBoxSelections": [
     {
-      "id": "82d6f1bb-f84d-496a-a13b-9a4fab0acbd8",
-      "upcoming_order_id": "0af4b6f7-89ec-4811-b905-647c548e265d",
-      "vendor_id": "3759e864-908e-427e-9e2b-6e139643bdcc",
+      "id": "uobs1111-1111-1111-1111-111111111111",
+      "upcoming_order_id": "upco2222-2222-2222-2222-222222222222",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "box_type_id": "box11111-1111-1111-1111-111111111111",
       "quantity": 1,
-      "created_at": "2026-01-06T15:23:54.337275+00:00",
-      "unit_value": 0,
-      "total_value": 0,
       "items": {
-        "620f48f0-8c55-44ef-a82f-bfa0d36585c1": 5,
-        "a80dc96d-e649-452b-8297-cabbd3aff9b6": 2,
-        "cf77ee7f-a3ee-4be4-9b44-3a6911283f61": 1
-      }
+        "item2222-2222-2222-2222-222222222221": 1,
+        "item2222-2222-2222-2222-222222222222": 1
+      },
+      "created_at": "2026-01-07T13:51:58.000Z"
     }
   ],
-  "lastSynced": "2026-01-06T17:20:49.456Z"
+  "lastSynced": "2026-01-07T15:14:00.770Z"
 }

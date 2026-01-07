@@ -91,33 +91,19 @@ export async function getForm(formId: string): Promise<{ success: boolean; data?
 export async function submitForm(formId: string, answers: Record<string, string>) {
     try {
         // 1. Create Submission (Filled Form)
-        // Note: For public submissions, we might want to allow this even without service role if RLS allows.
-        // But using service role ensures it works.
-        const { data: submission, error: submissionError } = await supabase
-            .from('filled_forms')
-            .insert({
-                form_id: formId
-            })
-            .select()
-            .single();
-
-        if (submissionError) throw submissionError;
-
-        const submissionId = submission.id;
+        const submissionId = generateUUID();
+        await insert(
+            'INSERT INTO filled_forms (id, form_id) VALUES (?, ?)',
+            [submissionId, formId]
+        );
 
         // 2. Save Answers
-        const answersToInsert = Object.entries(answers).map(([questionId, value]) => ({
-            filled_form_id: submissionId,
-            question_id: questionId,
-            value: value
-        }));
-
-        if (answersToInsert.length > 0) {
-            const { error: answersError } = await supabase
-                .from('form_answers')
-                .insert(answersToInsert);
-
-            if (answersError) throw answersError;
+        for (const [questionId, value] of Object.entries(answers)) {
+            const answerId = generateUUID();
+            await insert(
+                'INSERT INTO form_answers (id, filled_form_id, question_id, value) VALUES (?, ?, ?, ?)',
+                [answerId, submissionId, questionId, value]
+            );
         }
 
         revalidatePath('/forms');
@@ -138,54 +124,46 @@ export async function saveSingleForm(questions: any[], deleteOldForms: boolean =
         const formTitle = `${SCREENING_FORM_TITLE} - ${timestamp}`;
 
         // 1. Create new form
-        const { data: newForm, error: createError } = await supabase
-            .from('forms')
-            .insert({
-                title: formTitle,
-                description: 'Global Screening Form'
-            })
-            .select()
-            .single();
-
-        if (createError) throw createError;
-        const formId = newForm.id;
+        const formId = generateUUID();
+        await insert(
+            'INSERT INTO forms (id, title, description) VALUES (?, ?, ?)',
+            [formId, formTitle, 'Global Screening Form']
+        );
 
         // 2. Insert new questions
         if (questions.length > 0) {
-            const { error: insertError } = await supabase
-                .from('questions')
-                .insert(
-                    questions.map((q, index) => ({
-                        form_id: formId,
-                        text: q.text,
-                        type: q.type,
-                        options: q.options ? JSON.stringify(q.options) : null,
-                        conditional_text_inputs: q.conditionalTextInputs ? JSON.stringify(q.conditionalTextInputs) : null,
-                        order: index
-                    }))
+            for (const [index, q] of questions.entries()) {
+                const questionId = generateUUID();
+                await insert(
+                    'INSERT INTO questions (id, form_id, text, type, options, conditional_text_inputs, `order`) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        questionId,
+                        formId,
+                        q.text,
+                        q.type,
+                        q.options ? JSON.stringify(q.options) : null,
+                        q.conditionalTextInputs ? JSON.stringify(q.conditionalTextInputs) : null,
+                        index
+                    ]
                 );
-
-            if (insertError) throw insertError;
+            }
         }
 
         // 3. Delete old forms if requested (after successfully creating the new one)
         if (deleteOldForms) {
             // Get all old screening forms (excluding the one we just created)
-            const { data: oldForms, error: fetchOldError } = await supabase
-                .from('forms')
-                .select('id')
-                .like('title', `${SCREENING_FORM_TITLE}%`)
-                .neq('id', formId);
+            const oldForms = await query<any>(
+                'SELECT id FROM forms WHERE title LIKE ? AND id != ?',
+                [`${SCREENING_FORM_TITLE}%`, formId]
+            );
 
-            if (!fetchOldError && oldForms && oldForms.length > 0) {
+            if (oldForms && oldForms.length > 0) {
                 // Delete old forms (cascade will delete their questions)
                 const oldFormIds = oldForms.map(f => f.id);
-                const { error: deleteError } = await supabase
-                    .from('forms')
-                    .delete()
-                    .in('id', oldFormIds);
-
-                if (deleteError) {
+                const placeholders = oldFormIds.map(() => '?').join(',');
+                try {
+                    await execute(`DELETE FROM forms WHERE id IN (${placeholders})`, oldFormIds);
+                } catch (deleteError) {
                     console.error('Error deleting old forms:', deleteError);
                     // Don't fail the whole operation if deletion fails
                 }
@@ -203,14 +181,10 @@ export async function getSingleForm() {
     try {
         // Get the most recent screening form (forms with title starting with "Screening Form")
         // This allows multiple forms to exist, but we use the latest one
-        const { data: forms, error: formsError } = await supabase
-            .from('forms')
-            .select('id, title, description, created_at')
-            .like('title', `${SCREENING_FORM_TITLE}%`)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        if (formsError) throw formsError;
+        const forms = await query<any>(
+            'SELECT id, title, description, created_at FROM forms WHERE title LIKE ? ORDER BY created_at DESC LIMIT 1',
+            [`${SCREENING_FORM_TITLE}%`]
+        );
 
         if (!forms || forms.length === 0) {
             // No screening forms found, return null (not an error, just empty)
@@ -219,13 +193,10 @@ export async function getSingleForm() {
 
         const form = forms[0];
 
-        const { data: questions, error: qError } = await supabase
-            .from('questions')
-            .select('*')
-            .eq('form_id', form.id)
-            .order('order', { ascending: true });
-
-        if (qError) throw qError;
+        const questions = await query<any>(
+            'SELECT * FROM questions WHERE form_id = ? ORDER BY `order` ASC',
+            [form.id]
+        );
 
         const schema: FormSchema = {
             id: form.id,
@@ -285,40 +256,34 @@ export async function createSubmission(data: Record<string, string>, clientId?: 
 
         // Delete old pending submissions for this client and form before creating a new one
         if (clientId) {
-            const { error: deleteError } = await supabase
-                .from('form_submissions')
-                .delete()
-                .eq('client_id', clientId)
-                .eq('form_id', formResult.data.id)
-                .eq('status', 'pending');
-
-            if (deleteError) {
+            try {
+                await execute(
+                    'DELETE FROM form_submissions WHERE client_id = ? AND form_id = ? AND status = ?',
+                    [clientId, formResult.data.id, 'pending']
+                );
+            } catch (deleteError) {
                 console.error('Error deleting old pending submissions:', deleteError);
                 // Don't fail the whole operation if deletion fails, but log it
             }
         }
 
-        const { data: submission, error } = await supabase
-            .from('form_submissions')
-            .insert({
-                form_id: formResult.data.id,
-                client_id: clientId || null,
-                status: 'pending',
-                data: data
-            })
-            .select()
-            .single();
+        const submissionId = generateUUID();
+        const token = generateUUID();
+        await insert(
+            'INSERT INTO form_submissions (id, form_id, client_id, token, status, data) VALUES (?, ?, ?, ?, ?, ?)',
+            [submissionId, formResult.data.id, clientId || null, token, 'pending', JSON.stringify(data)]
+        );
 
-        if (error) throw error;
+        const submission = { id: submissionId, token, form_id: formResult.data.id, client_id: clientId || null, status: 'pending', data };
 
         // Set screening status to waiting_approval when form is submitted
         if (clientId) {
-            const { error: updateError } = await supabase
-                .from('clients')
-                .update({ screening_status: 'waiting_approval' })
-                .eq('id', clientId);
-
-            if (updateError) {
+            try {
+                await execute(
+                    'UPDATE clients SET screening_status = ? WHERE id = ?',
+                    ['waiting_approval', clientId]
+                );
+            } catch (updateError) {
                 console.error('Failed to update screening status:', updateError);
                 // Don't fail the submission if this fails
             }
@@ -333,13 +298,12 @@ export async function createSubmission(data: Record<string, string>, clientId?: 
 
 export async function getSubmissionByToken(token: string) {
     try {
-        const { data: submission, error } = await supabase
-            .from('form_submissions')
-            .select('*')
-            .eq('token', token)
-            .single();
+        const submission = await queryOne<any>(
+            'SELECT * FROM form_submissions WHERE token = ?',
+            [token]
+        );
 
-        if (error) throw error;
+        if (!submission) throw new Error('Submission not found');
 
         // Also fetch the form schema
         const formResult = await getForm(submission.form_id);
@@ -384,32 +348,40 @@ export async function updateSubmissionStatus(token: string, status: 'accepted' |
             }
         }
 
-        const updateData: any = { status };
+        const updates: string[] = ['status = ?'];
+        const params: any[] = [status];
+        
         if (signatureUrl) {
-            updateData.signature_url = signatureUrl;
+            updates.push('signature_url = ?');
+            params.push(signatureUrl);
         }
         if (comments) {
-            updateData.comments = comments;
+            updates.push('comments = ?');
+            params.push(comments);
         }
+        
+        params.push(token);
+        
+        await execute(
+            `UPDATE form_submissions SET ${updates.join(', ')} WHERE token = ?`,
+            params
+        );
 
-        const { data: updatedSubmission, error } = await supabase
-            .from('form_submissions')
-            .update(updateData)
-            .eq('token', token)
-            .select('client_id')
-            .single();
-
-        if (error) throw error;
+        // Get client_id from submission
+        const updatedSubmission = await queryOne<any>(
+            'SELECT client_id FROM form_submissions WHERE token = ?',
+            [token]
+        );
 
         // Update client screening_status based on submission status
         if (updatedSubmission?.client_id) {
             const newScreeningStatus = status === 'accepted' ? 'approved' : 'rejected';
-            const { error: clientUpdateError } = await supabase
-                .from('clients')
-                .update({ screening_status: newScreeningStatus })
-                .eq('id', updatedSubmission.client_id);
-
-            if (clientUpdateError) {
+            try {
+                await execute(
+                    'UPDATE clients SET screening_status = ? WHERE id = ?',
+                    [newScreeningStatus, updatedSubmission.client_id]
+                );
+            } catch (clientUpdateError) {
                 console.error('Failed to update client screening status:', clientUpdateError);
                 // Don't fail the submission if this fails
             }
@@ -434,12 +406,10 @@ export async function finalizeSubmission(token: string, pdfBlob: Blob) {
             throw new Error('PDF upload failed');
         }
 
-        const { error } = await supabase
-            .from('form_submissions')
-            .update({ pdf_url: key })
-            .eq('token', token);
-
-        if (error) throw error;
+        await execute(
+            'UPDATE form_submissions SET pdf_url = ? WHERE token = ?',
+            [key, token]
+        );
 
         return { success: true, pdfUrl: key };
     } catch (error: any) {
@@ -450,13 +420,10 @@ export async function finalizeSubmission(token: string, pdfBlob: Blob) {
 
 export async function getClientSubmissions(clientId: string) {
     try {
-        const { data, error } = await supabase
-            .from('form_submissions')
-            .select('*')
-            .eq('client_id', clientId)
-            .order('created_at', { ascending: false });
-
-        if (error) throw error;
+        const data = await query<any>(
+            'SELECT * FROM form_submissions WHERE client_id = ? ORDER BY created_at DESC',
+            [clientId]
+        );
 
         return { success: true, data };
     } catch (error: any) {
