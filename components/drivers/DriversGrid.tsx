@@ -81,17 +81,39 @@ export default function DriversGrid({ drivers = [], allStops = [] }) {
         return allStops.filter((s) => Number(s.driverId) === Number(d.id));
     };
 
+    // Show empty state if no drivers
+    if (drivers.length === 0) {
+        return (
+            <div style={{
+                textAlign: "center",
+                padding: "48px 24px",
+                color: "var(--muted, #6b7280)"
+            }}>
+                <p style={{ fontSize: "16px", fontWeight: 500, marginBottom: "8px" }}>No routes available</p>
+                <p style={{ fontSize: "14px" }}>There are currently no delivery routes to display.</p>
+            </div>
+        );
+    }
+
     return (
         <div className="grid">
             {drivers.map((d) => {
                 const cardStops = getStopsForDriver(d);
 
-                const total = d.totalStops ?? (d.stopIds?.length ?? cardStops.length ?? 0);
-                const done = d.completedStops ?? cardStops.filter((s) => !!s?.completed).length;
-                const pct = total ? (done / total) * 100 : 0;
+                // Use actual loaded stops count instead of API count to ensure consistency
+                // Only fall back to API count if we have no loaded stops data
+                const actualTotal = cardStops.length;
+                const apiTotal = d.totalStops ?? (d.stopIds?.length ?? 0);
+                const total = actualTotal > 0 ? actualTotal : apiTotal;
+                const done = cardStops.length > 0 
+                    ? cardStops.filter((s) => !!s?.completed).length 
+                    : (d.completedStops ?? 0);
+                const pct = total > 0 ? (done / total) * 100 : 0;
 
-                const sigUsersDone = cardStops.filter((s) => (sigMap.get(String(s?.userId)) ?? 0) >= 5).length;
-                const pctSigs = total ? (sigUsersDone / total) * 100 : 0;
+                const sigUsersDone = cardStops.length > 0
+                    ? cardStops.filter((s) => (sigMap.get(String(s?.userId)) ?? 0) >= 5).length
+                    : 0;
+                const pctSigs = total > 0 ? (sigUsersDone / total) * 100 : 0;
 
                 // Unique addresses for this driver (ignoring apt#)
                 const uniqueAddrCount = (() => {

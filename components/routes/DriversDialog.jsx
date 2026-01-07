@@ -220,6 +220,17 @@ export default function DriversDialog({
             setRoutes(data.routes || []);
             setUnrouted(data.unrouted || []);
 
+            // Debug: Log route data
+            console.log(`[DriversDialog] Loaded routes for day="${selectedDay}":`, {
+                routesCount: (data.routes || []).length,
+                unroutedCount: (data.unrouted || []).length,
+                routes: data.routes || []
+            });
+            
+            if (!data.routes || data.routes.length === 0) {
+                console.warn(`[DriversDialog] ⚠️ No drivers found for day="${selectedDay}". Click "Generate New Route" to create drivers.`);
+            }
+
             // Log users without stops to browser console
             if (data.usersWithoutStops && Array.isArray(data.usersWithoutStops)) {
                 console.log(`\n[DriversDialog] Checking users without stops for day: ${selectedDay}`);
@@ -266,6 +277,16 @@ export default function DriversDialog({
                 const data1 = await res1.json();
                 setRoutes(data1.routes || []);
                 setUnrouted(data1.unrouted || []);
+                
+                // Debug: Log initial route data
+                console.log(`[DriversDialog] Initial load for day="${selectedDay}":`, {
+                    routesCount: (data1.routes || []).length,
+                    unroutedCount: (data1.unrouted || []).length
+                });
+                
+                if (!data1.routes || data1.routes.length === 0) {
+                    console.warn(`[DriversDialog] ⚠️ No drivers found on initial load for day="${selectedDay}". User needs to generate routes.`);
+                }
 
                 // Log users without stops to browser console
                 if (data1.usersWithoutStops && Array.isArray(data1.usersWithoutStops)) {
@@ -826,6 +847,13 @@ export default function DriversDialog({
     // Apply a selected run
     async function applyRun(id) {
         if (!id) return;
+        const numId = Number(id);
+        // Validate that id is a valid number (not NaN, and finite)
+        if (!Number.isFinite(numId)) {
+            console.error("Invalid run ID:", id);
+            alert("Invalid route ID. Please select a valid route.");
+            return;
+        }
         const ok = window.confirm("Apply this saved route? This will overwrite current assignments.");
         if (!ok) return;
 
@@ -835,7 +863,7 @@ export default function DriversDialog({
             const res = await fetch("/api/route/apply-run", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ runId: Number(id) }),
+                body: JSON.stringify({ runId: numId }),
             });
             if (!res.ok) throw new Error(await res.text());
 
