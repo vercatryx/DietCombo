@@ -31,6 +31,33 @@ export async function GET(req: Request) {
             `SELECT * FROM drivers ${driverWhere} ORDER BY id ASC`,
             driverParams
         );
+        
+        // Also check routes table (legacy table without day field)
+        // Routes table records are treated as applicable to all days
+        const routesRaw = await query<any[]>(
+            `SELECT * FROM routes ORDER BY id ASC`
+        );
+        
+        // Convert routes to drivers format (add day field, default to "all" or current day)
+        const routesAsDrivers = routesRaw.map((r: any) => ({
+            ...r,
+            day: day === "all" ? "all" : day, // Use current day or "all" if querying all
+        }));
+        
+        // Combine drivers and routes
+        const allDriversRaw = [...driversRaw, ...routesAsDrivers];
+        
+        // Debug logging
+        console.log(`[route/routes] Querying drivers for day="${day}"`);
+        console.log(`[route/routes] Query: SELECT * FROM drivers ${driverWhere}`);
+        console.log(`[route/routes] Found ${driversRaw?.length || 0} drivers in database`);
+        console.log(`[route/routes] Found ${routesRaw?.length || 0} routes in routes table`);
+        if (driversRaw && driversRaw.length > 0) {
+            console.log(`[route/routes] Driver names:`, driversRaw.map(d => d.name));
+        }
+        if (routesRaw && routesRaw.length > 0) {
+            console.log(`[route/routes] Route names:`, routesRaw.map(r => r.name));
+        }
 
         // 2) All stops (do NOT filter by day; legacy rows may not have it)
         const allStops = await query<any[]>(`
@@ -68,9 +95,11 @@ export async function GET(req: Request) {
         }
 
         // 4) Sort drivers so Driver 0,1,2… are in that order
-        const drivers = [...driversRaw].sort(
+        const drivers = [...allDriversRaw].sort(
             (a, b) => driverRankByName(a.name) - driverRankByName(b.name)
         );
+        
+        console.log(`[route/routes] After sorting: ${drivers.length} drivers (${driversRaw.length} from drivers table, ${routesRaw.length} from routes table)`);
 
         // 5) Hydrate each stop, preferring live Client fields when available
         const stopById = new Map<string, any>();
@@ -120,6 +149,8 @@ export async function GET(req: Request) {
                 stops,
             };
         });
+        
+        console.log(`[route/routes] Built ${routes.length} routes with ${routes.reduce((sum, r) => sum + r.stops.length, 0)} total stops`);
 
         // 7) Unrouted = all hydrated stops not referenced by any driver's current list
         const claimed = new Set(routes.flatMap((r) => r.stops.map((s) => sid(s.id))));
@@ -276,6 +307,8 @@ export async function GET(req: Request) {
             }
         }
 
+        console.log(`[route/routes] Returning ${routes.length} routes, ${unrouted.length} unrouted stops`);
+        
         return NextResponse.json(
             { routes, unrouted, usersWithoutStops },
             { headers: { "Cache-Control": "no-store" } }

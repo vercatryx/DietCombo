@@ -464,7 +464,17 @@ export default function DriverDetailPage() {
 
             {/* Stops list */}
             <section className="grid">
-                {stopsWithDuplicateFlag.map((s, idx) => {
+                {stopsWithDuplicateFlag.length === 0 ? (
+                    <div style={{
+                        textAlign: "center",
+                        padding: "48px 24px",
+                        color: "var(--muted, #6b7280)"
+                    }}>
+                        <p style={{ fontSize: "16px", fontWeight: 500, marginBottom: "8px" }}>No stops assigned</p>
+                        <p style={{ fontSize: "14px" }}>This route currently has no delivery stops assigned.</p>
+                    </div>
+                ) : (
+                    stopsWithDuplicateFlag.map((s, idx) => {
                     const done = !!s.completed;
                     const sigs = Number(s.sigCollected ?? 0);
                     const sigDone = sigs >= 5;
@@ -614,7 +624,8 @@ export default function DriverDetailPage() {
                             </div>
                         </div>
                     );
-                })}
+                })
+                )}
             </section>
 
             <div style={{ marginTop: 24, textAlign: "center", width: "80%" }}>
@@ -691,7 +702,7 @@ export default function DriverDetailPage() {
 html,body{margin:0;padding:0;background:var(--bg);color:#111;
   -webkit-tap-highlight-color: transparent;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial}
-.container{max-width:960px;margin:0 auto;padding:12px 12px calc(12px + env(safe-area-inset-bottom));}
+.container{width:100%;margin:0;padding:12px 12px calc(12px + env(safe-area-inset-bottom));}
 
 .sticky-header{position: sticky; top: 0; z-index: 50; display:flex; align-items:center; gap:10px;
   background: #fff; border-bottom:1px solid var(--border); padding:10px 12px;}
@@ -715,7 +726,7 @@ html,body{margin:0;padding:0;background:var(--bg);color:#111;
 @media (min-width: 780px){
   .desktop-only{display:block}
   .sticky-header{display:none}
-  .container{padding:24px}
+  .container{padding:24px 24px calc(24px + env(safe-area-inset-bottom))}
 }
 
 .card{position:relative;border:1px solid var(--border);background:#fff;border-radius:18px;box-shadow:var(--shadow);overflow:hidden}

@@ -42,10 +42,11 @@ export async function GET(req: Request) {
         );
         const driver = drivers[0];
 
-        const orderedIds: number[] = driver?.stop_ids
+        // Keep stop_ids as strings (UUIDs) - don't convert to numbers
+        const orderedIds: string[] = driver?.stop_ids
             ? (Array.isArray(driver.stop_ids) ? driver.stop_ids : JSON.parse(driver.stop_ids))
-                .map((n: any) => Number(n))
-                .filter((n: number) => Number.isFinite(n))
+                .map((id: any) => String(id))
+                .filter((id: string) => id && id.trim().length > 0)
             : [];
 
         if (!orderedIds.length) {
@@ -65,13 +66,13 @@ export async function GET(req: Request) {
             stopParams
         );
 
-        // Reorder to match Driver.stopIds order
-        const byId = new Map(stops.map((s) => [Number(s.id), s]));
+        // Reorder to match Driver.stopIds order (keep IDs as strings for comparison)
+        const byId = new Map(stops.map((s) => [String(s.id), s]));
         const ordered = orderedIds.map((id) => byId.get(id)).filter(Boolean);
 
-        // Map to expected format
+        // Map to expected format (keep id as string if it's a UUID, or convert if it's numeric)
         const mapped = ordered.map((s: any) => ({
-            id: Number(s.id),
+            id: String(s.id), // Keep as string for UUID compatibility
             userId: s.userId,
             name: s.name,
             address: s.address,
@@ -99,9 +100,9 @@ export async function GET(req: Request) {
         whereParams
     );
 
-    // Map to expected format
+    // Map to expected format (keep id as string for UUID compatibility)
     const mapped = all.map((s: any) => ({
-        id: Number(s.id),
+        id: String(s.id), // Keep as string for UUID compatibility
         userId: s.userId,
         name: s.name,
         address: s.address,

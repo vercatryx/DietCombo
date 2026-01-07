@@ -150,7 +150,7 @@ export default function DriversHome() {
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:#111;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial}
-.container{max-width:900px;margin:32px auto;padding:0 20px}
+.container{width:100%;margin:0;padding:20px}
 .card{position:relative;border:1px solid var(--border);background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
 .card-content{padding:18px 20px}
 .color-rail{position:absolute;left:0;top:0;bottom:0;width:6px;border-top-left-radius:var(--radius);border-bottom-left-radius:var(--radius)}

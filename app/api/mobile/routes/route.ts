@@ -30,11 +30,60 @@ export async function GET(req: Request) {
             driverParams = [dayParam];
         }
 
-        const drivers = await query<any[]>(
+        const driversRaw = await query<any[]>(
             `SELECT id, name, color, stop_ids FROM drivers ${driverWhere} ORDER BY id ASC`,
             driverParams
         );
-        console.log("[mobile/routes] drivers:", drivers.length, "day:", dayParam);
+        console.log("[mobile/routes] drivers:", driversRaw.length, "day:", dayParam);
+
+        // Also check routes table (legacy table without day field)
+        // Routes table records are treated as applicable to all days
+        // Check if routes table has a driver_id field (for assignment) and filter accordingly
+        let routesRaw: any[] = [];
+        try {
+            // Try to query with driver_id if the column exists
+            routesRaw = await query<any[]>(
+                `SELECT id, name, color, stop_ids, driver_id FROM routes ORDER BY id ASC`
+            );
+        } catch (e: any) {
+            // If driver_id column doesn't exist, query without it
+            if (e?.code === 'ER_BAD_FIELD_ERROR' || e?.message?.includes('driver_id')) {
+                routesRaw = await query<any[]>(
+                    `SELECT id, name, color, stop_ids FROM routes ORDER BY id ASC`
+                );
+            } else {
+                throw e;
+            }
+        }
+        console.log("[mobile/routes] routes:", routesRaw.length);
+
+        // If routes have driver_id assigned, we only include routes that match drivers
+        // Otherwise, include all routes (like the admin endpoint does)
+        let routesToInclude: any[] = routesRaw;
+        
+        // Check if any route has a driver_id field
+        const hasDriverIdField = routesRaw.length > 0 && 'driver_id' in routesRaw[0];
+        if (hasDriverIdField) {
+            // Filter routes to only those assigned to drivers (driver_id is not null)
+            // Or routes where driver_id matches a driver's id
+            const driverIds = new Set(driversRaw.map(d => String(d.id)));
+            routesToInclude = routesRaw.filter((r: any) => {
+                const routeDriverId = r.driver_id ? String(r.driver_id) : null;
+                // Include routes assigned to a driver if that driver exists in our list
+                return routeDriverId && driverIds.has(routeDriverId);
+            });
+            console.log("[mobile/routes] routes with assigned drivers:", routesToInclude.length);
+        }
+
+        // Convert routes to drivers format (add day field, default to "all" or current day)
+        const routesAsDrivers = routesToInclude.map((r: any) => ({
+            ...r,
+            day: dayParam === "all" ? "all" : dayParam, // Use current day or "all" if querying all
+        }));
+
+        // Combine drivers and routes
+        const drivers = [...driversRaw, ...routesAsDrivers];
+        console.log("[mobile/routes] total (drivers + routes):", drivers.length);
 
         // 2) Collect unique stopIds (keep as strings since they are UUIDs)
         const allStopIds = Array.from(
