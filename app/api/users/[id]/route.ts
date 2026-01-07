@@ -86,7 +86,7 @@ export async function PUT(
     
     // Geocode if needed
     if (!clearGeocode && (finalLat == null || finalLng == null)) {
-        const { lat, lng } = await geocodeIfNeeded(
+        const result = await geocodeIfNeeded(
             {
                 address: b.address ?? current.address,
                 apt: b.apt ?? current.apt,
@@ -96,9 +96,9 @@ export async function PUT(
             },
             addressChanged
         );
-        if (lat && lng) {
-            finalLat = Number(lat);
-            finalLng = Number(lng);
+        if (result && result.lat && result.lng) {
+            finalLat = Number(result.lat);
+            finalLng = Number(result.lng);
         }
     }
     

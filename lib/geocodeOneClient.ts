@@ -5,6 +5,8 @@
 // - in-flight de-duplication (same query => one network call)
 // - short-guard for candidates and cooldown
 
+import { buildGeocodeQuery } from './addressHelpers';
+
 const LS_KEY = "geoCacheV1";
 const LS_MAX = 500; // keep up to 500 entries locally
 const COOLDOWN_MS = 30_000; // suppress identical fetches within 30s
@@ -201,4 +203,124 @@ export async function searchGeocodeCandidates(query: string, limit = 6): Promise
     }
     const data = await res.json();
     return Array.isArray(data?.items) ? data.items : [];
+}
+
+// ===== Server-side geocoding helper =====
+
+export interface AddressInput {
+    address?: string | null;
+    apt?: string | null;
+    city?: string | null;
+    state?: string | null;
+    zip?: string | null;
+}
+
+/**
+ * Server-side function to geocode an address if needed.
+ * Returns { lat, lng } if geocoding succeeds, or null if it fails or isn't needed.
+ */
+export async function geocodeIfNeeded(
+    address: AddressInput,
+    addressChanged: boolean
+): Promise<{ lat: number; lng: number } | null> {
+    // Only geocode if address changed
+    if (!addressChanged) {
+        return null;
+    }
+
+    // Build query string from address components
+    const queryRaw = buildGeocodeQuery(address);
+    
+    if (!queryRaw || queryRaw.trim().length === 0) {
+        return null;
+    }
+
+    // Strip unit/apt/suite from address (same logic as geocode API)
+    const query = queryRaw
+        .replace(/\b(apt|apartment|unit|ste|suite|fl|floor|bsmnt|basement|rm|room|#)\s*[\w\-\/]+/gi, "")
+        .replace(/,\s*,/g, ", ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (!query) {
+        return null;
+    }
+
+    try {
+        // Use the same geocode logic as the API route
+        const NOMINATIM = "https://nominatim.openstreetmap.org/search";
+        const COUNTRY = (process.env.GEOCODE_COUNTRY || "US").toLowerCase();
+        const TIMEOUT = Number(process.env.GEOCODE_TIMEOUT_MS || 7000);
+        const BOUNDS_STR = process.env.GEOCODE_BOUNDS || "-75.8,39.5,-72.9,41.9";
+        const GOOGLE_KEY = process.env.GOOGLE_MAPS_KEY || process.env.GOOGLE_MAPS_API_KEY || "";
+        const GOOGLE_BOUNDS = process.env.GEOCODE_GOOGLE_BOUNDS || "39.5,-75.8|41.9,-72.9";
+
+        const withTimeout = <T>(p: Promise<T>, ms = TIMEOUT) => {
+            return Promise.race([
+                p,
+                new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+            ]);
+        };
+
+        // Try Nominatim first
+        try {
+            const params = new URLSearchParams({
+                format: "json",
+                q: query,
+                addressdetails: "1",
+                limit: "1",
+                countrycodes: COUNTRY,
+                bounded: "1",
+                viewbox: BOUNDS_STR,
+            });
+            const res = await withTimeout(fetch(`${NOMINATIM}?${params}`, {
+                headers: {
+                    "User-Agent": "diet-combo/1.0 (contact: admin@local)",
+                    "Accept": "application/json",
+                },
+            }));
+            if (res.ok) {
+                const arr = await res.json();
+                if (Array.isArray(arr) && arr.length > 0) {
+                    const lat = Number(arr[0]?.lat);
+                    const lng = Number(arr[0]?.lon);
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                        return { lat, lng };
+                    }
+                }
+            }
+        } catch {
+            // Fall through to Google
+        }
+
+        // Try Google as fallback
+        if (GOOGLE_KEY) {
+            try {
+                const params = new URLSearchParams({
+                    key: GOOGLE_KEY,
+                    address: query,
+                    components: `country:${COUNTRY.toUpperCase()}|administrative_area:NY|administrative_area:NJ`,
+                    bounds: GOOGLE_BOUNDS,
+                    region: "us",
+                });
+                const res = await withTimeout(fetch(`https://maps.googleapis.com/maps/api/geocode/json?${params}`));
+                if (res.ok) {
+                    const data = await res.json();
+                    const r = data?.results?.[0];
+                    const lat = r?.geometry?.location?.lat;
+                    const lng = r?.geometry?.location?.lng;
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                        return { lat, lng };
+                    }
+                }
+            } catch {
+                // Return null if both fail
+            }
+        }
+
+        return null;
+    } catch (error) {
+        console.error('Geocoding error:', error);
+        return null;
+    }
 }

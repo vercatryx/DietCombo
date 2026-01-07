@@ -5,7 +5,7 @@ import { decrypt } from '@/lib/session';
 // 1. Specify protected and public routes
 const protectedRoutes = ['/admin', '/clients', '/billing', '/vendors', '/'];
 const vendorRoutes = ['/vendor'];
-const publicRoutes = ['/login', '/api/auth/login', '/api/process-weekly-orders', '/api/extension', '/verify-order', '/delivery'];
+const publicRoutes = ['/login', '/api/auth/login', '/api/process-weekly-orders', '/api/extension', '/verify-order', '/delivery', '/drivers'];
 
 export default async function proxy(req: NextRequest) {
     // 2. Check if the current route is protected or public
@@ -16,7 +16,7 @@ export default async function proxy(req: NextRequest) {
         return NextResponse.next();
     }
 
-    const isPublicRoute = publicRoutes.includes(path) || path.startsWith('/verify-order/') || path.startsWith('/client-portal') || path.startsWith('/delivery/') || path.startsWith('/api/extension');
+    const isPublicRoute = publicRoutes.includes(path) || path.startsWith('/verify-order/') || path.startsWith('/client-portal') || path.startsWith('/delivery/') || path.startsWith('/drivers/') || path.startsWith('/api/extension') || path.startsWith('/api/mobile');
     const isVendorRoute = vendorRoutes.some(route => path.startsWith(route));
     // Check protected routes - handle root path separately to avoid matching all paths
     const isProtectedRoute = protectedRoutes.some(route =>

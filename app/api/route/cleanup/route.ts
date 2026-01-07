@@ -31,7 +31,7 @@ export async function POST(req: Request) {
 
         // Get all clients
         const allClients = await query<any[]>(`
-            SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone, lat, lng, paused, delivery
+            SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone_number as phone, lat, lng, paused, delivery
             FROM clients
             ORDER BY id ASC
         `);
