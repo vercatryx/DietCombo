@@ -1,144 +1,132 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Route } from 'lucide-react';
+import { Button, Box } from '@mui/material';
+import dynamic from 'next/dynamic';
 
-/**
- * Routes Page
- * 
- * This page provides access to the routes feature for managing delivery routes.
- * The routes feature allows you to:
- * - View routes on a map
- * - Assign stops to drivers
- * - Optimize routes
- * - Generate new routes
- * - Manage drivers
- */
+// Dynamically import DriversDialog to avoid SSR issues with Leaflet
+const DriversDialog = dynamic(() => import('@/components/routes/DriversDialog'), { ssr: false });
+
 export default function RoutesPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [users, setUsers] = useState<any[]>([]);
+    const [dialogOpen, setDialogOpen] = useState(false);
 
     useEffect(() => {
-        // Check if routes feature is available
-        // This page can be enhanced to directly integrate with the routes feature
-        setIsLoading(false);
+        loadUsers();
     }, []);
+
+    async function loadUsers() {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const res = await fetch('/api/users', { cache: 'no-store' });
+            if (!res.ok) {
+                // Try to read error message from response
+                let errorMessage = 'Failed to load users';
+                try {
+                    const errorData = await res.json();
+                    errorMessage = errorData?.error || errorMessage;
+                } catch {
+                    // If response is not JSON, use default message
+                }
+                throw new Error(errorMessage);
+            }
+            const data = await res.json();
+            setUsers(Array.isArray(data) ? data : []);
+        } catch (err: any) {
+            console.error('Failed to load users:', err);
+            setError(err?.message || 'Failed to load users');
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
+    function handleUsersPatched(updates: any[]) {
+        // Update local users state with patched data
+        setUsers(prev => {
+            const updated = [...prev];
+            updates.forEach(u => {
+                const idx = updated.findIndex(usr => String(usr.id) === String(u.id));
+                if (idx >= 0) {
+                    updated[idx] = { ...updated[idx], ...u };
+                }
+            });
+            return updated;
+        });
+    }
 
     if (isLoading) {
         return (
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '100%',
-                minHeight: '60vh'
-            }}>
-                <div style={{ textAlign: 'center' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+                <Box sx={{ textAlign: 'center' }}>
                     <Route size={48} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-                    <p style={{ color: 'var(--text-secondary)' }}>Loading routes...</p>
-                </div>
-            </div>
+                    <p style={{ color: '#666' }}>Loading routes...</p>
+                </Box>
+            </Box>
         );
     }
 
     if (error) {
         return (
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '100%',
-                minHeight: '60vh'
-            }}>
-                <div style={{ textAlign: 'center', color: 'var(--color-danger)' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+                <Box sx={{ textAlign: 'center', color: '#d32f2f' }}>
                     <Route size={48} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
                     <p>{error}</p>
-                </div>
-            </div>
+                    <Button variant="outlined" onClick={loadUsers} sx={{ mt: 2 }}>
+                        Retry
+                    </Button>
+                </Box>
+            </Box>
         );
     }
 
     return (
-        <div style={{
-            padding: '2rem',
-            maxWidth: '1200px',
-            margin: '0 auto'
-        }}>
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '1rem',
-                marginBottom: '2rem'
-            }}>
-                <Route size={32} style={{ color: 'var(--color-primary)' }} />
-                <h1 style={{
-                    fontSize: '2rem',
-                    fontWeight: 600,
-                    color: 'var(--text-primary)',
-                    margin: 0
-                }}>
+        <Box sx={{ p: 4, maxWidth: 1200, margin: 'auto' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+                <Route size={32} style={{ color: '#1976d2' }} />
+                <h1 style={{ fontSize: '2rem', fontWeight: 600, margin: 0 }}>
                     Routes
                 </h1>
-            </div>
+            </Box>
 
-            <div style={{
-                backgroundColor: 'var(--bg-panel)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '0.5rem',
-                padding: '2rem',
-                textAlign: 'center'
+            <Box sx={{ mb: 3 }}>
+                <Button
+                    variant="contained"
+                    size="large"
+                    onClick={() => setDialogOpen(true)}
+                    startIcon={<Route />}
+                    sx={{ fontWeight: 700 }}
+                >
+                    Open Routes Map
+                </Button>
+            </Box>
+
+            <Box sx={{ 
+                backgroundColor: '#f5f5f5', 
+                border: '1px solid #ddd', 
+                borderRadius: 2, 
+                p: 3,
+                mb: 3
             }}>
-                <p style={{
-                    color: 'var(--text-secondary)',
-                    marginBottom: '1.5rem',
-                    fontSize: '1.1rem'
-                }}>
-                    Routes feature is available. This page provides access to route planning and management.
+                <p style={{ color: '#666', marginBottom: '1rem' }}>
+                    Loaded <strong>{users.length}</strong> users for route planning.
                 </p>
-                
-                <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '1rem',
-                    alignItems: 'center'
-                }}>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                        The routes feature includes:
-                    </p>
-                    <ul style={{
-                        textAlign: 'left',
-                        color: 'var(--text-secondary)',
-                        listStyle: 'none',
-                        padding: 0,
-                        margin: 0
-                    }}>
-                        <li style={{ padding: '0.5rem 0' }}>• View routes on an interactive map</li>
-                        <li style={{ padding: '0.5rem 0' }}>• Assign stops to drivers</li>
-                        <li style={{ padding: '0.5rem 0' }}>• Optimize routes automatically</li>
-                        <li style={{ padding: '0.5rem 0' }}>• Generate new routes</li>
-                        <li style={{ padding: '0.5rem 0' }}>• Manage drivers and driver assignments</li>
-                        <li style={{ padding: '0.5rem 0' }}>• Export route labels and reports</li>
-                    </ul>
-                </div>
+                <p style={{ color: '#666', fontSize: '0.9rem' }}>
+                    Click "Open Routes Map" to access the full routes management interface.
+                </p>
+            </Box>
 
-                <div style={{
-                    marginTop: '2rem',
-                    padding: '1rem',
-                    backgroundColor: 'var(--bg-surface)',
-                    borderRadius: '0.5rem',
-                    border: '1px solid var(--border-color)'
-                }}>
-                    <p style={{
-                        color: 'var(--text-secondary)',
-                        fontSize: '0.85rem',
-                        margin: 0
-                    }}>
-                        <strong>Note:</strong> This page can be enhanced to directly integrate with the routes feature 
-                        from the dietfantasy folder. The routes functionality includes comprehensive route planning, 
-                        optimization, and management capabilities.
-                    </p>
-                </div>
-            </div>
-        </div>
+            <DriversDialog
+                open={dialogOpen}
+                onClose={() => setDialogOpen(false)}
+                users={users}
+                initialDriverCount={6}
+                initialSelectedDay="all"
+                onUsersPatched={handleUsersPatched}
+            />
+        </Box>
     );
 }
