@@ -213,10 +213,12 @@ CREATE TABLE IF NOT EXISTS orders (
     total_items INT NULL,
     notes TEXT NULL,
     proof_of_delivery_url VARCHAR(500) NULL,
+    order_number INT NULL UNIQUE,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     updated_by VARCHAR(255) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+    INDEX idx_orders_order_number (order_number)
 );
 
 -- Order Vendor Selections
@@ -268,10 +270,16 @@ CREATE TABLE IF NOT EXISTS upcoming_orders (
     total_value DECIMAL(10, 2) NULL,
     total_items INT NULL,
     notes TEXT NULL,
+    order_number INT NULL,
+    processed_order_id VARCHAR(36) NULL,
+    processed_at TIMESTAMP NULL,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     updated_by VARCHAR(255) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+    FOREIGN KEY (processed_order_id) REFERENCES orders(id) ON DELETE SET NULL,
+    INDEX idx_upcoming_orders_order_number (order_number),
+    INDEX idx_upcoming_orders_processed_order_id (processed_order_id)
 );
 
 -- Upcoming Order Vendor Selections
@@ -287,14 +295,17 @@ CREATE TABLE IF NOT EXISTS upcoming_order_vendor_selections (
 -- Upcoming Order Items
 CREATE TABLE IF NOT EXISTS upcoming_order_items (
     id VARCHAR(36) PRIMARY KEY,
-    vendor_selection_id VARCHAR(36) NOT NULL,
+    upcoming_order_id VARCHAR(36) NOT NULL,
+    vendor_selection_id VARCHAR(36) NULL,
     upcoming_vendor_selection_id VARCHAR(36) NULL,
     menu_item_id VARCHAR(36) NOT NULL,
     quantity INT NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (upcoming_order_id) REFERENCES upcoming_orders(id) ON DELETE CASCADE,
     FOREIGN KEY (vendor_selection_id) REFERENCES order_vendor_selections(id) ON DELETE CASCADE,
     FOREIGN KEY (upcoming_vendor_selection_id) REFERENCES upcoming_order_vendor_selections(id) ON DELETE CASCADE,
-    FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE CASCADE
+    FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE CASCADE,
+    INDEX idx_upcoming_order_items_upcoming_order_id (upcoming_order_id)
 );
 
 -- Upcoming Order Box Selections
