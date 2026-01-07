@@ -19,6 +19,9 @@ import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
 import SubmissionsList from './SubmissionsList';
 import styles from './ClientProfile.module.css';
+import { geocodeOneClient } from '@/lib/geocodeOneClient';
+import { buildGeocodeQuery } from '@/lib/addressHelpers';
+import MapConfirmDialog from './MapConfirmDialog';
 
 
 interface Props {
@@ -206,9 +209,34 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const [dependentCin, setDependentCin] = useState('');
     const [creatingDependent, setCreatingDependent] = useState(false);
 
+    // Geolocation State
+    const [geoBusy, setGeoBusy] = useState(false);
+    const [geoErr, setGeoErr] = useState('');
+    const [geoSuccess, setGeoSuccess] = useState(false);
+    const [geoPersisting, setGeoPersisting] = useState(false);
+    const [candsOpen, setCandsOpen] = useState(false);
+    const [cands, setCands] = useState<any[]>([]);
+    const [mapOpen, setMapOpen] = useState(false);
+    const inflight = useRef(new Set<AbortController>());
 
+    // Abort all in-flight geocoding requests - must be defined before first useEffect
+    const abortAllGeo = () => {
+        for (const ctrl of inflight.current) ctrl.abort();
+        inflight.current.clear();
+        setGeoBusy(false);
+        setGeoErr("");
+    };
 
     useEffect(() => {
+        // Reset geocoding state when dialog opens or client changes
+        setGeoBusy(false);
+        setGeoErr("");
+        setCandsOpen(false);
+        setCands([]);
+        setGeoSuccess(false);
+        setGeoPersisting(false);
+        abortAllGeo();
+
         // Handle new client case - initialize with defaults
         if (isNewClient) {
             setLoading(true);
@@ -1569,6 +1597,151 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                             <label className="label">County</label>
                                             <input className="input" value={formData.county || ''} onChange={e => setFormData({ ...formData, county: e.target.value })} />
                                         </div>
+                                    </div>
+                                </div>
+
+                                {/* Geolocation Panel */}
+                                <div className={styles.formGroup}>
+                                    <div style={{ 
+                                        padding: '1rem', 
+                                        border: '1px solid var(--border-color)', 
+                                        borderRadius: 'var(--radius-md)', 
+                                        backgroundColor: 'var(--bg-surface-hover)',
+                                        opacity: saving ? 0.7 : 1 
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                                            <label className="label" style={{ margin: 0 }}>Location</label>
+                                            {(geoBusy || geoPersisting) && (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                    <Loader2 size={16} className="spin" />
+                                                    <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                                        {geoBusy ? 'Geocoding...' : 'Saving...'}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            <div style={{ flex: 1 }} />
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={tryAutoGeocode}
+                                                disabled={geoBusy || saving}
+                                                style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                                            >
+                                                Auto Geocode
+                                            </button>
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={openSuggestions}
+                                                disabled={geoBusy || saving}
+                                                style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                                            >
+                                                See Suggestions
+                                            </button>
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => setMapOpen(true)}
+                                                disabled={geoBusy || saving}
+                                                style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                                            >
+                                                Select on Map
+                                            </button>
+                                        </div>
+
+                                        {geoSuccess && (
+                                            <div style={{ 
+                                                display: 'flex', 
+                                                alignItems: 'center', 
+                                                gap: '0.5rem', 
+                                                marginTop: '0.5rem', 
+                                                color: 'var(--color-success)',
+                                                fontSize: '0.875rem'
+                                            }}>
+                                                <Check size={16} />
+                                                <span>Geocoded Successfully! 🎉</span>
+                                            </div>
+                                        )}
+
+                                        {typeof formData.lat === "number" && typeof formData.lng === "number" && !geoSuccess ? (
+                                            <div style={{ 
+                                                marginTop: '0.5rem', 
+                                                fontSize: '0.875rem', 
+                                                color: 'var(--color-success)' 
+                                            }}>
+                                                ✓ Geocoded: {formData.lat.toFixed(6)}, {formData.lng.toFixed(6)}{geoPersisting ? " (saving…)" : ""}
+                                            </div>
+                                        ) : !geoSuccess ? (
+                                            <div style={{ 
+                                                marginTop: '0.5rem', 
+                                                fontSize: '0.875rem', 
+                                                color: 'var(--text-secondary)' 
+                                            }}>
+                                                Not geocoded yet.
+                                            </div>
+                                        ) : null}
+
+                                        {geoErr && (
+                                            <div style={{ 
+                                                marginTop: '0.75rem', 
+                                                padding: '0.75rem', 
+                                                backgroundColor: 'rgba(239, 68, 68, 0.1)', 
+                                                border: '1px solid rgba(239, 68, 68, 0.3)', 
+                                                borderRadius: 'var(--radius-sm)', 
+                                                color: 'var(--color-danger)',
+                                                fontSize: '0.875rem'
+                                            }}>
+                                                {geoErr}
+                                            </div>
+                                        )}
+
+                                        {candsOpen && (
+                                            <div style={{ 
+                                                marginTop: '0.75rem', 
+                                                border: '1px dashed var(--border-color)', 
+                                                borderRadius: 'var(--radius-sm)', 
+                                                maxHeight: '220px', 
+                                                overflow: 'auto' 
+                                            }}>
+                                                {cands.length ? (
+                                                    <div>
+                                                        {cands.map((c, idx) => (
+                                                            <div
+                                                                key={idx}
+                                                                onClick={() => pickCandidate(c)}
+                                                                style={{
+                                                                    padding: '0.75rem',
+                                                                    cursor: saving ? 'not-allowed' : 'pointer',
+                                                                    borderBottom: idx < cands.length - 1 ? '1px solid var(--border-color)' : 'none',
+                                                                    backgroundColor: 'transparent',
+                                                                    transition: 'background-color 0.2s',
+                                                                    opacity: saving ? 0.5 : 1
+                                                                }}
+                                                                onMouseEnter={(e) => {
+                                                                    if (!saving) {
+                                                                        e.currentTarget.style.backgroundColor = 'var(--bg-surface)';
+                                                                    }
+                                                                }}
+                                                                onMouseLeave={(e) => {
+                                                                    e.currentTarget.style.backgroundColor = 'transparent';
+                                                                }}
+                                                            >
+                                                                <div style={{ fontWeight: 500 }}>{c.label}</div>
+                                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                                    {Number(c.lat).toFixed(5)}, {Number(c.lng).toFixed(5)} — {c.provider}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ 
+                                                        padding: '0.75rem', 
+                                                        fontSize: '0.875rem', 
+                                                        color: 'var(--text-secondary)', 
+                                                        textAlign: 'center' 
+                                                    }}>
+                                                        No suggestions yet.
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -3505,8 +3678,209 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 clientName={formData.fullName || 'this client'}
                 deleting={saving}
             />
+            <MapConfirmDialog
+                open={mapOpen}
+                onClose={() => {
+                    abortAllGeo();
+                    setMapOpen(false);
+                }}
+                initialQuery={streetQueryNoUnit({
+                    address: formData.address || "",
+                    city: formData.city || "",
+                    state: formData.state || "",
+                    zip: formData.zip || "",
+                })}
+                initialLatLng={
+                    typeof formData.lat === "number" && typeof formData.lng === "number"
+                        ? [formData.lat, formData.lng]
+                        : null
+                }
+                onConfirm={onMapConfirm}
+            />
         </>
     );
+
+    // Helper function to create address query for geocoding
+    function streetQueryNoUnit(addressData: { address?: string; city?: string; state?: string; zip?: string }) {
+        const parts = [addressData.address, addressData.city, addressData.state, addressData.zip].filter(Boolean);
+        return parts.join(", ");
+    }
+
+    // Tracked fetch for geocoding with timeout and abort
+    const trackedFetch = async (input: string, init: RequestInit = {}) => {
+        const ctrl = new AbortController();
+        const sig = init.signal
+            ? (() => {
+                try {
+                    return AbortSignal.any([init.signal!, ctrl.signal]);
+                } catch {
+                    return ctrl.signal;
+                }
+            })()
+            : ctrl.signal;
+        inflight.current.add(ctrl);
+        try {
+            const timeout = setTimeout(() => ctrl.abort(), 10000);
+            const res = await fetch(input, { ...init, signal: sig });
+            clearTimeout(timeout);
+            return res;
+        } finally {
+            inflight.current.delete(ctrl);
+            setGeoBusy(false);
+        }
+    };
+
+    // Persist lat/lng to server
+    async function persistLatLng(userId: string, geo: { lat: number; lng: number; address?: string; city?: string; state?: string; zip?: string }) {
+        if (!Number.isFinite(Number(userId))) return;
+        setGeoPersisting(true);
+        try {
+            await updateClient(userId, {
+                lat: geo.lat,
+                lng: geo.lng,
+                ...(geo.address ? { address: geo.address } : {}),
+                ...(geo.city ? { city: geo.city } : {}),
+                ...(geo.state ? { state: geo.state } : {}),
+                ...(geo.zip ? { zip: geo.zip } : {}),
+            });
+        } catch (_) {
+            // Silently fail - user can retry
+        } finally {
+            setGeoPersisting(false);
+        }
+    }
+
+    // Auto geocode function
+    async function tryAutoGeocode() {
+        if (saving || geoBusy) return;
+        setGeoBusy(true);
+        setGeoErr("");
+        setCandsOpen(false);
+        setCands([]);
+        setGeoSuccess(false);
+
+        const qStrict = buildGeocodeQuery({
+            address: formData.address || "",
+            city: formData.city || "",
+            state: formData.state || "",
+            zip: formData.zip || "",
+        }) || streetQueryNoUnit({
+            address: formData.address || "",
+            city: formData.city || "",
+            state: formData.state || "",
+            zip: formData.zip || "",
+        });
+
+        try {
+            const a = await geocodeOneClient(qStrict);
+            setFormData(f => ({ ...f, lat: a.lat, lng: a.lng }));
+            if (formData.id) {
+                await persistLatLng(formData.id, {
+                    lat: a.lat,
+                    lng: a.lng,
+                    address: formData.address || "",
+                    city: formData.city || "",
+                    state: formData.state || "",
+                    zip: formData.zip || "",
+                });
+            }
+            setGeoSuccess(true);
+            setTimeout(() => setGeoSuccess(false), 2000);
+        } catch {
+            try {
+                const qLoose = streetQueryNoUnit({
+                    address: formData.address || "",
+                    city: formData.city || "",
+                    state: formData.state || "",
+                    zip: "",
+                });
+                const a2 = await geocodeOneClient(qLoose);
+                setFormData(f => ({ ...f, lat: a2.lat, lng: a2.lng }));
+                if (formData.id) {
+                    await persistLatLng(formData.id, {
+                        lat: a2.lat,
+                        lng: a2.lng,
+                        address: formData.address || "",
+                        city: formData.city || "",
+                        state: formData.state || "",
+                        zip: formData.zip || "",
+                    });
+                }
+                setGeoSuccess(true);
+                setTimeout(() => setGeoSuccess(false), 2000);
+            } catch {
+                setGeoErr("Address not found. Try suggestions or map selection.");
+            }
+        } finally {
+            setGeoBusy(false);
+        }
+    }
+
+    // Open suggestions for geocoding
+    async function openSuggestions() {
+        if (saving || geoBusy) return;
+        setCandsOpen(true);
+        setCands([]);
+        setGeoBusy(true);
+        setGeoErr("");
+        try {
+            const q = streetQueryNoUnit({
+                address: formData.address || "",
+                city: formData.city || "",
+                state: formData.state || "",
+                zip: formData.zip || "",
+            });
+            const res = await trackedFetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=8`, { cache: "no-store" });
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            const data = await res.json();
+            setCands(Array.isArray(data?.items) ? data.items : []);
+        } catch (e: any) {
+            if (e?.name !== "AbortError") setGeoErr("Failed to load suggestions. Try again or use map.");
+        } finally {
+            setGeoBusy(false);
+        }
+    }
+
+    // Pick a candidate from suggestions
+    async function pickCandidate(item: any) {
+        const lat = Number(item?.lat);
+        const lng = Number(item?.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        setFormData(f => ({ ...f, lat, lng }));
+        setCandsOpen(false);
+        setGeoErr("");
+        if (formData.id) {
+            await persistLatLng(formData.id, {
+                lat,
+                lng,
+                address: formData.address || "",
+                city: formData.city || "",
+                state: formData.state || "",
+                zip: formData.zip || "",
+            });
+        }
+        setGeoSuccess(true);
+        setTimeout(() => setGeoSuccess(false), 2000);
+    }
+
+    // Handle map confirmation
+    async function onMapConfirm({ lat, lng }: { lat: number; lng: number }) {
+        setFormData(f => ({ ...f, lat, lng }));
+        setMapOpen(false);
+        setGeoErr("");
+        if (formData.id) {
+            await persistLatLng(formData.id, {
+                lat,
+                lng,
+                address: formData.address || "",
+                city: formData.city || "",
+                state: formData.state || "",
+                zip: formData.zip || "",
+            });
+        }
+        setGeoSuccess(true);
+        setTimeout(() => setGeoSuccess(false), 2000);
+    }
 
     async function handleSave(): Promise<boolean> {
 
