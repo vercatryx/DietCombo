@@ -29,8 +29,10 @@ export async function query<T = any>(sql: string, params?: any[]): Promise<T[]> 
     const connection = await getPool().getConnection();
     try {
         const [rows] = await connection.execute(sql, params);
+        // Ensure rows is always an array
+        const rowsArray = Array.isArray(rows) ? rows : [];
         // mysql2 should automatically parse JSON fields, but ensure they're objects
-        const parsedRows = (rows as any[]).map((row: any) => {
+        const parsedRows = rowsArray.map((row: any) => {
             if (!row || typeof row !== 'object') return row;
             const parsed: any = { ...row };
             // Handle JSON fields that might come as strings or Buffers

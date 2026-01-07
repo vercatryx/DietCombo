@@ -36,15 +36,15 @@ export async function GET(req: Request) {
         );
         console.log("[mobile/routes] drivers:", drivers.length, "day:", dayParam);
 
-        // 2) Collect unique stopIds
+        // 2) Collect unique stopIds (keep as strings since they are UUIDs)
         const allStopIds = Array.from(
             new Set(
                 drivers.flatMap((d) => {
                     const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : 
                         (typeof d.stop_ids === 'string' ? JSON.parse(d.stop_ids) : []);
                     return stopIds
-                        .map((n: any) => Number(n))
-                        .filter((n: number) => Number.isFinite(n));
+                        .map((id: any) => String(id))
+                        .filter((id: string) => id && id.trim().length > 0);
                 })
             )
         );
@@ -58,16 +58,16 @@ export async function GET(req: Request) {
             )
             : [];
 
-        const stopById = new Map<number, any>();
-        for (const s of stops) stopById.set(Number(s.id), s);
+        const stopById = new Map<string, any>();
+        for (const s of stops) stopById.set(String(s.id), s);
 
         // 4) Shape per driver
         const shaped = drivers.map((d) => {
             const rawIds = Array.isArray(d.stop_ids) ? d.stop_ids : 
                 (typeof d.stop_ids === 'string' ? JSON.parse(d.stop_ids) : []);
             const filteredIds = rawIds
-                .map((n: any) => Number(n))
-                .filter((n: number) => Number.isFinite(n) && stopById.has(n));
+                .map((id: any) => String(id))
+                .filter((id: string) => id && id.trim().length > 0 && stopById.has(id));
 
             let completed = 0;
             for (const sid of filteredIds) {

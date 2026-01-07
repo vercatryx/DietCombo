@@ -9,12 +9,14 @@ import dynamic from 'next/dynamic';
 const DriversDialog = dynamic(() => import('@/components/routes/DriversDialog'), { ssr: false });
 
 export default function RoutesPage() {
+    const [mounted, setMounted] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [users, setUsers] = useState<any[]>([]);
     const [dialogOpen, setDialogOpen] = useState(false);
 
     useEffect(() => {
+        setMounted(true);
         loadUsers();
     }, []);
 
@@ -56,6 +58,11 @@ export default function RoutesPage() {
             });
             return updated;
         });
+    }
+
+    // Prevent hydration mismatch by not rendering MUI components during SSR
+    if (!mounted) {
+        return null;
     }
 
     if (isLoading) {

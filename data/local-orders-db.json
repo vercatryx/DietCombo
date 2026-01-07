@@ -6,7 +6,7 @@
       "service_type": "Boxes",
       "case_id": "CASE-002",
       "status": "pending",
-      "scheduled_delivery_date": "2026-01-08T16:00:00.000Z",
+      "scheduled_delivery_date": "2026-01-09T16:00:00.000Z",
       "actual_delivery_date": null,
       "delivery_day": "Tuesday",
       "delivery_distribution": {
@@ -16,31 +16,52 @@
       "total_items": 1,
       "notes": "Standard box order",
       "proof_of_delivery_url": null,
-      "last_updated": "2026-01-07T13:51:58.000Z",
+      "order_number": 100002,
+      "last_updated": "2026-01-07T16:46:06.000Z",
       "updated_by": "navigator1",
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
   "upcomingOrders": [
     {
-      "id": "upco1111-1111-1111-1111-111111111111",
-      "client_id": "client444-4444-4444-4444-44444444444",
+      "id": "00525e48-a59f-4e94-a286-934fac8b5d14",
+      "client_id": "client111-1111-1111-1111-11111111111",
       "service_type": "Meals",
+      "case_id": "CASE-001",
+      "status": "scheduled",
+      "scheduled_delivery_date": null,
+      "take_effect_date": null,
+      "delivery_day": null,
+      "delivery_distribution": null,
+      "total_value": "0.00",
+      "total_items": 0,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-07T08:59:21.000Z",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-07T16:46:35.000Z"
+    },
+    {
+      "id": "24fad3d9-a459-4304-8987-c88ef77a803b",
+      "client_id": "client444-4444-4444-4444-44444444444",
+      "service_type": "Meals,Boxes",
       "case_id": "CASE-004",
       "status": "scheduled",
-      "scheduled_delivery_date": "2026-01-13T16:00:00.000Z",
-      "take_effect_date": "2026-01-13T16:00:00.000Z",
-      "delivery_day": "Monday",
-      "delivery_distribution": {
-        "Monday": 6,
-        "Wednesday": 6
-      },
-      "total_value": "77.94",
-      "total_items": 12,
-      "notes": "Starting next week",
-      "last_updated": "2026-01-07T13:51:58.000Z",
-      "updated_by": "navigator2",
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "scheduled_delivery_date": null,
+      "take_effect_date": null,
+      "delivery_day": null,
+      "delivery_distribution": null,
+      "total_value": "0.00",
+      "total_items": 0,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-07T08:46:14.000Z",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-07T16:46:14.000Z"
     },
     {
       "id": "upco2222-2222-2222-2222-222222222222",
@@ -48,8 +69,8 @@
       "service_type": "Boxes",
       "case_id": "CASE-006",
       "status": "scheduled",
-      "scheduled_delivery_date": "2026-01-16T16:00:00.000Z",
-      "take_effect_date": "2026-01-16T16:00:00.000Z",
+      "scheduled_delivery_date": "2026-01-17T16:00:00.000Z",
+      "take_effect_date": "2026-01-17T16:00:00.000Z",
       "delivery_day": "Tuesday",
       "delivery_distribution": {
         "Tuesday": 1
@@ -57,9 +78,12 @@
       "total_value": "45.00",
       "total_items": 1,
       "notes": "Pending activation",
-      "last_updated": "2026-01-07T13:51:58.000Z",
+      "order_number": 100007,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-07T16:46:06.000Z",
       "updated_by": "navigator3",
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
   "orderVendorSelections": [
@@ -67,7 +91,7 @@
       "id": "ovs22222-2222-2222-2222-222222222222",
       "order_id": "order222-2222-2222-2222-222222222222",
       "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
   "orderItems": [
@@ -76,7 +100,7 @@
       "vendor_selection_id": "ovs22222-2222-2222-2222-222222222222",
       "menu_item_id": "item2222-2222-2222-2222-222222222221",
       "quantity": 1,
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
   "orderBoxSelections": [
@@ -91,21 +115,15 @@
         "item2222-2222-2222-2222-222222222222": 1,
         "item2222-2222-2222-2222-222222222223": 1
       },
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
   "upcomingOrderVendorSelections": [
     {
-      "id": "uovs1111-1111-1111-1111-111111111111",
-      "upcoming_order_id": "upco1111-1111-1111-1111-111111111111",
-      "vendor_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      "created_at": "2026-01-07T13:51:58.000Z"
-    },
-    {
       "id": "uovs2222-2222-2222-2222-222222222222",
       "upcoming_order_id": "upco2222-2222-2222-2222-222222222222",
       "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
   "upcomingOrderItems": [],
@@ -120,8 +138,8 @@
         "item2222-2222-2222-2222-222222222221": 1,
         "item2222-2222-2222-2222-222222222222": 1
       },
-      "created_at": "2026-01-07T13:51:58.000Z"
+      "created_at": "2026-01-07T16:46:06.000Z"
     }
   ],
-  "lastSynced": "2026-01-07T15:14:00.770Z"
+  "lastSynced": "2026-01-07T18:32:34.238Z"
 }
