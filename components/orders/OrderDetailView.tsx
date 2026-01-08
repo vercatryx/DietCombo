@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, ShoppingCart, User, Calendar, CreditCard, FileText } from 'lucide-react';
+import { ArrowLeft, Package, ShoppingCart, User, Calendar, CreditCard, FileText, PenTool, ExternalLink } from 'lucide-react';
 import styles from './OrderDetailView.module.css';
 
 interface OrderDetailViewProps {
@@ -13,6 +13,7 @@ interface OrderDetailViewProps {
         clientAddress: string;
         clientEmail: string;
         clientPhone: string;
+        clientSignToken?: string | null;
         serviceType: string;
         caseId: string | null;
         status: string;
@@ -261,6 +262,22 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                                     <strong>Delivery Proof:</strong>
                                     <a href={order.deliveryProofUrl} target="_blank" rel="noopener noreferrer" className={styles.link}>
                                         View Image
+                                    </a>
+                                </div>
+                            )}
+                            {order.clientSignToken && (
+                                <div className={styles.infoRow}>
+                                    <strong>Signature Report:</strong>
+                                    <a 
+                                        href={`/sign/${order.clientSignToken}/view`} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer" 
+                                        className={styles.link}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                                    >
+                                        <PenTool size={16} />
+                                        View Signatures
+                                        <ExternalLink size={14} />
                                     </a>
                                 </div>
                             )}

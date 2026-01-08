@@ -2422,8 +2422,15 @@ async function syncSingleOrderForDeliveryDay(
 
     // Now sync related data (vendor selections, items, box selections)
     // Delete existing related records
+    // Delete items first (using JOIN since upcoming_order_items doesn't have upcoming_order_id column)
+    await execute(
+        `DELETE uoi FROM upcoming_order_items uoi
+         INNER JOIN upcoming_order_vendor_selections uovs ON uoi.upcoming_vendor_selection_id = uovs.id
+         WHERE uovs.upcoming_order_id = ?`,
+        [upcomingOrderId]
+    );
+    // Then delete vendor selections (this will also cascade delete any remaining items)
     await execute('DELETE FROM upcoming_order_vendor_selections WHERE upcoming_order_id = ?', [upcomingOrderId]);
-    await execute('DELETE FROM upcoming_order_items WHERE upcoming_order_id = ?', [upcomingOrderId]);
     await execute('DELETE FROM upcoming_order_box_selections WHERE upcoming_order_id = ?', [upcomingOrderId]);
 
     if (orderConfig.serviceType === 'Food' && orderConfig.vendorSelections) {
@@ -2457,6 +2464,28 @@ async function syncSingleOrderForDeliveryDay(
             
             if (!vendorSelection) continue;
 
+            // Find an existing vendor selection to use as a template for vendor_selection_id
+            // This is required because vendor_selection_id is NOT NULL and must reference order_vendor_selections
+            const templateVendorSelection = await queryOne<any>(
+                `SELECT ovs.id FROM order_vendor_selections ovs
+                 INNER JOIN orders o ON ovs.order_id = o.id
+                 WHERE ovs.vendor_id = ? AND o.client_id = ?
+                 ORDER BY o.created_at DESC
+                 LIMIT 1`,
+                [selection.vendorId, clientId]
+            );
+            
+            // If no template found, try to find any vendor selection for this vendor
+            const fallbackVendorSelection = templateVendorSelection || await queryOne<any>(
+                `SELECT id FROM order_vendor_selections WHERE vendor_id = ? LIMIT 1`,
+                [selection.vendorId]
+            );
+
+            if (!fallbackVendorSelection) {
+                console.warn(`[syncSingleOrderForDeliveryDay] No template vendor selection found for vendor ${selection.vendorId}, skipping items`);
+                continue;
+            }
+
             // Insert items
             for (const [itemId, qty] of Object.entries(selection.items)) {
                 const item = menuItems.find(i => i.id === itemId);
@@ -2481,8 +2510,8 @@ async function syncSingleOrderForDeliveryDay(
                     const itemId_uuid = generateUUID();
                     try {
                         await insert(
-                            'INSERT INTO upcoming_order_items (id, upcoming_order_id, vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?, ?)',
-                            [itemId_uuid, upcomingOrderId, vendorSelection.id, itemId, quantity]
+                            'INSERT INTO upcoming_order_items (id, vendor_selection_id, upcoming_vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?, ?)',
+                            [itemId_uuid, fallbackVendorSelection.id, vendorSelection.id, itemId, quantity]
                         );
                         console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted item ${itemId}`);
                     } catch (error) {
@@ -2519,11 +2548,28 @@ async function syncSingleOrderForDeliveryDay(
         if (allVendorSelections.length > 0 && calculatedTotalFromItems > 0) {
             // Use the first vendor selection to attach the total item
             const firstVendorSelection = allVendorSelections[0];
-            const totalItemId = generateUUID();
-            await insert(
-                'INSERT INTO upcoming_order_items (id, upcoming_order_id, vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?, ?)',
-                [totalItemId, upcomingOrderId, firstVendorSelection.id, null, 1]
+            // Find a template vendor selection for the total item
+            const templateVendorSelection = await queryOne<any>(
+                `SELECT ovs.id FROM order_vendor_selections ovs
+                 INNER JOIN orders o ON ovs.order_id = o.id
+                 WHERE ovs.vendor_id = ? AND o.client_id = ?
+                 ORDER BY o.created_at DESC
+                 LIMIT 1`,
+                [firstVendorSelection.vendor_id, clientId]
             );
+            
+            const fallbackVendorSelection = templateVendorSelection || await queryOne<any>(
+                `SELECT id FROM order_vendor_selections WHERE vendor_id = ? LIMIT 1`,
+                [firstVendorSelection.vendor_id]
+            );
+
+            if (fallbackVendorSelection) {
+                const totalItemId = generateUUID();
+                await insert(
+                    'INSERT INTO upcoming_order_items (id, vendor_selection_id, upcoming_vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?, ?)',
+                    [totalItemId, fallbackVendorSelection.id, firstVendorSelection.id, null, 1]
+                );
+            }
         }
     } else if (orderConfig.serviceType === 'Boxes') {
         console.log('[syncSingleOrderForDeliveryDay] Processing Boxes order for upcoming_order_id:', upcomingOrderId);
@@ -4747,10 +4793,10 @@ export async function getOrderById(orderId: string) {
         return null;
     }
 
-    // Fetch client information
+    // Fetch client information (including sign_token for signature reports)
     const { data: clientData } = await supabase
         .from('clients')
-        .select('id, full_name, address, email, phone_number')
+        .select('id, full_name, address, email, phone_number, sign_token')
         .eq('id', orderData.client_id)
         .single();
 
@@ -4914,6 +4960,7 @@ export async function getOrderById(orderId: string) {
         clientAddress: clientData?.address || '',
         clientEmail: clientData?.email || '',
         clientPhone: clientData?.phone_number || '',
+        clientSignToken: clientData?.sign_token || null,
         serviceType: orderData.service_type,
         caseId: orderData.case_id,
         status: orderData.status,

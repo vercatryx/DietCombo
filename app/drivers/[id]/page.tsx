@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
-import L from "leaflet";
 import { fetchDriver, fetchStops, setStopCompleted } from "../../../lib/api";
 import { mapsUrlFromAddress } from "../../../lib/maps";
 import {
@@ -308,54 +307,64 @@ export default function DriverDetailPage() {
 
     /** Fit all stops + render blue dot from saved coords */
     useEffect(() => {
-        if (!mapOpen || !mapApiRef.current?.getMap) return;
+        if (!mapOpen || !mapApiRef.current?.getMap || typeof window === "undefined") return;
         const map = mapApiRef.current.getMap();
         if (!map) return;
 
-        // (A) Fit bounds to all stops with padding
-        const pts = (stops || [])
-            .map(s => {
-                const lat = Number(s?.lat), lng = Number(s?.lng);
-                return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
-            })
-            .filter(Boolean);
-
-        if (pts.length > 0) {
+        // Dynamically import Leaflet only on client side
+        (async () => {
             try {
-                const bounds = L.latLngBounds(pts);
-                map.fitBounds(bounds, { padding: [40, 40] });
-            } catch {}
-        }
+                const Leaflet = await import("leaflet");
+                const L = Leaflet.default;
 
-        // (B) Draw blue dot if we already have coords
-        if (myLoc && Number.isFinite(myLoc.lat) && Number.isFinite(myLoc.lng)) {
-            try {
-                if (myLocMarkerRef.current) map.removeLayer(myLocMarkerRef.current);
-                if (myLocAccuracyRef.current) map.removeLayer(myLocAccuracyRef.current);
-            } catch {}
+                // (A) Fit bounds to all stops with padding
+                const pts = (stops || [])
+                    .map(s => {
+                        const lat = Number(s?.lat), lng = Number(s?.lng);
+                        return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+                    })
+                    .filter(Boolean);
 
-            const dot = L.circleMarker([myLoc.lat, myLoc.lng], {
-                radius: 7,
-                color: "#0B66FF",
-                weight: 2,
-                fillColor: "#0B66FF",
-                fillOpacity: 0.9,
-            }).addTo(map);
+                if (pts.length > 0) {
+                    try {
+                        const bounds = L.latLngBounds(pts);
+                        map.fitBounds(bounds, { padding: [40, 40] });
+                    } catch {}
+                }
 
-            let ring = null;
-            if (Number.isFinite(myLoc.acc) && myLoc.acc > 0) {
-                ring = L.circle([myLoc.lat, myLoc.lng], {
-                    radius: Math.min(myLoc.acc, 120),
-                    color: "#0B66FF",
-                    weight: 1,
-                    fillColor: "#0B66FF",
-                    fillOpacity: 0.08,
-                }).addTo(map);
+                // (B) Draw blue dot if we already have coords
+                if (myLoc && Number.isFinite(myLoc.lat) && Number.isFinite(myLoc.lng)) {
+                    try {
+                        if (myLocMarkerRef.current) map.removeLayer(myLocMarkerRef.current);
+                        if (myLocAccuracyRef.current) map.removeLayer(myLocAccuracyRef.current);
+                    } catch {}
+
+                    const dot = L.circleMarker([myLoc.lat, myLoc.lng], {
+                        radius: 7,
+                        color: "#0B66FF",
+                        weight: 2,
+                        fillColor: "#0B66FF",
+                        fillOpacity: 0.9,
+                    }).addTo(map);
+
+                    let ring = null;
+                    if (Number.isFinite(myLoc.acc) && myLoc.acc > 0) {
+                        ring = L.circle([myLoc.lat, myLoc.lng], {
+                            radius: Math.min(myLoc.acc, 120),
+                            color: "#0B66FF",
+                            weight: 1,
+                            fillColor: "#0B66FF",
+                            fillOpacity: 0.08,
+                        }).addTo(map);
+                    }
+
+                    myLocMarkerRef.current = dot;
+                    myLocAccuracyRef.current = ring;
+                }
+            } catch (e) {
+                console.error("Failed to load Leaflet", e);
             }
-
-            myLocMarkerRef.current = dot;
-            myLocAccuracyRef.current = ring;
-        }
+        })();
 
         // Cleanup on close
         return () => {

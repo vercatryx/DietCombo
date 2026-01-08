@@ -14,7 +14,7 @@ import {
     getAllDeliveryDatesForOrder,
     formatDeliveryDate
 } from '@/lib/order-dates';
-import { Save, ArrowLeft, Truck, Package, AlertTriangle, Upload, Trash2, Plus, Check, ClipboardList, History, CreditCard, Calendar, ChevronDown, ChevronUp, ShoppingCart, Loader2, FileText, Square, CheckSquare, Wrench, Info } from 'lucide-react';
+import { Save, ArrowLeft, Truck, Package, AlertTriangle, Upload, Trash2, Plus, Check, ClipboardList, History, CreditCard, Calendar, ChevronDown, ChevronUp, ShoppingCart, Loader2, FileText, Square, CheckSquare, Wrench, Info, PenTool, Copy, ExternalLink } from 'lucide-react';
 import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
 import SubmissionsList from './SubmissionsList';
@@ -219,6 +219,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const [mapOpen, setMapOpen] = useState(false);
     const inflight = useRef(new Set<AbortController>());
 
+    // Signature State
+    const [signatureCollected, setSignatureCollected] = useState<number>(0);
+    const [signatureLink, setSignatureLink] = useState<string | null>(null);
+    const [isCopyingLink, setIsCopyingLink] = useState(false);
+
     // Abort all in-flight geocoding requests - must be defined before first useEffect
     const abortAllGeo = () => {
         for (const ctrl of inflight.current) ctrl.abort();
@@ -314,6 +319,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         // Load submissions for this client
         if (clientId) {
             loadSubmissions();
+            loadSignatureStatus();
         }
     }, [clientId]);
 
@@ -407,6 +413,64 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             console.error('Failed to load submissions:', error);
         } finally {
             setLoadingSubmissions(false);
+        }
+    }
+
+    async function loadSignatureStatus() {
+        if (!clientId || clientId === 'new') return;
+        try {
+            // Get signature status
+            const statusRes = await fetch('/api/signatures/status', { cache: 'no-store' });
+            if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                const clientStatus = statusData.find((s: any) => s.userId === clientId);
+                if (clientStatus) {
+                    setSignatureCollected(clientStatus.collected || 0);
+                }
+            }
+
+            // Get or create signature token
+            const tokenRes = await fetch(`/api/signatures/ensure-token/${clientId}`, {
+                method: 'POST',
+            });
+            if (tokenRes.ok) {
+                const tokenData = await tokenRes.json();
+                if (tokenData.sign_token) {
+                    const baseUrl = window.location.origin;
+                    setSignatureLink(`${baseUrl}/sign/${tokenData.sign_token}`);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load signature status:', error);
+        }
+    }
+
+    async function handleCopySignatureLink() {
+        if (!signatureLink) {
+            // Ensure token exists
+            if (!clientId || clientId === 'new') return;
+            try {
+                const tokenRes = await fetch(`/api/signatures/ensure-token/${clientId}`, {
+                    method: 'POST',
+                });
+                if (tokenRes.ok) {
+                    const tokenData = await tokenRes.json();
+                    if (tokenData.sign_token) {
+                        const baseUrl = window.location.origin;
+                        const link = `${baseUrl}/sign/${tokenData.sign_token}`;
+                        setSignatureLink(link);
+                        await navigator.clipboard.writeText(link);
+                        setIsCopyingLink(true);
+                        setTimeout(() => setIsCopyingLink(false), 2000);
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to get signature link:', error);
+            }
+        } else {
+            await navigator.clipboard.writeText(signatureLink);
+            setIsCopyingLink(true);
+            setTimeout(() => setIsCopyingLink(false), 2000);
         }
     }
 
@@ -1428,6 +1492,38 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             <h1 className={styles.title}>{formData.fullName || (isDependent ? 'Dependent Profile' : 'Client Profile')}</h1>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {!isDependent && (
+                                <>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={handleCopySignatureLink}
+                                        title={`Signature Link (${signatureCollected}/5 collected)`}
+                                        style={{ marginRight: '8px' }}
+                                    >
+                                        {isCopyingLink ? (
+                                            <>
+                                                <Check size={16} /> Copied!
+                                            </>
+                                        ) : (
+                                            <>
+                                                <PenTool size={16} /> Signature {signatureCollected > 0 && `(${signatureCollected}/5)`}
+                                            </>
+                                        )}
+                                    </button>
+                                    {signatureLink && (
+                                        <a
+                                            href={signatureLink + '/view'}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="btn btn-secondary"
+                                            style={{ marginRight: '8px' }}
+                                            title="View collected signatures"
+                                        >
+                                            <ExternalLink size={16} /> View
+                                        </a>
+                                    )}
+                                </>
+                            )}
                             <button
                                 className={`btn ${styles.deleteButton}`}
                                 onClick={() => setShowDeleteModal(true)}

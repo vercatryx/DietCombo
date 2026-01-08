@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
-import { Camera, CheckCircle, Upload, RefreshCw, AlertCircle, MapPin, X } from 'lucide-react';
+import { Camera, CheckCircle, Upload, RefreshCw, AlertCircle, MapPin, X, PenTool, ExternalLink } from 'lucide-react';
 import '../delivery.css';
 
 interface OrderDetails {
@@ -13,6 +13,7 @@ interface OrderDetails {
     address: string;
     deliveryDate: string;
     alreadyDelivered: boolean;
+    clientSignToken?: string | null;
 }
 
 export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
@@ -235,6 +236,31 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     >
                         Update Proof (Re-take Photo)
                     </button>
+                    {order.clientSignToken && (
+                        <a
+                            href={`/sign/${order.clientSignToken}/view`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.5rem',
+                                padding: '0.75rem',
+                                background: 'rgba(59, 130, 246, 0.1)',
+                                border: '1px solid rgba(59, 130, 246, 0.3)',
+                                borderRadius: '0.5rem',
+                                color: '#60a5fa',
+                                textDecoration: 'none',
+                                fontWeight: 500,
+                                fontSize: '0.875rem'
+                            }}
+                        >
+                            <PenTool size={16} />
+                            View Signature Report
+                            <ExternalLink size={14} />
+                        </a>
+                    )}
                     <p className="text-subtitle">You can close this window now.</p>
                 </div>
             </div>

@@ -86,10 +86,10 @@ export default async function OrderDeliveryPage({ params }: { params: Promise<{ 
         );
     }
 
-    // Fetch Client Name/Address
+    // Fetch Client Name/Address and signature token
     const { data: client } = await supabaseAdmin
         .from('clients')
-        .select('full_name, address')
+        .select('full_name, address, sign_token')
         .eq('id', order.client_id)
         .single();
 
@@ -99,7 +99,8 @@ export default async function OrderDeliveryPage({ params }: { params: Promise<{ 
         clientName: client?.full_name || 'Unknown Client',
         address: client?.address || 'Unknown Address',
         deliveryDate: order.scheduled_delivery_date,
-        alreadyDelivered: !!order.delivery_proof_url
+        alreadyDelivered: !!order.delivery_proof_url,
+        clientSignToken: client?.sign_token || null
     };
 
     return (
