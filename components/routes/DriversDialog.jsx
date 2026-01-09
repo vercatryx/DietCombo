@@ -394,7 +394,7 @@ export default function DriversDialog({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         day: selectedDay,
-                        runId: selectedRunId ? Number(selectedRunId) : undefined,
+                        runId: selectedRunId && selectedRunId.trim() !== "" ? String(selectedRunId) : undefined,
                     }),
                 });
             } catch (e) {
@@ -848,9 +848,9 @@ export default function DriversDialog({
     // Apply a selected run
     async function applyRun(id) {
         if (!id) return;
-        const numId = Number(id);
-        // Validate that id is a valid number (not NaN, and finite)
-        if (!Number.isFinite(numId)) {
+        // IDs are UUID strings, not numbers
+        const runId = String(id);
+        if (!runId || runId.trim() === "") {
             console.error("Invalid run ID:", id);
             alert("Invalid route ID. Please select a valid route.");
             return;
@@ -864,7 +864,7 @@ export default function DriversDialog({
             const res = await fetch("/api/route/apply-run", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ runId: numId }),
+                body: JSON.stringify({ runId: runId }),
             });
             if (!res.ok) throw new Error(await res.text());
 
