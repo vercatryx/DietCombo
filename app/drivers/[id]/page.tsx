@@ -179,12 +179,31 @@ export default function DriverDetailPage() {
     }, [loadData]);
 
     /* ================== Progress counts ================== */
-    const doneCount = useMemo(() => stops.filter((s) => !!s.completed).length, [stops]);
-    const pctDone = stops.length ? (doneCount / stops.length) * 100 : 0;
+    const total = stops.length;
+    const doneCount = useMemo(() => stops.filter((s) => !!s?.completed).length, [stops]);
+    const pctDone = total > 0 ? Math.min(100, Math.max(0, (doneCount / total) * 100)) : 0;
 
     // A "signature complete user" = sigCollected >= 5
-    const sigUsersDone = useMemo(() => stops.filter((s) => Number(s.sigCollected ?? 0) >= 5).length, [stops]);
-    const pctSigs = stops.length ? (sigUsersDone / stops.length) * 100 : 0;
+    const sigUsersDone = useMemo(() => stops.filter((s) => Number(s?.sigCollected ?? 0) >= 5).length, [stops]);
+    const pctSigs = total > 0 ? Math.min(100, Math.max(0, (sigUsersDone / total) * 100)) : 0;
+
+    // Ensure progress values are valid numbers for rendering
+    const safePctDone = Number.isFinite(pctDone) ? pctDone : 0;
+    const safePctSigs = Number.isFinite(pctSigs) ? pctSigs : 0;
+
+    // Debug logging (remove in production)
+    useEffect(() => {
+        if (stops.length > 0) {
+            console.log('[Driver Progress]', {
+                total: stops.length,
+                doneCount,
+                sigUsersDone,
+                pctDone: safePctDone,
+                pctSigs: safePctSigs,
+                sampleStop: stops[0]
+            });
+        }
+    }, [stops.length, doneCount, sigUsersDone, safePctDone, safePctSigs]);
 
     /* ================== Duplicate address detection ================== */
     const addressGroups = useMemo(() => {
@@ -395,8 +414,10 @@ export default function DriverDetailPage() {
         return <div className="muted" style={{ padding: 16 }}>Loading route…</div>;
     }
 
+    const brandColor = driver.color || "#3665F3";
+    
     return (
-        <div className="container theme" style={{ ["--brand"]: driver.color || "#3665F3" }}>
+        <div className="container theme" style={{ "--brand": brandColor } as React.CSSProperties}>
             {/* Sticky mobile header */}
             <header className="sticky-header">
                 <button className="icon-back" onClick={() => router.push("/drivers")} aria-label="Back to routes">
@@ -409,10 +430,10 @@ export default function DriverDetailPage() {
                     </div>
 
                     {/* Progress #1: Completed stops */}
-                    <div className="progress small"><span style={{ width: `${pctDone}%` }} /></div>
+                    <div className="progress"><span style={{ width: `${safePctDone}%`, background: brandColor, display: 'block', height: '100%', borderRadius: '999px' }} /></div>
 
                     {/* Progress #2: Signature-complete users */}
-                    <div className="progress small sig"><span style={{ width: `${pctSigs}%` }} /></div>
+                    <div className="progress sig"><span style={{ width: `${safePctSigs}%`, background: '#0ea5e9', display: 'block', height: '100%', borderRadius: '999px' }} /></div>
                 </div>
                 <div className="hdr-count">
                     <div className="strong">{doneCount}/{stops.length}</div>
@@ -449,8 +470,8 @@ export default function DriverDetailPage() {
 
                     <div className="banner-progress">
                         <div className="muted white mb8">Progress</div>
-                        <div className="progress"><span style={{ width: `${pctDone}%`, background: "#fff" }} /></div>
-                        <div className="progress sig" style={{ marginTop: 8 }}><span style={{ width: `${pctSigs}%`, background: "#fff" }} /></div>
+                        <div className="progress"><span style={{ width: `${safePctDone}%`, background: "#fff", display: 'block', height: '100%', borderRadius: '999px' }} /></div>
+                        <div className="progress sig" style={{ marginTop: 8 }}><span style={{ width: `${safePctSigs}%`, background: "#fff", display: 'block', height: '100%', borderRadius: '999px' }} /></div>
                     </div>
                 </div>
             </div>
