@@ -770,7 +770,8 @@ export default function DriversDialog({
     async function handleRemoveDriver() {
         // Get list of drivers (excluding Driver 0)
         const removableDrivers = routes.filter(r => {
-            const isDriver0 = /driver\s+0/i.test(r.name || "");
+            const driverName = r.driverName || r.name || "";
+            const isDriver0 = /driver\s+0/i.test(driverName);
             return !isDriver0;
         });
 
@@ -780,7 +781,7 @@ export default function DriversDialog({
         }
 
         // Show selection dialog
-        const driverNames = removableDrivers.map((r, idx) => `${idx + 1}. ${r.name} (${r.stops?.length || 0} stops)`).join("\n");
+        const driverNames = removableDrivers.map((r, idx) => `${idx + 1}. ${r.driverName || r.name || "Unknown"} (${r.stops?.length || 0} stops)`).join("\n");
         const selection = window.prompt(
             `Select driver to remove (enter number):\n${driverNames}`,
             "1"
@@ -974,7 +975,10 @@ export default function DriversDialog({
                                     ➖ Remove Driver
                                 </Button>
                                 <Box sx={{ fontSize: 13, color: "#6b7280", ml: 1 }}>
-                                    Drivers: {routes.filter(r => !/driver\s+0/i.test(r.name || "")).length}
+                                    Drivers: {routes.filter(r => {
+                                        const driverName = r.driverName || r.name || "";
+                                        return !/driver\s+0/i.test(driverName);
+                                    }).length}
                                 </Box>
                             </Box>
                         </Box>

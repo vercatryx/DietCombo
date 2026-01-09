@@ -1622,7 +1622,7 @@ export default function DriversMapLeaflet({
 
                     {/* Clickable driver index */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {indexItems.map((it) => {
+                        {indexItems.map((it, idx) => {
                             const idNum = Number(it.driverId);
                             const active = driverFilter.has(idNum);
                             const isEditing = editingDriverId === it.driverId;
@@ -1630,7 +1630,7 @@ export default function DriversMapLeaflet({
 
                             return (
                                 <div
-                                    key={it.driverId}
+                                    key={it.driverId != null ? `driver-${it.driverId}` : `driver-unrouted-${idx}`}
                                     style={{
                                         display: "flex",
                                         alignItems: "center",
@@ -1813,12 +1813,13 @@ export default function DriversMapLeaflet({
 
                     {/* route lines */}
                     {showRouteLines &&
-                        visibleDrivers.map((d) => {
+                        visibleDrivers.map((d, index) => {
                             const pts = (d.stops || []).map(getLL).filter(Boolean);
                             if (pts.length < 2) return null;
+                            const driverId = Number.isFinite(d.driverId) ? String(d.driverId) : `unknown-${index}`;
                             return (
                                 <Polyline
-                                    key={`route-${String(d.driverId)}`}
+                                    key={`route-${driverId}-${index}`}
                                     positions={pts}
                                     pathOptions={{
                                         color: d.color || "#1f77b4",

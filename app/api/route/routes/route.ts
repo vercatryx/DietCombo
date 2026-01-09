@@ -73,26 +73,13 @@ export async function GET(req: Request) {
 
         const clients = clientIds.length
             ? await query<any[]>(`
-                SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone, lat, lng, dislikes, paused, delivery
+                SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone_number as phone, lat, lng, dislikes, paused, delivery
                 FROM clients
                 WHERE id IN (${clientIds.map(() => "?").join(",")})
             `, clientIds)
             : [];
 
         const clientById = new Map(clients.map((c) => [c.id, c]));
-
-        // Get schedules for clients
-        const schedulesMap = new Map<string, any>();
-        if (clientIds.length) {
-            const schedules = await query<any[]>(`
-                SELECT client_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday
-                FROM schedules
-                WHERE client_id IN (${clientIds.map(() => "?").join(",")})
-            `, clientIds);
-            for (const s of schedules) {
-                schedulesMap.set(s.client_id, s);
-            }
-        }
 
         // 4) Sort drivers so Driver 0,1,2… are in that order
         const drivers = [...allDriversRaw].sort(
@@ -160,8 +147,9 @@ export async function GET(req: Request) {
         }
 
         // 8) Check clients without stops, create missing stops, and log reasons
+        // NEW APPROACH: Use orders to determine which clients need stops, not schedules
         const allClients = await query<any[]>(`
-            SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone, lat, lng, paused, delivery
+            SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone_number as phone, lat, lng, paused, delivery
             FROM clients
             ORDER BY id ASC
         `);
@@ -180,25 +168,98 @@ export async function GET(req: Request) {
             }
         }
 
+        // Get active orders to determine which clients need stops
+        // Active order statuses: 'pending', 'scheduled', 'confirmed'
+        const activeOrderStatuses = ["pending", "scheduled", "confirmed"];
+        const placeholders = activeOrderStatuses.map(() => "?").join(",");
+        
+        // Get orders with scheduled_delivery_date and extract day of week
+        // Also check delivery_day field if present
+        const activeOrders = await query<any[]>(`
+            SELECT 
+                client_id,
+                scheduled_delivery_date,
+                delivery_day,
+                status
+            FROM orders
+            WHERE status IN (${placeholders})
+            AND (scheduled_delivery_date IS NOT NULL OR delivery_day IS NOT NULL)
+        `, activeOrderStatuses);
+
+        // Get upcoming_orders with delivery_day
+        const upcomingOrders = await query<any[]>(`
+            SELECT 
+                client_id,
+                delivery_day,
+                status
+            FROM upcoming_orders
+            WHERE status = 'scheduled'
+            AND delivery_day IS NOT NULL
+        `);
+
+        // Build map of client_id -> set of delivery days they have orders for
+        const clientDeliveryDays = new Map<string, Set<string>>();
+        
+        // Helper to convert day name to lowercase
+        const normalizeDay = (dayName: string | null): string | null => {
+            if (!dayName) return null;
+            return dayName.toLowerCase();
+        };
+
+        // Helper to get day of week from date
+        const getDayOfWeek = (dateStr: string | null): string | null => {
+            if (!dateStr) return null;
+            try {
+                const date = new Date(dateStr);
+                const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                return dayNames[date.getDay()];
+            } catch {
+                return null;
+            }
+        };
+
+        // Process active orders
+        for (const order of activeOrders) {
+            const clientId = String(order.client_id);
+            if (!clientDeliveryDays.has(clientId)) {
+                clientDeliveryDays.set(clientId, new Set());
+            }
+            const daysSet = clientDeliveryDays.get(clientId)!;
+            
+            // Use delivery_day if available, otherwise extract from scheduled_delivery_date
+            if (order.delivery_day) {
+                const normalizedDay = normalizeDay(order.delivery_day);
+                if (normalizedDay) daysSet.add(normalizedDay);
+            } else if (order.scheduled_delivery_date) {
+                const dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
+                if (dayOfWeek) daysSet.add(dayOfWeek);
+            }
+        }
+
+        // Process upcoming orders
+        for (const order of upcomingOrders) {
+            const clientId = String(order.client_id);
+            if (!clientDeliveryDays.has(clientId)) {
+                clientDeliveryDays.set(clientId, new Set());
+            }
+            const daysSet = clientDeliveryDays.get(clientId)!;
+            
+            if (order.delivery_day) {
+                const normalizedDay = normalizeDay(order.delivery_day);
+                if (normalizedDay) daysSet.add(normalizedDay);
+            }
+        }
+
         const isDeliverable = (c: any) => {
             const v = c?.delivery;
             return v === undefined || v === null ? true : Boolean(v);
         };
 
-        const isOnDay = (c: any, dayValue: string) => {
-            if (dayValue === "all") return true;
-            const sc = schedulesMap.get(c.id);
-            if (!sc) return true; // back-compat
-            const dayMap: Record<string, string> = {
-                monday: "monday",
-                tuesday: "tuesday",
-                wednesday: "wednesday",
-                thursday: "thursday",
-                friday: "friday",
-                saturday: "saturday",
-                sunday: "sunday",
-            };
-            return !!sc[dayMap[dayValue]];
+        const hasOrderForDay = (clientId: string, dayValue: string): boolean => {
+            if (dayValue === "all") return true; // For "all" day, check if client has any orders
+            const daysSet = clientDeliveryDays.get(String(clientId));
+            if (!daysSet || daysSet.size === 0) return false;
+            return daysSet.has(dayValue.toLowerCase());
         };
 
         const s = (v: unknown) => (v == null ? "" : String(v));
@@ -223,42 +284,47 @@ export async function GET(req: Request) {
         }> = [];
 
         for (const client of allClients) {
-            if (!clientsWithStops.has(String(client.id))) {
-                const reasons: string[] = [];
-                
-                if (client.paused) {
-                    reasons.push("paused");
-                }
-                if (!isDeliverable(client)) {
-                    reasons.push("delivery off");
-                }
-                if (!isOnDay(client, day)) {
-                    reasons.push(`not on schedule (${day})`);
-                }
-                
-                const name = `${client.first || ""} ${client.last || ""}`.trim() || "Unnamed";
-                
-                // If client should have a stop (no valid reasons), create it
-                if (reasons.length === 0) {
-                    stopsToCreate.push({
-                        id: uuidv4(),
-                        day: day,
-                        client_id: String(client.id),
-                        name: name || "(Unnamed)",
-                        address: s(client.address),
-                        apt: client.apt ? s(client.apt) : null,
-                        city: s(client.city),
-                        state: s(client.state),
-                        zip: s(client.zip),
-                        phone: client.phone ? s(client.phone) : null,
-                        lat: n(client.lat),
-                        lng: n(client.lng),
-                    });
-                } else {
-                    // Client has a valid reason for not having a stop, log it
-                    const reason = reasons.join(", ");
-                    usersWithoutStops.push({ id: String(client.id), name, reason });
-                }
+            const clientId = String(client.id);
+            
+            // Skip if client already has a stop for this day
+            if (clientsWithStops.has(clientId)) {
+                continue;
+            }
+
+            const reasons: string[] = [];
+            
+            if (client.paused) {
+                reasons.push("paused");
+            }
+            if (!isDeliverable(client)) {
+                reasons.push("delivery off");
+            }
+            if (!hasOrderForDay(clientId, day)) {
+                reasons.push(`no active order for ${day}`);
+            }
+            
+            const name = `${client.first || ""} ${client.last || ""}`.trim() || "Unnamed";
+            
+            // If client should have a stop (no valid reasons), create it
+            if (reasons.length === 0) {
+                stopsToCreate.push({
+                    id: uuidv4(),
+                    day: day,
+                    client_id: clientId,
+                    name: name || "(Unnamed)",
+                    address: s(client.address),
+                    apt: client.apt ? s(client.apt) : null,
+                    city: s(client.city),
+                    state: s(client.state),
+                    zip: s(client.zip),
+                    phone: client.phone ? s(client.phone) : null,
+                    lat: n(client.lat),
+                    lng: n(client.lng),
+                });
+            } else {
+                // Client has a valid reason for not having a stop, log it
+                const reason = reasons.join(", ");
+                usersWithoutStops.push({ id: clientId, name, reason });
             }
         }
 
