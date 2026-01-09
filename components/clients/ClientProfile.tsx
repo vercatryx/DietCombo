@@ -4153,6 +4153,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         try {
             // Handle new client creation
             if (isNewClient) {
+                // Validate that client name is not empty
+                if (!formData.fullName || !formData.fullName.trim()) {
+                    setSaving(false);
+                    setMessage('Client name is required. Please enter a client name before saving.');
+                    return false;
+                }
+
                 // STRATEGY: Create client first WITHOUT order details, then update it with order details
                 // This avoids issues with saving order data during creation and uses the proven edit path
                 const initialStatusId = (initialStatuses || statuses)[0]?.id || '';

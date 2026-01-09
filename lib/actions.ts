@@ -1004,8 +1004,13 @@ export async function getPublicClient(id: string) {
 }
 
 export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | 'updatedAt'>) {
+    // Validate that client name is not empty
+    if (!data.fullName || !data.fullName.trim()) {
+        throw new Error('Client name is required and cannot be empty');
+    }
+
     const payload: any = {
-        full_name: data.fullName,
+        full_name: data.fullName.trim(),
         email: data.email,
         address: data.address,
         phone_number: data.phoneNumber,

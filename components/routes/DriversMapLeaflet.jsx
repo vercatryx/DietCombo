@@ -1440,8 +1440,8 @@ export default function DriversMapLeaflet({
                                 }}
                             >
                                 <option value="">Choose driver…</option>
-                                {sortedDrivers.map((opt) => (
-                                    <option key={opt.driverId} value={opt.driverId}>
+                                {sortedDrivers.map((opt, idx) => (
+                                    <option key={opt.driverId != null && !isNaN(opt.driverId) ? opt.driverId : `driver-opt-${idx}`} value={opt.driverId}>
                                         {opt.name}
                                     </option>
                                 ))}
@@ -1623,14 +1623,18 @@ export default function DriversMapLeaflet({
                     {/* Clickable driver index */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {indexItems.map((it, idx) => {
-                            const idNum = Number(it.driverId);
+                            // Check if driverId is null, undefined, or NaN before converting
+                            const hasValidDriverId = it.driverId != null && it.driverId !== "" && !isNaN(it.driverId);
+                            const idNum = hasValidDriverId ? Number(it.driverId) : NaN;
                             const active = driverFilter.has(idNum);
                             const isEditing = editingDriverId === it.driverId;
                             const isDriver0 = /driver\s+0/i.test(it.name || "");
+                            // Ensure unique keys: use driverId if valid, otherwise use index-based key
+                            const driverId = Number.isFinite(idNum) && hasValidDriverId ? String(idNum) : `unrouted-${idx}`;
 
                             return (
                                 <div
-                                    key={it.driverId != null ? `driver-${it.driverId}` : `driver-unrouted-${idx}`}
+                                    key={`driver-${driverId}`}
                                     style={{
                                         display: "flex",
                                         alignItems: "center",

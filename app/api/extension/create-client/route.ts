@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
         } = body;
 
         // Validate required fields
-        if (!fullName || !statusId || !navigatorId || !address || !phone || !serviceType || !caseId) {
+        if (!fullName || !fullName.trim() || !statusId || !navigatorId || !address || !phone || !serviceType || !caseId) {
             return NextResponse.json({
                 success: false,
                 error: 'Missing required fields: fullName, statusId, navigatorId, address, phone, serviceType, and caseId are required'
