@@ -76,6 +76,7 @@ export async function POST(
         const body = await req.json().catch(() => null);
         const slot = Number(body?.slot);
         const strokes = body?.strokes;
+        const orderId = body?.orderId || null; // Optional order_id to link signature to specific order
 
         if (![1, 2, 3, 4, 5].includes(slot)) {
             return new NextResponse("Invalid slot", { status: 400 });
@@ -93,19 +94,63 @@ export async function POST(
             [user.id, slot]
         );
 
+        // Handle signature insert/update (order_id is optional and only used if provided and column exists)
+        // We'll try with order_id first if provided, and fall back without it if column doesn't exist
         if (existing) {
             // Update existing signature
-            await execute(
-                `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP WHERE client_id = ? AND slot = ?`,
-                [JSON.stringify(strokes), ip || null, ua || null, user.id, slot]
-            );
+            if (orderId) {
+                // Try to update with order_id, fall back if column doesn't exist
+                try {
+                    await execute(
+                        `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP, order_id = ? WHERE client_id = ? AND slot = ?`,
+                        [JSON.stringify(strokes), ip || null, ua || null, orderId, user.id, slot]
+                    );
+                } catch (err: any) {
+                    // If error is about missing column, try without order_id
+                    if (err.code === 'ER_BAD_FIELD_ERROR' || err.message?.includes('order_id')) {
+                        await execute(
+                            `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP WHERE client_id = ? AND slot = ?`,
+                            [JSON.stringify(strokes), ip || null, ua || null, user.id, slot]
+                        );
+                    } else {
+                        throw err;
+                    }
+                }
+            } else {
+                // Update without order_id (backward compatible)
+                await execute(
+                    `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP WHERE client_id = ? AND slot = ?`,
+                    [JSON.stringify(strokes), ip || null, ua || null, user.id, slot]
+                );
+            }
         } else {
             // Insert new signature
             const id = generateUUID();
-            await insert(
-                `INSERT INTO signatures (id, client_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-                [id, user.id, slot, JSON.stringify(strokes), ip || null, ua || null]
-            );
+            if (orderId) {
+                // Try to insert with order_id, fall back if column doesn't exist
+                try {
+                    await insert(
+                        `INSERT INTO signatures (id, client_id, order_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                        [id, user.id, orderId, slot, JSON.stringify(strokes), ip || null, ua || null]
+                    );
+                } catch (err: any) {
+                    // If error is about missing column, try without order_id
+                    if (err.code === 'ER_BAD_FIELD_ERROR' || err.message?.includes('order_id')) {
+                        await insert(
+                            `INSERT INTO signatures (id, client_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                            [id, user.id, slot, JSON.stringify(strokes), ip || null, ua || null]
+                        );
+                    } else {
+                        throw err;
+                    }
+                }
+            } else {
+                // Insert without order_id (backward compatible)
+                await insert(
+                    `INSERT INTO signatures (id, client_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                    [id, user.id, slot, JSON.stringify(strokes), ip || null, ua || null]
+                );
+            }
         }
 
         const after = await query<{ slot: number }>(

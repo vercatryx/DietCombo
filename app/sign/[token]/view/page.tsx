@@ -26,6 +26,7 @@ type Loaded = {
         signedAt?: string;
         ip?: string | null;
         userAgent?: string | null;
+        orderId?: string | null;
     }[];
 };
 
@@ -42,10 +43,43 @@ function drawStrokes(canvas: HTMLCanvasElement, strokes: Stroke[], width = 600, 
     ctx.lineWidth = 2;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+    
+    // Normalize and validate strokes data
+    if (!strokes || !Array.isArray(strokes)) {
+        return;
+    }
+    
     for (const s of strokes) {
+        // Skip if stroke is not an array
+        if (!Array.isArray(s)) {
+            continue;
+        }
+        
+        // Ensure we have at least one point
+        if (s.length === 0) {
+            continue;
+        }
+        
         ctx.beginPath();
-        s.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-        ctx.stroke();
+        let hasValidPoint = false;
+        
+        for (let i = 0; i < s.length; i++) {
+            const p = s[i];
+            // Validate point structure
+            if (p && typeof p === 'object' && typeof p.x === 'number' && typeof p.y === 'number') {
+                if (i === 0) {
+                    ctx.moveTo(p.x, p.y);
+                    hasValidPoint = true;
+                } else {
+                    ctx.lineTo(p.x, p.y);
+                }
+            }
+        }
+        
+        // Only stroke if we had at least one valid point
+        if (hasValidPoint) {
+            ctx.stroke();
+        }
     }
 }
 
@@ -110,7 +144,11 @@ export default function SignaturesViewPage() {
         for (const sig of data.signatures) {
             const idx = sig.slot - 1;
             const c = padRefs[idx]?.current;
-            if (c) drawStrokes(c, sig.strokes);
+            if (c) {
+                // Ensure strokes is an array, default to empty array if invalid
+                const strokes = Array.isArray(sig.strokes) ? sig.strokes : [];
+                drawStrokes(c, strokes);
+            }
         }
         const signedSet = new Set(data.signatures.map((s) => s.slot));
         [1, 2, 3, 4, 5].forEach((slot) => {
@@ -233,8 +271,89 @@ export default function SignaturesViewPage() {
         try {
             setPdfBusy(true);
 
-            const dataUrl = canvas.toDataURL("image/png");
+            // Ensure the canvas is properly drawn before extracting
+            // Find the signature data for the selected slot
+            const signature = data.signatures?.find((s) => s.slot === slot);
+            
+            // Verify canvas has context
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                throw new Error("Unable to get canvas context");
+            }
+
+            // Ensure canvas dimensions are set (re-apply if needed)
+            const dpr = window.devicePixelRatio || 1;
+            const canvasWidth = 600;
+            const canvasHeight = 160;
+            if (canvas.width !== canvasWidth * dpr || canvas.height !== canvasHeight * dpr) {
+                canvas.width = canvasWidth * dpr;
+                canvas.height = canvasHeight * dpr;
+                canvas.style.width = `${canvasWidth}px`;
+                canvas.style.height = `${canvasHeight}px`;
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            
+            // Set white background for PDF export (ensures signature is visible)
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+            
+            // Re-draw the strokes to ensure canvas is up-to-date
+            if (signature && signature.strokes) {
+                const strokes = Array.isArray(signature.strokes) ? signature.strokes : [];
+                if (strokes.length > 0) {
+                    // Set stroke style
+                    ctx.strokeStyle = "#000000";
+                    ctx.lineWidth = 2;
+                    ctx.lineJoin = "round";
+                    ctx.lineCap = "round";
+                    
+                    // Draw each stroke
+                    for (const s of strokes) {
+                        if (!Array.isArray(s) || s.length === 0) continue;
+                        
+                        ctx.beginPath();
+                        let hasValidPoint = false;
+                        
+                        for (let i = 0; i < s.length; i++) {
+                            const p = s[i];
+                            if (p && typeof p === 'object' && typeof p.x === 'number' && typeof p.y === 'number') {
+                                if (i === 0) {
+                                    ctx.moveTo(p.x, p.y);
+                                    hasValidPoint = true;
+                                } else {
+                                    ctx.lineTo(p.x, p.y);
+                                }
+                            }
+                        }
+                        
+                        if (hasValidPoint) {
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            // Wait a brief moment to ensure canvas rendering is complete
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Extract image data from canvas - ensure we get PNG format
+            let dataUrl: string;
+            try {
+                dataUrl = canvas.toDataURL("image/png");
+            } catch (err) {
+                throw new Error(`Failed to extract canvas data: ${err instanceof Error ? err.message : String(err)}`);
+            }
+
+            // Validate data URL
+            if (!dataUrl || dataUrl === "data:," || !dataUrl.startsWith("data:image/png")) {
+                throw new Error("Canvas is empty or not properly rendered - no signature data available");
+            }
+
             const base64 = dataUrl.split(",")[1] || "";
+            if (!base64) {
+                throw new Error("Failed to extract image data from canvas");
+            }
+
             const bin = atob(base64);
             const imgBytes = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) imgBytes[i] = bin.charCodeAt(i);
@@ -362,18 +481,34 @@ export default function SignaturesViewPage() {
             page.drawText("Signature", { x: margin, y, size: 14, font: bold });
             y -= 10;
 
+            // Embed the signature image
             let embedded;
             try {
+                // Try PNG first (canvas produces PNG)
                 embedded = await pdf.embedPng(imgBytes);
-            } catch {
-                embedded = await pdf.embedJpg(imgBytes);
+            } catch (pngErr) {
+                try {
+                    // Fallback to JPG if PNG fails
+                    embedded = await pdf.embedJpg(imgBytes);
+                } catch (jpgErr) {
+                    console.error("Failed to embed signature image:", pngErr, jpgErr);
+                    throw new Error("Failed to embed signature image into PDF");
+                }
             }
+
+            // Validate embedded image exists
+            if (!embedded || !embedded.width || !embedded.height) {
+                throw new Error("Invalid signature image data");
+            }
+
             const maxW = 300, maxH = 100;
             const scale = Math.min(maxW / embedded.width, maxH / embedded.height, 1);
             const drawW = embedded.width * scale;
             const drawH = embedded.height * scale;
             const xImg = margin;
             const yImg = y - drawH - 8;
+            
+            // Draw the signature image on the PDF
             page.drawImage(embedded, { x: xImg, y: yImg, width: drawW, height: drawH });
 
             page.drawText(`Date: ${dateString || "—"}`, {
@@ -402,6 +537,9 @@ export default function SignaturesViewPage() {
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
+        } catch (err: any) {
+            console.error("Error generating PDF:", err);
+            alert(`Failed to generate PDF: ${err?.message || "Unknown error"}`);
         } finally {
             setPdfBusy(false);
         }
@@ -583,7 +721,12 @@ export default function SignaturesViewPage() {
                         {meta ? (
                             <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
                                 Signed: {meta.signedAt ? new Date(meta.signedAt).toLocaleString() : "—"}
-                                {meta.ip ? ` • IP: ${meta.ip}` : ""} {meta.userAgent ? ` • UA: ${meta.userAgent}` : ""}
+                                {meta.orderId ? (
+                                    <span style={{ color: "#1976d2", marginLeft: "8px" }}>
+                                        • Order: <a href={`/orders/${meta.orderId}`} target="_blank" rel="noopener noreferrer" style={{ color: "#1976d2", textDecoration: "underline" }}>View Order</a>
+                                    </span>
+                                ) : null}
+                                {meta.ip ? ` • IP: ${meta.ip}` : ""} {meta.userAgent ? ` • UA: ${meta.userAgent.substring(0, 50)}${meta.userAgent.length > 50 ? '...' : ''}` : ""}
                             </div>
                         ) : null}
                     </div>

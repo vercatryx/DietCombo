@@ -41,16 +41,39 @@ export async function GET(
             }
         }
 
-        const sigs = await query<{
-            slot: number;
-            strokes: string;
-            signed_at: string;
-            ip: string | null;
-            user_agent: string | null;
-        }>(
-            `SELECT slot, strokes, signed_at, ip, user_agent FROM signatures WHERE client_id = ? ORDER BY slot ASC, signed_at ASC`,
-            [user.id]
-        );
+        // Query signatures (try with order_id first, fall back if column doesn't exist)
+        let sigs: any[];
+        try {
+            sigs = await query<{
+                slot: number;
+                strokes: string;
+                signed_at: string;
+                ip: string | null;
+                user_agent: string | null;
+                order_id?: string | null;
+            }>(
+                `SELECT slot, strokes, signed_at, ip, user_agent, order_id FROM signatures WHERE client_id = ? ORDER BY slot ASC, signed_at ASC`,
+                [user.id]
+            );
+        } catch (err: any) {
+            // If error is about missing order_id column, query without it
+            if (err.code === 'ER_BAD_FIELD_ERROR' || err.message?.includes('order_id')) {
+                sigs = await query<{
+                    slot: number;
+                    strokes: string;
+                    signed_at: string;
+                    ip: string | null;
+                    user_agent: string | null;
+                }>(
+                    `SELECT slot, strokes, signed_at, ip, user_agent FROM signatures WHERE client_id = ? ORDER BY slot ASC, signed_at ASC`,
+                    [user.id]
+                );
+                // Add order_id as null for all rows
+                sigs = sigs.map(r => ({ ...r, order_id: null }));
+            } else {
+                throw err;
+            }
+        }
 
         const slots = Array.from(new Set(sigs.map((s) => s.slot))).sort((a, b) => a - b);
 
@@ -67,13 +90,29 @@ export async function GET(
             },
             collected: sigs.length,
             slots,
-            signatures: sigs.map((s) => ({
-                slot: s.slot,
-                strokes: typeof s.strokes === 'string' ? JSON.parse(s.strokes) : s.strokes,
-                signedAt: s.signed_at,
-                ip: s.ip,
-                userAgent: s.user_agent,
-            })),
+            signatures: sigs.map((s: any) => {
+                // Parse strokes if it's a string, ensure it's always an array
+                let strokes = s.strokes;
+                if (typeof strokes === 'string') {
+                    try {
+                        strokes = JSON.parse(strokes);
+                    } catch {
+                        strokes = [];
+                    }
+                }
+                // Ensure strokes is an array
+                if (!Array.isArray(strokes)) {
+                    strokes = [];
+                }
+                return {
+                    slot: s.slot,
+                    strokes,
+                    signedAt: s.signed_at,
+                    ip: s.ip,
+                    userAgent: s.user_agent,
+                    orderId: s.order_id || null,
+                };
+            }),
         });
     } catch (err: any) {
         console.error("[admin token GET] error:", err);

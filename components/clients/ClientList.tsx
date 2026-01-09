@@ -22,7 +22,7 @@ import {
     getBatchClientDetails
 } from '@/lib/actions';
 import { invalidateClientData } from '@/lib/cached-data';
-import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X } from 'lucide-react';
+import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink } from 'lucide-react';
 import styles from './ClientList.module.css';
 import { useRouter } from 'next/navigation';
 
@@ -90,16 +90,156 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     // Order Details Visibility Toggle
     const [showOrderDetails, setShowOrderDetails] = useState(false);
 
+    // Signature state (matching dietfantasy pattern)
+    const [signatureCounts, setSignatureCounts] = useState<Record<string, number>>({});
+    const [signatureCopied, setSignatureCopied] = useState<Record<string, boolean>>({});
+    const [signatureLoading, setSignatureLoading] = useState<Record<string, boolean>>({});
+    const [tokenCache, setTokenCache] = useState<Record<string, string>>({});
+
     useEffect(() => {
         loadInitialData();
+        loadSignatureCounts();
     }, []);
+
+    // Load signature counts from API
+    async function loadSignatureCounts() {
+        try {
+            const res = await fetch('/api/signatures/status', { cache: 'no-store' });
+            if (!res.ok) return;
+            const rows = await res.json();
+            const counts: Record<string, number> = {};
+            for (const row of rows) {
+                counts[row.userId] = row.collected || row._count?.userId || 0;
+            }
+            setSignatureCounts(counts);
+        } catch (error) {
+            console.error('Error loading signature counts:', error);
+        }
+    }
 
     // Reload data when view changes
     useEffect(() => {
         if (!isLoading) {
             loadInitialData();
+            loadSignatureCounts();
         }
     }, [currentView]);
+
+    // Helper function to get signature count for a client
+    const getSignatureCount = (clientId: string): number => {
+        return signatureCounts[clientId] || 0;
+    };
+
+    // Helper function to ensure token exists and get it (matches dietfantasy exactly)
+    const ensureSignatureToken = async (clientId: string): Promise<string | null> => {
+        try {
+            // Try legacy endpoint first (matches dietfantasy pattern)
+            const legacy = await fetch(`/api/signatures/ensure-token/${clientId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+            });
+            if (legacy.ok) {
+                const legacyData = await legacy.json();
+                return legacyData.sign_token ?? null;
+            }
+            // Try alternative endpoint (dietfantasy fallback pattern)
+            const body = await fetch(`/api/signatures/ensure-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: clientId }),
+            });
+            const data = await body.json();
+            return data.sign_token ?? data.signToken ?? data.token ?? null;
+        } catch {
+            return null;
+        }
+    };
+
+    // SignCell component matching dietfantasy exactly
+    const SignCell = ({ client }: { client: ClientProfile }) => {
+        const clientId = client.id;
+        const collected = getSignatureCount(clientId);
+        const done = collected >= 5;
+        const isCopied = signatureCopied[clientId] || false;
+        const isLoading = signatureLoading[clientId] || false;
+
+        const handleSignClick = async (e: React.MouseEvent) => {
+            e.stopPropagation(); // Prevent row click
+            
+            if (isLoading) return;
+            
+            setSignatureLoading(prev => ({ ...prev, [clientId]: true }));
+            
+            // Get token from multiple sources (matches dietfantasy token lookup order exactly)
+            // Note: tokenPatch in dietfantasy is never set, so tokens are always fetched fresh
+            // We use tokenCache here as equivalent to tokenPatch for potential future caching
+            const token = tokenCache[clientId] ??
+                         client.signToken ??
+                         (client as any).sign_token ??
+                         (client as any).token ??
+                         (await ensureSignatureToken(clientId));
+            
+            setSignatureLoading(prev => ({ ...prev, [clientId]: false }));
+            
+            if (!token) {
+                alert('Could not create a signature link. Try again.');
+                return;
+            }
+
+            const base = `${window.location.origin}/sign/${token}`;
+            
+            if (done) {
+                // Open signature view page (matches dietfantasy: checks with HEAD first)
+                const viewerUrl = `${base}/view`;
+                try {
+                    const head = await fetch(viewerUrl, { method: 'HEAD' });
+                    window.open(head.ok ? viewerUrl : base, '_blank', 'noopener,noreferrer');
+                } catch {
+                    window.open(base, '_blank', 'noopener,noreferrer');
+                }
+            } else {
+                // Copy signature link to clipboard (matches dietfantasy exactly)
+                try {
+                    await navigator.clipboard.writeText(base);
+                    setSignatureCopied(prev => ({ ...prev, [clientId]: true }));
+                    setTimeout(() => {
+                        setSignatureCopied(prev => ({ ...prev, [clientId]: false }));
+                    }, 1800);
+                } catch {
+                    alert('Failed to copy link.');
+                }
+            }
+        };
+
+        // Match dietfantasy exactly: only show IconButton wrapped in tooltip, no count display
+        return (
+            <button
+                onClick={handleSignClick}
+                disabled={isLoading}
+                style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: isLoading ? 'not-allowed' : 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: isLoading ? 0.6 : 1,
+                }}
+                title={done ? 'View completed signatures' : isCopied ? 'Link Copied!' : 'Copy link'}
+                aria-label="Sign link"
+            >
+                {isLoading ? (
+                    <Loader2 size={18} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+                ) : done || isCopied ? (
+                    <Check size={18} style={{ color: '#4caf50' }} />
+                ) : (
+                    <Copy size={18} style={{ color: '#1976d2' }} />
+                )}
+            </button>
+        );
+    };
 
     // Progressive Loading Effect
     useEffect(() => {
@@ -215,6 +355,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             const allClientsData = await getClients();
             setAllClientsForLookup(allClientsData);
             setPage(1);
+            
+            // Refresh signature counts
+            loadSignatureCounts();
         } catch (error) {
             console.error("Error refreshing data:", error);
         } finally {
@@ -440,6 +583,23 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 const dateA = a.expirationDate ? new Date(a.expirationDate).getTime() : 0;
                 const dateB = b.expirationDate ? new Date(b.expirationDate).getTime() : 0;
                 comparison = dateA - dateB;
+                break;
+            case 'signatures':
+                const sigCountA = getSignatureCount(a.id);
+                const sigCountB = getSignatureCount(b.id);
+                // Sort by: has signatures first, then by count, then by name
+                const hasA = sigCountA > 0 ? 1 : 0;
+                const hasB = sigCountB > 0 ? 1 : 0;
+                if (hasA !== hasB) {
+                    comparison = hasB - hasA; // Those with signatures first
+                } else if (sigCountA !== sigCountB) {
+                    comparison = sigCountB - sigCountA; // More signatures first
+                } else {
+                    // Same signature count, sort by name
+                    const nameA = a.fullName || '';
+                    const nameB = b.fullName || '';
+                    comparison = nameA.localeCompare(nameB);
+                }
                 break;
             default:
                 comparison = a.fullName.localeCompare(b.fullName);
@@ -1285,6 +1445,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         Name {getSortIcon('name')}
                     </span>
 
+                    {/* SIGN column */}
+                    <span style={{ minWidth: '100px', flex: 0.8, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        onClick={() => handleSort('signatures')}>
+                        SIGN {getSortIcon('signatures')}
+                    </span>
+
                     {/* Status column with filter */}
                     <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('status')}>
@@ -1547,6 +1713,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             <span title={client.fullName} style={{ minWidth: '200px', flex: 2, fontWeight: 600, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 {isNotAllowed && <span className={styles.redTab}></span>}
                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{client.fullName}</span>
+                            </span>
+                            <span style={{ minWidth: '100px', flex: 0.8, paddingRight: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {isDependent ? '-' : <SignCell client={client} />}
                             </span>
                             <span title={client.parentClientId ? `Parent: ${getParentClientName(client)}` : getStatusName(client.statusId)} style={{ minWidth: '140px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                 {client.parentClientId ? (
