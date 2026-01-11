@@ -12,3 +12,52 @@ export function formatDate(dateStr: string) {
         day: 'numeric'
     });
 }
+
+/**
+ * Validates if a string is a valid UniteUs case URL
+ * Pattern: https://app.uniteus.io/dashboard/cases/open/{case-uuid}/contact/{contact-uuid}
+ */
+export function isValidUniteUsUrl(url: string): boolean {
+    if (!url || typeof url !== 'string') return false;
+    const caseUrlPattern = /^https:\/\/app\.uniteus\.io\/dashboard\/cases\/open\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/contact\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return caseUrlPattern.test(url.trim());
+}
+
+/**
+ * Extracts and formats a UniteUs URL for display
+ * Returns the URL if valid, otherwise returns null
+ */
+export function formatUniteUsUrl(url: string | null | undefined): string | null {
+    if (!url) return null;
+    const trimmed = url.trim();
+    return isValidUniteUsUrl(trimmed) ? trimmed : null;
+}
+
+/**
+ * Parses a UniteUs URL to extract caseId and clientId (contact ID)
+ * Returns { caseId, clientId } or null if invalid
+ * Based on dietfantasy UserModal.jsx implementation
+ */
+export function parseUniteUsUrl(urlStr: string | null | undefined): { caseId: string; clientId: string } | null {
+    if (!urlStr) return null;
+    try {
+        const u = new URL(String(urlStr));
+        const path = u.pathname.replace(/\/+$/, '');
+        const m = /\/cases\/open\/([0-9a-fA-F-]{10,})\/contact\/([0-9a-fA-F-]{10,})/.exec(path);
+        if (!m) return null;
+        const [, caseId, clientId] = m;
+        return { caseId, clientId };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Composes a UniteUs URL from caseId and clientId (contact ID)
+ * Returns empty string if either ID is missing
+ * Based on dietfantasy UserModal.jsx implementation
+ */
+export function composeUniteUsUrl(caseId: string | null | undefined, clientId: string | null | undefined): string {
+    if (!caseId || !clientId) return '';
+    return `https://app.uniteus.io/dashboard/cases/open/${encodeURIComponent(caseId)}/contact/${encodeURIComponent(clientId)}`;
+}

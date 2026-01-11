@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Package, ShoppingCart, User, Calendar, CreditCard, FileText, PenTool, ExternalLink } from 'lucide-react';
 import styles from './OrderDetailView.module.css';
+import { formatUniteUsUrl } from '@/lib/utils';
 
 interface OrderDetailViewProps {
     order: {
@@ -232,7 +233,20 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                             {order.caseId && (
                                 <div className={styles.infoRow}>
                                     <strong>Case ID:</strong>
-                                    <span>{order.caseId}</span>
+                                    {formatUniteUsUrl(order.caseId) ? (
+                                        <a 
+                                            href={order.caseId} 
+                                            target="_blank" 
+                                            rel="noopener noreferrer" 
+                                            className={styles.link}
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                                        >
+                                            View Case
+                                            <ExternalLink size={14} />
+                                        </a>
+                                    ) : (
+                                        <span>{order.caseId}</span>
+                                    )}
                                 </div>
                             )}
                             {order.scheduledDeliveryDate && (

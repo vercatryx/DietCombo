@@ -22,6 +22,7 @@ import styles from './ClientProfile.module.css';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import MapConfirmDialog from './MapConfirmDialog';
+import { isValidUniteUsUrl, parseUniteUsUrl, formatUniteUsUrl } from '@/lib/utils';
 
 
 interface Props {
@@ -212,6 +213,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     // Geolocation State
     const [geoBusy, setGeoBusy] = useState(false);
     const [geoErr, setGeoErr] = useState('');
+    const [caseIdExternalError, setCaseIdExternalError] = useState('');
     const [geoSuccess, setGeoSuccess] = useState(false);
     const [geoPersisting, setGeoPersisting] = useState(false);
     const [candsOpen, setCandsOpen] = useState(false);
@@ -240,6 +242,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         setCands([]);
         setGeoSuccess(false);
         setGeoPersisting(false);
+        setCaseIdExternalError("");
         abortAllGeo();
 
         // Handle new client case - initialize with defaults
@@ -1371,6 +1374,25 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
     }
 
+    // Handler for caseIdExternal (UniteUs URL) changes
+    function handleCaseIdExternalChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const url = e.target.value;
+        setFormData({ ...formData, caseIdExternal: url });
+        
+        if (!url || !url.trim()) {
+            setCaseIdExternalError("");
+            return;
+        }
+        
+        const parsed = parseUniteUsUrl(url);
+        if (!parsed) {
+            setCaseIdExternalError("Must match /cases/open/{caseId}/contact/{clientId}");
+            return;
+        }
+        
+        setCaseIdExternalError("");
+    }
+
     function addVendorBlock(day: string | null = null) {
         // Handling for multi-day format when adding to "consolidated" list (day is null)
         if (day === null && orderConfig.deliveryDayOrders) {
@@ -1877,8 +1899,51 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     <label className="label">Client ID (External)</label>
                                     <input className="input" value={formData.clientIdExternal || ''} onChange={e => setFormData({ ...formData, clientIdExternal: e.target.value })} />
                                     <div style={{ height: '1rem' }} /> {/* Spacer */}
-                                    <label className="label">Case ID (External)</label>
-                                    <input className="input" value={formData.caseIdExternal || ''} onChange={e => setFormData({ ...formData, caseIdExternal: e.target.value })} />
+                                    <label className="label">UniteUs Case URL</label>
+                                    <input 
+                                        className="input"
+                                        style={{
+                                            borderColor: caseIdExternalError || (formData.caseIdExternal && !isValidUniteUsUrl(formData.caseIdExternal)) 
+                                                ? 'var(--color-danger, #dc2626)' 
+                                                : undefined
+                                        }}
+                                        value={formData.caseIdExternal || ''} 
+                                        onChange={handleCaseIdExternalChange}
+                                        placeholder="https://app.uniteus.io/dashboard/cases/open/{CASE_ID}/contact/{CLIENT_ID}"
+                                    />
+                                    {caseIdExternalError && (
+                                        <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--color-danger)' }}>
+                                            {caseIdExternalError}
+                                        </div>
+                                    )}
+                                    {formData.caseIdExternal && isValidUniteUsUrl(formData.caseIdExternal) && (() => {
+                                        const parsed = parseUniteUsUrl(formData.caseIdExternal);
+                                        return parsed ? (
+                                            <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--color-success)' }}>
+                                                Parsed ✓ Case ID: <strong>{parsed.caseId}</strong> | Client ID: <strong>{parsed.clientId}</strong>
+                                            </div>
+                                        ) : null;
+                                    })()}
+                                    {formData.caseIdExternal && isValidUniteUsUrl(formData.caseIdExternal) && (
+                                        <div style={{ marginTop: '0.5rem' }}>
+                                            <a 
+                                                href={formData.caseIdExternal} 
+                                                target="_blank" 
+                                                rel="noopener noreferrer" 
+                                                style={{ 
+                                                    display: 'inline-flex', 
+                                                    alignItems: 'center', 
+                                                    gap: '0.5rem',
+                                                    color: 'var(--color-primary)',
+                                                    textDecoration: 'underline',
+                                                    fontSize: '0.875rem'
+                                                }}
+                                            >
+                                                Open in UniteUs
+                                                <ExternalLink size={14} />
+                                            </a>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Status Flags from dietfantasy */}
