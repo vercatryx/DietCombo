@@ -54,7 +54,6 @@ export async function GET(req: Request) {
         
         // Debug logging
         console.log(`[route/routes] Querying drivers for day="${day}"`);
-        console.log(`[route/routes] Query: SELECT * FROM drivers ${driverWhere}`);
         console.log(`[route/routes] Found ${driversRaw?.length || 0} drivers in database`);
         console.log(`[route/routes] Found ${routesRaw?.length || 0} routes in routes table`);
         if (driversRaw && driversRaw.length > 0) {
@@ -302,7 +301,7 @@ export async function GET(req: Request) {
                 reasons.push(`no active order for ${day}`);
             }
             
-            const name = `${client.first || ""} ${client.last || ""}`.trim() || "Unnamed";
+            const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
             
             // If client should have a stop (no valid reasons), create it
             if (reasons.length === 0) {
@@ -316,7 +315,7 @@ export async function GET(req: Request) {
                     city: s(client.city),
                     state: s(client.state),
                     zip: s(client.zip),
-                    phone: client.phone ? s(client.phone) : null,
+                    phone: client.phone_number ? s(client.phone_number) : null,
                     lat: n(client.lat),
                     lng: n(client.lng),
                 });
