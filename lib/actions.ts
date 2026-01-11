@@ -14,10 +14,41 @@ import {
 import { supabase } from './supabase';
 
 // --- HELPERS ---
-function handleError(error: any) {
+function handleError(error: any, context?: string) {
     if (error) {
-        console.error('Supabase Error:', error);
+        const contextMsg = context ? `[${context}] ` : '';
+        console.error(`Supabase Error ${contextMsg}:`, {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+            fullError: error
+        });
+        
+        // Check for RLS/permission errors
+        if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS') || error.message?.includes('row-level security')) {
+            console.error('⚠️  RLS (Row Level Security) may be blocking this query. Consider:');
+            console.error('   1. Setting SUPABASE_SERVICE_ROLE_KEY environment variable');
+            console.error('   2. Running sql/disable-rls.sql to disable RLS');
+            console.error('   3. Running sql/enable-permissive-rls.sql to add permissive policies');
+        }
+        
         throw new Error(error.message);
+    }
+}
+
+function logQueryError(error: any, table: string, operation: string = 'select') {
+    if (error) {
+        console.error(`[${table}] Error in ${operation}:`, {
+            message: error.message,
+            code: error.code,
+            details: error.details
+        });
+        
+        // Check for RLS/permission errors
+        if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS') || error.message?.includes('row-level security')) {
+            console.error(`⚠️  RLS may be blocking ${table} queries. Check RLS configuration.`);
+        }
     }
 }
 
@@ -26,7 +57,10 @@ function handleError(error: any) {
 export async function getStatuses() {
     try {
         const { data, error } = await supabase.from('client_statuses').select('*').order('created_at', { ascending: true });
-        if (error) return [];
+        if (error) {
+            console.error('Error fetching client_statuses:', error);
+            return [];
+        }
         return (data || []).map((s: any) => ({
             id: s.id,
             name: s.name,
@@ -99,21 +133,86 @@ export async function updateStatus(id: string, data: Partial<ClientStatus>) { //
 
 export async function getVendors() {
     try {
+        // Check if we're using service role key (important for RLS)
+        const isUsingServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (!isUsingServiceKey) {
+            console.warn('[getVendors] ⚠️  Not using service role key - RLS may block queries');
+        }
+        
         const { data, error } = await supabase.from('vendors').select('*');
-        if (error) return [];
-        return (data || []).map((v: any) => ({
-            id: v.id,
-            name: v.name,
-            email: v.email || null,
-            serviceTypes: (v.service_type || '').split(',').map((s: string) => s.trim()).filter(Boolean) as ServiceType[],
-            deliveryDays: typeof v.delivery_days === 'string' ? JSON.parse(v.delivery_days) : (v.delivery_days || []),
-            allowsMultipleDeliveries: v.delivery_frequency === 'Multiple',
-            isActive: v.is_active,
-            minimumMeals: v.minimum_meals ?? 0,
-            cutoffHours: v.cutoff_hours ?? 0
-        }));
+        if (error) {
+            logQueryError(error, 'vendors');
+            console.error('[getVendors] Query error details:', {
+                message: error.message,
+                code: error.code,
+                details: error.details,
+                hint: error.hint,
+                usingServiceKey: isUsingServiceKey
+            });
+            
+            // If RLS error, provide helpful message
+            if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS')) {
+                console.error('[getVendors] ❌ RLS is blocking the query. Ensure SUPABASE_SERVICE_ROLE_KEY is set in environment variables.');
+            }
+            return [];
+        }
+        
+        if (!data) {
+            console.warn('[getVendors] No data returned from query (data is null/undefined)');
+            return [];
+        }
+        
+        if (data.length === 0) {
+            console.warn('[getVendors] Query succeeded but returned 0 vendors. Table may be empty or RLS is filtering all rows.');
+        } else {
+            console.log(`[getVendors] ✅ Fetched ${data.length} vendors from database`);
+        }
+        
+        const mapped = (data || []).map((v: any) => {
+            try {
+                // Parse delivery_days safely
+                let deliveryDays: string[] = [];
+                if (v.delivery_days) {
+                    if (typeof v.delivery_days === 'string') {
+                        try {
+                            deliveryDays = JSON.parse(v.delivery_days);
+                        } catch (parseError) {
+                            console.warn(`[getVendors] Failed to parse delivery_days for vendor ${v.id}:`, parseError);
+                            deliveryDays = [];
+                        }
+                    } else if (Array.isArray(v.delivery_days)) {
+                        deliveryDays = v.delivery_days;
+                    }
+                }
+                
+                // Parse service_type safely
+                const serviceTypes = (v.service_type || '')
+                    .split(',')
+                    .map((s: string) => s.trim())
+                    .filter(Boolean) as ServiceType[];
+                
+                const vendor: Vendor = {
+                    id: v.id,
+                    name: v.name,
+                    email: v.email || null,
+                    serviceTypes,
+                    deliveryDays,
+                    allowsMultipleDeliveries: v.delivery_frequency === 'Multiple',
+                    isActive: v.is_active !== undefined ? Boolean(v.is_active) : true,
+                    minimumMeals: v.minimum_meals ?? 0,
+                    cutoffHours: v.cutoff_hours ?? 0
+                };
+                return vendor;
+            } catch (mapError) {
+                console.error(`[getVendors] Error mapping vendor ${v.id}:`, mapError);
+                return null;
+            }
+        }).filter((v) => v !== null) as Vendor[];
+        
+        console.log(`[getVendors] Successfully mapped ${mapped.length} vendors`);
+        return mapped;
     } catch (error) {
-        console.error('Error fetching vendors:', error);
+        console.error('[getVendors] Unexpected error:', error);
         return [];
     }
 }
@@ -849,7 +948,7 @@ export async function getClients() {
         console.log('[getClients] Fetching all clients...');
         const { data, error } = await supabase.from('clients').select('*');
         if (error) {
-            console.error('[getClients] Supabase error:', error);
+            logQueryError(error, 'clients');
             return [];
         }
         console.log('[getClients] Raw data returned:', { count: data?.length, firstClient: data?.[0] ? { id: data[0].id, full_name: data[0].full_name } : null });
@@ -1871,42 +1970,67 @@ export async function getBillingHistory(clientId: string) {
 export async function getBillingOrders() {
     try {
         // Get orders with billing_pending status
-        const { data: pendingOrders } = await supabase
+        const { data: pendingOrders, error: pendingError } = await supabase
             .from('orders')
-            .select('*, clients!inner(full_name)')
+            .select(`
+                *,
+                clients (
+                    id,
+                    full_name
+                )
+            `)
             .eq('status', 'billing_pending')
             .order('created_at', { ascending: false });
 
+        if (pendingError) {
+            console.error('[getBillingOrders] Error fetching pending orders:', pendingError);
+        }
+
         // Get billing records with status "success" and their associated orders
-        const { data: billingRecords } = await supabase
+        const { data: billingRecords, error: billingError } = await supabase
             .from('billing_records')
             .select('order_id, status')
             .eq('status', 'success');
+
+        if (billingError) {
+            console.error('[getBillingOrders] Error fetching billing records:', billingError);
+        }
 
         const successfulOrderIds = new Set((billingRecords || []).map((br: any) => br.order_id).filter(Boolean));
 
         // Get orders that have successful billing records
         let successfulOrders: any[] = [];
         if (successfulOrderIds.size > 0) {
-            const { data: successfulOrdersData } = await supabase
+            const { data: successfulOrdersData, error: successfulError } = await supabase
                 .from('orders')
-                .select('*, clients!inner(full_name)')
+                .select(`
+                    *,
+                    clients (
+                        id,
+                        full_name
+                    )
+                `)
                 .in('id', Array.from(successfulOrderIds))
                 .order('created_at', { ascending: false });
+            
+            if (successfulError) {
+                console.error('[getBillingOrders] Error fetching successful orders:', successfulError);
+            }
             successfulOrders = successfulOrdersData || [];
         }
 
         // Combine and map orders
+        // Note: Supabase join returns clients as an object (not array) for one-to-many relationships
         const allOrders = [
             ...((pendingOrders || []).map((o: any) => ({
                 ...o,
-                clientName: o.client_full_name || 'Unknown',
+                clientName: (o.clients?.full_name) || 'Unknown',
                 amount: o.total_value || 0,
                 billingStatus: 'billing_pending' as const
             }))),
             ...(successfulOrders.map((o: any) => ({
                 ...o,
-                clientName: o.client_full_name || 'Unknown',
+                clientName: (o.clients?.full_name) || 'Unknown',
                 amount: o.total_value || 0,
                 billingStatus: 'billing_successful' as const
             })))
@@ -3316,7 +3440,7 @@ export async function getActiveOrderForClient(clientId: string) {
                 deliveryDay: orderData.delivery_day, // Include delivery_day if present
                 isUpcoming: orderData.is_upcoming || false, // Flag for upcoming orders
                 orderNumber: orderData.order_number, // Numeric Order ID
-                proofOfDelivery: orderData.proof_of_delivery_image || orderData.delivery_proof_url // URL to proof of delivery image (check both fields)
+                proofOfDelivery: orderData.proof_of_delivery_url || orderData.proof_of_delivery_image // URL to proof of delivery image (check both fields for compatibility)
             };
 
             // Determine which table to query based on whether this is an upcoming order
@@ -4093,12 +4217,12 @@ export async function isOrderUnderVendor(orderId: string, vendorId: string) {
 export async function orderHasDeliveryProof(orderId: string) {
     const { data, error } = await supabase
         .from('orders')
-        .select('delivery_proof_url')
+        .select('proof_of_delivery_url')
         .eq('id', orderId)
         .single();
 
     if (error || !data) return false;
-    return !!data.delivery_proof_url;
+    return !!data.proof_of_delivery_url;
 }
 
 export async function updateOrderDeliveryProof(orderId: string, proofUrl: string) {
@@ -4116,7 +4240,7 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
     const { data: order, error } = await supabase
         .from('orders')
         .update({
-            delivery_proof_url: proofUrl,
+            proof_of_delivery_url: proofUrl,
             status: 'billing_pending', // Changed from 'completed'
             actual_delivery_date: new Date().toISOString()
         })
@@ -4130,7 +4254,7 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
     // Fetch client to get navigator info and client name
     const { data: client } = await supabase
         .from('clients')
-        .select('navigator_id, fullName, authorized_amount')
+        .select('navigator_id, full_name, authorized_amount')
         .eq('id', order.client_id)
         .single();
 
@@ -4144,7 +4268,7 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
     if (!existingBilling) {
         const billingPayload = {
             client_id: order.client_id,
-            client_name: client?.fullName || 'Unknown Client',
+            client_name: client?.full_name || 'Unknown Client',
             order_id: order.id,
             status: 'pending',
             amount: order.total_value || 0,
@@ -4468,7 +4592,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
     // If order was just processed, it already has status 'billing_pending' and billing record created
     // Just update the proof URL and other fields
     const updateData: any = {
-        delivery_proof_url: proofUrl.trim(),
+        proof_of_delivery_url: proofUrl.trim(),
         updated_by: currentUserName,
         last_updated: new Date().toISOString()
     };
@@ -4497,7 +4621,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
     if (!wasProcessed) {
         const { data: client } = await supabase
             .from('clients')
-            .select('navigator_id, fullName, authorized_amount')
+            .select('navigator_id, full_name, authorized_amount')
             .eq('id', order.client_id)
             .single();
 
@@ -4512,7 +4636,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
             // Create billing record if it doesn't exist
             const billingPayload = {
                 client_id: order.client_id,
-                client_name: client?.fullName || 'Unknown Client',
+                client_name: client?.full_name || 'Unknown Client',
                 order_id: order.id,
                 status: 'pending',
                 amount: order.total_value || 0,

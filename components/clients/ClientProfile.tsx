@@ -610,7 +610,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         ]);
         setStatuses(s);
         setNavigators(n);
-        setVendors(v);
+        // Ensure vendors array is set (even if empty, to avoid undefined issues)
+        const vendorsArray = v || [];
+        setVendors(vendorsArray);
+        if (vendorsArray && vendorsArray.length > 0) {
+            console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+            // Log Food vendors specifically
+            const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
+            console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
+        } else {
+            console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
+        }
         setMenuItems(m);
         setBoxTypes(b);
         setSettings(appSettings);
@@ -646,7 +656,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
         setStatuses(s);
         setNavigators(n);
-        setVendors(v);
+        // Ensure vendors array is set (even if empty, to avoid undefined issues)
+        const vendorsArray = v || [];
+        setVendors(vendorsArray);
+        if (vendorsArray && vendorsArray.length > 0) {
+            console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+            // Log Food vendors specifically
+            const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
+            console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
+        } else {
+            console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
+        }
         setMenuItems(m);
         setBoxTypes(b);
         setSettings(appSettings);
@@ -2337,11 +2357,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                     onChange={e => updateVendorSelection(index, 'vendorId', e.target.value, null)}
                                                                                 >
                                                                                     <option value="">Select Vendor...</option>
-                                                                                    {vendors.filter(v => v.serviceTypes.includes('Food') && v.isActive).map(v => (
+                                                                                    {vendors && vendors.length > 0 ? vendors.filter(v => {
+                                                                                        const hasFoodService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
+                                                                                        const isActive = v.isActive !== undefined ? v.isActive : true;
+                                                                                        return hasFoodService && isActive;
+                                                                                    }).map(v => (
                                                                                         <option key={v.id} value={v.id} disabled={currentSelections.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
                                                                                             {v.name}
                                                                                         </option>
-                                                                                    ))}
+                                                                                    )) : <option value="" disabled>Loading vendors...</option>}
                                                                                 </select>
                                                                                 <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => removeVendorBlock(index, null)} title="Remove Vendor">
                                                                                     <Trash2 size={16} />
@@ -2656,11 +2680,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                 onChange={e => updateVendorSelection(index, 'vendorId', e.target.value, null)}
                                                                             >
                                                                                 <option value="">Select Vendor...</option>
-                                                                                {vendors.filter(v => v.serviceTypes.includes('Food') && v.isActive).map(v => (
+                                                                                {vendors && vendors.length > 0 ? vendors.filter(v => {
+                                                                                    const hasFoodService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
+                                                                                    const isActive = v.isActive !== undefined ? v.isActive : true;
+                                                                                    return hasFoodService && isActive;
+                                                                                }).map(v => (
                                                                                     <option key={v.id} value={v.id} disabled={currentSelections.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
                                                                                         {v.name}
                                                                                     </option>
-                                                                                ))}
+                                                                                )) : <option value="" disabled>Loading vendors...</option>}
                                                                             </select>
                                                                             <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => removeVendorBlock(index, null)} title="Remove Vendor">
                                                                                 <Trash2 size={16} />
@@ -2990,9 +3018,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             }}
                                                         >
                                                             <option value="">Select Vendor...</option>
-                                                            {vendors.filter(v => v.serviceTypes.includes('Boxes') && v.isActive).map(v => (
+                                                            {vendors && vendors.length > 0 ? vendors.filter(v => {
+                                                                const hasBoxesService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Boxes');
+                                                                const isActive = v.isActive !== undefined ? v.isActive : true;
+                                                                return hasBoxesService && isActive;
+                                                            }).map(v => (
                                                                 <option key={v.id} value={v.id}>{v.name}</option>
-                                                            ))}
+                                                            )) : <option value="" disabled>Loading vendors...</option>}
                                                         </select>
                                                     </div>
 
@@ -3274,15 +3306,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             })}
                                                         >
                                                             <option value="">Select Vendor...</option>
-                                                            {vendors
+                                                            {vendors && vendors.length > 0 ? vendors
                                                                 .filter(v => {
-                                                                    const hasEquipment = v.serviceTypes && v.serviceTypes.includes('Equipment');
-                                                                    const isActive = v.isActive;
+                                                                    const hasEquipment = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Equipment');
+                                                                    const isActive = v.isActive !== undefined ? v.isActive : true;
                                                                     return hasEquipment && isActive;
                                                                 })
                                                                 .map(v => (
                                                                     <option key={v.id} value={v.id}>{v.name}</option>
-                                                                ))}
+                                                                )) : <option value="" disabled>Loading vendors...</option>}
                                                         </select>
                                                         {vendors.filter(v => v.serviceTypes && v.serviceTypes.includes('Equipment') && v.isActive).length === 0 && (
                                                             <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.5rem', fontStyle: 'italic' }}>

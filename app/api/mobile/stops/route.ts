@@ -36,11 +36,15 @@ export async function GET(req: Request) {
         }
 
         // Fetch driver's ordered stopIds
-        const { data: driverData } = await supabase
+        const { data: driverData, error: driverError } = await supabase
             .from('drivers')
             .select('stop_ids')
             .eq('id', driverId)
             .single();
+        if (driverError) {
+            console.error("[/api/mobile/stops] Error fetching driver:", driverError);
+            return NextResponse.json({ error: "Driver not found" }, { status: 404 });
+        }
         const driver = driverData;
 
         // Keep stop_ids as strings (UUIDs) - don't convert to numbers
@@ -105,7 +109,11 @@ export async function GET(req: Request) {
         allQuery = allQuery.eq('day', day);
     }
 
-    const { data: all } = await allQuery;
+        const { data: all, error: allError } = await allQuery;
+        if (allError) {
+            console.error("[/api/mobile/stops] Error fetching all stops:", allError);
+            return NextResponse.json({ error: allError.message }, { status: 500 });
+        }
 
     // Map to expected format (keep id as string for UUID compatibility)
     const mapped = (all || []).map((s: any) => ({
