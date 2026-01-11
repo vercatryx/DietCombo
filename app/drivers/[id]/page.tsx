@@ -11,7 +11,7 @@ import {
 import SearchStops from "../../../components/drivers/SearchStops";
 
 /** Lazy-load the shared Leaflet map */
-const DriversMapLeaflet = dynamic(() => import("../../../components/drivers/DriversMapLeaflet"), { ssr: false });
+const DriversMapLeaflet = dynamic(() => import("../../../components/routes/DriversMapLeaflet"), { ssr: false });
 
 /** Fetch signature status — never cached */
 async function fetchSignStatus() {

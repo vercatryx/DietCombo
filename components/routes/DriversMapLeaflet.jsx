@@ -603,7 +603,7 @@ export default function DriversMapLeaflet({
 
     /* ------- local data updates ------- */
     const moveStopsLocally = useCallback((stopIds, toDriverId) => {
-        const toId = Number(toDriverId);
+        const toId = String(toDriverId); // Keep as string (UUID) to match database
         const idKeys = new Set(stopIds.map(sid));
         const dSnap = localDriversRef.current;
         const uSnap = localUnroutedRef.current;
@@ -624,7 +624,7 @@ export default function DriversMapLeaflet({
 
         let injected = false;
         const nextDrivers = strippedDrivers.map((d) => {
-            if (Number(d.driverId) === toId) {
+            if (String(d.driverId) === String(toId)) {
                 injected = true;
                 const newStops = Array.isArray(d.stops) ? [...d.stops, ...movingStops] : [...movingStops];
                 return { ...d, stops: newStops };
@@ -632,14 +632,19 @@ export default function DriversMapLeaflet({
             return d;
         });
 
+        // Find the target driver's name and color from the existing drivers
+        const targetDriver = dSnap.find((d) => String(d.driverId) === String(toId));
+        const driverName = targetDriver?.name || `Driver ${toId}`;
+        const driverColor = targetDriver?.color || "#1f77b4";
+
         const finalDrivers = injected
             ? nextDrivers
             : [
                 ...nextDrivers,
                 {
                     driverId: toId,
-                    name: `Driver ${toId}`,
-                    color: "#1f77b4",
+                    name: driverName,
+                    color: driverColor,
                     stops: movingStops,
                     polygon: [],
                 },
@@ -1078,9 +1083,9 @@ export default function DriversMapLeaflet({
     /* ======== TRUE SEQUENTIAL BULK ASSIGN ======== */
     const applyBulkAssign = useCallback(
         async (toDriverId) => {
-            const to = Number(toDriverId);
+            const to = String(toDriverId); // Keep as string (UUID) to match API expectations
             const ids = Array.from(selectedIds);
-            if (!Number.isFinite(to) || ids.length === 0 || bulkBusy) return;
+            if (!to || to.trim() === "" || ids.length === 0 || bulkBusy) return;
 
             setBulkBusy(true);
             try {
@@ -1096,6 +1101,7 @@ export default function DriversMapLeaflet({
                 }
             } catch (err) {
                 console.error("[BulkAssign(sequential)] failed:", err);
+                alert("Failed to assign stops: " + (err.message || "Unknown error"));
             } finally {
                 prevLiveSetRef.current.forEach((id) => setIconForId(id, false));
                 prevLiveSetRef.current = new Set();
