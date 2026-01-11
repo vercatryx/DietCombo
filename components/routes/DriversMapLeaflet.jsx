@@ -350,15 +350,27 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
         sel.value = String(currentDriverId);
     }
 
-    sel.addEventListener("change", () => {
-        const to = Number(sel.value);
-        if (Number.isFinite(to)) onAssign?.(stop, to);
+    // Create and store popup reference so we can close it after assignment
+    const popup = L.popup({ closeOnClick: true, autoClose: true, className: "color-popup" })
+        .setLatLng(ll)
+        .setContent(container);
+
+    sel.addEventListener("change", async () => {
+        const to = sel.value;
+        if (to && to.trim() !== "") {
+            try {
+                await onAssign?.(stop, to);
+                // Close popup after successful assignment
+                popup.close();
+            } catch (err) {
+                console.error("Assignment failed:", err);
+                alert("Failed to assign driver. Please try again.");
+                // Don't close popup on error so user can try again
+            }
+        }
     });
 
-    L.popup({ closeOnClick: true, autoClose: true, className: "color-popup" })
-        .setLatLng(ll)
-        .setContent(container)
-        .openOn(map);
+    popup.openOn(map);
 }
 
 /* ==================== Pretty checkbox row ==================== */
@@ -642,9 +654,21 @@ export default function DriversMapLeaflet({
     const onReassignLocal = useCallback(
         async (stop, toDriverId) => {
             const id = stop?.id;
-            if (id == null) return;
-            await onReassignRef.current?.(stop, Number(toDriverId));
-            moveStopsLocally([id], toDriverId);
+            if (id == null) {
+                console.error("Stop ID is null, cannot reassign");
+                return;
+            }
+            if (!toDriverId) {
+                console.error("Driver ID is missing, cannot reassign");
+                return;
+            }
+            try {
+                await onReassignRef.current?.(stop, toDriverId);
+                moveStopsLocally([id], toDriverId);
+            } catch (err) {
+                console.error("Reassign local failed:", err);
+                throw err; // Re-throw to be caught by onChange handler
+            }
         },
         [moveStopsLocally]
     );

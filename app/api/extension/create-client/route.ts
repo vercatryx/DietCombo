@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addClient } from '@/lib/actions';
 import { ServiceType } from '@/lib/types';
+import { isValidUniteUsUrl } from '@/lib/utils';
 
 /**
  * API Route: Create a new client from Chrome extension
@@ -98,8 +99,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Validate case URL format
-        const caseUrlPattern = /^https:\/\/app\.uniteus\.io\/dashboard\/cases\/open\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/contact\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!caseUrlPattern.test(caseId.trim())) {
+        if (!isValidUniteUsUrl(caseId)) {
             return NextResponse.json({
                 success: false,
                 error: 'Please make sure you are on the clients open case page or enter the real case url'

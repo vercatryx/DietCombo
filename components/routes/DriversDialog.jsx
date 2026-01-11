@@ -446,21 +446,22 @@ export default function DriversDialog({
 
     // === Single reassign used by the map for individual popup assigns ===
     const handleReassign = React.useCallback(async (stop, toDriverId) => {
-        const toId = Number(toDriverId);
+        const toId = String(toDriverId); // Keep as string to match API expectations
+        console.log("[handleReassign] Starting reassign:", { stopId: stop.id, toDriverId: toId, stop });
         // optimistic local UI (in dialog routes copy)
         setRoutes(prevRoutes => {
             const next = prevRoutes.map(r => ({ ...r, stops: [...(r.stops || [])] }));
             if (stop.__driverId) {
-                const fromIdx = next.findIndex(r => r.driverId === stop.__driverId);
-                const toIdx   = next.findIndex(r => r.driverId === toId);
+                const fromIdx = next.findIndex(r => String(r.driverId) === String(stop.__driverId));
+                const toIdx   = next.findIndex(r => String(r.driverId) === String(toId));
                 if (fromIdx === -1 || toIdx === -1) return prevRoutes;
-                const sIdx = next[fromIdx].stops.findIndex(s => s.id === stop.id);
+                const sIdx = next[fromIdx].stops.findIndex(s => String(s.id) === String(stop.id));
                 if (sIdx === -1) return prevRoutes;
                 const [moved] = next[fromIdx].stops.splice(sIdx, 1);
                 next[toIdx].stops.push({ ...moved, __driverId: toId });
                 return next;
             } else {
-                const toIdx = next.findIndex(r => r.driverId === toId);
+                const toIdx = next.findIndex(r => String(r.driverId) === String(toId));
                 if (toIdx === -1) return prevRoutes;
                 next[toIdx].stops.push({ ...stop, __driverId: toId });
                 return next;
@@ -477,8 +478,8 @@ export default function DriversDialog({
                 body: JSON.stringify({
                     day: selectedDay,
                     toDriverId: toId,
-                    stopId: Number(stop.id),
-                    userId: Number(stop.userId) || undefined
+                    stopId: String(stop.id),
+                    userId: stop.userId ? String(stop.userId) : undefined
                 }),
             });
             if (!res.ok) throw new Error(await res.text());
@@ -494,7 +495,7 @@ export default function DriversDialog({
     // Map-facing drivers (kept in sync with dialog routes)
     const mapDrivers = React.useMemo(() => {
         return (routes || []).map((r, i) => {
-            const driverId = Number(r.driverId ?? r.id);
+            const driverId = String(r.driverId ?? r.id ?? ""); // Keep as string (UUID) to match database
             const color = r.color || palette[i % palette.length];
             const dname = r.driverName || r.name || `Driver ${i}`;
             const stops = (r.stops || [])
@@ -514,7 +515,7 @@ export default function DriversDialog({
                     __stopIndex: idx,
                 }))
                 .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-            return { id: String(driverId), driverId, name: dname, color, polygon: [], stops };
+            return { id: driverId, driverId, name: dname, color, polygon: [], stops };
         });
     }, [routes]);
 
