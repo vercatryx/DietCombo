@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { query, queryOne, execute } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export async function GET(
     _req: Request,
@@ -11,20 +11,11 @@ export async function GET(
             return NextResponse.json({ error: "Missing token" }, { status: 400 });
         }
 
-        const user = await queryOne<{
-            id: string;
-            full_name: string;
-            first_name: string | null;
-            last_name: string | null;
-            address: string | null;
-            apt: string | null;
-            city: string | null;
-            state: string | null;
-            zip: string | null;
-        }>(
-            `SELECT id, full_name, first_name, last_name, address, apt, city, state, zip FROM clients WHERE sign_token = ?`,
-            [token]
-        );
+        const { data: user } = await supabase
+            .from('clients')
+            .select('id, full_name, first_name, last_name, address, apt, city, state, zip')
+            .eq('sign_token', token)
+            .single();
 
         if (!user) {
             return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -44,32 +35,28 @@ export async function GET(
         // Query signatures (try with order_id first, fall back if column doesn't exist)
         let sigs: any[];
         try {
-            sigs = await query<{
-                slot: number;
-                strokes: string;
-                signed_at: string;
-                ip: string | null;
-                user_agent: string | null;
-                order_id?: string | null;
-            }>(
-                `SELECT slot, strokes, signed_at, ip, user_agent, order_id FROM signatures WHERE client_id = ? ORDER BY slot ASC, signed_at ASC`,
-                [user.id]
-            );
+            const { data, error } = await supabase
+                .from('signatures')
+                .select('slot, strokes, signed_at, ip, user_agent, order_id')
+                .eq('client_id', user.id)
+                .order('slot', { ascending: true })
+                .order('signed_at', { ascending: true });
+            
+            if (error) throw error;
+            sigs = data || [];
         } catch (err: any) {
             // If error is about missing order_id column, query without it
-            if (err.code === 'ER_BAD_FIELD_ERROR' || err.message?.includes('order_id')) {
-                sigs = await query<{
-                    slot: number;
-                    strokes: string;
-                    signed_at: string;
-                    ip: string | null;
-                    user_agent: string | null;
-                }>(
-                    `SELECT slot, strokes, signed_at, ip, user_agent FROM signatures WHERE client_id = ? ORDER BY slot ASC, signed_at ASC`,
-                    [user.id]
-                );
+            if (err.message?.includes('order_id') || err.code === 'PGRST116') {
+                const { data, error: retryError } = await supabase
+                    .from('signatures')
+                    .select('slot, strokes, signed_at, ip, user_agent')
+                    .eq('client_id', user.id)
+                    .order('slot', { ascending: true })
+                    .order('signed_at', { ascending: true });
+                
+                if (retryError) throw retryError;
                 // Add order_id as null for all rows
-                sigs = sigs.map(r => ({ ...r, order_id: null }));
+                sigs = (data || []).map(r => ({ ...r, order_id: null }));
             } else {
                 throw err;
             }
@@ -133,16 +120,20 @@ export async function DELETE(
             return NextResponse.json({ error: "Missing token" }, { status: 400 });
         }
 
-        const user = await queryOne<{ id: string }>(
-            `SELECT id FROM clients WHERE sign_token = ?`,
-            [token]
-        );
+        const { data: user } = await supabase
+            .from('clients')
+            .select('id')
+            .eq('sign_token', token)
+            .single();
 
         if (!user) {
             return NextResponse.json({ error: "Not found" }, { status: 404 });
         }
 
-        await execute(`DELETE FROM signatures WHERE client_id = ?`, [user.id]);
+        await supabase
+            .from('signatures')
+            .delete()
+            .eq('client_id', user.id);
         return NextResponse.json({ ok: true });
     } catch (err: any) {
         console.error("[admin token DELETE] error:", err);

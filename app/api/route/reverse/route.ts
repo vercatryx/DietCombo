@@ -1,6 +1,6 @@
 // app/api/route/reverse/route.ts
 import { NextResponse } from "next/server";
-import { query, queryOne } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export async function POST(req: Request) {
     try {
@@ -12,10 +12,11 @@ export async function POST(req: Request) {
         }
 
         // Fetch driver's current stopIds
-        const driver = await queryOne<any>(
-            `SELECT stop_ids, day FROM drivers WHERE id = ?`,
-            [routeId]
-        );
+        const { data: driver } = await supabase
+            .from('drivers')
+            .select('stop_ids, day')
+            .eq('id', routeId)
+            .single();
 
         if (!driver) {
             return NextResponse.json({ ok: false, error: "Driver not found" }, { status: 404 });
@@ -33,10 +34,10 @@ export async function POST(req: Request) {
         const reversed = [...stopIds].reverse();
 
         // Update driver
-        await query(
-            `UPDATE drivers SET stop_ids = ? WHERE id = ?`,
-            [JSON.stringify(reversed), routeId]
-        );
+        await supabase
+            .from('drivers')
+            .update({ stop_ids: reversed })
+            .eq('id', routeId);
 
         return NextResponse.json({ 
             ok: true, 

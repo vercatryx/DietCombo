@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
 const sid = (v: unknown) => (v === null || v === undefined ? "" : String(v));
@@ -30,21 +30,22 @@ export async function POST(req: Request) {
         }
 
         // Get all clients
-        const allClients = await query<any[]>(`
-            SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone_number as phone, lat, lng, paused, delivery
-            FROM clients
-            ORDER BY id ASC
-        `);
+        const { data: allClients } = await supabase
+            .from('clients')
+            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
+            .order('id', { ascending: true });
 
         // Check which clients have stops for THIS day
-        const dayWhere = day === "all" ? "" : `WHERE day = ?`;
-        const dayParams = day === "all" ? [] : [day];
-        const stopsForDay = await query<any[]>(
-            `SELECT client_id FROM stops ${dayWhere}`,
-            dayParams
-        );
+        let stopsQuery = supabase
+            .from('stops')
+            .select('client_id');
+        if (day !== "all") {
+            stopsQuery = stopsQuery.eq('day', day);
+        }
+        const { data: stopsForDay } = await stopsQuery;
+        
         const clientsWithStops = new Set<string>();
-        for (const s of stopsForDay) {
+        for (const s of (stopsForDay || [])) {
             if (s.client_id) {
                 clientsWithStops.add(String(s.client_id));
             }
@@ -53,31 +54,21 @@ export async function POST(req: Request) {
         // Get active orders to determine which clients need stops
         // Active order statuses: 'pending', 'scheduled', 'confirmed'
         const activeOrderStatuses = ["pending", "scheduled", "confirmed"];
-        const placeholders = activeOrderStatuses.map(() => "?").join(",");
         
         // Get orders with scheduled_delivery_date and extract day of week
         // Also check delivery_day field if present
-        const activeOrders = await query<any[]>(`
-            SELECT 
-                client_id,
-                scheduled_delivery_date,
-                delivery_day,
-                status
-            FROM orders
-            WHERE status IN (${placeholders})
-            AND (scheduled_delivery_date IS NOT NULL OR delivery_day IS NOT NULL)
-        `, activeOrderStatuses);
+        const { data: activeOrders } = await supabase
+            .from('orders')
+            .select('client_id, scheduled_delivery_date, delivery_day, status')
+            .in('status', activeOrderStatuses)
+            .or('scheduled_delivery_date.not.is.null,delivery_day.not.is.null');
 
         // Get upcoming_orders with delivery_day
-        const upcomingOrders = await query<any[]>(`
-            SELECT 
-                client_id,
-                delivery_day,
-                status
-            FROM upcoming_orders
-            WHERE status = 'scheduled'
-            AND delivery_day IS NOT NULL
-        `);
+        const { data: upcomingOrders } = await supabase
+            .from('upcoming_orders')
+            .select('client_id, delivery_day, status')
+            .eq('status', 'scheduled')
+            .not('delivery_day', 'is', null);
 
         // Build map of client_id -> set of delivery days they have orders for
         const clientDeliveryDays = new Map<string, Set<string>>();
@@ -185,7 +176,7 @@ export async function POST(req: Request) {
             }
 
             // Client should have a stop - create it
-            const name = `${client.first || ""} ${client.last || ""}`.trim() || "Unnamed";
+            const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
             stopsToCreate.push({
                 id: uuidv4(),
                 day: day,
@@ -196,7 +187,7 @@ export async function POST(req: Request) {
                 city: s(client.city),
                 state: s(client.state),
                 zip: s(client.zip),
-                phone: client.phone ? s(client.phone) : null,
+                phone: client.phone_number ? s(client.phone_number) : null,
                 lat: n(client.lat),
                 lng: n(client.lng),
             });
@@ -209,28 +200,31 @@ export async function POST(req: Request) {
                 // Insert stops one at a time to handle duplicates gracefully
                 for (const stopData of stopsToCreate) {
                     try {
-                        await query(`
-                            INSERT INTO stops (id, day, client_id, name, address, apt, city, state, zip, phone, lat, lng)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON DUPLICATE KEY UPDATE name = VALUES(name)
-                        `, [
-                            stopData.id,
-                            stopData.day,
-                            stopData.client_id,
+                        const { error: insertError } = await supabase
+                            .from('stops')
+                            .upsert({
+                                id: stopData.id,
+                                day: stopData.day,
+                                client_id: stopData.client_id,
+                                name: stopData.name,
+                                address: stopData.address,
+                                apt: stopData.apt,
+                                city: stopData.city,
+                                state: stopData.state,
+                                zip: stopData.zip,
+                                phone: stopData.phone,
+                                lat: stopData.lat,
+                                lng: stopData.lng,
+                            }, { onConflict: 'id' });
+                        if (insertError) throw insertError;
                             stopData.name,
                             stopData.address,
                             stopData.apt,
                             stopData.city,
-                            stopData.state,
-                            stopData.zip,
-                            stopData.phone,
-                            stopData.lat,
-                            stopData.lng,
-                        ]);
                         stopsCreated++;
                     } catch (createError: any) {
                         // Skip if stop already exists (duplicate key)
-                        if (createError?.code !== "ER_DUP_ENTRY") {
+                        if (createError?.code !== "23505" && !createError?.message?.includes('duplicate')) {
                             console.error(`[route/cleanup] Failed to create stop for client ${stopData.client_id}:`, createError?.message);
                         }
                     }

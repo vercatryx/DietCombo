@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse, NextRequest } from "next/server";
-import { query, queryOne } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { geocodeIfNeeded } from "@/lib/geocodeOneClient";
 
 export async function GET(
@@ -9,39 +9,24 @@ export async function GET(
     { params }: { params: Promise<{ id: string }> }
 ) {
     const { id } = await params;
-    const client = await queryOne<any>(`
-        SELECT 
-            id,
-            first_name as first,
-            last_name as last,
-            address,
-            apt,
-            city,
-            state,
-            zip,
-            phone,
-            lat,
-            lng,
-            dislikes,
-            paused,
-            delivery,
-            complex
-        FROM clients
-        WHERE id = ?
-    `, [id]);
+    const { data: client } = await supabase
+        .from('clients')
+        .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex')
+        .eq('id', id)
+        .single();
     
     if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
     
     return NextResponse.json({
         id: client.id,
-        first: client.first || "",
-        last: client.last || "",
+        first: client.first_name || "",
+        last: client.last_name || "",
         address: client.address || "",
         apt: client.apt || null,
         city: client.city || "",
         state: client.state || "",
         zip: client.zip || "",
-        phone: client.phone || null,
+        phone: client.phone_number || null,
         lat: client.lat ? Number(client.lat) : null,
         lng: client.lng ? Number(client.lng) : null,
         dislikes: client.dislikes || null,
@@ -63,10 +48,11 @@ export async function PUT(
     const cascadeStopsFlag = !!b.cascadeStops;
     
     // Get current client
-    const current = await queryOne<any>(`
-        SELECT lat, lng, address, apt, city, state, zip, phone, first_name, last_name
-        FROM clients WHERE id = ?
-    `, [userId]);
+    const { data: current } = await supabase
+        .from('clients')
+        .select('lat, lng, address, apt, city, state, zip, phone_number, first_name, last_name')
+        .eq('id', userId)
+        .single();
     
     if (!current) {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -102,164 +88,79 @@ export async function PUT(
         }
     }
     
-    // Build update fields
-    const updateFields: string[] = [];
-    const updateValues: any[] = [];
+    // Build update payload
+    const payload: any = {};
     
-    if (b.first !== undefined) {
-        updateFields.push("first_name = ?");
-        updateValues.push(b.first);
-    }
-    if (b.last !== undefined) {
-        updateFields.push("last_name = ?");
-        updateValues.push(b.last);
-    }
-    if (b.address !== undefined) {
-        updateFields.push("address = ?");
-        updateValues.push(b.address ?? null);
-    }
-    if (b.apt !== undefined) {
-        updateFields.push("apt = ?");
-        updateValues.push(b.apt ?? null);
-    }
-    if (b.city !== undefined) {
-        updateFields.push("city = ?");
-        updateValues.push(b.city ?? null);
-    }
-    if (b.state !== undefined) {
-        updateFields.push("state = ?");
-        updateValues.push(b.state ?? null);
-    }
-    if (b.zip !== undefined) {
-        updateFields.push("zip = ?");
-        updateValues.push(b.zip ?? null);
-    }
-    if (b.phone !== undefined) {
-        updateFields.push("phone = ?");
-        updateValues.push(b.phone ?? null);
-    }
-    if (b.dislikes !== undefined) {
-        updateFields.push("dislikes = ?");
-        updateValues.push(b.dislikes ?? null);
-    }
-    if (b.paused !== undefined) {
-        updateFields.push("paused = ?");
-        updateValues.push(b.paused ? 1 : 0);
-    }
-    if (b.delivery !== undefined) {
-        updateFields.push("delivery = ?");
-        updateValues.push(b.delivery ? 1 : 0);
-    }
-    if (b.complex !== undefined) {
-        updateFields.push("complex = ?");
-        updateValues.push(b.complex ? 1 : 0);
-    }
-    if (finalLat !== undefined) {
-        updateFields.push("lat = ?");
-        updateValues.push(finalLat);
-    }
-    if (finalLng !== undefined) {
-        updateFields.push("lng = ?");
-        updateValues.push(finalLng);
-    }
+    if (b.first !== undefined) payload.first_name = b.first;
+    if (b.last !== undefined) payload.last_name = b.last;
+    if (b.address !== undefined) payload.address = b.address ?? null;
+    if (b.apt !== undefined) payload.apt = b.apt ?? null;
+    if (b.city !== undefined) payload.city = b.city ?? null;
+    if (b.state !== undefined) payload.state = b.state ?? null;
+    if (b.zip !== undefined) payload.zip = b.zip ?? null;
+    if (b.phone !== undefined) payload.phone_number = b.phone ?? null;
+    if (b.dislikes !== undefined) payload.dislikes = b.dislikes ?? null;
+    if (b.paused !== undefined) payload.paused = b.paused;
+    if (b.delivery !== undefined) payload.delivery = b.delivery;
+    if (b.complex !== undefined) payload.complex = b.complex;
+    if (finalLat !== undefined) payload.lat = finalLat;
+    if (finalLng !== undefined) payload.lng = finalLng;
     
-    if (updateFields.length > 0) {
-        updateValues.push(userId);
-        await query(`
-            UPDATE clients
-            SET ${updateFields.join(", ")}
-            WHERE id = ?
-        `, updateValues);
+    if (Object.keys(payload).length > 0) {
+        await supabase
+            .from('clients')
+            .update(payload)
+            .eq('id', userId);
     }
     
     // Cascade to stops if needed
     if (cascadeStopsFlag && (finalLat !== null || finalLng !== null)) {
-        const stopUpdateFields: string[] = [];
-        const stopUpdateValues: any[] = [];
+        const stopPayload: any = {};
         
         if (b.first !== undefined || b.last !== undefined) {
-            const firstName = b.first ?? current.first_name ?? "";
-            const lastName = b.last ?? current.last_name ?? "";
-            stopUpdateFields.push("name = ?");
-            stopUpdateValues.push(`${firstName} ${lastName}`.trim());
+            const firstName = b.first ?? current?.first_name ?? "";
+            const lastName = b.last ?? current?.last_name ?? "";
+            stopPayload.name = `${firstName} ${lastName}`.trim();
         }
-        if (b.address !== undefined) {
-            stopUpdateFields.push("address = ?");
-            stopUpdateValues.push(b.address ?? null);
-        }
-        if (b.apt !== undefined) {
-            stopUpdateFields.push("apt = ?");
-            stopUpdateValues.push(b.apt ?? null);
-        }
-        if (b.city !== undefined) {
-            stopUpdateFields.push("city = ?");
-            stopUpdateValues.push(b.city ?? null);
-        }
-        if (b.state !== undefined) {
-            stopUpdateFields.push("state = ?");
-            stopUpdateValues.push(b.state ?? null);
-        }
-        if (b.zip !== undefined) {
-            stopUpdateFields.push("zip = ?");
-            stopUpdateValues.push(b.zip ?? null);
-        }
-        if (b.phone !== undefined) {
-            stopUpdateFields.push("phone = ?");
-            stopUpdateValues.push(b.phone ?? null);
-        }
-        if (finalLat !== null) {
-            stopUpdateFields.push("lat = ?");
-            stopUpdateValues.push(finalLat);
-        }
-        if (finalLng !== null) {
-            stopUpdateFields.push("lng = ?");
-            stopUpdateValues.push(finalLng);
-        }
+        if (b.address !== undefined) stopPayload.address = b.address ?? null;
+        if (b.apt !== undefined) stopPayload.apt = b.apt ?? null;
+        if (b.city !== undefined) stopPayload.city = b.city ?? null;
+        if (b.state !== undefined) stopPayload.state = b.state ?? null;
+        if (b.zip !== undefined) stopPayload.zip = b.zip ?? null;
+        if (b.phone !== undefined) stopPayload.phone = b.phone ?? null;
+        if (finalLat !== null) stopPayload.lat = finalLat;
+        if (finalLng !== null) stopPayload.lng = finalLng;
         
-        if (stopUpdateFields.length > 0) {
-            stopUpdateValues.push(userId);
-            await query(`
-                UPDATE stops
-                SET ${stopUpdateFields.join(", ")}
-                WHERE client_id = ?
-            `, stopUpdateValues).catch(err => {
-                console.error("Failed to cascade to stops:", err);
-            });
+        if (Object.keys(stopPayload).length > 0) {
+            await supabase
+                .from('stops')
+                .update(stopPayload)
+                .eq('client_id', userId)
+                .catch(err => {
+                    console.error("Failed to cascade to stops:", err);
+                });
         }
     }
     
     // Return updated client
-    const updated = await queryOne<any>(`
-        SELECT 
-            id,
-            first_name as first,
-            last_name as last,
-            address,
-            apt,
-            city,
-            state,
-            zip,
-            phone,
-            lat,
-            lng,
-            dislikes,
-            paused,
-            delivery,
-            complex
-        FROM clients
-        WHERE id = ?
-    `, [userId]);
+    const { data: updated } = await supabase
+        .from('clients')
+        .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex')
+        .eq('id', userId)
+        .single();
+    
+    if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
     
     return NextResponse.json({
         id: updated.id,
-        first: updated.first || "",
-        last: updated.last || "",
+        first: updated.first_name || "",
+        last: updated.last_name || "",
         address: updated.address || "",
         apt: updated.apt || null,
         city: updated.city || "",
         state: updated.state || "",
         zip: updated.zip || "",
-        phone: updated.phone || null,
+        phone: updated.phone_number || null,
         lat: updated.lat ? Number(updated.lat) : null,
         lng: updated.lng ? Number(updated.lng) : null,
         dislikes: updated.dislikes || null,

@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 /**
  * API endpoint to get clients formatted as "users" for routes feature compatibility
@@ -9,40 +9,15 @@ import { query } from "@/lib/mysql";
  */
 export async function GET(req: Request) {
     try {
-        const clients = await query<any[]>(`
-            SELECT 
-                id,
-                first_name as first,
-                last_name as last,
-                address,
-                apt,
-                city,
-                state,
-                zip,
-                phone_number as phone,
-                lat,
-                lng,
-                dislikes,
-                paused,
-                delivery,
-                complex
-            FROM clients
-            ORDER BY id ASC
-        `);
+        const { data: clients } = await supabase
+            .from('clients')
+            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex')
+            .order('id', { ascending: true });
 
         // Get schedules for clients
-        const schedules = await query<any[]>(`
-            SELECT 
-                client_id,
-                monday,
-                tuesday,
-                wednesday,
-                thursday,
-                friday,
-                saturday,
-                sunday
-            FROM schedules
-        `);
+        const { data: schedules } = await supabase
+            .from('schedules')
+            .select('client_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday');
 
         const scheduleMap = new Map<string, any>();
         for (const s of schedules) {
@@ -50,16 +25,16 @@ export async function GET(req: Request) {
         }
 
         // Format clients as users with schedule
-        const users = clients.map(client => ({
+        const users = (clients || []).map(client => ({
             id: client.id,
-            first: client.first || "",
-            last: client.last || "",
+            first: client.first_name || "",
+            last: client.last_name || "",
             address: client.address || "",
             apt: client.apt || null,
             city: client.city || "",
             state: client.state || "",
             zip: client.zip || "",
-            phone: client.phone || null,
+            phone: client.phone_number || null,
             lat: client.lat ? Number(client.lat) : null,
             lng: client.lng ? Number(client.lng) : null,
             dislikes: client.dislikes || null,
@@ -108,20 +83,21 @@ export async function PUT(req: Request) {
 
         // Add other fields if needed
         if (updateFields.length > 0) {
-            updateValues.push(String(id));
-            await query(`
-                UPDATE clients 
-                SET ${updateFields.join(", ")}
-                WHERE id = ?
-            `, updateValues);
+            const payload: any = {};
+            if (lat !== undefined) payload.lat = Number(lat);
+            if (lng !== undefined) payload.lng = Number(lng);
+            
+            await supabase
+                .from('clients')
+                .update(payload)
+                .eq('id', String(id));
 
             // If cascadeStops, update stops too
             if (cascadeStops && (lat !== undefined || lng !== undefined)) {
-                await query(`
-                    UPDATE stops 
-                    SET lat = ?, lng = ?
-                    WHERE client_id = ?
-                `, [Number(lat ?? 0), Number(lng ?? 0), String(id)]);
+                await supabase
+                    .from('stops')
+                    .update({ lat: Number(lat ?? 0), lng: Number(lng ?? 0) })
+                    .eq('client_id', String(id));
             }
         }
 

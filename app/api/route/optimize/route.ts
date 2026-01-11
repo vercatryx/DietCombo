@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 function normalizeDay(raw?: string | null) {
     const s = String(raw ?? "all").toLowerCase().trim();
@@ -94,10 +94,10 @@ export async function POST(req: Request) {
         if (consolidateDuplicates) {
             // STEP A: Consolidate duplicate stops across all drivers
             // Find stops with the same client_id assigned to multiple drivers
-            const allDrivers = await query<any[]>(`
-                SELECT id, name, stop_ids FROM drivers
-                WHERE day = ?
-            `, [day]);
+            const { data: allDrivers } = await supabase
+                .from('drivers')
+                .select('id, name, stop_ids')
+                .eq('day', day);
 
             // Build a map of client_id -> list of (driverId, stopId) pairs
             const clientToStops = new Map<string, Array<{ driverId: string; stopId: string }>>();
@@ -108,14 +108,16 @@ export async function POST(req: Request) {
                     : (typeof driver.stop_ids === "string" ? JSON.parse(driver.stop_ids || "[]") : []);
 
                 for (const stopId of stopIds) {
-                    const stop = await query<any[]>(`
-                        SELECT id, client_id FROM stops
-                        WHERE id = ? AND day = ?
-                        LIMIT 1
-                    `, [stopId, day]);
+                    const { data: stop } = await supabase
+                        .from('stops')
+                        .select('id, client_id')
+                        .eq('id', stopId)
+                        .eq('day', day)
+                        .limit(1)
+                        .maybeSingle();
 
-                    if (stop.length > 0 && stop[0].client_id) {
-                        const clientId = String(stop[0].client_id);
+                    if (stop && stop.client_id) {
+                        const clientId = String(stop.client_id);
                         if (!clientToStops.has(clientId)) {
                             clientToStops.set(clientId, []);
                         }
@@ -152,11 +154,10 @@ export async function POST(req: Request) {
                             ? driver.stop_ids 
                             : (typeof driver.stop_ids === "string" ? JSON.parse(driver.stop_ids || "[]") : []);
                         const filtered = stopIds.filter((id: any) => String(id) !== removeStop.stopId);
-                        await query(`
-                            UPDATE drivers
-                            SET stop_ids = ?
-                            WHERE id = ?
-                        `, [JSON.stringify(filtered), driver.id]);
+                        await supabase
+                            .from('drivers')
+                            .update({ stop_ids: filtered })
+                            .eq('id', driver.id);
                     }
                 }
             }
@@ -164,19 +165,20 @@ export async function POST(req: Request) {
 
         if (driverId) {
             // STEP B: Optimize a specific driver's route order
-            const drivers = await query<any[]>(`
-                SELECT id, stop_ids FROM drivers
-                WHERE id = ? AND day = ?
-            `, [driverId, day]);
+            const { data: driver } = await supabase
+                .from('drivers')
+                .select('id, stop_ids')
+                .eq('id', driverId)
+                .eq('day', day)
+                .single();
 
-            if (drivers.length === 0) {
+            if (!driver) {
                 return NextResponse.json(
                     { error: "Driver not found" },
                     { status: 404 }
                 );
             }
 
-            const driver = drivers[0];
             const stopIds = Array.isArray(driver.stop_ids) 
                 ? driver.stop_ids 
                 : (typeof driver.stop_ids === "string" ? JSON.parse(driver.stop_ids || "[]") : []);
@@ -186,20 +188,19 @@ export async function POST(req: Request) {
             }
 
             // Fetch stop details with coordinates
-            const stops = await query<any[]>(`
-                SELECT id, lat, lng FROM stops
-                WHERE id IN (${stopIds.map(() => "?").join(",")})
-            `, stopIds);
+            const { data: stops } = await supabase
+                .from('stops')
+                .select('id, lat, lng')
+                .in('id', stopIds);
 
             // Optimize order
-            const optimizedOrder = optimizeRouteOrder(stops);
+            const optimizedOrder = optimizeRouteOrder(stops || []);
 
             // Update driver with optimized order
-            await query(`
-                UPDATE drivers
-                SET stop_ids = ?
-                WHERE id = ?
-            `, [JSON.stringify(optimizedOrder), driverId]);
+            await supabase
+                .from('drivers')
+                .update({ stop_ids: optimizedOrder })
+                .eq('id', driverId);
 
             return NextResponse.json(
                 { 

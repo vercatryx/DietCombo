@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
 function normalizeDay(raw?: string | null) {
@@ -23,11 +23,11 @@ export async function POST(req: Request) {
         const day = normalizeDay(body?.day);
 
         // Get existing drivers for this day
-        const existingDrivers = await query<any[]>(`
-            SELECT id, name FROM drivers
-            WHERE day = ?
-            ORDER BY id ASC
-        `, [day]);
+        const { data: existingDrivers } = await supabase
+            .from('drivers')
+            .select('id, name')
+            .eq('day', day)
+            .order('id', { ascending: true });
 
         // Parse driver numbers from names to find the highest number
         const parseDriverNum = (name: string) => {
@@ -51,24 +51,27 @@ export async function POST(req: Request) {
 
         // Create new driver
         const newId = uuidv4();
-        await query(`
-            INSERT INTO drivers (id, day, name, color, stop_ids)
-            VALUES (?, ?, ?, ?, ?)
-        `, [newId, day, driverName, color, JSON.stringify([])]);
+        await supabase
+            .from('drivers')
+            .insert([{ id: newId, day, name: driverName, color, stop_ids: [] }]);
 
         // Create new route run snapshot with the new driver
-        const allDrivers = await query<any[]>(`
-            SELECT id, name, color, stop_ids FROM drivers
-            WHERE day = ?
-            ORDER BY 
-                CASE 
-                    WHEN name LIKE 'Driver 0' THEN 0
-                    WHEN name REGEXP 'Driver [0-9]+' THEN CAST(SUBSTRING(name, 8) AS UNSIGNED)
-                    ELSE 999999
-                END
-        `, [day]);
+        const { data: allDrivers } = await supabase
+            .from('drivers')
+            .select('id, name, color, stop_ids')
+            .eq('day', day);
 
-        const finalSnapshot = allDrivers.map(d => ({
+        // Sort by driver number manually
+        const sortedDrivers = (allDrivers || []).sort((a, b) => {
+            const parseNum = (name: string) => {
+                if (name === 'Driver 0') return 0;
+                const m = /driver\s+(\d+)/i.exec(String(name || ""));
+                return m ? parseInt(m[1], 10) : 999999;
+            };
+            return parseNum(a.name) - parseNum(b.name);
+        });
+
+        const finalSnapshot = sortedDrivers.map(d => ({
             driverId: d.id,
             driverName: d.name,
             color: d.color,
@@ -77,10 +80,9 @@ export async function POST(req: Request) {
 
         // Create new route run
         const runId = uuidv4();
-        await query(`
-            INSERT INTO route_runs (id, day, snapshot)
-            VALUES (?, ?, ?)
-        `, [runId, day, JSON.stringify(finalSnapshot)]);
+        await supabase
+            .from('route_runs')
+            .insert([{ id: runId, day, snapshot: finalSnapshot }]);
 
         return NextResponse.json(
             { 

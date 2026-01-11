@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
 function normalizeDay(raw?: string | null) {
@@ -31,21 +31,24 @@ export async function POST(req: Request) {
         }
 
         // Get all stops for this day
-        const dayWhere = day === "all" ? "" : `WHERE day = ?`;
-        const dayParams = day === "all" ? [] : [day];
-        const allStops = await query<any[]>(`
-            SELECT id FROM stops ${dayWhere}
-            ORDER BY id ASC
-        `, dayParams);
-
-        const stopIds = allStops.map(s => s.id);
+        let stopsQuery = supabase
+            .from('stops')
+            .select('id')
+            .order('id', { ascending: true });
+        
+        if (day !== "all") {
+            stopsQuery = stopsQuery.eq('day', day);
+        }
+        
+        const { data: allStops } = await stopsQuery;
+        const stopIds = (allStops || []).map(s => s.id);
 
         // Get existing drivers for this day
-        const existingDrivers = await query<any[]>(`
-            SELECT id, name FROM drivers
-            WHERE day = ?
-            ORDER BY id ASC
-        `, [day]);
+        const { data: existingDrivers } = await supabase
+            .from('drivers')
+            .select('id, name')
+            .eq('day', day)
+            .order('id', { ascending: true });
 
         // Parse driver numbers from names to maintain Driver 0, 1, 2... order
         const parseDriverNum = (name: string) => {
@@ -70,19 +73,17 @@ export async function POST(req: Request) {
             if (i < sortedExisting.length) {
                 // Update existing driver
                 const existing = sortedExisting[i];
-                await query(`
-                    UPDATE drivers
-                    SET name = ?, color = ?, stop_ids = ?
-                    WHERE id = ?
-                `, [driverName, color, JSON.stringify([]), existing.id]);
+                await supabase
+                    .from('drivers')
+                    .update({ name: driverName, color, stop_ids: [] })
+                    .eq('id', existing.id);
                 drivers.push({ id: existing.id, name: driverName, color });
             } else {
                 // Create new driver
                 const newId = uuidv4();
-                await query(`
-                    INSERT INTO drivers (id, day, name, color, stop_ids)
-                    VALUES (?, ?, ?, ?, ?)
-                `, [newId, day, driverName, color, JSON.stringify([])]);
+                await supabase
+                    .from('drivers')
+                    .insert([{ id: newId, day, name: driverName, color, stop_ids: [] }]);
                 drivers.push({ id: newId, name: driverName, color });
             }
         }
@@ -92,9 +93,10 @@ export async function POST(req: Request) {
             const toRemove = sortedExisting.slice(driverCount);
             for (const driver of toRemove) {
                 // Remove stops from this driver first
-                await query(`
-                    UPDATE drivers SET stop_ids = ? WHERE id = ?
-                `, [JSON.stringify([]), driver.id]);
+                await supabase
+                    .from('drivers')
+                    .update({ stop_ids: [] })
+                    .eq('id', driver.id);
                 // Optionally delete the driver, or just leave it with empty stops
                 // For now, we'll leave it (in case user wants to add it back)
             }
@@ -112,26 +114,29 @@ export async function POST(req: Request) {
             const driverStops = stopIds.slice(stopIndex, stopIndex + count);
             stopIndex += count;
 
-            await query(`
-                UPDATE drivers
-                SET stop_ids = ?
-                WHERE id = ?
-            `, [JSON.stringify(driverStops), driver.id]);
+            await supabase
+                .from('drivers')
+                .update({ stop_ids: driverStops })
+                .eq('id', driver.id);
         }
 
         // Re-fetch to get actual stop_ids after distribution
-        const updatedDrivers = await query<any[]>(`
-            SELECT id, name, color, stop_ids FROM drivers
-            WHERE day = ? AND id IN (${drivers.map(() => "?").join(",")})
-            ORDER BY 
-                CASE 
-                    WHEN name LIKE 'Driver 0' THEN 0
-                    WHEN name REGEXP 'Driver [0-9]+' THEN CAST(SUBSTRING(name, 8) AS UNSIGNED)
-                    ELSE 999999
-                END
-        `, [day, ...drivers.map(d => d.id)]);
+        const { data: updatedDrivers } = await supabase
+            .from('drivers')
+            .select('id, name, color, stop_ids')
+            .eq('day', day)
+            .in('id', drivers.map(d => d.id));
 
-        const finalSnapshot = updatedDrivers.map(d => ({
+        // Sort by driver number manually since Supabase doesn't support complex ORDER BY
+        const sortedDrivers = (updatedDrivers || []).sort((a, b) => {
+            const parseNum = (name: string) => {
+                const m = /driver\s+(\d+)/i.exec(String(name || ""));
+                return m ? parseInt(m[1], 10) : 999999;
+            };
+            return parseNum(a.name) - parseNum(b.name);
+        });
+
+        const finalSnapshot = sortedDrivers.map(d => ({
             driverId: d.id,
             driverName: d.name,
             color: d.color,
@@ -140,10 +145,9 @@ export async function POST(req: Request) {
 
         // Create new route run
         const runId = uuidv4();
-        await query(`
-            INSERT INTO route_runs (id, day, snapshot)
-            VALUES (?, ?, ?)
-        `, [runId, day, JSON.stringify(finalSnapshot)]);
+        await supabase
+            .from('route_runs')
+            .insert([{ id: runId, day, snapshot: finalSnapshot }]);
 
         return NextResponse.json(
             { 

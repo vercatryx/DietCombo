@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query, queryOne, insert, execute } from "@/lib/mysql";
-import { generateUUID } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
+import { randomUUID } from "crypto";
 
 export async function GET(
     _req: NextRequest,
@@ -9,15 +9,11 @@ export async function GET(
     try {
         const { token } = await ctx.params;
 
-        const user = await queryOne<{
-            id: string;
-            full_name: string;
-            first_name: string | null;
-            last_name: string | null;
-        }>(
-            `SELECT id, full_name, first_name, last_name FROM clients WHERE sign_token = ?`,
-            [token]
-        );
+        const { data: user } = await supabase
+            .from('clients')
+            .select('id, full_name, first_name, last_name')
+            .eq('sign_token', token)
+            .single();
 
         if (!user) {
             return new NextResponse("Not found", { status: 404 });
@@ -34,10 +30,11 @@ export async function GET(
             }
         }
 
-        const sigs = await query<{ slot: number }>(
-            `SELECT slot FROM signatures WHERE client_id = ? ORDER BY slot ASC`,
-            [user.id]
-        );
+        const { data: sigs } = await supabase
+            .from('signatures')
+            .select('slot')
+            .eq('client_id', user.id)
+            .order('slot', { ascending: true });
 
         return NextResponse.json({
             user: {
@@ -64,10 +61,11 @@ export async function POST(
     try {
         const { token } = await ctx.params;
 
-        const user = await queryOne<{ id: string }>(
-            `SELECT id FROM clients WHERE sign_token = ?`,
-            [token]
-        );
+        const { data: user } = await supabase
+            .from('clients')
+            .select('id')
+            .eq('sign_token', token)
+            .single();
 
         if (!user) {
             return new NextResponse("Not found", { status: 404 });
@@ -89,74 +87,71 @@ export async function POST(
         const ua = req.headers.get("user-agent") || undefined;
 
         // Check if signature already exists
-        const existing = await queryOne<{ id: string }>(
-            `SELECT id FROM signatures WHERE client_id = ? AND slot = ?`,
-            [user.id, slot]
-        );
+        const { data: existing } = await supabase
+            .from('signatures')
+            .select('id')
+            .eq('client_id', user.id)
+            .eq('slot', slot)
+            .maybeSingle();
 
         // Handle signature insert/update (order_id is optional and only used if provided and column exists)
-        // We'll try with order_id first if provided, and fall back without it if column doesn't exist
+        const payload: any = {
+            strokes,
+            ip: ip || null,
+            user_agent: ua || null,
+            signed_at: new Date().toISOString()
+        };
+        if (orderId) {
+            payload.order_id = orderId;
+        }
+
         if (existing) {
             // Update existing signature
-            if (orderId) {
-                // Try to update with order_id, fall back if column doesn't exist
-                try {
-                    await execute(
-                        `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP, order_id = ? WHERE client_id = ? AND slot = ?`,
-                        [JSON.stringify(strokes), ip || null, ua || null, orderId, user.id, slot]
-                    );
-                } catch (err: any) {
-                    // If error is about missing column, try without order_id
-                    if (err.code === 'ER_BAD_FIELD_ERROR' || err.message?.includes('order_id')) {
-                        await execute(
-                            `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP WHERE client_id = ? AND slot = ?`,
-                            [JSON.stringify(strokes), ip || null, ua || null, user.id, slot]
-                        );
-                    } else {
-                        throw err;
-                    }
+            const { error: updateError } = await supabase
+                .from('signatures')
+                .update(payload)
+                .eq('client_id', user.id)
+                .eq('slot', slot);
+            if (updateError) {
+                // If error is about missing column, try without order_id
+                if (updateError.message?.includes('order_id') || updateError.code === 'PGRST116') {
+                    delete payload.order_id;
+                    const { error: retryError } = await supabase
+                        .from('signatures')
+                        .update(payload)
+                        .eq('client_id', user.id)
+                        .eq('slot', slot);
+                    if (retryError) throw retryError;
+                } else {
+                    throw updateError;
                 }
-            } else {
-                // Update without order_id (backward compatible)
-                await execute(
-                    `UPDATE signatures SET strokes = ?, ip = ?, user_agent = ?, signed_at = CURRENT_TIMESTAMP WHERE client_id = ? AND slot = ?`,
-                    [JSON.stringify(strokes), ip || null, ua || null, user.id, slot]
-                );
             }
         } else {
             // Insert new signature
-            const id = generateUUID();
-            if (orderId) {
-                // Try to insert with order_id, fall back if column doesn't exist
-                try {
-                    await insert(
-                        `INSERT INTO signatures (id, client_id, order_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-                        [id, user.id, orderId, slot, JSON.stringify(strokes), ip || null, ua || null]
-                    );
-                } catch (err: any) {
-                    // If error is about missing column, try without order_id
-                    if (err.code === 'ER_BAD_FIELD_ERROR' || err.message?.includes('order_id')) {
-                        await insert(
-                            `INSERT INTO signatures (id, client_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-                            [id, user.id, slot, JSON.stringify(strokes), ip || null, ua || null]
-                        );
-                    } else {
-                        throw err;
-                    }
+            const id = randomUUID();
+            const insertPayload = { ...payload, id, client_id: user.id, slot };
+            const { error: insertError } = await supabase
+                .from('signatures')
+                .insert([insertPayload]);
+            if (insertError) {
+                // If error is about missing column, try without order_id
+                if (insertError.message?.includes('order_id') || insertError.code === 'PGRST116') {
+                    delete insertPayload.order_id;
+                    const { error: retryError } = await supabase
+                        .from('signatures')
+                        .insert([insertPayload]);
+                    if (retryError) throw retryError;
+                } else {
+                    throw insertError;
                 }
-            } else {
-                // Insert without order_id (backward compatible)
-                await insert(
-                    `INSERT INTO signatures (id, client_id, slot, strokes, ip, user_agent, signed_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-                    [id, user.id, slot, JSON.stringify(strokes), ip || null, ua || null]
-                );
             }
         }
 
-        const after = await query<{ slot: number }>(
-            `SELECT slot FROM signatures WHERE client_id = ? ORDER BY slot ASC`,
-            [user.id]
-        );
+        const { data: after } = await supabase
+            .from('signatures')
+            .select('slot')
+            .eq('client_id', user.id)
+            .order('slot', { ascending: true });
 
         return NextResponse.json({
             ok: true,

@@ -2,7 +2,6 @@
 
 import { getCurrentTime } from './time';
 import { revalidatePath } from 'next/cache';
-import { query, queryOne, insert, execute, generateUUID } from './mysql';
 import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment } from './types';
 import { randomUUID } from 'crypto';
 import { getSession } from './session';
@@ -17,7 +16,7 @@ import { supabase } from './supabase';
 // --- HELPERS ---
 function handleError(error: any) {
     if (error) {
-        console.error('MySQL Error:', error);
+        console.error('Supabase Error:', error);
         throw new Error(error.message);
     }
 }
@@ -26,8 +25,9 @@ function handleError(error: any) {
 
 export async function getStatuses() {
     try {
-        const data = await query<any>('SELECT * FROM client_statuses ORDER BY created_at ASC');
-        return data.map((s: any) => ({
+        const { data, error } = await supabase.from('client_statuses').select('*').order('created_at', { ascending: true });
+        if (error) return [];
+        return (data || []).map((s: any) => ({
             id: s.id,
             name: s.name,
             isSystemDefault: s.is_system_default,
@@ -41,14 +41,21 @@ export async function getStatuses() {
 }
 
 export async function addStatus(name: string) {
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO client_statuses (id, name, is_system_default, deliveries_allowed, requires_units_on_change) VALUES (?, ?, ?, ?, ?)',
-        [id, name, false, true, false]
-    );
-    revalidatePath('/admin');
-    const data = await queryOne<any>('SELECT * FROM client_statuses WHERE id = ?', [id]);
+    const id = randomUUID();
+    const { data, error } = await supabase
+        .from('client_statuses')
+        .insert([{
+            id,
+            name,
+            is_system_default: false,
+            deliveries_allowed: true,
+            requires_units_on_change: false
+        }])
+        .select()
+        .single();
+    handleError(error);
     if (!data) throw new Error('Failed to retrieve created status');
+    revalidatePath('/admin');
     return {
         id: data.id,
         name: data.name,
@@ -59,34 +66,25 @@ export async function addStatus(name: string) {
 }
 
 export async function deleteStatus(id: string) {
-    await execute('DELETE FROM client_statuses WHERE id = ?', [id]);
+    const { error } = await supabase.from('client_statuses').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
 export async function updateStatus(id: string, data: Partial<ClientStatus>) { // Modified signature to take Partial<ClientStatus> instead of just name
-    const updates: string[] = [];
-    const params: any[] = [];
+    const payload: any = {};
+    if (data.name) payload.name = data.name;
+    if (data.deliveriesAllowed !== undefined) payload.deliveries_allowed = data.deliveriesAllowed;
+    if (data.requiresUnitsOnChange !== undefined) payload.requires_units_on_change = data.requiresUnitsOnChange;
     
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.deliveriesAllowed !== undefined) {
-        updates.push('deliveries_allowed = ?');
-        params.push(data.deliveriesAllowed);
-    }
-    if (data.requiresUnitsOnChange !== undefined) {
-        updates.push('requires_units_on_change = ?');
-        params.push(data.requiresUnitsOnChange);
-    }
-    
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE client_statuses SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('client_statuses').update(payload).eq('id', id);
+        handleError(error);
     }
     
     revalidatePath('/admin');
-    const res = await queryOne<any>('SELECT * FROM client_statuses WHERE id = ?', [id]);
+    const { data: res, error: fetchError } = await supabase.from('client_statuses').select('*').eq('id', id).single();
+    handleError(fetchError);
     if (!res) throw new Error('Status not found');
     return {
         id: res.id,
@@ -101,8 +99,9 @@ export async function updateStatus(id: string, data: Partial<ClientStatus>) { //
 
 export async function getVendors() {
     try {
-        const data = await query<any>('SELECT * FROM vendors');
-        return data.map((v: any) => ({
+        const { data, error } = await supabase.from('vendors').select('*');
+        if (error) return [];
+        return (data || []).map((v: any) => ({
             id: v.id,
             name: v.name,
             email: v.email || null,
@@ -121,8 +120,8 @@ export async function getVendors() {
 
 export async function getVendor(id: string) {
     try {
-        const v = await queryOne<any>('SELECT * FROM vendors WHERE id = ?', [id]);
-        if (!v) return null;
+        const { data: v, error } = await supabase.from('vendors').select('*').eq('id', id).single();
+        if (error || !v) return null;
 
         return {
             id: v.id,
@@ -142,7 +141,7 @@ export async function getVendor(id: string) {
 }
 
 export async function addVendor(data: Omit<Vendor, 'id'> & { password?: string; email?: string }) {
-    const id = generateUUID();
+    const id = randomUUID();
     let password = null;
     
     if (data.password && data.password.trim() !== '') {
@@ -154,77 +153,54 @@ export async function addVendor(data: Omit<Vendor, 'id'> & { password?: string; 
         ? (data.email.trim() === '' ? null : data.email.trim())
         : null;
     
-    await insert(
-        'INSERT INTO vendors (id, name, email, password, service_type, delivery_days, delivery_frequency, is_active, minimum_meals, cutoff_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-            id,
-            data.name,
-            email,
-            password,
-            (data.serviceTypes || []).join(','),
-            JSON.stringify(data.deliveryDays || []),
-            data.allowsMultipleDeliveries ? 'Multiple' : 'Once',
-            data.isActive,
-            data.minimumMeals ?? 0,
-            data.cutoffHours ?? 0
-        ]
-    );
+    const payload: any = {
+        id,
+        name: data.name,
+        email,
+        password,
+        service_type: (data.serviceTypes || []).join(','),
+        delivery_days: data.deliveryDays || [],
+        delivery_frequency: data.allowsMultipleDeliveries ? 'Multiple' : 'Once',
+        is_active: data.isActive,
+        minimum_meals: data.minimumMeals ?? 0,
+        cutoff_hours: data.cutoffHours ?? 0
+    };
+    
+    const { error } = await supabase.from('vendors').insert([payload]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
 
 export async function updateVendor(id: string, data: Partial<Vendor & { password?: string }>) {
-    const updates: string[] = [];
-    const params: any[] = [];
+    const payload: any = {};
     
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.serviceTypes) {
-        updates.push('service_type = ?');
-        params.push(data.serviceTypes.join(','));
-    }
-    if (data.deliveryDays) {
-        updates.push('delivery_days = ?');
-        params.push(JSON.stringify(data.deliveryDays));
-    }
-    if (data.allowsMultipleDeliveries !== undefined) {
-        updates.push('delivery_frequency = ?');
-        params.push(data.allowsMultipleDeliveries ? 'Multiple' : 'Once');
-    }
-    if (data.isActive !== undefined) {
-        updates.push('is_active = ?');
-        params.push(data.isActive);
-    }
-    if (data.minimumMeals !== undefined) {
-        updates.push('minimum_meals = ?');
-        params.push(data.minimumMeals);
-    }
-    if (data.cutoffHours !== undefined) {
-        updates.push('cutoff_hours = ?');
-        params.push(data.cutoffHours);
-    }
+    if (data.name) payload.name = data.name;
+    if (data.serviceTypes) payload.service_type = data.serviceTypes.join(',');
+    if (data.deliveryDays) payload.delivery_days = data.deliveryDays;
+    if (data.allowsMultipleDeliveries !== undefined) payload.delivery_frequency = data.allowsMultipleDeliveries ? 'Multiple' : 'Once';
+    if (data.isActive !== undefined) payload.is_active = data.isActive;
+    if (data.minimumMeals !== undefined) payload.minimum_meals = data.minimumMeals;
+    if (data.cutoffHours !== undefined) payload.cutoff_hours = data.cutoffHours;
     if (data.email !== undefined) {
-        updates.push('email = ?');
         const trimmedEmail = data.email?.trim() || '';
-        params.push(trimmedEmail === '' ? null : trimmedEmail);
+        payload.email = trimmedEmail === '' ? null : trimmedEmail;
     }
     if (data.password !== undefined && data.password !== null && data.password.trim() !== '') {
         const { hashPassword } = await import('./password');
-        updates.push('password = ?');
-        params.push(await hashPassword(data.password.trim()));
+        payload.password = await hashPassword(data.password.trim());
     }
     
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE vendors SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('vendors').update(payload).eq('id', id);
+        handleError(error);
     }
     revalidatePath('/admin');
 }
 
 export async function deleteVendor(id: string) {
-    await execute('DELETE FROM vendors WHERE id = ?', [id]);
+    const { error } = await supabase.from('vendors').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
@@ -232,8 +208,9 @@ export async function deleteVendor(id: string) {
 
 export async function getMenuItems() {
     try {
-        const data = await query<any>('SELECT * FROM menu_items');
-        return data.map((i: any) => ({
+        const { data, error } = await supabase.from('menu_items').select('*');
+        if (error) return [];
+        return (data || []).map((i: any) => ({
             id: i.id,
             vendorId: i.vendor_id,
             name: i.name,
@@ -255,83 +232,61 @@ export async function addMenuItem(data: Omit<MenuItem, 'id'>) {
         throw new Error('Price is required and must be greater than 0');
     }
     
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO menu_items (id, vendor_id, name, value, price_each, is_active, category_id, quota_value, minimum_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-            id,
-            data.vendorId || null,
-            data.name,
-            data.value,
-            data.priceEach,
-            data.isActive,
-            data.categoryId || null,
-            data.quotaValue || null,
-            data.minimumOrder ?? 0
-        ]
-    );
+    const id = randomUUID();
+    const payload: any = {
+        id,
+        vendor_id: data.vendorId || null,
+        name: data.name,
+        value: data.value,
+        price_each: data.priceEach,
+        is_active: data.isActive,
+        category_id: data.categoryId || null,
+        quota_value: data.quotaValue || null,
+        minimum_order: data.minimumOrder ?? 0
+    };
+    
+    const { error } = await supabase.from('menu_items').insert([payload]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
 
 export async function updateMenuItem(id: string, data: Partial<MenuItem>) {
-    const updates: string[] = [];
-    const params: any[] = [];
+    const payload: any = {};
+    if (data.name) payload.name = data.name;
+    if (data.value !== undefined) payload.value = data.value;
+    if (data.priceEach !== undefined) payload.price_each = data.priceEach;
+    if (data.isActive !== undefined) payload.is_active = data.isActive;
+    if (data.categoryId !== undefined) payload.category_id = data.categoryId || null;
+    if (data.quotaValue !== undefined) payload.quota_value = data.quotaValue;
+    if (data.minimumOrder !== undefined) payload.minimum_order = data.minimumOrder;
+    if (data.vendorId !== undefined) payload.vendor_id = data.vendorId || null;
     
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.value !== undefined) {
-        updates.push('value = ?');
-        params.push(data.value);
-    }
-    if (data.priceEach !== undefined) {
-        updates.push('price_each = ?');
-        params.push(data.priceEach);
-    }
-    if (data.isActive !== undefined) {
-        updates.push('is_active = ?');
-        params.push(data.isActive);
-    }
-    if (data.categoryId !== undefined) {
-        updates.push('category_id = ?');
-        params.push(data.categoryId || null);
-    }
-    if (data.quotaValue !== undefined) {
-        updates.push('quota_value = ?');
-        params.push(data.quotaValue);
-    }
-    if (data.minimumOrder !== undefined) {
-        updates.push('minimum_order = ?');
-        params.push(data.minimumOrder);
-    }
-    if (data.vendorId !== undefined) {
-        updates.push('vendor_id = ?');
-        params.push(data.vendorId || null);
-    }
-    
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE menu_items SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('menu_items').update(payload).eq('id', id);
+        handleError(error);
     }
     revalidatePath('/admin');
 }
 
 export async function deleteMenuItem(id: string) {
     try {
-        await execute('DELETE FROM menu_items WHERE id = ?', [id]);
+        const { error } = await supabase.from('menu_items').delete().eq('id', id);
+        if (error) {
+            // Check if it's a foreign key constraint error (PostgreSQL code 23503)
+            if (error.code === '23503' || error.message?.includes('foreign key')) {
+                // Soft delete instead
+                const { error: updateError } = await supabase.from('menu_items').update({ is_active: false }).eq('id', id);
+                handleError(updateError);
+                revalidatePath('/admin');
+                return { success: false, message: 'Item is in use by existing orders. It has been deactivated instead of permanently deleted.' };
+            }
+            throw error;
+        }
         revalidatePath('/admin');
         return { success: true };
     } catch (error: any) {
-        // If the item is referenced by orders (FK violation), we can't hard delete it.
-        // Instead, we mark it as inactive (soft delete) so it doesn't appear in new order selections
-        // but preserves history for existing orders.
-        if (error.code === 'ER_ROW_IS_REFERENCED_2' || error.code === '23000') {
-            await execute('UPDATE menu_items SET is_active = ? WHERE id = ?', [false, id]);
-            revalidatePath('/admin');
-            return { success: false, message: 'Item is in use by existing orders. It has been deactivated instead of permanently deleted.' };
-        }
+        console.error('Error deleting menu item:', error);
         throw error;
     }
 }
@@ -340,8 +295,9 @@ export async function deleteMenuItem(id: string) {
 
 export async function getCategories() {
     try {
-        const data = await query<any>('SELECT * FROM item_categories ORDER BY name');
-        return data.map((c: any) => ({
+        const { data, error } = await supabase.from('item_categories').select('*').order('name');
+        if (error) return [];
+        return (data || []).map((c: any) => ({
             id: c.id,
             name: c.name,
             setValue: c.set_value ?? undefined
@@ -353,27 +309,30 @@ export async function getCategories() {
 }
 
 export async function addCategory(name: string, setValue?: number | null) {
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO item_categories (id, name, set_value) VALUES (?, ?, ?)',
-        [id, name, setValue ?? null]
-    );
-    revalidatePath('/admin');
-    const data = await queryOne<any>('SELECT * FROM item_categories WHERE id = ?', [id]);
+    const id = randomUUID();
+    const { data, error } = await supabase
+        .from('item_categories')
+        .insert([{ id, name, set_value: setValue ?? null }])
+        .select()
+        .single();
+    handleError(error);
     if (!data) throw new Error('Failed to retrieve created category');
+    revalidatePath('/admin');
     return { id: data.id, name: data.name, setValue: data.set_value ?? undefined };
 }
 
 export async function deleteCategory(id: string) {
-    await execute('DELETE FROM item_categories WHERE id = ?', [id]);
+    const { error } = await supabase.from('item_categories').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
 export async function updateCategory(id: string, name: string, setValue?: number | null) {
-    await execute(
-        'UPDATE item_categories SET name = ?, set_value = ? WHERE id = ?',
-        [name, setValue ?? null, id]
-    );
+    const { error } = await supabase
+        .from('item_categories')
+        .update({ name, set_value: setValue ?? null })
+        .eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
@@ -381,8 +340,9 @@ export async function updateCategory(id: string, name: string, setValue?: number
 
 export async function getEquipment() {
     try {
-        const data = await query<any>('SELECT * FROM equipment ORDER BY name');
-        return data.map((e: any) => ({
+        const { data, error } = await supabase.from('equipment').select('*').order('name');
+        if (error) return [];
+        return (data || []).map((e: any) => ({
             id: e.id,
             name: e.name,
             price: parseFloat(e.price),
@@ -395,41 +355,35 @@ export async function getEquipment() {
 }
 
 export async function addEquipment(data: Omit<Equipment, 'id'>) {
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO equipment (id, name, price, vendor_id) VALUES (?, ?, ?, ?)',
-        [id, data.name, data.price, data.vendorId || null]
-    );
+    const id = randomUUID();
+    const payload: any = {
+        id,
+        name: data.name,
+        price: data.price,
+        vendor_id: data.vendorId || null
+    };
+    const { error } = await supabase.from('equipment').insert([payload]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
 
 export async function updateEquipment(id: string, data: Partial<Equipment>) {
-    const updates: string[] = [];
-    const params: any[] = [];
+    const payload: any = {};
+    if (data.name) payload.name = data.name;
+    if (data.price !== undefined) payload.price = data.price;
+    if (data.vendorId !== undefined) payload.vendor_id = data.vendorId || null;
     
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.price !== undefined) {
-        updates.push('price = ?');
-        params.push(data.price);
-    }
-    if (data.vendorId !== undefined) {
-        updates.push('vendor_id = ?');
-        params.push(data.vendorId || null);
-    }
-    
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE equipment SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('equipment').update(payload).eq('id', id);
+        handleError(error);
     }
     revalidatePath('/admin');
 }
 
 export async function deleteEquipment(id: string) {
-    await execute('DELETE FROM equipment WHERE id = ?', [id]);
+    const { error } = await supabase.from('equipment').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
@@ -495,13 +449,25 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
         notes: JSON.stringify(equipmentSelection)
     };
 
-    const orderId = generateUUID();
-    await insert(
-        'INSERT INTO orders (id, client_id, service_type, case_id, status, last_updated, updated_by, scheduled_delivery_date, total_value, total_items, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [orderId, clientId, orderData.service_type, orderData.case_id, orderData.status, orderData.last_updated, orderData.updated_by, orderData.scheduled_delivery_date, orderData.total_value, orderData.total_items, orderData.notes]
-    );
-
-    const newOrder = await queryOne<any>('SELECT * FROM orders WHERE id = ?', [orderId]);
+    const orderId = randomUUID();
+    const { data: newOrder, error: orderError } = await supabase
+        .from('orders')
+        .insert([{
+            id: orderId,
+            client_id: clientId,
+            service_type: orderData.service_type,
+            case_id: orderData.case_id,
+            status: orderData.status,
+            last_updated: orderData.last_updated,
+            updated_by: orderData.updated_by,
+            scheduled_delivery_date: orderData.scheduled_delivery_date,
+            total_value: orderData.total_value,
+            total_items: orderData.total_items,
+            notes: orderData.notes
+        }])
+        .select()
+        .single();
+    handleError(orderError);
     if (!newOrder) {
         throw new Error('Failed to create order');
     }
@@ -510,15 +476,19 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
     // The database default should handle this, but we'll verify and fix if needed
     if (newOrder && (!newOrder.order_number || newOrder.order_number < 100000)) {
         // Get the max order_number and ensure next is at least 6 digits
-        const maxOrder = await queryOne<any>(
-            'SELECT order_number FROM orders ORDER BY order_number DESC LIMIT 1'
-        );
+        const { data: maxOrderData } = await supabase
+            .from('orders')
+            .select('order_number')
+            .order('order_number', { ascending: false })
+            .limit(1)
+            .single();
 
-        const nextNumber = Math.max((maxOrder?.order_number || 99999) + 1, 100000);
-        await execute(
-            'UPDATE orders SET order_number = ? WHERE id = ?',
-            [nextNumber, newOrder.id]
-        );
+        const nextNumber = Math.max((maxOrderData?.order_number || 99999) + 1, 100000);
+        const { error: updateError } = await supabase
+            .from('orders')
+            .update({ order_number: nextNumber })
+            .eq('id', newOrder.id);
+        handleError(updateError);
 
         newOrder.order_number = nextNumber;
     }
@@ -526,12 +496,15 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
     // Also create a vendor selection record so it shows up in vendor tab
     // We'll use order_vendor_selections table for Equipment orders too
     if (newOrder) {
-        const vsId = generateUUID();
+        const vsId = randomUUID();
         try {
-            await insert(
-                'INSERT INTO order_vendor_selections (id, order_id, vendor_id) VALUES (?, ?, ?)',
-                [vsId, newOrder.id, vendorId]
-            );
+            const { error: vsError } = await supabase
+                .from('order_vendor_selections')
+                .insert([{ id: vsId, order_id: newOrder.id, vendor_id: vendorId }]);
+            if (vsError) {
+                console.error('Error creating vendor selection for equipment order:', vsError);
+                // Don't fail the whole operation if this fails
+            }
         } catch (vsError) {
             console.error('Error creating vendor selection for equipment order:', vsError);
             // Don't fail the whole operation if this fails
@@ -547,8 +520,9 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
 
 export async function getBoxQuotas(boxTypeId: string) {
     try {
-        const data = await query<any>('SELECT * FROM box_quotas WHERE box_type_id = ?', [boxTypeId]);
-        return data.map((q: any) => ({
+        const { data, error } = await supabase.from('box_quotas').select('*').eq('box_type_id', boxTypeId);
+        if (error) return [];
+        return (data || []).map((q: any) => ({
             id: q.id,
             boxTypeId: q.box_type_id,
             categoryId: q.category_id,
@@ -561,22 +535,24 @@ export async function getBoxQuotas(boxTypeId: string) {
 }
 
 export async function addBoxQuota(data: Omit<BoxQuota, 'id'>) {
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO box_quotas (id, box_type_id, category_id, target_value) VALUES (?, ?, ?, ?)',
-        [id, data.boxTypeId, data.categoryId, data.targetValue]
-    );
+    const id = randomUUID();
+    const { error } = await supabase
+        .from('box_quotas')
+        .insert([{ id, box_type_id: data.boxTypeId, category_id: data.categoryId, target_value: data.targetValue }]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
 
 export async function updateBoxQuota(id: string, targetValue: number) {
-    await execute('UPDATE box_quotas SET target_value = ? WHERE id = ?', [targetValue, id]);
+    const { error } = await supabase.from('box_quotas').update({ target_value: targetValue }).eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
 export async function deleteBoxQuota(id: string) {
-    await execute('DELETE FROM box_quotas WHERE id = ?', [id]);
+    const { error } = await supabase.from('box_quotas').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
@@ -584,8 +560,9 @@ export async function deleteBoxQuota(id: string) {
 
 export async function getBoxTypes() {
     try {
-        const data = await query<any>('SELECT * FROM box_types');
-        return data.map((b: any) => ({
+        const { data, error } = await supabase.from('box_types').select('*');
+        if (error) return [];
+        return (data || []).map((b: any) => ({
             id: b.id,
             name: b.name,
             vendorId: b.vendor_id ?? null,
@@ -602,7 +579,8 @@ export async function addBoxType(data: Omit<BoxType, 'id'>) {
     const payload: any = {
         name: data.name,
         is_active: data.isActive,
-        price_each: data.priceEach ?? 1
+        price_each: data.priceEach ?? 1,
+        vendor_id: data.vendorId || null
     };
 
     if (data.priceEach !== undefined && data.priceEach <= 0) {
@@ -611,45 +589,30 @@ export async function addBoxType(data: Omit<BoxType, 'id'>) {
     if (data.priceEach !== undefined) {
         payload.price_each = data.priceEach;
     }
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO box_types (id, name, is_active, price_each, vendor_id) VALUES (?, ?, ?, ?, ?)',
-        [id, payload.name, payload.is_active, payload.price_each, data.vendorId || null]
-    );
+    const id = randomUUID();
+    const { error } = await supabase.from('box_types').insert([{ ...payload, id }]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
 
 export async function updateBoxType(id: string, data: Partial<BoxType>) {
-    const updates: string[] = [];
-    const params: any[] = [];
+    const payload: any = {};
+    if (data.name) payload.name = data.name;
+    if (data.isActive !== undefined) payload.is_active = data.isActive;
+    if (data.priceEach !== undefined) payload.price_each = data.priceEach;
+    if (data.vendorId !== undefined) payload.vendor_id = data.vendorId;
     
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.isActive !== undefined) {
-        updates.push('is_active = ?');
-        params.push(data.isActive);
-    }
-    if (data.priceEach !== undefined) {
-        updates.push('price_each = ?');
-        params.push(data.priceEach);
-    }
-    if (data.vendorId !== undefined) {
-        updates.push('vendor_id = ?');
-        params.push(data.vendorId);
-    }
-    
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE box_types SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('box_types').update(payload).eq('id', id);
+        handleError(error);
     }
     revalidatePath('/admin');
 }
 
 export async function deleteBoxType(id: string) {
-    await execute('DELETE FROM box_types WHERE id = ?', [id]);
+    const { error } = await supabase.from('box_types').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
@@ -657,8 +620,8 @@ export async function deleteBoxType(id: string) {
 
 export async function getSettings() {
     try {
-        const data = await queryOne<any>('SELECT * FROM app_settings WHERE id = ?', ['1']);
-        if (!data) return { weeklyCutoffDay: 'Friday', weeklyCutoffTime: '17:00', reportEmail: '', enablePasswordlessLogin: false };
+        const { data, error } = await supabase.from('app_settings').select('*').eq('id', '1').single();
+        if (error || !data) return { weeklyCutoffDay: 'Friday', weeklyCutoffTime: '17:00', reportEmail: '', enablePasswordlessLogin: false };
 
         return {
             weeklyCutoffDay: data.weekly_cutoff_day,
@@ -674,10 +637,16 @@ export async function getSettings() {
 
 export async function updateSettings(settings: AppSettings) {
     try {
-        await execute(
-            'UPDATE app_settings SET weekly_cutoff_day = ?, weekly_cutoff_time = ?, report_email = ?, enable_passwordless_login = ? WHERE id = ?',
-            [settings.weeklyCutoffDay, settings.weeklyCutoffTime, settings.reportEmail || null, settings.enablePasswordlessLogin || false, '1']
-        );
+        const { error } = await supabase
+            .from('app_settings')
+            .update({
+                weekly_cutoff_day: settings.weeklyCutoffDay,
+                weekly_cutoff_time: settings.weeklyCutoffTime,
+                report_email: settings.reportEmail || null,
+                enable_passwordless_login: settings.enablePasswordlessLogin || false
+            })
+            .eq('id', '1');
+        handleError(error);
     } catch (error) {
         console.error('Error updating settings:', error);
     }
@@ -688,8 +657,9 @@ export async function updateSettings(settings: AppSettings) {
 
 export async function getNavigators() {
     try {
-        const data = await query<any>('SELECT * FROM navigators');
-        return data.map((n: any) => ({
+        const { data, error } = await supabase.from('navigators').select('*');
+        if (error) return [];
+        return (data || []).map((n: any) => ({
             id: n.id,
             name: n.name,
             email: n.email || null,
@@ -717,47 +687,36 @@ export async function addNavigator(data: Omit<Navigator, 'id'>) {
         payload.password = await hashPassword(data.password.trim());
     }
 
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO navigators (id, name, email, password, is_active) VALUES (?, ?, ?, ?, ?)',
-        [id, payload.name, payload.email || null, payload.password || null, payload.is_active]
-    );
+    const id = randomUUID();
+    const { error } = await supabase.from('navigators').insert([{ ...payload, id }]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
 
 export async function updateNavigator(id: string, data: Partial<Navigator>) {
-    const updates: string[] = [];
-    const params: any[] = [];
-    
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.isActive !== undefined) {
-        updates.push('is_active = ?');
-        params.push(data.isActive);
-    }
+    const payload: any = {};
+    if (data.name) payload.name = data.name;
+    if (data.isActive !== undefined) payload.is_active = data.isActive;
     if (data.email !== undefined) {
         const trimmedEmail = data.email?.trim() || '';
-        updates.push('email = ?');
-        params.push(trimmedEmail === '' ? null : trimmedEmail);
+        payload.email = trimmedEmail === '' ? null : trimmedEmail;
     }
     if (data.password !== undefined && data.password !== null && data.password.trim() !== '') {
         const { hashPassword } = await import('./password');
-        updates.push('password = ?');
-        params.push(await hashPassword(data.password.trim()));
+        payload.password = await hashPassword(data.password.trim());
     }
     
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE navigators SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('navigators').update(payload).eq('id', id);
+        handleError(error);
     }
     revalidatePath('/admin');
 }
 
 export async function deleteNavigator(id: string) {
-    await execute('DELETE FROM navigators WHERE id = ?', [id]);
+    const { error } = await supabase.from('navigators').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
@@ -765,8 +724,9 @@ export async function deleteNavigator(id: string) {
 
 export async function getNutritionists() {
     try {
-        const data = await query<any>('SELECT * FROM nutritionists ORDER BY created_at ASC');
-        return data.map((n: any) => ({
+        const { data, error } = await supabase.from('nutritionists').select('*').order('created_at', { ascending: true });
+        if (error) return [];
+        return (data || []).map((n: any) => ({
             id: n.id,
             name: n.name,
             email: n.email || null
@@ -787,11 +747,9 @@ export async function addNutritionist(data: Omit<Nutritionist, 'id'>) {
         payload.email = trimmedEmail === '' ? null : trimmedEmail;
     }
 
-    const id = generateUUID();
-    await insert(
-        'INSERT INTO nutritionists (id, name, email) VALUES (?, ?, ?)',
-        [id, payload.name, payload.email || null]
-    );
+    const id = randomUUID();
+    const { error } = await supabase.from('nutritionists').insert([{ ...payload, id }]);
+    handleError(error);
     revalidatePath('/admin');
     return { ...data, id };
 }
@@ -804,26 +762,15 @@ export async function updateNutritionist(id: string, data: Partial<Nutritionist>
         const trimmedEmail = data.email?.trim() || '';
         payload.email = trimmedEmail === '' ? null : trimmedEmail;
     }
-
-    const updates: string[] = [];
-    const params: any[] = [];
     
-    if (data.name) {
-        updates.push('name = ?');
-        params.push(data.name);
-    }
-    if (data.email !== undefined) {
-        const trimmedEmail = data.email?.trim() || '';
-        updates.push('email = ?');
-        params.push(trimmedEmail === '' ? null : trimmedEmail);
+    if (Object.keys(payload).length > 0) {
+        const { error } = await supabase.from('nutritionists').update(payload).eq('id', id);
+        handleError(error);
     }
     
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE nutritionists SET ${updates.join(', ')} WHERE id = ?`, params);
-    }
-    
-    const updated = await queryOne<any>('SELECT * FROM nutritionists WHERE id = ?', [id]);
+    const { data: updated, error: fetchError } = await supabase.from('nutritionists').select('*').eq('id', id).single();
+    handleError(fetchError);
+    if (!updated) throw new Error('Nutritionist not found');
     revalidatePath('/admin');
     return {
         id: updated.id,
@@ -833,75 +780,18 @@ export async function updateNutritionist(id: string, data: Partial<Nutritionist>
 }
 
 export async function deleteNutritionist(id: string) {
-    await execute('DELETE FROM nutritionists WHERE id = ?', [id]);
+    const { error } = await supabase.from('nutritionists').delete().eq('id', id);
+    handleError(error);
     revalidatePath('/admin');
 }
 
 // --- CLIENT ACTIONS ---
 
 function mapClientFromDB(c: any): ClientProfile {
-    // Parse JSON fields if they come as strings (MySQL JSON type can return as string in some cases)
-    // MySQL2 returns JSON as objects, but sometimes as strings or Buffers
-    let activeOrder = c.active_order;
-    if (activeOrder !== null && activeOrder !== undefined) {
-        // Handle Buffer (mysql2 sometimes returns JSON as Buffer)
-        if (Buffer.isBuffer(activeOrder)) {
-            try {
-                activeOrder = JSON.parse(activeOrder.toString());
-            } catch (e) {
-                console.warn('Failed to parse active_order from Buffer:', e);
-                activeOrder = {};
-            }
-        } else if (typeof activeOrder === 'string') {
-            try {
-                activeOrder = JSON.parse(activeOrder);
-            } catch (e) {
-                console.warn('Failed to parse active_order JSON:', e);
-                activeOrder = {};
-            }
-        }
-        // If it's already an object, use it as-is
-    } else {
-        activeOrder = {};
-    }
-
-    let billings = c.billings;
-    if (billings !== null && billings !== undefined) {
-        if (Buffer.isBuffer(billings)) {
-            try {
-                billings = JSON.parse(billings.toString());
-            } catch (e) {
-                console.warn('Failed to parse billings from Buffer:', e);
-                billings = null;
-            }
-        } else if (typeof billings === 'string') {
-            try {
-                billings = JSON.parse(billings);
-            } catch (e) {
-                console.warn('Failed to parse billings JSON:', e);
-                billings = null;
-            }
-        }
-    }
-
-    let visits = c.visits;
-    if (visits !== null && visits !== undefined) {
-        if (Buffer.isBuffer(visits)) {
-            try {
-                visits = JSON.parse(visits.toString());
-            } catch (e) {
-                console.warn('Failed to parse visits from Buffer:', e);
-                visits = null;
-            }
-        } else if (typeof visits === 'string') {
-            try {
-                visits = JSON.parse(visits);
-            } catch (e) {
-                console.warn('Failed to parse visits JSON:', e);
-                visits = null;
-            }
-        }
-    }
+    // Supabase automatically handles JSON fields, so we can use them directly
+    const activeOrder = c.active_order || {};
+    const billings = c.billings || null;
+    const visits = c.visits || null;
 
     return {
         id: c.id,
@@ -957,10 +847,14 @@ function mapClientFromDB(c: any): ClientProfile {
 export async function getClients() {
     try {
         console.log('[getClients] Fetching all clients...');
-        const data = await query<any>('SELECT * FROM clients');
+        const { data, error } = await supabase.from('clients').select('*');
+        if (error) {
+            console.error('[getClients] Supabase error:', error);
+            return [];
+        }
         console.log('[getClients] Raw data returned:', { count: data?.length, firstClient: data?.[0] ? { id: data[0].id, full_name: data[0].full_name } : null });
         // Map clients with error handling for individual clients
-        const mapped = data.map((c: any) => {
+        const mapped = (data || []).map((c: any) => {
             try {
                 return mapClientFromDB(c);
             } catch (error) {
@@ -981,8 +875,8 @@ export async function getClients() {
 
 export async function getClient(id: string) {
     try {
-        const data = await queryOne<any>('SELECT * FROM clients WHERE id = ?', [id]);
-        if (!data) return undefined;
+        const { data, error } = await supabase.from('clients').select('*').eq('id', id).single();
+        if (error || !data) return undefined;
         return mapClientFromDB(data);
     } catch (error) {
         console.error('Error fetching client:', error);
@@ -994,8 +888,8 @@ export async function getPublicClient(id: string) {
     if (!id) return undefined;
 
     try {
-        const data = await queryOne<any>('SELECT * FROM clients WHERE id = ?', [id]);
-        if (!data) return undefined;
+        const { data, error } = await supabase.from('clients').select('*').eq('id', id).single();
+        if (error || !data) return undefined;
         return mapClientFromDB(data);
     } catch (error) {
         console.error('Error fetching public client:', error);
@@ -1058,19 +952,58 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         payload.active_order = {};
     }
 
-    const id = generateUUID();
-    const activeOrderJson = JSON.stringify(payload.active_order || {});
-    const billingsJson = payload.billings;
-    const visitsJson = payload.visits;
+    const id = randomUUID();
+    const insertPayload: any = {
+        id,
+        full_name: payload.full_name,
+        email: payload.email,
+        address: payload.address,
+        phone_number: payload.phone_number,
+        secondary_phone_number: (payload as any).secondary_phone_number || null,
+        navigator_id: payload.navigator_id,
+        end_date: payload.end_date,
+        screening_took_place: payload.screening_took_place,
+        screening_signed: payload.screening_signed,
+        notes: payload.notes,
+        status_id: payload.status_id,
+        service_type: payload.service_type,
+        approved_meals_per_week: payload.approved_meals_per_week,
+        authorized_amount: payload.authorized_amount,
+        expiration_date: payload.expiration_date,
+        active_order: payload.active_order || {},
+        first_name: payload.first_name,
+        last_name: payload.last_name,
+        apt: payload.apt,
+        city: payload.city,
+        state: payload.state,
+        zip: payload.zip,
+        county: payload.county,
+        client_id_external: payload.client_id_external,
+        case_id_external: payload.case_id_external,
+        medicaid: payload.medicaid,
+        paused: payload.paused,
+        complex: payload.complex,
+        bill: payload.bill,
+        delivery: payload.delivery,
+        dislikes: payload.dislikes,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        lat: payload.lat,
+        lng: payload.lng,
+        geocoded_at: payload.geocoded_at,
+        billings: payload.billings,
+        visits: payload.visits,
+        sign_token: payload.sign_token
+    };
     
-    await insert(
-        `INSERT INTO clients (id, full_name, email, address, phone_number, secondary_phone_number, navigator_id, end_date, screening_took_place, screening_signed, notes, status_id, service_type, approved_meals_per_week, authorized_amount, expiration_date, active_order, first_name, last_name, apt, city, state, zip, county, client_id_external, case_id_external, medicaid, paused, complex, bill, delivery, dislikes, latitude, longitude, lat, lng, geocoded_at, billings, visits, sign_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, payload.full_name, payload.email, payload.address, payload.phone_number, payload.secondary_phone_number, payload.navigator_id, payload.end_date, payload.screening_took_place, payload.screening_signed, payload.notes, payload.status_id, payload.service_type, payload.approved_meals_per_week, payload.authorized_amount, payload.expiration_date, activeOrderJson, payload.first_name, payload.last_name, payload.apt, payload.city, payload.state, payload.zip, payload.county, payload.client_id_external, payload.case_id_external, payload.medicaid, payload.paused, payload.complex, payload.bill, payload.delivery, payload.dislikes, payload.latitude, payload.longitude, payload.lat, payload.lng, payload.geocoded_at, billingsJson, visitsJson, payload.sign_token]
-    );
-
-    const res = await queryOne<any>('SELECT * FROM clients WHERE id = ?', [id]);
-    if (!res) {
-        throw new Error('Failed to create client: no data returned');
+    const { data: res, error: insertError } = await supabase
+        .from('clients')
+        .insert([insertPayload])
+        .select()
+        .single();
+    
+    if (insertError || !res) {
+        throw new Error('Failed to create client: ' + (insertError?.message || 'no data returned'));
     }
 
     const newClient = mapClientFromDB(res);
@@ -1102,11 +1035,12 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         throw new Error('Cannot attach dependent to another dependent');
     }
 
-    const payload = {
+    const payload: any = {
         full_name: name.trim(),
         email: null,
         address: '',
         phone_number: '',
+        secondary_phone_number: null,
         navigator_id: null,
         end_date: '',
         screening_took_place: false,
@@ -1123,17 +1057,38 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         cin: cin ?? null
     };
 
-    const id = generateUUID();
-    const activeOrderJson = JSON.stringify(payload.active_order || {});
+    const id = randomUUID();
+    const insertPayload: any = {
+        id,
+        full_name: payload.full_name,
+        email: payload.email,
+        address: payload.address,
+        phone_number: payload.phone_number,
+        secondary_phone_number: (payload as any).secondary_phone_number || null,
+        navigator_id: payload.navigator_id,
+        end_date: payload.end_date,
+        screening_took_place: payload.screening_took_place,
+        screening_signed: payload.screening_signed,
+        notes: payload.notes,
+        status_id: payload.status_id,
+        service_type: payload.service_type,
+        approved_meals_per_week: payload.approved_meals_per_week,
+        authorized_amount: payload.authorized_amount,
+        expiration_date: payload.expiration_date,
+        active_order: payload.active_order || {},
+        parent_client_id: payload.parent_client_id,
+        dob: payload.dob,
+        cin: payload.cin
+    };
     
-    await insert(
-        `INSERT INTO clients (id, full_name, email, address, phone_number, secondary_phone_number, navigator_id, end_date, screening_took_place, screening_signed, notes, status_id, service_type, approved_meals_per_week, authorized_amount, expiration_date, active_order, parent_client_id, dob, cin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, payload.full_name, payload.email, payload.address, payload.phone_number, payload.secondary_phone_number, payload.navigator_id, payload.end_date, payload.screening_took_place, payload.screening_signed, payload.notes, payload.status_id, payload.service_type, payload.approved_meals_per_week, payload.authorized_amount, payload.expiration_date, activeOrderJson, payload.parent_client_id, payload.dob, payload.cin]
-    );
-
-    const res = await queryOne<any>('SELECT * FROM clients WHERE id = ?', [id]);
-    if (!res) {
-        throw new Error('Failed to create dependent: no data returned');
+    const { data: res, error: insertError } = await supabase
+        .from('clients')
+        .insert([insertPayload])
+        .select()
+        .single();
+    
+    if (insertError || !res) {
+        throw new Error('Failed to create dependent: ' + (insertError?.message || 'no data returned'));
     }
 
     const newDependent = mapClientFromDB(res);
@@ -1151,17 +1106,24 @@ export async function getRegularClients() {
     try {
         // Get all clients that are not dependents (parent_client_id is NULL)
         // If the column doesn't exist yet (migration not run), return all clients
-        const data = await query<any>(
-            'SELECT * FROM clients WHERE parent_client_id IS NULL ORDER BY full_name'
-        );
+        const { data, error } = await supabase
+            .from('clients')
+            .select('*')
+            .is('parent_client_id', null)
+            .order('full_name');
+        
+        if (error) return [];
 
         return data.map(mapClientFromDB);
     } catch (error: any) {
         // If error (e.g., column doesn't exist), fall back to getting all clients
         // This handles the case where the migration hasn't been run yet
         try {
-            const allData = await query<any>('SELECT * FROM clients ORDER BY full_name');
-            return allData.map(mapClientFromDB);
+            const { data: allData } = await supabase
+                .from('clients')
+                .select('*')
+                .order('full_name');
+            return (allData || []).map(mapClientFromDB);
         } catch (allError) {
             console.error('Error fetching clients:', allError);
             return [];
@@ -1171,10 +1133,13 @@ export async function getRegularClients() {
 
 export async function getDependentsByParentId(parentClientId: string) {
     try {
-        const data = await query<any>(
-            'SELECT * FROM clients WHERE parent_client_id = ? ORDER BY full_name',
-            [parentClientId]
-        );
+        const { data, error } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('parent_client_id', parentClientId)
+            .order('full_name');
+        
+        if (error) return [];
         if (!data) return [];
         return data.map(mapClientFromDB);
     } catch (e: any) {
@@ -1235,24 +1200,22 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
 
     payload.updated_at = new Date().toISOString();
 
-    const updates: string[] = [];
-    const params: any[] = [];
-    
+    // Convert camelCase to snake_case for database
+    const dbPayload: any = {};
     for (const [key, value] of Object.entries(payload)) {
         if (value !== undefined) {
-            if (key === 'active_order' || key === 'billings' || key === 'visits') {
-                updates.push(`${key} = ?`);
-                params.push(typeof value === 'string' ? value : JSON.stringify(value));
-            } else {
-                updates.push(`${key} = ?`);
-                params.push(value);
-            }
+            // Convert camelCase to snake_case
+            const dbKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+            // JSON fields are already handled by Supabase automatically
+            dbPayload[dbKey] = value;
         }
     }
     
-    if (updates.length > 0) {
-        params.push(id);
-        await execute(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (Object.keys(dbPayload).length > 0) {
+        await supabase
+            .from('clients')
+            .update(dbPayload)
+            .eq('id', id);
     }
 
     // If activeOrder was updated, sync to upcoming_orders
@@ -1274,60 +1237,70 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
 
 export async function deleteClient(id: string) {
     // First, get all dependents of this client (if it's a parent client)
-    const dependents = await query<any>(
-        'SELECT id FROM clients WHERE parent_client_id = ?',
-        [id]
-    );
+    const { data: dependents } = await supabase
+        .from('clients')
+        .select('id')
+        .eq('parent_client_id', id);
 
     // Delete all dependents first (cascade delete)
     // Dependents cannot have their own dependents (enforced in addDependent),
     // so we can safely delete them directly
     if (dependents && dependents.length > 0) {
         const dependentIds = dependents.map(d => d.id);
-        const placeholders = dependentIds.map(() => '?').join(',');
 
         // Delete upcoming orders for all dependents
-        await execute(
-            `DELETE FROM upcoming_orders WHERE client_id IN (${placeholders})`,
-            dependentIds
-        );
+        await supabase
+            .from('upcoming_orders')
+            .delete()
+            .in('client_id', dependentIds);
 
         // Delete active orders for all dependents
-        await execute(
-            `DELETE FROM orders WHERE client_id IN (${placeholders}) AND status IN (?, ?, ?)`,
-            [...dependentIds, 'pending', 'confirmed', 'processing']
-        );
+        await supabase
+            .from('orders')
+            .delete()
+            .in('client_id', dependentIds)
+            .in('status', ['pending', 'confirmed', 'processing']);
 
         // Delete form submissions for all dependents
-        await execute(
-            `DELETE FROM form_submissions WHERE client_id IN (${placeholders})`,
-            dependentIds
-        );
+        await supabase
+            .from('form_submissions')
+            .delete()
+            .in('client_id', dependentIds);
 
         // Delete all dependents
-        await execute(
-            `DELETE FROM clients WHERE id IN (${placeholders})`,
-            dependentIds
-        );
+        await supabase
+            .from('clients')
+            .delete()
+            .in('id', dependentIds);
     }
 
     // Delete all upcoming orders for this client
-    await execute('DELETE FROM upcoming_orders WHERE client_id = ?', [id]);
+    await supabase
+        .from('upcoming_orders')
+        .delete()
+        .eq('client_id', id);
 
     // Delete active orders (pending, confirmed, processing) but preserve order history
     // Order history includes: completed, waiting_for_proof, billing_pending, cancelled
-    await execute(
-        'DELETE FROM orders WHERE client_id = ? AND status IN (?, ?, ?)',
-        [id, 'pending', 'confirmed', 'processing']
-    );
+    await supabase
+        .from('orders')
+        .delete()
+        .eq('client_id', id)
+        .in('status', ['pending', 'confirmed', 'processing']);
 
     // Delete form submissions for this client
-    await execute('DELETE FROM form_submissions WHERE client_id = ?', [id]);
+    await supabase
+        .from('form_submissions')
+        .delete()
+        .eq('client_id', id);
 
     // Delete the client
     // Note: Client IDs are generated identifiers (e.g. CLIENT-XXX) which CAN be reused after deletion.
     // We must ensure the local cache is synced to remove any stale data associated with this ID.
-    await execute('DELETE FROM clients WHERE id = ?', [id]);
+    await supabase
+        .from('clients')
+        .delete()
+        .eq('id', id);
     revalidatePath('/clients');
 
     // Trigger local DB sync in background to remove deleted client data from cache
@@ -1339,13 +1312,13 @@ export async function deleteClient(id: string) {
 
 export async function generateDeliveriesForDate(dateStr: string) {
     // Fetch required data
-    const clients = await query<any>('SELECT * FROM clients');
-    const vendors = await query<any>('SELECT * FROM vendors');
-    const boxTypes = await query<any>('SELECT * FROM box_types');
-    const existingHistory = await query<any>(
-        'SELECT * FROM delivery_history WHERE delivery_date = ?',
-        [dateStr]
-    );
+    const { data: clients } = await supabase.from('clients').select('*');
+    const { data: vendors } = await supabase.from('vendors').select('*');
+    const { data: boxTypes } = await supabase.from('box_types').select('*');
+    const { data: existingHistory } = await supabase
+        .from('delivery_history')
+        .select('*')
+        .eq('delivery_date', dateStr);
 
     const dayName = new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long' });
     let count = 0;
@@ -1375,12 +1348,19 @@ export async function generateDeliveriesForDate(dateStr: string) {
                 summary = `${box?.name || 'Box'} x${activeOrder.boxQuantity}`;
             }
 
-            const historyId = generateUUID();
+            const historyId = randomUUID();
             try {
-                await insert(
-                    'INSERT INTO delivery_history (id, client_id, vendor_id, service_type, delivery_date, items_summary, proof_of_delivery_image) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    [historyId, c.id, vendor.id, c.service_type, dateStr, summary, '']
-                );
+                await supabase
+                    .from('delivery_history')
+                    .insert([{
+                        id: historyId,
+                        client_id: c.id,
+                        vendor_id: vendor.id,
+                        service_type: c.service_type,
+                        delivery_date: dateStr,
+                        items_summary: summary,
+                        proof_of_delivery_image: ''
+                    }]);
                 count++;
             } catch (error) {
                 console.error('Error inserting delivery history:', error);
@@ -1394,12 +1374,15 @@ export async function generateDeliveriesForDate(dateStr: string) {
 
 export async function getClientHistory(clientId: string) {
     try {
-        const data = await query<any>(
-            'SELECT * FROM delivery_history WHERE client_id = ? ORDER BY delivery_date DESC',
-            [clientId]
-        );
+        const { data, error } = await supabase
+            .from('delivery_history')
+            .select('*')
+            .eq('client_id', clientId)
+            .order('delivery_date', { ascending: false });
+        
+        if (error) return [];
 
-        return data.map((d: any) => ({
+        return (data || []).map((d: any) => ({
             id: d.id,
             clientId: d.client_id,
             vendorId: d.vendor_id,
@@ -1417,10 +1400,10 @@ export async function getClientHistory(clientId: string) {
 
 export async function updateDeliveryProof(id: string, proofUrl: string) {
     try {
-        await execute(
-            'UPDATE delivery_history SET proof_of_delivery_image = ? WHERE id = ?',
-            [proofUrl, id]
-        );
+        await supabase
+            .from('delivery_history')
+            .update({ proof_of_delivery_image: proofUrl })
+            .eq('id', id);
         revalidatePath('/clients');
     } catch (error) {
         console.error('Error updating delivery proof:', error);
@@ -1437,11 +1420,16 @@ export async function recordClientChange(clientId: string, summary: string, who?
     }
 
     try {
-        const historyId = generateUUID();
-        await insert(
-            'INSERT INTO order_history (id, client_id, who, summary, timestamp) VALUES (?, ?, ?, ?, ?)',
-            [historyId, clientId, userName, summary, new Date().toISOString()]
-        );
+        const historyId = randomUUID();
+        await supabase
+            .from('order_history')
+            .insert([{
+                id: historyId,
+                client_id: clientId,
+                who: userName,
+                summary,
+                timestamp: new Date().toISOString()
+            }]);
     } catch (error) {
         console.error('Error recording audit log:', error);
     }
@@ -1452,20 +1440,24 @@ export async function getOrderHistory(clientId: string) {
 
     try {
         // Try with timestamp column first, fallback to created_at if needed
-        let data = await query<any>(
-            'SELECT * FROM order_history WHERE client_id = ? ORDER BY timestamp DESC',
-            [clientId]
-        );
+        let { data, error } = await supabase
+            .from('order_history')
+            .select('*')
+            .eq('client_id', clientId)
+            .order('timestamp', { ascending: false });
 
         // If no results or error, try with created_at
-        if (!data || data.length === 0) {
-            data = await query<any>(
-                'SELECT * FROM order_history WHERE client_id = ? ORDER BY created_at DESC',
-                [clientId]
-            );
+        if (error || !data || data.length === 0) {
+            const retry = await supabase
+                .from('order_history')
+                .select('*')
+                .eq('client_id', clientId)
+                .order('created_at', { ascending: false });
+            data = retry.data;
+            error = retry.error;
         }
 
-        if (!data || data.length === 0) return [];
+        if (error || !data || data.length === 0) return [];
 
         return data.map((d: any) => ({
             id: d.id,
@@ -1484,10 +1476,12 @@ export async function getCompletedOrdersWithDeliveryProof(clientId: string) {
     if (!clientId) return [];
 
     try {
-        const data = await query<any>(
-            'SELECT * FROM orders WHERE client_id = ? AND proof_of_delivery_url IS NOT NULL ORDER BY created_at DESC',
-            [clientId]
-        );
+        const { data } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('client_id', clientId)
+            .not('proof_of_delivery_url', 'is', null)
+            .order('created_at', { ascending: false });
 
         if (!data || data.length === 0) return [];
 
@@ -1504,10 +1498,10 @@ export async function getCompletedOrdersWithDeliveryProof(clientId: string) {
 
                 if (orderData.service_type === 'Food') {
                     console.log(`[getCompletedOrdersWithDeliveryProof] Processing Food order ${orderData.id}`);
-                    const vendorSelections = await query<any>(
-                        'SELECT * FROM order_vendor_selections WHERE order_id = ?',
-                        [orderData.id]
-                    );
+                    const { data: vendorSelections } = await supabase
+                        .from('order_vendor_selections')
+                        .select('*')
+                        .eq('order_id', orderData.id);
 
                     console.log(`[getCompletedOrdersWithDeliveryProof] Found ${vendorSelections?.length || 0} vendor selections for order ${orderData.id}`);
 
@@ -1515,10 +1509,10 @@ export async function getCompletedOrdersWithDeliveryProof(clientId: string) {
                         const vendorSelectionsWithItems = await Promise.all(
                             vendorSelections.map(async (vs: any) => {
                                 console.log(`[getCompletedOrdersWithDeliveryProof] Processing vendor selection ${vs.id} for vendor ${vs.vendor_id}`);
-                                const items = await query<any>(
-                                    'SELECT * FROM order_items WHERE vendor_selection_id = ?',
-                                    [vs.id]
-                                );
+                                const { data: items } = await supabase
+                                    .from('order_items')
+                                    .select('*')
+                                    .eq('vendor_selection_id', vs.id);
 
                                 console.log(`[getCompletedOrdersWithDeliveryProof] Found ${items?.length || 0} items for vendor selection ${vs.id}`, items);
 
@@ -1596,10 +1590,11 @@ export async function getCompletedOrdersWithDeliveryProof(clientId: string) {
                     console.log(`[getCompletedOrdersWithDeliveryProof] Set orderDetails.totalValue to: ${finalTotal}`);
                 }
             } else if (orderData.service_type === 'Boxes') {
-                const boxSelectionData = await queryOne<any>(
-                    'SELECT * FROM order_box_selections WHERE order_id = ?',
-                    [orderData.id]
-                );
+                const { data: boxSelectionData } = await supabase
+                    .from('order_box_selections')
+                    .select('*')
+                    .eq('order_id', orderData.id)
+                    .maybeSingle();
                 const boxSelection = boxSelectionData || null;
 
                 if (boxSelection) {
@@ -1667,10 +1662,11 @@ export async function getBillingHistory(clientId: string) {
     if (!clientId) return [];
 
     try {
-        const billingRecords = await query<any>(
-            'SELECT * FROM billing_records WHERE client_id = ? ORDER BY created_at DESC',
-            [clientId]
-        );
+        const { data: billingRecords } = await supabase
+            .from('billing_records')
+            .select('*')
+            .eq('client_id', clientId)
+            .order('created_at', { ascending: false });
 
         // Fetch reference data once for all orders
         const [menuItems, vendors, boxTypes] = await Promise.all([
@@ -1681,15 +1677,16 @@ export async function getBillingHistory(clientId: string) {
 
         // Fetch order details separately if order_id exists
         const recordsWithOrderData = await Promise.all(
-            billingRecords.map(async (d: any) => {
+            (billingRecords || []).map(async (d: any) => {
                 let deliveryDate: string | undefined = undefined;
                 let orderDetails: any = undefined;
 
                 if (d.order_id) {
-                    const orderData = await queryOne<any>(
-                        'SELECT * FROM orders WHERE id = ?',
-                        [d.order_id]
-                    );
+                    const { data: orderData } = await supabase
+                        .from('orders')
+                        .select('*')
+                        .eq('id', d.order_id)
+                        .single();
 
                     if (orderData) {
                         // Prefer actual_delivery_date, fallback to scheduled_delivery_date
@@ -1699,10 +1696,10 @@ export async function getBillingHistory(clientId: string) {
                         if (orderData.service_type === 'Food') {
                             console.log(`[getBillingHistory] Processing Food order ${orderData.id}`);
                             // Fetch vendor selections and items
-                            const vendorSelections = await query<any>(
-                                'SELECT * FROM order_vendor_selections WHERE order_id = ?',
-                                [d.order_id]
-                            );
+                            const { data: vendorSelections } = await supabase
+                                .from('order_vendor_selections')
+                                .select('*')
+                                .eq('order_id', d.order_id);
 
                             console.log(`[getBillingHistory] Found ${vendorSelections?.length || 0} vendor selections for order ${orderData.id}`);
 
@@ -1710,10 +1707,10 @@ export async function getBillingHistory(clientId: string) {
                                 const vendorSelectionsWithItems = await Promise.all(
                                     vendorSelections.map(async (vs: any) => {
                                         console.log(`[getBillingHistory] Processing vendor selection ${vs.id} for vendor ${vs.vendor_id}`);
-                                        const items = await query<any>(
-                                            'SELECT * FROM order_items WHERE vendor_selection_id = ?',
-                                            [vs.id]
-                                        );
+                                        const { data: items } = await supabase
+                                            .from('order_items')
+                                            .select('*')
+                                            .eq('vendor_selection_id', vs.id);
 
                                     console.log(`[getBillingHistory] Found ${items?.length || 0} items for vendor selection ${vs.id}`, items);
 
@@ -1793,10 +1790,11 @@ export async function getBillingHistory(clientId: string) {
                         }
                     } else if (orderData.service_type === 'Boxes') {
                         // Fetch box selection
-                        const boxSelectionData = await queryOne<any>(
-                            'SELECT * FROM order_box_selections WHERE order_id = ?',
-                            [d.order_id]
-                        );
+                        const { data: boxSelectionData } = await supabase
+                            .from('order_box_selections')
+                            .select('*')
+                            .eq('order_id', d.order_id)
+                            .maybeSingle();
                         const boxSelection = boxSelectionData || null;
 
                         if (boxSelection) {
@@ -1863,7 +1861,7 @@ export async function getBillingHistory(clientId: string) {
         })
     );
 
-    return recordsWithOrderData;
+        return recordsWithOrderData || [];
     } catch (error) {
         console.error('Error fetching billing history:', error);
         return [];
@@ -1873,35 +1871,29 @@ export async function getBillingHistory(clientId: string) {
 export async function getBillingOrders() {
     try {
         // Get orders with billing_pending status
-        const pendingOrders = await query<any>(
-            `SELECT o.*, c.full_name as client_full_name 
-             FROM orders o 
-             LEFT JOIN clients c ON o.client_id = c.id 
-             WHERE o.status = ? 
-             ORDER BY o.created_at DESC`,
-            ['billing_pending']
-        );
+        const { data: pendingOrders } = await supabase
+            .from('orders')
+            .select('*, clients!inner(full_name)')
+            .eq('status', 'billing_pending')
+            .order('created_at', { ascending: false });
 
         // Get billing records with status "success" and their associated orders
-        const billingRecords = await query<any>(
-            'SELECT order_id, status FROM billing_records WHERE status = ?',
-            ['success']
-        );
+        const { data: billingRecords } = await supabase
+            .from('billing_records')
+            .select('order_id, status')
+            .eq('status', 'success');
 
         const successfulOrderIds = new Set((billingRecords || []).map((br: any) => br.order_id).filter(Boolean));
 
         // Get orders that have successful billing records
         let successfulOrders: any[] = [];
         if (successfulOrderIds.size > 0) {
-            const placeholders = Array.from(successfulOrderIds).map(() => '?').join(',');
-            successfulOrders = await query<any>(
-                `SELECT o.*, c.full_name as client_full_name 
-                 FROM orders o 
-                 LEFT JOIN clients c ON o.client_id = c.id 
-                 WHERE o.id IN (${placeholders}) 
-                 ORDER BY o.created_at DESC`,
-                Array.from(successfulOrderIds)
-            );
+            const { data: successfulOrdersData } = await supabase
+                .from('orders')
+                .select('*, clients!inner(full_name)')
+                .in('id', Array.from(successfulOrderIds))
+                .order('created_at', { ascending: false });
+            successfulOrders = successfulOrdersData || [];
         }
 
         // Combine and map orders
@@ -1942,50 +1934,52 @@ export async function getBillingOrders() {
 export async function getAllBillingRecords() {
     try {
         // First, ensure all orders with billing_pending status have billing records
-        const billingPendingOrders = await query<any>(
-            'SELECT * FROM orders WHERE status = ?',
-            ['billing_pending']
-        );
+        const { data: billingPendingOrders } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('status', 'billing_pending');
 
-        if (billingPendingOrders) {
+        if (billingPendingOrders && billingPendingOrders.length > 0) {
             // For each billing_pending order, check if billing record exists
             for (const order of billingPendingOrders) {
-                const existingBilling = await queryOne<any>(
-                    'SELECT id FROM billing_records WHERE order_id = ?',
-                    [order.id]
-                );
+                const { data: existingBilling } = await supabase
+                    .from('billing_records')
+                    .select('id')
+                    .eq('order_id', order.id)
+                    .maybeSingle();
 
                 if (!existingBilling) {
                     // Fetch client to get navigator and name
-                    const client = await queryOne<any>(
-                        'SELECT navigator_id, full_name FROM clients WHERE id = ?',
-                        [order.client_id]
-                    );
+                    const { data: client } = await supabase
+                        .from('clients')
+                        .select('navigator_id, full_name')
+                        .eq('id', order.client_id)
+                        .single();
 
                     if (client) {
                         // Create billing record for this order
-                        const billingId = generateUUID();
-                        await insert(
-                            'INSERT INTO billing_records (id, client_id, order_id, status, amount, navigator, remarks) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                            [
-                                billingId,
-                                order.client_id,
-                                order.id,
-                                'pending',
-                                order.total_value || 0,
-                                client.navigator_id || 'Unknown',
-                                'Auto-generated for billing_pending order'
-                            ]
-                        );
+                        const billingId = randomUUID();
+                        await supabase
+                            .from('billing_records')
+                            .insert([{
+                                id: billingId,
+                                client_id: order.client_id,
+                                order_id: order.id,
+                                status: 'pending',
+                                amount: order.total_value || 0,
+                                navigator: client.navigator_id || 'Unknown',
+                                remarks: 'Auto-generated for billing_pending order'
+                            }]);
                     }
                 }
             }
         }
 
         // Now fetch all billing records
-        const billingRecords = await query<any>(
-            'SELECT * FROM billing_records ORDER BY created_at DESC'
-        );
+        const { data: billingRecords } = await supabase
+            .from('billing_records')
+            .select('*')
+            .order('created_at', { ascending: false });
 
         // Fetch reference data once for all orders
         const [menuItems, vendors, boxTypes] = await Promise.all([
@@ -1996,15 +1990,16 @@ export async function getAllBillingRecords() {
 
         // Fetch order details separately if order_id exists
         const recordsWithOrderData = await Promise.all(
-            billingRecords.map(async (d: any) => {
+            (billingRecords || []).map(async (d: any) => {
                 let deliveryDate: string | undefined = undefined;
                 let calculatedAmount = d.amount; // Default to stored amount
 
                 if (d.order_id) {
-                    const orderData = await queryOne<any>(
-                        'SELECT * FROM orders WHERE id = ?',
-                        [d.order_id]
-                    );
+                    const { data: orderData } = await supabase
+                        .from('orders')
+                        .select('*')
+                        .eq('id', d.order_id)
+                        .single();
 
                     if (orderData) {
                         // Prefer actual_delivery_date, fallback to scheduled_delivery_date
@@ -2013,18 +2008,18 @@ export async function getAllBillingRecords() {
                         // Calculate amount from order items
                         if (orderData.service_type === 'Food') {
                             // Fetch vendor selections and items
-                            const vendorSelections = await query<any>(
-                                'SELECT * FROM order_vendor_selections WHERE order_id = ?',
-                                [d.order_id]
-                            );
+                            const { data: vendorSelections } = await supabase
+                                .from('order_vendor_selections')
+                                .select('*')
+                                .eq('order_id', d.order_id);
 
                             if (vendorSelections && vendorSelections.length > 0) {
                                 const vendorAmounts = await Promise.all(
                                     vendorSelections.map(async (vs: any) => {
-                                        const items = await query<any>(
-                                            'SELECT * FROM order_items WHERE vendor_selection_id = ?',
-                                            [vs.id]
-                                        );
+                                        const { data: items } = await supabase
+                                            .from('order_items')
+                                            .select('*')
+                                            .eq('vendor_selection_id', vs.id);
 
                                         return (items || []).reduce((sum: number, item: any) => {
                                             const menuItem = menuItems.find(mi => mi.id === item.menu_item_id);
@@ -2037,10 +2032,11 @@ export async function getAllBillingRecords() {
                             }
                         } else if (orderData.service_type === 'Boxes') {
                             // Fetch box selection and use stored total_value if available
-                            const boxSelection = await queryOne<any>(
-                                'SELECT * FROM order_box_selections WHERE order_id = ?',
-                                [d.order_id]
-                            );
+                            const { data: boxSelection } = await supabase
+                                .from('order_box_selections')
+                                .select('*')
+                                .eq('order_id', d.order_id)
+                                .maybeSingle();
 
                             if (boxSelection && boxSelection.total_value) {
                                 calculatedAmount = parseFloat(boxSelection.total_value);
@@ -2355,16 +2351,22 @@ async function syncSingleOrderForDeliveryDay(
     // Check if upcoming order exists for this delivery day
     let existing;
     if (deliveryDay) {
-        existing = await queryOne<any>(
-            'SELECT id FROM upcoming_orders WHERE client_id = ? AND delivery_day = ?',
-            [clientId, deliveryDay]
-        );
+        const { data: existingData } = await supabase
+            .from('upcoming_orders')
+            .select('id')
+            .eq('client_id', clientId)
+            .eq('delivery_day', deliveryDay)
+            .maybeSingle();
+        existing = existingData;
     } else {
         // For backward compatibility, check for orders without delivery_day
-        existing = await queryOne<any>(
-            'SELECT id FROM upcoming_orders WHERE client_id = ? AND delivery_day IS NULL',
-            [clientId]
-        );
+        const { data: existingData } = await supabase
+            .from('upcoming_orders')
+            .select('id')
+            .eq('client_id', clientId)
+            .is('delivery_day', null)
+            .maybeSingle();
+        existing = existingData;
     }
 
     console.log('[syncSingleOrderForDeliveryDay] Checking existing', {
@@ -2378,27 +2380,22 @@ async function syncSingleOrderForDeliveryDay(
 
     if (existing) {
         // Update existing
-        const updates: string[] = [];
-        const params: any[] = [];
-        
+        const updatePayload: any = {};
         for (const [key, value] of Object.entries(upcomingOrderData)) {
             if (value !== undefined) {
-                updates.push(`${key} = ?`);
                 if (key === 'delivery_distribution' && typeof value !== 'string') {
-                    params.push(JSON.stringify(value));
+                    updatePayload[key] = value; // Supabase handles JSON automatically
                 } else {
-                    params.push(value);
+                    updatePayload[key] = value;
                 }
             }
         }
         
-        params.push(existing.id);
-        
         try {
-            await execute(
-                `UPDATE upcoming_orders SET ${updates.join(', ')} WHERE id = ?`,
-                params
-            );
+            await supabase
+                .from('upcoming_orders')
+                .update(updatePayload)
+                .eq('id', existing.id);
             upcomingOrderId = existing.id;
         } catch (error: any) {
             console.error('[syncSingleOrderForDeliveryDay] Error updating upcoming order:', error);
@@ -2406,18 +2403,13 @@ async function syncSingleOrderForDeliveryDay(
         }
     } else {
         // Insert new
-        const upcomingOrderId_new = generateUUID();
-        const columns = Object.keys(upcomingOrderData).filter(k => upcomingOrderData[k as keyof typeof upcomingOrderData] !== undefined);
-        const values = columns.map(k => {
-            const val = upcomingOrderData[k as keyof typeof upcomingOrderData];
-            return (k === 'delivery_distribution' && typeof val !== 'string') ? JSON.stringify(val) : val;
-        });
+        const upcomingOrderId_new = randomUUID();
+        const insertPayload = { ...upcomingOrderData, id: upcomingOrderId_new };
         
         try {
-            await insert(
-                `INSERT INTO upcoming_orders (id, ${columns.join(', ')}) VALUES (?, ${columns.map(() => '?').join(', ')})`,
-                [upcomingOrderId_new, ...values]
-            );
+            await supabase
+                .from('upcoming_orders')
+                .insert([insertPayload]);
             upcomingOrderId = upcomingOrderId_new;
         } catch (error: any) {
             console.error('[syncSingleOrderForDeliveryDay] Error creating upcoming order:', error);
@@ -2427,16 +2419,31 @@ async function syncSingleOrderForDeliveryDay(
 
     // Now sync related data (vendor selections, items, box selections)
     // Delete existing related records
-    // Delete items first (using JOIN since upcoming_order_items doesn't have upcoming_order_id column)
-    await execute(
-        `DELETE uoi FROM upcoming_order_items uoi
-         INNER JOIN upcoming_order_vendor_selections uovs ON uoi.upcoming_vendor_selection_id = uovs.id
-         WHERE uovs.upcoming_order_id = ?`,
-        [upcomingOrderId]
-    );
+    // First, get vendor selection IDs for this upcoming order
+    const { data: vendorSelections } = await supabase
+        .from('upcoming_order_vendor_selections')
+        .select('id')
+        .eq('upcoming_order_id', upcomingOrderId);
+    
+    const vendorSelectionIds = (vendorSelections || []).map(vs => vs.id);
+    
+    // Delete items that reference these vendor selections
+    if (vendorSelectionIds.length > 0) {
+        await supabase
+            .from('upcoming_order_items')
+            .delete()
+            .in('upcoming_vendor_selection_id', vendorSelectionIds);
+    }
+    
     // Then delete vendor selections (this will also cascade delete any remaining items)
-    await execute('DELETE FROM upcoming_order_vendor_selections WHERE upcoming_order_id = ?', [upcomingOrderId]);
-    await execute('DELETE FROM upcoming_order_box_selections WHERE upcoming_order_id = ?', [upcomingOrderId]);
+    await supabase
+        .from('upcoming_order_vendor_selections')
+        .delete()
+        .eq('upcoming_order_id', upcomingOrderId);
+    await supabase
+        .from('upcoming_order_box_selections')
+        .delete()
+        .eq('upcoming_order_id', upcomingOrderId);
 
     if (orderConfig.serviceType === 'Food' && orderConfig.vendorSelections) {
         // Insert vendor selections and items
@@ -2452,13 +2459,12 @@ async function syncSingleOrderForDeliveryDay(
             }
 
             console.log(`[syncSingleOrderForDeliveryDay] Creating vendor selection for vendor ${selection.vendorId}`);
-            const vsId = generateUUID();
+            const vsId = randomUUID();
             let vendorSelection;
             try {
-                await insert(
-                    'INSERT INTO upcoming_order_vendor_selections (id, upcoming_order_id, vendor_id) VALUES (?, ?, ?)',
-                    [vsId, upcomingOrderId, selection.vendorId]
-                );
+                await supabase
+                    .from('upcoming_order_vendor_selections')
+                    .insert([{ id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId }]);
                 vendorSelection = { id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId };
                 allVendorSelections.push(vendorSelection);
                 console.log(`[syncSingleOrderForDeliveryDay] Created vendor selection ${vendorSelection.id}`);
@@ -2471,20 +2477,36 @@ async function syncSingleOrderForDeliveryDay(
 
             // Find an existing vendor selection to use as a template for vendor_selection_id
             // This is required because vendor_selection_id is NOT NULL and must reference order_vendor_selections
-            const templateVendorSelection = await queryOne<any>(
-                `SELECT ovs.id FROM order_vendor_selections ovs
-                 INNER JOIN orders o ON ovs.order_id = o.id
-                 WHERE ovs.vendor_id = ? AND o.client_id = ?
-                 ORDER BY o.created_at DESC
-                 LIMIT 1`,
-                [selection.vendorId, clientId]
-            );
+            // First, get orders for this client, then get vendor selections
+            const { data: clientOrders } = await supabase
+                .from('orders')
+                .select('id')
+                .eq('client_id', clientId)
+                .order('created_at', { ascending: false })
+                .limit(10);
+            
+            let templateVendorSelection: any = null;
+            if (clientOrders && clientOrders.length > 0) {
+                const orderIds = clientOrders.map(o => o.id);
+                const { data: templateVs } = await supabase
+                    .from('order_vendor_selections')
+                    .select('id')
+                    .eq('vendor_id', selection.vendorId)
+                    .in('order_id', orderIds)
+                    .limit(1)
+                    .maybeSingle();
+                templateVendorSelection = templateVs;
+            }
             
             // If no template found, try to find any vendor selection for this vendor
-            const fallbackVendorSelection = templateVendorSelection || await queryOne<any>(
-                `SELECT id FROM order_vendor_selections WHERE vendor_id = ? LIMIT 1`,
-                [selection.vendorId]
-            );
+            const { data: fallbackVendorSelection } = templateVendorSelection 
+                ? { data: templateVendorSelection } 
+                : await supabase
+                    .from('order_vendor_selections')
+                    .select('id')
+                    .eq('vendor_id', selection.vendorId)
+                    .limit(1)
+                    .maybeSingle();
 
             if (!fallbackVendorSelection) {
                 console.warn(`[syncSingleOrderForDeliveryDay] No template vendor selection found for vendor ${selection.vendorId}, skipping items`);
@@ -2512,12 +2534,17 @@ async function syncSingleOrderForDeliveryDay(
                     calculatedTotalFromItems += itemTotal;
                     console.log(`[syncSingleOrderForDeliveryDay] Updated calculatedTotalFromItems: ${calculatedTotalFromItems}`);
 
-                    const itemId_uuid = generateUUID();
+                    const itemId_uuid = randomUUID();
                     try {
-                        await insert(
-                            'INSERT INTO upcoming_order_items (id, vendor_selection_id, upcoming_vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?, ?)',
-                            [itemId_uuid, fallbackVendorSelection.id, vendorSelection.id, itemId, quantity]
-                        );
+                        await supabase
+                            .from('upcoming_order_items')
+                            .insert([{
+                                id: itemId_uuid,
+                                vendor_selection_id: fallbackVendorSelection.id,
+                                upcoming_vendor_selection_id: vendorSelection.id,
+                                menu_item_id: itemId,
+                                quantity
+                            }]);
                         console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted item ${itemId}`);
                     } catch (error) {
                         console.error(`[syncSingleOrderForDeliveryDay] Error inserting item:`, error);
@@ -2536,10 +2563,10 @@ async function syncSingleOrderForDeliveryDay(
             console.log(`[syncSingleOrderForDeliveryDay] Mismatch detected! Updating total_value from ${totalValue} to ${calculatedTotalFromItems}`);
             totalValue = calculatedTotalFromItems;
             try {
-                await execute(
-                    'UPDATE upcoming_orders SET total_value = ? WHERE id = ?',
-                    [totalValue, upcomingOrderId]
-                );
+                await supabase
+                    .from('upcoming_orders')
+                    .update({ total_value: totalValue })
+                    .eq('id', upcomingOrderId);
                 console.log(`[syncSingleOrderForDeliveryDay] Successfully updated total_value to ${totalValue}`);
             } catch (error) {
                 console.error(`[syncSingleOrderForDeliveryDay] Error updating total_value:`, error);
@@ -2554,26 +2581,47 @@ async function syncSingleOrderForDeliveryDay(
             // Use the first vendor selection to attach the total item
             const firstVendorSelection = allVendorSelections[0];
             // Find a template vendor selection for the total item
-            const templateVendorSelection = await queryOne<any>(
-                `SELECT ovs.id FROM order_vendor_selections ovs
-                 INNER JOIN orders o ON ovs.order_id = o.id
-                 WHERE ovs.vendor_id = ? AND o.client_id = ?
-                 ORDER BY o.created_at DESC
-                 LIMIT 1`,
-                [firstVendorSelection.vendor_id, clientId]
-            );
+            // First, get orders for this client
+            const { data: clientOrders } = await supabase
+                .from('orders')
+                .select('id')
+                .eq('client_id', clientId)
+                .order('created_at', { ascending: false })
+                .limit(10);
             
-            const fallbackVendorSelection = templateVendorSelection || await queryOne<any>(
-                `SELECT id FROM order_vendor_selections WHERE vendor_id = ? LIMIT 1`,
-                [firstVendorSelection.vendor_id]
-            );
+            let templateVendorSelection: any = null;
+            if (clientOrders && clientOrders.length > 0) {
+                const orderIds = clientOrders.map(o => o.id);
+                const { data: templateVs } = await supabase
+                    .from('order_vendor_selections')
+                    .select('id')
+                    .eq('vendor_id', firstVendorSelection.vendor_id)
+                    .in('order_id', orderIds)
+                    .limit(1)
+                    .maybeSingle();
+                templateVendorSelection = templateVs;
+            }
+            
+            const { data: fallbackVendorSelection } = templateVendorSelection 
+                ? { data: templateVendorSelection } 
+                : await supabase
+                    .from('order_vendor_selections')
+                    .select('id')
+                    .eq('vendor_id', firstVendorSelection.vendor_id)
+                    .limit(1)
+                    .maybeSingle();
 
             if (fallbackVendorSelection) {
-                const totalItemId = generateUUID();
-                await insert(
-                    'INSERT INTO upcoming_order_items (id, vendor_selection_id, upcoming_vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?, ?)',
-                    [totalItemId, fallbackVendorSelection.id, firstVendorSelection.id, null, 1]
-                );
+                const totalItemId = randomUUID();
+                await supabase
+                    .from('upcoming_order_items')
+                    .insert([{
+                        id: totalItemId,
+                        vendor_selection_id: fallbackVendorSelection.id,
+                        upcoming_vendor_selection_id: firstVendorSelection.id,
+                        menu_item_id: null,
+                        quantity: 1
+                    }]);
             }
         }
     } else if (orderConfig.serviceType === 'Boxes') {
@@ -2639,12 +2687,18 @@ async function syncSingleOrderForDeliveryDay(
             boxSelectionData.box_type_id = orderConfig.boxTypeId;
         }
 
-        const boxSelectionId = generateUUID();
+        const boxSelectionId = randomUUID();
         try {
-            await insert(
-                'INSERT INTO upcoming_order_box_selections (id, upcoming_order_id, vendor_id, box_type_id, quantity, items) VALUES (?, ?, ?, ?, ?, ?)',
-                [boxSelectionId, upcomingOrderId, boxVendorId, orderConfig.boxTypeId || null, quantity, JSON.stringify(boxItems)]
-            );
+            await supabase
+                .from('upcoming_order_box_selections')
+                .insert([{
+                    id: boxSelectionId,
+                    upcoming_order_id: upcomingOrderId,
+                    vendor_id: boxVendorId,
+                    box_type_id: orderConfig.boxTypeId || null,
+                    quantity,
+                    items: boxItems
+                }]);
             console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box selection for upcoming_order_id=${upcomingOrderId}, vendor_id=${boxVendorId}, items_count=${Object.keys(boxItems).length}, items=${JSON.stringify(boxItems)}`);
         } catch (error) {
             console.error(`[syncSingleOrderForDeliveryDay] Error inserting box selection:`, error);
@@ -2689,10 +2743,13 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
     if (!skipClientUpdate && client.activeOrder) {
         const currentTime = await getCurrentTime();
         try {
-            await execute(
-                'UPDATE clients SET active_order = ?, updated_at = ? WHERE id = ?',
-                [JSON.stringify(client.activeOrder), currentTime.toISOString(), clientId]
-            );
+            await supabase
+                .from('clients')
+                .update({ 
+                    active_order: client.activeOrder,
+                    updated_at: currentTime.toISOString()
+                })
+                .eq('id', clientId);
             revalidatePath('/clients');
         } catch (updateError: any) {
             console.error('[syncCurrentOrderToUpcoming] Error updating clients.active_order:', updateError);
@@ -2702,7 +2759,10 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
 
     if (!orderConfig) {
         // If no active order, remove any existing upcoming orders
-        await execute('DELETE FROM upcoming_orders WHERE client_id = ?', [clientId]);
+        await supabase
+            .from('upcoming_orders')
+            .delete()
+            .eq('client_id', clientId);
         return;
     }
 
@@ -2745,21 +2805,24 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         // });
 
         // Delete orders for delivery days that are no longer in the config
-        const existingOrders = await query<any>(
-            'SELECT id, delivery_day FROM upcoming_orders WHERE client_id = ?',
-            [clientId]
-        );
+        const { data: existingOrders } = await supabase
+            .from('upcoming_orders')
+            .select('id, delivery_day')
+            .eq('client_id', clientId);
 
         if (existingOrders && existingOrders.length > 0) {
-            const existingDeliveryDays = new Set(existingOrders.map(o => o.delivery_day).filter(Boolean));
+            const existingDeliveryDays = new Set((existingOrders || []).map(o => o.delivery_day).filter(Boolean));
             const currentDeliveryDays = new Set(deliveryDays);
 
             // Delete orders for days that are no longer in the config
             for (const day of existingDeliveryDays) {
                 if (!currentDeliveryDays.has(day)) {
-                    const orderToDelete = existingOrders.find(o => o.delivery_day === day);
+                    const orderToDelete = (existingOrders || []).find(o => o.delivery_day === day);
                     if (orderToDelete) {
-                        await execute('DELETE FROM upcoming_orders WHERE id = ?', [orderToDelete.id]);
+                        await supabase
+                            .from('upcoming_orders')
+                            .delete()
+                            .eq('id', orderToDelete.id);
                     }
                 }
             }
@@ -2857,7 +2920,11 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         // If vendor(s) have multiple delivery days, create orders for each
         if (deliveryDays.length > 1) {
             // Delete old orders without delivery_day
-            await execute('DELETE FROM upcoming_orders WHERE client_id = ? AND delivery_day IS NULL', [clientId]);
+            await supabase
+                .from('upcoming_orders')
+                .delete()
+                .eq('client_id', clientId)
+                .is('delivery_day', null);
 
             // Create order for each delivery day
             for (const deliveryDay of deliveryDays) {
@@ -2877,19 +2944,22 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
             // Only keep the order for the target delivery day (or null), delete others
             if (orderConfig.serviceType === 'Boxes') {
                 const targetDay = deliveryDays.length === 1 ? deliveryDays[0] : null;
-                const existing = await query<any>(
-                    'SELECT id, delivery_day FROM upcoming_orders WHERE client_id = ? AND service_type = ?',
-                    [clientId, 'Boxes']
-                );
+                const { data: existing } = await supabase
+                    .from('upcoming_orders')
+                    .select('id, delivery_day')
+                    .eq('client_id', clientId)
+                    .eq('service_type', 'Boxes');
 
-                if (existing) {
+                if (existing && existing.length > 0) {
                     const idsToDelete = existing
                         .filter((o: any) => o.delivery_day !== targetDay)
                         .map((o: any) => o.id);
 
                     if (idsToDelete.length > 0) {
-                        const placeholders = idsToDelete.map(() => '?').join(',');
-                        await execute(`DELETE FROM upcoming_orders WHERE id IN (${placeholders})`, idsToDelete);
+                        await supabase
+                            .from('upcoming_orders')
+                            .delete()
+                            .in('id', idsToDelete);
                     }
                 }
             }
@@ -2925,10 +2995,17 @@ export async function processUpcomingOrders() {
     // Find all upcoming orders where take_effect_date <= today and status is 'scheduled'
     let upcomingOrders;
     try {
-        upcomingOrders = await query<any>(
-            'SELECT * FROM upcoming_orders WHERE status = ? AND take_effect_date <= ?',
-            ['scheduled', todayStr]
-        );
+        const { data: upcomingOrdersData, error: fetchError } = await supabase
+            .from('upcoming_orders')
+            .select('*')
+            .eq('status', 'scheduled')
+            .lte('take_effect_date', todayStr);
+        
+        if (fetchError) {
+            console.error('Error fetching upcoming orders:', fetchError);
+            return { processed: 0, errors: [] };
+        }
+        upcomingOrders = upcomingOrdersData || [];
     } catch (fetchError) {
         console.error('Error fetching upcoming orders:', fetchError);
         return { processed: 0, errors: [] };
@@ -2977,73 +3054,67 @@ export async function processUpcomingOrders() {
                 order_number: upcomingOrder.order_number // Preserve the assigned 6-digit number
             };
 
-            const orderId = generateUUID();
+            const orderId = randomUUID();
+            let newOrder: any;
             try {
-                await insert(
-                    'INSERT INTO orders (id, client_id, service_type, case_id, status, last_updated, updated_by, scheduled_delivery_date, delivery_distribution, total_value, total_items, notes, order_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [
-                        orderId,
-                        orderData.client_id,
-                        orderData.service_type,
-                        orderData.case_id,
-                        orderData.status,
-                        orderData.last_updated,
-                        orderData.updated_by,
-                        orderData.scheduled_delivery_date,
-                        orderData.delivery_distribution ? JSON.stringify(orderData.delivery_distribution) : null,
-                        orderData.total_value,
-                        orderData.total_items,
-                        orderData.notes,
-                        orderData.order_number
-                    ]
-                );
+                const insertPayload = {
+                    id: orderId,
+                    ...orderData,
+                    delivery_distribution: orderData.delivery_distribution || null
+                };
                 
-                const newOrder = await queryOne<any>('SELECT * FROM orders WHERE id = ?', [orderId]);
-                if (!newOrder) {
-                    errors.push(`Failed to create order for client ${upcomingOrder.client_id}: Order not found after insert`);
+                const { data: insertedOrder, error: insertError } = await supabase
+                    .from('orders')
+                    .insert([insertPayload])
+                    .select()
+                    .single();
+                
+                if (insertError || !insertedOrder) {
+                    errors.push(`Failed to create order for client ${upcomingOrder.client_id}: ${insertError?.message || 'Order not found after insert'}`);
                     continue;
                 }
+                newOrder = insertedOrder;
             } catch (orderError: any) {
                 errors.push(`Failed to create order for client ${upcomingOrder.client_id}: ${orderError?.message}`);
                 continue;
             }
             
-            const newOrder = await queryOne<any>('SELECT * FROM orders WHERE id = ?', [orderId]);
             if (!newOrder) {
                 errors.push(`Failed to retrieve order for client ${upcomingOrder.client_id}`);
                 continue;
             }
 
             // Copy vendor selections and items (for Food orders)
-            const vendorSelections = await query<any>(
-                'SELECT * FROM upcoming_order_vendor_selections WHERE upcoming_order_id = ?',
-                [upcomingOrder.id]
-            );
+            const { data: vendorSelections } = await supabase
+                .from('upcoming_order_vendor_selections')
+                .select('*')
+                .eq('upcoming_order_id', upcomingOrder.id);
 
-            if (vendorSelections) {
+            if (vendorSelections && vendorSelections.length > 0) {
                 for (const vs of vendorSelections) {
-                    const newVsId = generateUUID();
+                    const newVsId = randomUUID();
                     try {
-                        await insert(
-                            'INSERT INTO order_vendor_selections (id, order_id, vendor_id) VALUES (?, ?, ?)',
-                            [newVsId, newOrder.id, vs.vendor_id]
-                        );
+                        await supabase
+                            .from('order_vendor_selections')
+                            .insert([{ id: newVsId, order_id: newOrder.id, vendor_id: vs.vendor_id }]);
                         const newVs = { id: newVsId, order_id: newOrder.id, vendor_id: vs.vendor_id };
 
                         // Copy items
-                        const items = await query<any>(
-                            'SELECT * FROM upcoming_order_items WHERE vendor_selection_id = ?',
-                            [vs.id]
-                        );
+                        const { data: items } = await supabase
+                            .from('upcoming_order_items')
+                            .select('*')
+                            .eq('vendor_selection_id', vs.id);
 
-                        if (items) {
-                            for (const item of items) {
-                                const itemId = generateUUID();
-                                await insert(
-                                    'INSERT INTO order_items (id, vendor_selection_id, menu_item_id, quantity) VALUES (?, ?, ?, ?)',
-                                    [itemId, newVs.id, item.menu_item_id, item.quantity]
-                                );
-                            }
+                        if (items && items.length > 0) {
+                            const itemsToInsert = items.map(item => ({
+                                id: randomUUID(),
+                                vendor_selection_id: newVs.id,
+                                menu_item_id: item.menu_item_id,
+                                quantity: item.quantity
+                            }));
+                            await supabase
+                                .from('order_items')
+                                .insert(itemsToInsert);
                         }
                     } catch (vsError) {
                         console.error('Error creating vendor selection:', vsError);
@@ -3053,10 +3124,10 @@ export async function processUpcomingOrders() {
             }
 
             // Copy box selections (for Box orders)
-            const boxSelections = await query<any>(
-                'SELECT * FROM upcoming_order_box_selections WHERE upcoming_order_id = ?',
-                [upcomingOrder.id]
-            );
+            const { data: boxSelections } = await supabase
+                .from('upcoming_order_box_selections')
+                .select('*')
+                .eq('upcoming_order_id', upcomingOrder.id);
 
             console.log('[processUpcomingOrders] Box selections found:', {
                 upcoming_order_id: upcomingOrder.id,
@@ -3083,12 +3154,18 @@ export async function processUpcomingOrders() {
 
                     console.log('[processUpcomingOrders] Inserting box selection:', insertData);
 
-                    const boxSelectionId = generateUUID();
+                    const boxSelectionId = randomUUID();
                     try {
-                        await insert(
-                            'INSERT INTO order_box_selections (id, order_id, vendor_id, box_type_id, quantity, items) VALUES (?, ?, ?, ?, ?, ?)',
-                            [boxSelectionId, newOrder.id, bs.vendor_id, bs.box_type_id, bs.quantity, JSON.stringify(bs.items || {})]
-                        );
+                        await supabase
+                            .from('order_box_selections')
+                            .insert([{
+                                id: boxSelectionId,
+                                order_id: newOrder.id,
+                                vendor_id: bs.vendor_id,
+                                box_type_id: bs.box_type_id,
+                                quantity: bs.quantity,
+                                items: bs.items || {}
+                            }]);
                         console.log('[processUpcomingOrders] Successfully inserted box selection for order_id:', newOrder.id);
                     } catch (error) {
                         console.error('[processUpcomingOrders] Error inserting box selection:', error);
@@ -3097,10 +3174,14 @@ export async function processUpcomingOrders() {
             }
 
             // Update upcoming order status
-            await execute(
-                'UPDATE upcoming_orders SET status = ?, processed_order_id = ?, processed_at = ? WHERE id = ?',
-                ['processed', newOrder.id, (await getCurrentTime()).toISOString(), upcomingOrder.id]
-            );
+            await supabase
+                .from('upcoming_orders')
+                .update({
+                    status: 'processed',
+                    processed_order_id: newOrder.id,
+                    processed_at: (await getCurrentTime()).toISOString()
+                })
+                .eq('id', upcomingOrder.id);
 
             processedCount++;
         } catch (error: any) {
@@ -3456,11 +3537,16 @@ export async function logNavigatorAction(data: {
     unitsAdded: number;
 }) {
     try {
-        const logId = generateUUID();
-        await insert(
-            'INSERT INTO navigator_logs (id, navigator_id, client_id, action, details) VALUES (?, ?, ?, ?, ?)',
-            [logId, data.navigatorId, data.clientId, `Status changed from ${data.oldStatus} to ${data.newStatus}`, JSON.stringify({ unitsAdded: data.unitsAdded })]
-        );
+        const logId = randomUUID();
+        await supabase
+            .from('navigator_logs')
+            .insert([{
+                id: logId,
+                navigator_id: data.navigatorId,
+                client_id: data.clientId,
+                action: `Status changed from ${data.oldStatus} to ${data.newStatus}`,
+                details: { unitsAdded: data.unitsAdded }
+            }]);
     } catch (err) {
         console.error('Error in logNavigatorAction:', err);
         // We don't throw here to avoid blocking the main action if logging fails, 
@@ -3514,39 +3600,58 @@ export async function getClientsPaginated(page: number, pageSize: number, search
         // If filtering for clients needing vendor assignment, get Boxes clients whose vendor is not set
         if (filter === 'needs-vendor') {
             // First, get all clients with service_type = 'Boxes'
-            const allBoxesClients = await query<any>('SELECT id FROM clients WHERE service_type = ?', ['Boxes']);
+            const { data: allBoxesClients } = await supabase
+                .from('clients')
+                .select('id')
+                .eq('service_type', 'Boxes');
 
             if (!allBoxesClients || allBoxesClients.length === 0) {
                 return { clients: [], total: 0 };
             }
 
             const boxesClientIds = allBoxesClients.map(c => c.id);
-            const placeholders = boxesClientIds.map(() => '?').join(',');
 
-            // Get all upcoming box selections for these clients with JOIN to upcoming_orders
-            const boxSelections = await query<any>(`
-                SELECT 
-                    uobs.vendor_id,
-                    uobs.box_type_id,
-                    uo.client_id,
-                    uo.service_type,
-                    uo.status
-                FROM upcoming_order_box_selections uobs
-                INNER JOIN upcoming_orders uo ON uobs.upcoming_order_id = uo.id
-                WHERE uo.client_id IN (${placeholders})
-                    AND uo.service_type = ?
-                    AND uo.status = ?
-            `, [...boxesClientIds, 'Boxes', 'scheduled']);
+            // Get all upcoming box selections for these clients
+            // First get upcoming orders for these clients
+            const { data: upcomingOrders } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id')
+                .in('client_id', boxesClientIds)
+                .eq('service_type', 'Boxes')
+                .eq('status', 'scheduled');
+            
+            const upcomingOrderIds = (upcomingOrders || []).map(o => o.id);
+            
+            // Then get box selections for these orders
+            const { data: boxSelections } = upcomingOrderIds.length > 0
+                ? await supabase
+                    .from('upcoming_order_box_selections')
+                    .select('vendor_id, box_type_id, upcoming_order_id')
+                    .in('upcoming_order_id', upcomingOrderIds)
+                : { data: [] };
+            
+            // Map box selections with client_id from upcoming orders
+            const boxSelectionsWithClient = (boxSelections || []).map((bs: any) => {
+                const order = (upcomingOrders || []).find((o: any) => o.id === bs.upcoming_order_id);
+                return {
+                    ...bs,
+                    client_id: order?.client_id || null,
+                    service_type: 'Boxes',
+                    status: 'scheduled'
+                };
+            });
 
             // Get all box types to check their vendor_id
-            const boxTypes = await query<any>('SELECT id, vendor_id FROM box_types');
+            const { data: boxTypes } = await supabase
+                .from('box_types')
+                .select('id, vendor_id');
 
             const boxTypeMap = new Map((boxTypes || []).map((bt: any) => [bt.id, bt.vendor_id]));
 
             // Group box selections by client_id
             const clientBoxSelections = new Map<string, any[]>();
-            if (boxSelections) {
-                for (const bs of boxSelections) {
+            if (boxSelectionsWithClient) {
+                for (const bs of boxSelectionsWithClient) {
                     const clientId = bs.client_id;
                     if (!clientId) continue;
 
@@ -3601,36 +3706,28 @@ export async function getClientsPaginated(page: number, pageSize: number, search
             }
 
             // Fetch clients with pagination
-            const clientPlaceholders = clientIdsNeedingVendor.map(() => '?').join(',');
-            let whereClause = `WHERE id IN (${clientPlaceholders})`;
-            const baseParams: any[] = [...clientIdsNeedingVendor];
+            let clientsQuery = supabase
+                .from('clients')
+                .select('*', { count: 'exact' })
+                .in('id', clientIdsNeedingVendor);
 
             if (searchQuery) {
-                whereClause += ' AND LOWER(full_name) LIKE LOWER(?)';
-                baseParams.push(`%${searchQuery}%`);
+                clientsQuery = clientsQuery.ilike('full_name', `%${searchQuery}%`);
             }
 
-            // Get total count
-            const countResult = await queryOne<{ count: number }>(`
-                SELECT COUNT(*) as count
-                FROM clients
-                ${whereClause}
-            `, baseParams);
+            const { data, count, error } = await clientsQuery
+                .order('full_name')
+                .range((page - 1) * pageSize, page * pageSize - 1);
 
-            const total = countResult?.count || 0;
+            if (error) {
+                console.error('Error fetching clients:', error);
+                return { clients: [], total: 0 };
+            }
 
-            // Get paginated data
-            const paginationParams = [...baseParams, pageSize, (page - 1) * pageSize];
-            const data = await query<any>(`
-                SELECT *
-                FROM clients
-                ${whereClause}
-                ORDER BY full_name
-                LIMIT ? OFFSET ?
-            `, paginationParams);
+            const total = count || 0;
 
             // Map clients with error handling for individual clients
-            const mappedClients = data.map((c: any) => {
+            const mappedClients = (data || []).map((c: any) => {
                 try {
                     return mapClientFromDB(c);
                 } catch (error) {
@@ -3646,38 +3743,30 @@ export async function getClientsPaginated(page: number, pageSize: number, search
         }
 
         // Default behavior - get all clients
-        let whereClause = '';
-        const baseParams: any[] = [];
+        let clientsQuery = supabase
+            .from('clients')
+            .select('*', { count: 'exact' });
 
         if (searchQuery) {
-            whereClause = 'WHERE LOWER(full_name) LIKE LOWER(?)';
-            baseParams.push(`%${searchQuery}%`);
+            clientsQuery = clientsQuery.ilike('full_name', `%${searchQuery}%`);
         }
 
-        // Get total count
-        const countResult = await queryOne<{ count: number }>(`
-            SELECT COUNT(*) as count
-            FROM clients
-            ${whereClause}
-        `, baseParams);
+        console.log('[getClientsPaginated] Executing query with searchQuery:', searchQuery);
+        const { data, count, error } = await clientsQuery
+            .order('full_name')
+            .range((page - 1) * pageSize, page * pageSize - 1);
 
-        const total = countResult?.count || 0;
+        if (error) {
+            console.error('Error fetching clients:', error);
+            return { clients: [], total: 0 };
+        }
 
-        // Get paginated data
-        const paginationParams = [...baseParams, pageSize, (page - 1) * pageSize];
-        console.log('[getClientsPaginated] Executing query with params:', { whereClause, paginationParams });
-        const data = await query<any>(`
-            SELECT *
-            FROM clients
-            ${whereClause}
-            ORDER BY full_name
-            LIMIT ? OFFSET ?
-        `, paginationParams);
+        const total = count || 0;
 
         console.log('[getClientsPaginated] Raw data returned:', { count: data?.length, total, firstClient: data?.[0] ? { id: data[0].id, full_name: data[0].full_name, active_order_type: typeof data[0].active_order } : null });
 
         // Map clients with error handling for individual clients
-        const mappedClients = data.map((c: any) => {
+        const mappedClients = (data || []).map((c: any) => {
             try {
                 return mapClientFromDB(c);
             } catch (error) {
@@ -4064,12 +4153,19 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
             remarks: 'Auto-generated upon proof upload'
         };
 
-        const billingId = generateUUID();
+        const billingId = randomUUID();
         try {
-            await insert(
-                'INSERT INTO billing_records (id, client_id, order_id, status, amount, navigator, remarks) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [billingId, billingPayload.client_id, billingPayload.order_id, billingPayload.status, billingPayload.amount, billingPayload.navigator || null, billingPayload.remarks]
-            );
+            await supabase
+                .from('billing_records')
+                .insert([{
+                    id: billingId,
+                    client_id: billingPayload.client_id,
+                    order_id: billingPayload.order_id,
+                    status: billingPayload.status,
+                    amount: billingPayload.amount,
+                    navigator: billingPayload.navigator || null,
+                    remarks: billingPayload.remarks
+                }]);
         } catch (billingError) {
             console.error('Failed to create billing record:', billingError);
             return { success: true, warning: 'Order updated but billing record creation failed.' };

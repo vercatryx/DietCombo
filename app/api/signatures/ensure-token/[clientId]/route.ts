@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { queryOne, execute } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { randomUUID } from "crypto";
 
 export async function POST(
@@ -12,10 +12,11 @@ export async function POST(
             return NextResponse.json({ error: "Bad clientId" }, { status: 400 });
         }
 
-        const found = await queryOne<{ sign_token: string | null }>(
-            `SELECT sign_token FROM clients WHERE id = ?`,
-            [clientId]
-        );
+        const { data: found } = await supabase
+            .from('clients')
+            .select('sign_token')
+            .eq('id', clientId)
+            .single();
 
         if (!found) {
             return NextResponse.json({ error: "Client not found" }, { status: 404 });
@@ -24,10 +25,10 @@ export async function POST(
         const token = found.sign_token ?? randomUUID();
 
         if (!found.sign_token) {
-            await execute(
-                `UPDATE clients SET sign_token = ? WHERE id = ?`,
-                [token, clientId]
-            );
+            await supabase
+                .from('clients')
+                .update({ sign_token: token })
+                .eq('id', clientId);
         }
 
         return NextResponse.json({ sign_token: token });

@@ -3,7 +3,8 @@
 import { createSession, deleteSession, verifySession } from './session';
 import { hashPassword, verifyPassword } from './password';
 import { redirect } from 'next/navigation';
-import { query, queryOne, insert, execute, generateUUID } from './mysql';
+import { supabase } from './supabase';
+import { randomUUID } from 'crypto';
 
 import { getSettings } from './actions';
 import { sendEmail } from './email';
@@ -30,14 +31,14 @@ export async function sendOtp(email: string) {
         const normalizedEmail = normalizeEmail(email);
 
         // Delete old codes
-        await execute('DELETE FROM passwordless_codes WHERE email = ?', [normalizedEmail]);
+        await supabase.from('passwordless_codes').delete().eq('email', normalizedEmail);
         
         // Insert new code
-        const codeId = generateUUID();
-        await insert(
-            'INSERT INTO passwordless_codes (id, email, code, expires_at) VALUES (?, ?, ?, ?)',
-            [codeId, normalizedEmail, code, expiresAt]
-        );
+        const codeId = randomUUID();
+        const { error: insertError } = await supabase
+            .from('passwordless_codes')
+            .insert([{ id: codeId, email: normalizedEmail, code, expires_at: expiresAt }]);
+        if (insertError) throw insertError;
 
         // Send Email (using same pattern as nutritionist screening form)
         // Use original email for sending (not normalized)
@@ -76,12 +77,14 @@ export async function verifyOtp(email: string, code: string) {
         // Normalize email for lookup (consistent with sendOtp)
         const normalizedEmail = normalizeEmail(email);
 
-        const record = await queryOne<any>(
-            'SELECT * FROM passwordless_codes WHERE email = ? AND code = ?',
-            [normalizedEmail, code]
-        );
+        const { data: record, error: fetchError } = await supabase
+            .from('passwordless_codes')
+            .select('*')
+            .eq('email', normalizedEmail)
+            .eq('code', code)
+            .single();
 
-        if (!record) {
+        if (fetchError || !record) {
             return { success: false, message: 'Invalid code.' };
         }
 
@@ -90,7 +93,7 @@ export async function verifyOtp(email: string, code: string) {
         }
 
         // Code valid! Delete it.
-        await execute('DELETE FROM passwordless_codes WHERE id = ?', [record.id]);
+        await supabase.from('passwordless_codes').delete().eq('id', record.id);
 
         // Perform Login (Create Session)
         const { exists, type, id } = await checkEmailIdentity(email);
@@ -104,16 +107,16 @@ export async function verifyOtp(email: string, code: string) {
                 await createSession('super-admin', 'Admin', 'super-admin');
                 redirect('/');
             } else if (id) {
-                const admin = await queryOne<any>('SELECT name FROM admins WHERE id = ?', [id]);
+                const { data: admin } = await supabase.from('admins').select('name').eq('id', id).single();
                 await createSession(id, admin?.name || 'Admin', 'admin');
                 redirect('/');
             }
         } else if (type === 'vendor' && id) {
-            const vendor = await queryOne<any>('SELECT name FROM vendors WHERE id = ?', [id]);
+            const { data: vendor } = await supabase.from('vendors').select('name').eq('id', id).single();
             await createSession(id, vendor?.name || 'Vendor', 'vendor');
             redirect('/vendor');
         } else if (type === 'navigator' && id) {
-            const nav = await queryOne<any>('SELECT name FROM navigators WHERE id = ?', [id]);
+            const { data: nav } = await supabase.from('navigators').select('name').eq('id', id).single();
             await createSession(id, nav?.name || 'Navigator', 'navigator');
             redirect('/clients');
         } else if (type === 'client' && id) {
@@ -150,7 +153,11 @@ export async function login(prevState: any, formData: FormData) {
         }
 
         // 2. Check Database Admins
-        const admin = await queryOne<any>('SELECT * FROM admins WHERE username = ?', [loginInput]);
+        const { data: admin } = await supabase
+            .from('admins')
+            .select('*')
+            .eq('username', loginInput)
+            .maybeSingle();
 
         if (admin) {
             const isMatch = await verifyPassword(password, admin.password);
@@ -163,7 +170,10 @@ export async function login(prevState: any, formData: FormData) {
 
         // 3. Check Vendors (by Email) - normalize email for matching (ignore spaces and case)
         const normalizedEmail = normalizeEmail(loginInput);
-        const vendors = await query<any>('SELECT * FROM vendors WHERE email IS NOT NULL');
+        const { data: vendors } = await supabase
+            .from('vendors')
+            .select('*')
+            .not('email', 'is', null);
 
         const vendor = vendors?.find(v => v.email && normalizeEmail(v.email) === normalizedEmail);
 
@@ -184,7 +194,10 @@ export async function login(prevState: any, formData: FormData) {
         }
 
         // 4. Check Navigators (by Email) - normalize email for matching (ignore spaces and case)
-        const navigators = await query<any>('SELECT * FROM navigators WHERE email IS NOT NULL');
+        const { data: navigators } = await supabase
+            .from('navigators')
+            .select('*')
+            .not('email', 'is', null);
 
         const navigator = navigators?.find(n => n.email && normalizeEmail(n.email) === normalizedEmail);
 
@@ -252,7 +265,10 @@ export async function checkEmailIdentity(identifier: string) {
     }
 
     // 2. Check Database Admins (by username - case sensitive)
-    const admins = await query<any>('SELECT id FROM admins WHERE username = ?', [originalTrimmed]);
+    const { data: admins } = await supabase
+        .from('admins')
+        .select('id')
+        .eq('username', originalTrimmed);
     
     if (admins && admins.length > 0) {
         matches.push(...admins.map(a => ({ type: 'admin' as const, id: a.id })));
@@ -260,7 +276,10 @@ export async function checkEmailIdentity(identifier: string) {
 
     // 3. Check Vendors (by Email) - fetch all and normalize for comparison
     // This ensures we match emails regardless of spaces or case
-    const vendorsData = await query<any>('SELECT id, email, is_active FROM vendors WHERE email IS NOT NULL');
+    const { data: vendorsData } = await supabase
+        .from('vendors')
+        .select('id, email, is_active')
+        .not('email', 'is', null);
     
     if (vendorsData && vendorsData.length > 0) {
         // Normalize both input and database emails (remove all spaces, lowercase)
@@ -277,7 +296,10 @@ export async function checkEmailIdentity(identifier: string) {
     }
 
     // 4. Check Navigators (by Email)
-    const navigatorsData = await query<any>('SELECT id, email FROM navigators WHERE email IS NOT NULL');
+    const { data: navigatorsData } = await supabase
+        .from('navigators')
+        .select('id, email')
+        .not('email', 'is', null);
     
     if (navigatorsData && navigatorsData.length > 0) {
         const exactMatches = navigatorsData.filter(n => 
@@ -292,7 +314,10 @@ export async function checkEmailIdentity(identifier: string) {
     }
 
     // 5. Check Clients (by Email)
-    const clientsData = await query<any>('SELECT id, email FROM clients WHERE email IS NOT NULL');
+    const { data: clientsData } = await supabase
+        .from('clients')
+        .select('id, email')
+        .not('email', 'is', null);
     
     if (clientsData && clientsData.length > 0) {
         const exactMatches = clientsData.filter(c => 
@@ -370,8 +395,12 @@ export async function checkEmailIdentity(identifier: string) {
 export async function getAdmins() {
     await verifySession();
     try {
-        const data = await query<any>('SELECT id, username, created_at, name FROM admins ORDER BY created_at ASC');
-        return data;
+        const { data, error } = await supabase
+            .from('admins')
+            .select('id, username, created_at, name')
+            .order('created_at', { ascending: true });
+        if (error) return [];
+        return data || [];
     } catch (error) {
         console.error('Error fetching admins:', error);
         return [];
@@ -389,19 +418,23 @@ export async function addAdmin(prevState: any, formData: FormData) {
     }
 
     // Check availability
-    const existing = await queryOne<any>('SELECT id FROM admins WHERE username = ?', [username]);
+    const { data: existing } = await supabase
+        .from('admins')
+        .select('id')
+        .eq('username', username)
+        .maybeSingle();
     if (existing) {
         return { message: 'Username already exists.' };
     }
 
     const hashedPassword = await hashPassword(password);
-    const id = generateUUID();
+    const id = randomUUID();
 
     try {
-        await insert(
-            'INSERT INTO admins (id, username, password, name) VALUES (?, ?, ?, ?)',
-            [id, username, hashedPassword, name]
-        );
+        const { error } = await supabase
+            .from('admins')
+            .insert([{ id, username, password: hashedPassword, name }]);
+        if (error) throw error;
     } catch (error) {
         console.error('Error adding admin:', error);
         return { message: 'Failed to add admin.' };
@@ -416,7 +449,8 @@ export async function deleteAdmin(id: string) {
     // Also, don't delete the last admin if relying on DB. But we have Env admin.
 
     try {
-        await execute('DELETE FROM admins WHERE id = ?', [id]);
+        const { error } = await supabase.from('admins').delete().eq('id', id);
+        if (error) throw error;
     } catch (error) {
         console.error('Error deleting admin:', error);
         throw new Error('Failed to delete admin');
@@ -433,26 +467,25 @@ export async function updateAdmin(prevState: any, formData: FormData) {
         return { message: 'Admin ID is missing.', success: false };
     }
 
-    const updates: string[] = [];
-    const params: any[] = [];
+    const payload: any = {};
     
     if (name) {
-        updates.push('name = ?');
-        params.push(name);
+        payload.name = name;
     }
     if (password) {
-        updates.push('password = ?');
-        params.push(await hashPassword(password));
+        payload.password = await hashPassword(password);
     }
 
-    if (updates.length === 0) {
+    if (Object.keys(payload).length === 0) {
         return { message: 'No changes made.', success: true };
     }
-
-    params.push(id);
     
     try {
-        await execute(`UPDATE admins SET ${updates.join(', ')} WHERE id = ?`, params);
+        const { error } = await supabase
+            .from('admins')
+            .update(payload)
+            .eq('id', id);
+        if (error) throw error;
     } catch (error) {
         console.error('Error updating admin:', error);
         return { message: 'Failed to update admin.', success: false };

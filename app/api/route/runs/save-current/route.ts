@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
 function normalizeDay(raw?: string | null) {
@@ -18,15 +18,14 @@ export async function POST(req: Request) {
         const asNew = Boolean(body?.asNew);
 
         // Fetch current state of drivers for this day
-        const drivers = await query<any[]>(`
-            SELECT id, name, color, stop_ids
-            FROM drivers
-            WHERE day = ?
-            ORDER BY id ASC
-        `, [day]);
+        const { data: drivers } = await supabase
+            .from('drivers')
+            .select('id, name, color, stop_ids')
+            .eq('day', day)
+            .order('id', { ascending: true });
 
         // Build snapshot: array of drivers with their stop_ids
-        const snapshot = drivers.map(d => ({
+        const snapshot = (drivers || []).map(d => ({
             driverId: d.id,
             driverName: d.name,
             color: d.color,
@@ -36,46 +35,43 @@ export async function POST(req: Request) {
         if (asNew) {
             // Always create a new route run when asNew is true
             const newId = uuidv4();
-            await query(`
-                INSERT INTO route_runs (id, day, snapshot)
-                VALUES (?, ?, ?)
-            `, [newId, day, JSON.stringify(snapshot)]);
+            await supabase
+                .from('route_runs')
+                .insert([{ id: newId, day, snapshot }]);
             
             return NextResponse.json({ id: newId, message: "Route run saved" }, { headers: { "Cache-Control": "no-store" } });
         } else if (runId) {
             // Update existing run by ID
-            const updated = await query(`
-                UPDATE route_runs
-                SET snapshot = ?
-                WHERE id = ? AND day = ?
-            `, [JSON.stringify(snapshot), runId, day]);
+            await supabase
+                .from('route_runs')
+                .update({ snapshot })
+                .eq('id', runId)
+                .eq('day', day);
             
             return NextResponse.json({ id: runId, message: "Route run updated" }, { headers: { "Cache-Control": "no-store" } });
         } else {
             // No runId provided and not asNew: find most recent run for this day and update it, or create if none exists
-            const existing = await query<any[]>(`
-                SELECT id FROM route_runs
-                WHERE day = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-            `, [day]);
+            const { data: existing } = await supabase
+                .from('route_runs')
+                .select('id')
+                .eq('day', day)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
             
-            if (existing && existing.length > 0) {
+            if (existing) {
                 // Update most recent run
-                const existingId = existing[0].id;
-                await query(`
-                    UPDATE route_runs
-                    SET snapshot = ?
-                    WHERE id = ?
-                `, [JSON.stringify(snapshot), existingId]);
-                return NextResponse.json({ id: existingId, message: "Route run updated" }, { headers: { "Cache-Control": "no-store" } });
+                await supabase
+                    .from('route_runs')
+                    .update({ snapshot })
+                    .eq('id', existing.id);
+                return NextResponse.json({ id: existing.id, message: "Route run updated" }, { headers: { "Cache-Control": "no-store" } });
             } else {
                 // Create new run
                 const newId = uuidv4();
-                await query(`
-                    INSERT INTO route_runs (id, day, snapshot)
-                    VALUES (?, ?, ?)
-                `, [newId, day, JSON.stringify(snapshot)]);
+                await supabase
+                    .from('route_runs')
+                    .insert([{ id: newId, day, snapshot }]);
                 return NextResponse.json({ id: newId, message: "Route run saved" }, { headers: { "Cache-Control": "no-store" } });
             }
         }

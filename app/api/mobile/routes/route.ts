@@ -1,6 +1,6 @@
 // app/api/mobile/routes/route.ts
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -23,18 +23,17 @@ export async function GET(req: Request) {
         const dayParam = (searchParams.get("day") ?? "all").toLowerCase();
 
         // 1) Fetch drivers (include day="all" when a specific day is requested)
-        let driverWhere = "";
-        let driverParams: any[] = [];
+        let driversQuery = supabase
+            .from('drivers')
+            .select('id, name, color, stop_ids')
+            .order('id', { ascending: true });
+        
         if (dayParam !== "all") {
-            driverWhere = "WHERE (day = ? OR day = 'all')";
-            driverParams = [dayParam];
+            driversQuery = driversQuery.or(`day.eq.${dayParam},day.eq.all`);
         }
 
-        const driversRaw = await query<any[]>(
-            `SELECT id, name, color, stop_ids FROM drivers ${driverWhere} ORDER BY id ASC`,
-            driverParams
-        );
-        console.log("[mobile/routes] drivers:", driversRaw.length, "day:", dayParam);
+        const { data: driversRaw } = await driversQuery;
+        console.log("[mobile/routes] drivers:", driversRaw?.length || 0, "day:", dayParam);
 
         // Also check routes table (legacy table without day field)
         // Routes table records are treated as applicable to all days
@@ -42,15 +41,21 @@ export async function GET(req: Request) {
         let routesRaw: any[] = [];
         try {
             // Try to query with driver_id if the column exists
-            routesRaw = await query<any[]>(
-                `SELECT id, name, color, stop_ids, driver_id FROM routes ORDER BY id ASC`
-            );
+            const { data, error } = await supabase
+                .from('routes')
+                .select('id, name, color, stop_ids, driver_id')
+                .order('id', { ascending: true });
+            if (error) throw error;
+            routesRaw = data || [];
         } catch (e: any) {
             // If driver_id column doesn't exist, query without it
-            if (e?.code === 'ER_BAD_FIELD_ERROR' || e?.message?.includes('driver_id')) {
-                routesRaw = await query<any[]>(
-                    `SELECT id, name, color, stop_ids FROM routes ORDER BY id ASC`
-                );
+            if (e?.message?.includes('driver_id') || e?.code === 'PGRST116') {
+                const { data, error: retryError } = await supabase
+                    .from('routes')
+                    .select('id, name, color, stop_ids')
+                    .order('id', { ascending: true });
+                if (retryError) throw retryError;
+                routesRaw = data || [];
             } else {
                 throw e;
             }
@@ -100,12 +105,14 @@ export async function GET(req: Request) {
         console.log("[mobile/routes] unique stopIds:", allStopIds.length);
 
         // 3) Load minimal stop info to compute progress
-        const stops: any[] = allStopIds.length
-            ? await query<any[]>(
-                `SELECT id, completed FROM stops WHERE id IN (${allStopIds.map(() => "?").join(",")})`,
-                allStopIds
-            )
-            : [];
+        let stops: any[] = [];
+        if (allStopIds.length > 0) {
+            const { data } = await supabase
+                .from('stops')
+                .select('id, completed')
+                .in('id', allStopIds);
+            stops = data || [];
+        }
 
         const stopById = new Map<string, any>();
         for (const s of stops) stopById.set(String(s.id), s);

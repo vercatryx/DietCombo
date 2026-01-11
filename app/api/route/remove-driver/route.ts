@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 function normalizeDay(raw?: string | null) {
     const s = String(raw ?? "all").toLowerCase().trim();
@@ -23,19 +23,20 @@ export async function POST(req: Request) {
         }
 
         // Get the driver to check if it exists
-        const drivers = await query<any[]>(`
-            SELECT id, name, stop_ids FROM drivers
-            WHERE id = ? AND day = ?
-        `, [driverId, day]);
+        const { data: driver } = await supabase
+            .from('drivers')
+            .select('id, name, stop_ids')
+            .eq('id', driverId)
+            .eq('day', day)
+            .single();
 
-        if (drivers.length === 0) {
+        if (!driver) {
             return NextResponse.json(
                 { error: "Driver not found" },
                 { status: 404 }
             );
         }
 
-        const driver = drivers[0];
         const driverName = driver.name || "Unknown";
 
         // Check if it's Driver 0 (should not be removed)
@@ -53,18 +54,17 @@ export async function POST(req: Request) {
 
         // Clear assigned_driver_id from stops
         if (Array.isArray(stopIds) && stopIds.length > 0) {
-            await query(`
-                UPDATE stops
-                SET assigned_driver_id = NULL
-                WHERE id IN (${stopIds.map(() => "?").join(",")})
-            `, stopIds);
+            await supabase
+                .from('stops')
+                .update({ assigned_driver_id: null })
+                .in('id', stopIds);
         }
 
         // Delete the driver
-        await query(`
-            DELETE FROM drivers
-            WHERE id = ?
-        `, [driverId]);
+        await supabase
+            .from('drivers')
+            .delete()
+            .eq('id', driverId);
 
         return NextResponse.json(
             { 

@@ -2,7 +2,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { query } from './mysql';
+import { supabase } from './supabase';
 import { getMenuItems, getVendors, getBoxTypes } from './actions';
 
 interface LocalOrdersDB {
@@ -164,22 +164,22 @@ export async function syncLocalDBFromMySQL(): Promise<void> {
     return syncLocalDBFromSupabase();
 }
 
-// Sync all orders and upcoming orders from MySQL to local DB
+// Sync all orders and upcoming orders from Supabase to local DB
 export async function syncLocalDBFromSupabase(): Promise<void> {
     try {
-        // console.log('Starting local DB sync from MySQL...');
+        // console.log('Starting local DB sync from Supabase...');
 
         // Fetch all orders with status pending, confirmed, or processing
-        const orders = await query<any>(
-            'SELECT * FROM orders WHERE status IN (?, ?, ?)',
-            ['pending', 'confirmed', 'processing']
-        );
+        const { data: orders } = await supabase
+            .from('orders')
+            .select('*')
+            .in('status', ['pending', 'confirmed', 'processing']);
 
         // Fetch all scheduled upcoming orders
-        const upcomingOrders = await query<any>(
-            'SELECT * FROM upcoming_orders WHERE status = ?',
-            ['scheduled']
-        );
+        const { data: upcomingOrders } = await supabase
+            .from('upcoming_orders')
+            .select('*')
+            .eq('status', 'scheduled');
 
         // Fetch related data for orders
         const orderIds = (orders || []).map(o => o.id);
@@ -189,32 +189,29 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
         if (orderIds.length > 0) {
             // Fetch vendor selections
-            const placeholders = orderIds.map(() => '?').join(',');
-            const vsData = await query<any>(
-                `SELECT * FROM order_vendor_selections WHERE order_id IN (${placeholders})`,
-                orderIds
-            );
+            const { data: vsData } = await supabase
+                .from('order_vendor_selections')
+                .select('*')
+                .in('order_id', orderIds);
 
             orderVendorSelections = vsData || [];
 
             // Fetch items for these vendor selections
             const vsIds = orderVendorSelections.map(vs => vs.id);
             if (vsIds.length > 0) {
-                const vsPlaceholders = vsIds.map(() => '?').join(',');
-                const itemsData = await query<any>(
-                    `SELECT * FROM order_items WHERE vendor_selection_id IN (${vsPlaceholders})`,
-                    vsIds
-                );
+                const { data: itemsData } = await supabase
+                    .from('order_items')
+                    .select('*')
+                    .in('vendor_selection_id', vsIds);
 
                 orderItems = itemsData || [];
             }
 
             // Fetch box selections
-            const boxPlaceholders = orderIds.map(() => '?').join(',');
-            const boxData = await query<any>(
-                `SELECT * FROM order_box_selections WHERE order_id IN (${boxPlaceholders})`,
-                orderIds
-            );
+            const { data: boxData } = await supabase
+                .from('order_box_selections')
+                .select('*')
+                .in('order_id', orderIds);
 
             orderBoxSelections = boxData || [];
         }
@@ -227,32 +224,29 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
         if (upcomingOrderIds.length > 0) {
             // Fetch vendor selections
-            const uvsPlaceholders = upcomingOrderIds.map(() => '?').join(',');
-            const uvsData = await query<any>(
-                `SELECT * FROM upcoming_order_vendor_selections WHERE upcoming_order_id IN (${uvsPlaceholders})`,
-                upcomingOrderIds
-            );
+            const { data: uvsData } = await supabase
+                .from('upcoming_order_vendor_selections')
+                .select('*')
+                .in('upcoming_order_id', upcomingOrderIds);
 
             upcomingOrderVendorSelections = uvsData || [];
 
             // Fetch items for these vendor selections
             const uvsIds = upcomingOrderVendorSelections.map(vs => vs.id);
             if (uvsIds.length > 0) {
-                const uvsItemsPlaceholders = uvsIds.map(() => '?').join(',');
-                const uitemsData = await query<any>(
-                    `SELECT * FROM upcoming_order_items WHERE vendor_selection_id IN (${uvsItemsPlaceholders})`,
-                    uvsIds
-                );
+                const { data: uitemsData } = await supabase
+                    .from('upcoming_order_items')
+                    .select('*')
+                    .in('vendor_selection_id', uvsIds);
 
                 upcomingOrderItems = uitemsData || [];
             }
 
             // Fetch box selections
-            const uboxPlaceholders = upcomingOrderIds.map(() => '?').join(',');
-            const uboxData = await query<any>(
-                `SELECT * FROM upcoming_order_box_selections WHERE upcoming_order_id IN (${uboxPlaceholders})`,
-                upcomingOrderIds
-            );
+            const { data: uboxData } = await supabase
+                .from('upcoming_order_box_selections')
+                .select('*')
+                .in('upcoming_order_id', upcomingOrderIds);
 
             upcomingOrderBoxSelections = uboxData || [];
         }

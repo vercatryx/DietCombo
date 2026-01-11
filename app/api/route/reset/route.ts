@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 function normalizeDay(raw?: string | null) {
     const s = String(raw ?? "all").toLowerCase().trim();
@@ -24,46 +24,45 @@ export async function POST(req: Request) {
         }
 
         // Get the driver
-        const drivers = await query<any[]>(`
-            SELECT id, stop_ids FROM drivers
-            WHERE id = ? AND day = ?
-        `, [driverId, day]);
+        const { data: driverData } = await supabase
+            .from('drivers')
+            .select('id, stop_ids')
+            .eq('id', driverId)
+            .eq('day', day)
+            .single();
 
-        if (drivers.length === 0) {
+        if (!driverData) {
             return NextResponse.json(
                 { error: "Driver not found" },
                 { status: 404 }
             );
         }
 
-        const driver = drivers[0];
+        const driver = driverData;
         const stopIds = Array.isArray(driver.stop_ids) 
             ? driver.stop_ids 
             : (typeof driver.stop_ids === "string" ? JSON.parse(driver.stop_ids || "[]") : []);
 
         // Clear stops from driver
-        await query(`
-            UPDATE drivers
-            SET stop_ids = ?
-            WHERE id = ?
-        `, [JSON.stringify([]), driverId]);
+        await supabase
+            .from('drivers')
+            .update({ stop_ids: [] })
+            .eq('id', driverId);
 
         // Clear assigned_driver_id from stops
         if (Array.isArray(stopIds) && stopIds.length > 0) {
-            await query(`
-                UPDATE stops
-                SET assigned_driver_id = NULL
-                WHERE id IN (${stopIds.map(() => "?").join(",")})
-            `, stopIds);
+            await supabase
+                .from('stops')
+                .update({ assigned_driver_id: null })
+                .in('id', stopIds);
         }
 
         // Optionally clear proof URLs
         if (clearProof && Array.isArray(stopIds) && stopIds.length > 0) {
-            await query(`
-                UPDATE stops
-                SET proof_url = NULL, completed = FALSE
-                WHERE id IN (${stopIds.map(() => "?").join(",")})
-            `, stopIds);
+            await supabase
+                .from('stops')
+                .update({ proof_url: null, completed: false })
+                .in('id', stopIds);
         }
 
         return NextResponse.json(

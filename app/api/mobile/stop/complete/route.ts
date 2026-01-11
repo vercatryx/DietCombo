@@ -1,6 +1,6 @@
 // app/api/mobile/stop/complete/route.ts
 import { NextResponse } from "next/server";
-import { execute } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export async function POST(req: Request) {
     let body;
@@ -49,10 +49,12 @@ export async function POST(req: Request) {
     }
 
     try {
-        await execute(
-            `UPDATE stops SET completed = ? WHERE id = ?`,
-            [completed ? 1 : 0, stopIdStr]
-        );
+        const { error } = await supabase
+            .from('stops')
+            .update({ completed })
+            .eq('id', stopIdStr);
+        
+        if (error) throw error;
 
         return NextResponse.json({ ok: true, stop: { id: stopIdStr, completed } });
     } catch (error) {

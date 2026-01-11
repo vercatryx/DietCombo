@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export async function POST(req: Request) {
     try {
@@ -16,19 +16,18 @@ export async function POST(req: Request) {
         const runId = String(body.runId);
 
         // Get the route run
-        const runs = await query<any[]>(`
-            SELECT id, day, snapshot FROM route_runs
-            WHERE id = ?
-        `, [runId]);
+        const { data: run } = await supabase
+            .from('route_runs')
+            .select('id, day, snapshot')
+            .eq('id', runId)
+            .single();
 
-        if (runs.length === 0) {
+        if (!run) {
             return NextResponse.json(
                 { error: "Route run not found" },
                 { status: 404 }
             );
         }
-
-        const run = runs[0];
         const day = run.day || "all";
         const snapshot = typeof run.snapshot === "string" 
             ? JSON.parse(run.snapshot) 
@@ -49,58 +48,54 @@ export async function POST(req: Request) {
             if (!driverId) continue;
 
             // Update or create driver
-            const existingDrivers = await query<any[]>(`
-                SELECT id FROM drivers
-                WHERE id = ? AND day = ?
-            `, [driverId, day]);
+            const { data: existingDrivers } = await supabase
+                .from('drivers')
+                .select('id')
+                .eq('id', driverId)
+                .eq('day', day);
 
-            if (existingDrivers.length > 0) {
+            if (existingDrivers && existingDrivers.length > 0) {
                 // Update existing driver
-                await query(`
-                    UPDATE drivers
-                    SET stop_ids = ?, name = ?, color = ?
-                    WHERE id = ?
-                `, [
-                    JSON.stringify(stopIds),
-                    driverSnapshot.driverName || `Driver ${driverSnapshot.driverId}`,
-                    driverSnapshot.color || null,
-                    driverId
-                ]);
+                await supabase
+                    .from('drivers')
+                    .update({
+                        stop_ids: stopIds,
+                        name: driverSnapshot.driverName || `Driver ${driverSnapshot.driverId}`,
+                        color: driverSnapshot.color || null
+                    })
+                    .eq('id', driverId);
             } else {
                 // Create new driver (shouldn't happen often, but handle it)
-                const { v4: uuidv4 } = await import("uuid");
-                await query(`
-                    INSERT INTO drivers (id, day, name, color, stop_ids)
-                    VALUES (?, ?, ?, ?, ?)
-                `, [
-                    driverId,
-                    day,
-                    driverSnapshot.driverName || `Driver ${driverSnapshot.driverId}`,
-                    driverSnapshot.color || null,
-                    JSON.stringify(stopIds)
-                ]);
+                await supabase
+                    .from('drivers')
+                    .insert([{
+                        id: driverId,
+                        day,
+                        name: driverSnapshot.driverName || `Driver ${driverSnapshot.driverId}`,
+                        color: driverSnapshot.color || null,
+                        stop_ids: stopIds
+                    }]);
             }
 
             // Update stops to point to this driver
             if (stopIds.length > 0) {
                 // First, clear all stops for this day that were assigned to other drivers
                 // Then assign stops to this driver
-                await query(`
-                    UPDATE stops
-                    SET assigned_driver_id = ?
-                    WHERE id IN (${stopIds.map(() => "?").join(",")})
-                `, [driverId, ...stopIds]);
+                await supabase
+                    .from('stops')
+                    .update({ assigned_driver_id: driverId })
+                    .in('id', stopIds);
             }
         }
 
         // Clear stops from drivers not in snapshot
         const snapshotDriverIds = snapshot.map((s: any) => String(s.driverId)).filter(Boolean);
         if (snapshotDriverIds.length > 0) {
-            await query(`
-                UPDATE drivers
-                SET stop_ids = ?
-                WHERE day = ? AND id NOT IN (${snapshotDriverIds.map(() => "?").join(",")})
-            `, [JSON.stringify([]), day, ...snapshotDriverIds]);
+            await supabase
+                .from('drivers')
+                .update({ stop_ids: [] })
+                .eq('day', day)
+                .not('id', 'in', `(${snapshotDriverIds.join(',')})`);
         }
 
         return NextResponse.json(

@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export async function POST(req: Request) {
     try {
@@ -32,19 +32,19 @@ export async function POST(req: Request) {
         }
 
         // Get the driver
-        const drivers = await query<any[]>(`
-            SELECT id, name FROM drivers
-            WHERE id = ?
-        `, [driverId]);
+        const { data: driver } = await supabase
+            .from('drivers')
+            .select('id, name, day')
+            .eq('id', driverId)
+            .single();
 
-        if (drivers.length === 0) {
+        if (!driver) {
             return NextResponse.json(
                 { error: "Driver not found" },
                 { status: 404 }
             );
         }
 
-        const driver = drivers[0];
         const oldName = driver.name || "Unknown";
 
         // Check if it's Driver 0 and trying to rename to something else
@@ -57,13 +57,14 @@ export async function POST(req: Request) {
 
         // Check if another driver with this number already exists (for the same day)
         const day = driver.day || "all";
-        const existingDrivers = await query<any[]>(`
-            SELECT id, name FROM drivers
-            WHERE day = ? AND name = ?
-        `, [day, `Driver ${num}`]);
+        const { data: existingDrivers } = await supabase
+            .from('drivers')
+            .select('id, name')
+            .eq('day', day)
+            .eq('name', `Driver ${num}`);
 
         // If another driver exists with this name and it's not the same driver, error
-        if (existingDrivers.length > 0 && existingDrivers[0].id !== driverId) {
+        if (existingDrivers && existingDrivers.length > 0 && existingDrivers[0].id !== driverId) {
             return NextResponse.json(
                 { error: `Driver ${num} already exists` },
                 { status: 400 }
@@ -72,11 +73,10 @@ export async function POST(req: Request) {
 
         // Update the driver name
         const newName = `Driver ${num}`;
-        await query(`
-            UPDATE drivers
-            SET name = ?
-            WHERE id = ?
-        `, [newName, driverId]);
+        await supabase
+            .from('drivers')
+            .update({ name: newName })
+            .eq('id', driverId);
 
         return NextResponse.json(
             { 

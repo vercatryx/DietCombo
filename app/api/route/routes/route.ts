@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
 const sid = (v: unknown) => (v === null || v === undefined ? "" : String(v));
@@ -25,18 +25,23 @@ export async function GET(req: Request) {
         const day = (searchParams.get("day") || "all").toLowerCase();
 
         // 1) Drivers filtered by day (if not "all")
-        const driverWhere = day === "all" ? "" : `WHERE day = ?`;
-        const driverParams = day === "all" ? [] : [day];
-        const driversRaw = await query<any[]>(
-            `SELECT * FROM drivers ${driverWhere} ORDER BY id ASC`,
-            driverParams
-        );
+        let driversQuery = supabase
+            .from('drivers')
+            .select('*')
+            .order('id', { ascending: true });
+        
+        if (day !== "all") {
+            driversQuery = driversQuery.eq('day', day);
+        }
+        
+        const { data: driversRaw } = await driversQuery;
         
         // Also check routes table (legacy table without day field)
         // Routes table records are treated as applicable to all days
-        const routesRaw = await query<any[]>(
-            `SELECT * FROM routes ORDER BY id ASC`
-        );
+        const { data: routesRaw } = await supabase
+            .from('routes')
+            .select('*')
+            .order('id', { ascending: true });
         
         // Convert routes to drivers format (add day field, default to "all" or current day)
         const routesAsDrivers = routesRaw.map((r: any) => ({
@@ -60,26 +65,29 @@ export async function GET(req: Request) {
         }
 
         // 2) All stops (do NOT filter by day; legacy rows may not have it)
-        const allStops = await query<any[]>(`
-            SELECT id, client_id as userId, address, apt, city, state, zip, phone, lat, lng, dislikes
-            FROM stops
-            ORDER BY id ASC
-        `);
+        const { data: allStops } = await supabase
+            .from('stops')
+            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes')
+            .order('id', { ascending: true });
 
         // 3) Fetch all Clients for the clientIds we saw in stops
         const clientIdSet = new Set<string>();
-        for (const s of allStops) if (s.userId) clientIdSet.add(String(s.userId));
+        for (const s of (allStops || [])) if (s.client_id) clientIdSet.add(String(s.client_id));
         const clientIds = Array.from(clientIdSet);
 
-        const clients = clientIds.length
-            ? await query<any[]>(`
-                SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone_number as phone, lat, lng, dislikes, paused, delivery
-                FROM clients
-                WHERE id IN (${clientIds.map(() => "?").join(",")})
-            `, clientIds)
-            : [];
+        const { data: clients } = clientIds.length > 0
+            ? await supabase
+                .from('clients')
+                .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery')
+                .in('id', clientIds)
+            : { data: [] };
 
-        const clientById = new Map(clients.map((c) => [c.id, c]));
+        const clientById = new Map((clients || []).map((c) => [c.id, {
+            ...c,
+            first: c.first_name,
+            last: c.last_name,
+            phone: c.phone_number
+        }]));
 
         // 4) Sort drivers so Driver 0,1,2… are in that order
         const drivers = [...allDriversRaw].sort(
@@ -91,8 +99,8 @@ export async function GET(req: Request) {
         // 5) Hydrate each stop, preferring live Client fields when available
         const stopById = new Map<string, any>();
 
-        for (const s of allStops) {
-            const c = s.userId ? clientById.get(s.userId) : undefined;
+        for (const s of (allStops || [])) {
+            const c = s.client_id ? clientById.get(s.client_id) : undefined;
             const name =
                 c ? `${c.first || ""} ${c.last || ""}`.trim() : "(Unnamed)";
 
@@ -101,7 +109,7 @@ export async function GET(req: Request) {
 
             stopById.set(sid(s.id), {
                 id: s.id,
-                userId: s.userId ?? null,
+                userId: s.client_id ?? null,
                 name,
 
                 // prefer live client fields; fallback to stop's denorm copies
@@ -148,21 +156,22 @@ export async function GET(req: Request) {
 
         // 8) Check clients without stops, create missing stops, and log reasons
         // NEW APPROACH: Use orders to determine which clients need stops, not schedules
-        const allClients = await query<any[]>(`
-            SELECT id, first_name as first, last_name as last, address, apt, city, state, zip, phone_number as phone, lat, lng, paused, delivery
-            FROM clients
-            ORDER BY id ASC
-        `);
+        const { data: allClients } = await supabase
+            .from('clients')
+            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
+            .order('id', { ascending: true });
 
         // Check which clients have stops for THIS day
-        const dayWhere = day === "all" ? "" : `WHERE day = ?`;
-        const dayParams = day === "all" ? [] : [day];
-        const stopsForDay = await query<any[]>(
-            `SELECT client_id FROM stops ${dayWhere}`,
-            dayParams
-        );
+        let stopsQuery = supabase
+            .from('stops')
+            .select('client_id');
+        if (day !== "all") {
+            stopsQuery = stopsQuery.eq('day', day);
+        }
+        const { data: stopsForDay } = await stopsQuery;
+        
         const clientsWithStops = new Set<string>();
-        for (const s of stopsForDay) {
+        for (const s of (stopsForDay || [])) {
             if (s.client_id) {
                 clientsWithStops.add(String(s.client_id));
             }
@@ -171,31 +180,21 @@ export async function GET(req: Request) {
         // Get active orders to determine which clients need stops
         // Active order statuses: 'pending', 'scheduled', 'confirmed'
         const activeOrderStatuses = ["pending", "scheduled", "confirmed"];
-        const placeholders = activeOrderStatuses.map(() => "?").join(",");
         
         // Get orders with scheduled_delivery_date and extract day of week
         // Also check delivery_day field if present
-        const activeOrders = await query<any[]>(`
-            SELECT 
-                client_id,
-                scheduled_delivery_date,
-                delivery_day,
-                status
-            FROM orders
-            WHERE status IN (${placeholders})
-            AND (scheduled_delivery_date IS NOT NULL OR delivery_day IS NOT NULL)
-        `, activeOrderStatuses);
+        const { data: activeOrders } = await supabase
+            .from('orders')
+            .select('client_id, scheduled_delivery_date, delivery_day, status')
+            .in('status', activeOrderStatuses)
+            .or('scheduled_delivery_date.not.is.null,delivery_day.not.is.null');
 
         // Get upcoming_orders with delivery_day
-        const upcomingOrders = await query<any[]>(`
-            SELECT 
-                client_id,
-                delivery_day,
-                status
-            FROM upcoming_orders
-            WHERE status = 'scheduled'
-            AND delivery_day IS NOT NULL
-        `);
+        const { data: upcomingOrders } = await supabase
+            .from('upcoming_orders')
+            .select('client_id, delivery_day, status')
+            .eq('status', 'scheduled')
+            .not('delivery_day', 'is', null);
 
         // Build map of client_id -> set of delivery days they have orders for
         const clientDeliveryDays = new Map<string, Set<string>>();
@@ -343,27 +342,26 @@ export async function GET(req: Request) {
                 // Insert stops one at a time to handle duplicates gracefully
                 for (const stopData of stopsToCreate) {
                     try {
-                        await query(`
-                            INSERT INTO stops (id, day, client_id, name, address, apt, city, state, zip, phone, lat, lng)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON DUPLICATE KEY UPDATE name = VALUES(name)
-                        `, [
-                            stopData.id,
-                            stopData.day,
-                            stopData.client_id,
-                            stopData.name,
-                            stopData.address,
-                            stopData.apt,
-                            stopData.city,
-                            stopData.state,
-                            stopData.zip,
-                            stopData.phone,
-                            stopData.lat,
-                            stopData.lng,
-                        ]);
+                        const { error: insertError } = await supabase
+                            .from('stops')
+                            .upsert({
+                                id: stopData.id,
+                                day: stopData.day,
+                                client_id: stopData.client_id,
+                                name: stopData.name,
+                                address: stopData.address,
+                                apt: stopData.apt,
+                                city: stopData.city,
+                                state: stopData.state,
+                                zip: stopData.zip,
+                                phone: stopData.phone,
+                                lat: stopData.lat,
+                                lng: stopData.lng,
+                            }, { onConflict: 'id' });
+                        if (insertError) throw insertError;
                     } catch (createError: any) {
-                        // Skip if stop already exists
-                        if (createError?.code !== "ER_DUP_ENTRY") {
+                        // Skip if stop already exists or other error
+                        if (createError?.code !== "23505" && createError?.message?.includes('duplicate')) {
                             console.error(`[route/routes] Failed to create stop for client ${stopData.client_id}:`, createError?.message);
                         }
                     }

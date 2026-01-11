@@ -1,6 +1,6 @@
 // app/api/mobile/stops/route.ts
 import { NextResponse } from "next/server";
-import { query } from "@/lib/mysql";
+import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -36,15 +36,16 @@ export async function GET(req: Request) {
         }
 
         // Fetch driver's ordered stopIds
-        const drivers = await query<any[]>(
-            `SELECT stop_ids FROM drivers WHERE id = ?`,
-            [driverId]
-        );
-        const driver = drivers[0];
+        const { data: driverData } = await supabase
+            .from('drivers')
+            .select('stop_ids')
+            .eq('id', driverId)
+            .single();
+        const driver = driverData;
 
         // Keep stop_ids as strings (UUIDs) - don't convert to numbers
         const orderedIds: string[] = driver?.stop_ids
-            ? (Array.isArray(driver.stop_ids) ? driver.stop_ids : JSON.parse(driver.stop_ids))
+            ? (Array.isArray(driver.stop_ids) ? driver.stop_ids : (typeof driver.stop_ids === 'string' ? JSON.parse(driver.stop_ids) : []))
                 .map((id: any) => String(id))
                 .filter((id: string) => id && id.trim().length > 0)
             : [];
@@ -55,16 +56,16 @@ export async function GET(req: Request) {
         }
 
         // Get those stops (optionally constrained by day)
-        const stopWhere = whereClause 
-            ? `${whereClause} AND id IN (${orderedIds.map(() => "?").join(",")})`
-            : `WHERE id IN (${orderedIds.map(() => "?").join(",")})`;
-        const stopParams = [...whereParams, ...orderedIds];
+        let stopsQuery = supabase
+            .from('stops')
+            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url')
+            .in('id', orderedIds);
+        
+        if (day !== "all") {
+            stopsQuery = stopsQuery.eq('day', day);
+        }
 
-        const stops = await query<any[]>(
-            `SELECT id, client_id as userId, name, address, apt, city, state, zip, phone, lat, lng, \`order\`, completed, proof_url as proofUrl
-             FROM stops ${stopWhere}`,
-            stopParams
-        );
+        const { data: stops } = await stopsQuery;
 
         // Reorder to match Driver.stopIds order (keep IDs as strings for comparison)
         const byId = new Map(stops.map((s) => [String(s.id), s]));
@@ -73,7 +74,7 @@ export async function GET(req: Request) {
         // Map to expected format (keep id as string if it's a UUID, or convert if it's numeric)
         const mapped = ordered.map((s: any) => ({
             id: String(s.id), // Keep as string for UUID compatibility
-            userId: s.userId,
+            userId: s.client_id,
             name: s.name,
             address: s.address,
             apt: s.apt,
@@ -85,7 +86,7 @@ export async function GET(req: Request) {
             lng: s.lng ? Number(s.lng) : null,
             order: s.order ? Number(s.order) : null,
             completed: Boolean(s.completed),
-            proofUrl: s.proofUrl,
+            proofUrl: s.proof_url,
         }));
 
         console.log("[/api/mobile/stops] return (by driver):", mapped.length); // DEBUG
@@ -93,17 +94,23 @@ export async function GET(req: Request) {
     }
 
     // No driverId → return ALL stops for the day (flat array), ordered for stable UI
-    const orderBy = whereClause ? "ORDER BY assigned_driver_id ASC, `order` ASC, id ASC" : "ORDER BY assigned_driver_id ASC, `order` ASC, id ASC";
-    const all = await query<any[]>(
-        `SELECT id, client_id as userId, name, address, apt, city, state, zip, phone, lat, lng, \`order\`, completed, proof_url as proofUrl
-         FROM stops ${whereClause} ${orderBy}`,
-        whereParams
-    );
+    let allQuery = supabase
+        .from('stops')
+        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url')
+        .order('assigned_driver_id', { ascending: true })
+        .order('order', { ascending: true })
+        .order('id', { ascending: true });
+    
+    if (day !== "all") {
+        allQuery = allQuery.eq('day', day);
+    }
+
+    const { data: all } = await allQuery;
 
     // Map to expected format (keep id as string for UUID compatibility)
-    const mapped = all.map((s: any) => ({
+    const mapped = (all || []).map((s: any) => ({
         id: String(s.id), // Keep as string for UUID compatibility
-        userId: s.userId,
+        userId: s.client_id,
         name: s.name,
         address: s.address,
         apt: s.apt,
@@ -115,7 +122,7 @@ export async function GET(req: Request) {
         lng: s.lng ? Number(s.lng) : null,
         order: s.order ? Number(s.order) : null,
         completed: Boolean(s.completed),
-        proofUrl: s.proofUrl,
+        proofUrl: s.proof_url,
     }));
 
     console.log("[/api/mobile/stops] return (all day):", mapped.length); // DEBUG
