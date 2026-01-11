@@ -39,12 +39,33 @@
       "created_at": "2026-01-11T19:03:10.682195"
     }
   ],
-  "upcomingOrders": [],
+  "upcomingOrders": [
+    {
+      "id": "dbe1f9c8-4b72-49bd-8470-1ea4ef82fc10",
+      "client_id": "client777-7777-7777-7777-77777777777",
+      "service_type": "Meals",
+      "case_id": null,
+      "status": "scheduled",
+      "scheduled_delivery_date": null,
+      "take_effect_date": null,
+      "delivery_day": null,
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 0,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-11T21:00:42.052",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-11T21:00:42.853131"
+    }
+  ],
   "orderVendorSelections": [],
   "orderItems": [],
   "orderBoxSelections": [],
   "upcomingOrderVendorSelections": [],
   "upcomingOrderItems": [],
   "upcomingOrderBoxSelections": [],
-  "lastSynced": "2026-01-11T19:35:35.562Z"
+  "lastSynced": "2026-01-11T21:00:47.262Z"
 }
