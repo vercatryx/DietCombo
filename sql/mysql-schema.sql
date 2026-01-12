@@ -521,6 +521,7 @@ CREATE TABLE IF NOT EXISTS route_runs (
 CREATE TABLE IF NOT EXISTS signatures (
     id VARCHAR(36) PRIMARY KEY,
     client_id VARCHAR(36) NOT NULL,
+    order_id VARCHAR(36) NULL,
     slot INT NOT NULL,
     strokes JSON NOT NULL,
     signed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -528,8 +529,10 @@ CREATE TABLE IF NOT EXISTS signatures (
     user_agent VARCHAR(500) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
     UNIQUE KEY unique_client_slot (client_id, slot),
-    INDEX idx_signatures_client_id (client_id)
+    INDEX idx_signatures_client_id (client_id),
+    INDEX idx_signatures_order_id (order_id)
 );
 
 -- City Colors (from dietfantasy - city color coding for maps)
