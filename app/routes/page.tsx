@@ -2,16 +2,15 @@
 
 import React, { useState, useEffect } from 'react';
 import { Route } from 'lucide-react';
-import { Button, Box } from '@mui/material';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { fetchDrivers } from '@/lib/api';
+import styles from './routes.module.css';
 
 // Dynamically import DriversDialog to avoid SSR issues with Leaflet
 const DriversDialog = dynamic(() => import('@/components/routes/DriversDialog'), { ssr: false });
 
 export default function RoutesPage() {
-    const [mounted, setMounted] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [users, setUsers] = useState<any[]>([]);
@@ -19,7 +18,6 @@ export default function RoutesPage() {
     const [dialogOpen, setDialogOpen] = useState(false);
 
     useEffect(() => {
-        setMounted(true);
         loadData();
     }, []);
 
@@ -67,87 +65,63 @@ export default function RoutesPage() {
         });
     }
 
-    // Prevent hydration mismatch by not rendering MUI components during SSR
-    if (!mounted) {
-        return null;
-    }
-
     if (isLoading) {
         return (
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-                <Box sx={{ textAlign: 'center' }}>
-                    <Route size={48} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-                    <p style={{ color: '#666' }}>Loading routes...</p>
-                </Box>
-            </Box>
+            <div className={styles.container}>
+                <div className={styles.loadingContainer}>
+                    <Route size={48} className={styles.loadingIcon} />
+                    <p className={styles.loadingText}>Loading routes...</p>
+                </div>
+            </div>
         );
     }
 
     if (error) {
         return (
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-                <Box sx={{ textAlign: 'center', color: '#d32f2f' }}>
-                    <Route size={48} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
-                    <p>{error}</p>
-                    <Button variant="outlined" onClick={loadData} sx={{ mt: 2 }}>
+            <div className={styles.container}>
+                <div className={styles.errorContainer}>
+                    <Route size={48} className={styles.errorIcon} />
+                    <p className={styles.errorText}>{error}</p>
+                    <button className={styles.retryButton} onClick={loadData}>
                         Retry
-                    </Button>
-                </Box>
-            </Box>
+                    </button>
+                </div>
+            </div>
         );
     }
 
     return (
-        <Box sx={{ p: 4, maxWidth: 1200, margin: 'auto' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Route size={32} style={{ color: '#1976d2' }} />
-                    <h1 style={{ fontSize: '2rem', fontWeight: 600, margin: 0 }}>
-                        Routes
-                    </h1>
-                </Box>
-                <Button
-                    variant="contained"
-                    size="large"
+        <div className={styles.container}>
+            <div className={styles.header}>
+                <div className={styles.headerLeft}>
+                    <Route size={32} className={styles.headerIcon} />
+                    <h1 className={styles.title}>Routes</h1>
+                </div>
+                <button
+                    className={styles.openMapButton}
                     onClick={() => setDialogOpen(true)}
-                    startIcon={<Route />}
-                    sx={{ fontWeight: 700 }}
                 >
+                    <Route size={18} />
                     Open Routes Map
-                </Button>
-            </Box>
+                </button>
+            </div>
 
             {routes.length === 0 ? (
-                <Box sx={{ 
-                    backgroundColor: '#f5f5f5', 
-                    border: '1px solid #ddd', 
-                    borderRadius: 2, 
-                    p: 3,
-                    textAlign: 'center'
-                }}>
-                    <p style={{ color: '#666', marginBottom: '0.5rem', fontSize: '1.1rem' }}>
-                        No routes found
-                    </p>
-                    <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                <div className={styles.emptyState}>
+                    <p className={styles.emptyStateTitle}>No routes found</p>
+                    <p className={styles.emptyStateText}>
                         There are currently no delivery routes with stops assigned.
                     </p>
-                    <p style={{ color: '#666', fontSize: '0.9rem' }}>
+                    <p className={styles.emptyStateText}>
                         Click "Open Routes Map" to create and manage routes.
                     </p>
-                </Box>
+                </div>
             ) : (
                 <>
-                    <Box sx={{ mb: 2 }}>
-                        <p style={{ color: '#666', fontSize: '0.9rem' }}>
-                            Showing <strong>{routes.length}</strong> route{routes.length !== 1 ? 's' : ''} with stops assigned.
-                        </p>
-                    </Box>
-                    <Box sx={{ 
-                        display: 'grid', 
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', 
-                        gap: 2,
-                        mb: 3
-                    }}>
+                    <p className={styles.infoText}>
+                        Showing <strong>{routes.length}</strong> route{routes.length !== 1 ? 's' : ''} with stops assigned.
+                    </p>
+                    <div className={styles.routesGrid}>
                         {routes.map((route) => {
                             const color = route.color || '#1976d2';
                             const progress = route.totalStops > 0 
@@ -158,78 +132,43 @@ export default function RoutesPage() {
                                 <Link
                                     key={route.id}
                                     href={`/drivers/${route.id}`}
-                                    style={{ textDecoration: 'none', color: 'inherit' }}
+                                    className={styles.routeCard}
                                 >
-                                    <Box sx={{
-                                        border: '1px solid #ddd',
-                                        borderRadius: 2,
-                                        p: 2,
-                                        backgroundColor: '#fff',
-                                        cursor: 'pointer',
-                                        transition: 'box-shadow 0.2s',
-                                        '&:hover': {
-                                            boxShadow: 2
-                                        }
-                                    }}>
-                                        <Box sx={{ 
-                                            display: 'flex', 
-                                            alignItems: 'center', 
-                                            gap: 1.5,
-                                            mb: 1.5
-                                        }}>
-                                            <Box sx={{
-                                                width: 40,
-                                                height: 40,
-                                                borderRadius: 1,
-                                                backgroundColor: color,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                color: '#fff',
-                                                fontWeight: 600
-                                            }}>
-                                                R
-                                            </Box>
-                                            <Box sx={{ flex: 1 }}>
-                                                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
-                                                    {route.name}
-                                                </h3>
-                                                <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#666' }}>
-                                                    {route.totalStops} stop{route.totalStops !== 1 ? 's' : ''}
-                                                </p>
-                                            </Box>
-                                        </Box>
-                                        <Box sx={{ mt: 1.5 }}>
-                                            <Box sx={{ 
-                                                display: 'flex', 
-                                                justifyContent: 'space-between',
-                                                fontSize: '0.85rem',
-                                                color: '#666',
-                                                mb: 0.5
-                                            }}>
-                                                <span>Progress</span>
-                                                <span>{route.completedStops} / {route.totalStops}</span>
-                                            </Box>
-                                            <Box sx={{
-                                                width: '100%',
-                                                height: 8,
-                                                backgroundColor: '#e0e0e0',
-                                                borderRadius: 4,
-                                                overflow: 'hidden'
-                                            }}>
-                                                <Box sx={{
+                                    <div className={styles.routeHeader}>
+                                        <div 
+                                            className={styles.routeIcon}
+                                            style={{ backgroundColor: color }}
+                                        >
+                                            R
+                                        </div>
+                                        <div className={styles.routeInfo}>
+                                            <h3 className={styles.routeName}>
+                                                {route.name}
+                                            </h3>
+                                            <p className={styles.routeStops}>
+                                                {route.totalStops} stop{route.totalStops !== 1 ? 's' : ''}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className={styles.progressSection}>
+                                        <div className={styles.progressHeader}>
+                                            <span>Progress</span>
+                                            <span>{route.completedStops} / {route.totalStops}</span>
+                                        </div>
+                                        <div className={styles.progressBar}>
+                                            <div 
+                                                className={styles.progressFill}
+                                                style={{ 
                                                     width: `${progress}%`,
-                                                    height: '100%',
-                                                    backgroundColor: color,
-                                                    transition: 'width 0.3s'
-                                                }} />
-                                            </Box>
-                                        </Box>
-                                    </Box>
+                                                    backgroundColor: color
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
                                 </Link>
                             );
                         })}
-                    </Box>
+                    </div>
                 </>
             )}
 
@@ -241,6 +180,6 @@ export default function RoutesPage() {
                 initialSelectedDay="all"
                 onUsersPatched={handleUsersPatched}
             />
-        </Box>
+        </div>
     );
 }

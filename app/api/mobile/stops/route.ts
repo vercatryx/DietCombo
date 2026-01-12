@@ -75,23 +75,54 @@ export async function GET(req: Request) {
         const byId = new Map(stops.map((s) => [String(s.id), s]));
         const ordered = orderedIds.map((id) => byId.get(id)).filter(Boolean);
 
+        // Fetch order information for all stops
+        const clientIds = [...new Set(ordered.map((s: any) => s.client_id).filter(Boolean))];
+        const orderMap = new Map<string, any>();
+        
+        if (clientIds.length > 0) {
+            // Get the most recent order for each client (preferring orders with scheduled_delivery_date matching stop day or in current week)
+            const { data: orders } = await supabase
+                .from('orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date')
+                .in('client_id', clientIds)
+                .in('status', ['pending', 'confirmed', 'processing'])
+                .order('created_at', { ascending: false });
+            
+            if (orders) {
+                // Group orders by client_id and pick the most recent one for each client
+                for (const order of orders) {
+                    const cid = String(order.client_id);
+                    if (!orderMap.has(cid)) {
+                        orderMap.set(cid, order);
+                    }
+                }
+            }
+        }
+
         // Map to expected format (keep id as string if it's a UUID, or convert if it's numeric)
-        const mapped = ordered.map((s: any) => ({
-            id: String(s.id), // Keep as string for UUID compatibility
-            userId: s.client_id,
-            name: s.name,
-            address: s.address,
-            apt: s.apt,
-            city: s.city,
-            state: s.state,
-            zip: s.zip,
-            phone: s.phone,
-            lat: s.lat ? Number(s.lat) : null,
-            lng: s.lng ? Number(s.lng) : null,
-            order: s.order ? Number(s.order) : null,
-            completed: Boolean(s.completed),
-            proofUrl: s.proof_url,
-        }));
+        const mapped = ordered.map((s: any) => {
+            const order = orderMap.get(String(s.client_id));
+            return {
+                id: String(s.id), // Keep as string for UUID compatibility
+                userId: s.client_id,
+                name: s.name,
+                address: s.address,
+                apt: s.apt,
+                city: s.city,
+                state: s.state,
+                zip: s.zip,
+                phone: s.phone,
+                lat: s.lat ? Number(s.lat) : null,
+                lng: s.lng ? Number(s.lng) : null,
+                order: s.order ? Number(s.order) : null,
+                completed: Boolean(s.completed),
+                proofUrl: s.proof_url,
+                // Temporarily add order tracking fields
+                orderId: order?.id || null,
+                orderDate: order?.created_at || null,
+                deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
+            };
+        });
 
         console.log("[/api/mobile/stops] return (by driver):", mapped.length); // DEBUG
         return NextResponse.json(mapped, { headers: { "Cache-Control": "no-store" } });
@@ -115,23 +146,54 @@ export async function GET(req: Request) {
             return NextResponse.json({ error: allError.message }, { status: 500 });
         }
 
+        // Fetch order information for all stops
+        const clientIds = [...new Set((all || []).map((s: any) => s.client_id).filter(Boolean))];
+        const orderMap = new Map<string, any>();
+        
+        if (clientIds.length > 0) {
+            // Get the most recent order for each client (preferring orders with scheduled_delivery_date matching stop day or in current week)
+            const { data: orders } = await supabase
+                .from('orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date')
+                .in('client_id', clientIds)
+                .in('status', ['pending', 'confirmed', 'processing'])
+                .order('created_at', { ascending: false });
+            
+            if (orders) {
+                // Group orders by client_id and pick the most recent one for each client
+                for (const order of orders) {
+                    const cid = String(order.client_id);
+                    if (!orderMap.has(cid)) {
+                        orderMap.set(cid, order);
+                    }
+                }
+            }
+        }
+
     // Map to expected format (keep id as string for UUID compatibility)
-    const mapped = (all || []).map((s: any) => ({
-        id: String(s.id), // Keep as string for UUID compatibility
-        userId: s.client_id,
-        name: s.name,
-        address: s.address,
-        apt: s.apt,
-        city: s.city,
-        state: s.state,
-        zip: s.zip,
-        phone: s.phone,
-        lat: s.lat ? Number(s.lat) : null,
-        lng: s.lng ? Number(s.lng) : null,
-        order: s.order ? Number(s.order) : null,
-        completed: Boolean(s.completed),
-        proofUrl: s.proof_url,
-    }));
+    const mapped = (all || []).map((s: any) => {
+        const order = orderMap.get(String(s.client_id));
+        return {
+            id: String(s.id), // Keep as string for UUID compatibility
+            userId: s.client_id,
+            name: s.name,
+            address: s.address,
+            apt: s.apt,
+            city: s.city,
+            state: s.state,
+            zip: s.zip,
+            phone: s.phone,
+            lat: s.lat ? Number(s.lat) : null,
+            lng: s.lng ? Number(s.lng) : null,
+            order: s.order ? Number(s.order) : null,
+            completed: Boolean(s.completed),
+            proofUrl: s.proof_url,
+            // Temporarily add order tracking fields
+            orderId: order?.id || null,
+            orderDate: order?.created_at || null,
+            deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
+        };
+    });
 
     console.log("[/api/mobile/stops] return (all day):", mapped.length); // DEBUG
     return NextResponse.json(mapped, { headers: { "Cache-Control": "no-store" } });
