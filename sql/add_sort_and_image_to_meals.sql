@@ -1,0 +1,3 @@
+ALTER TABLE breakfast_categories ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
+ALTER TABLE breakfast_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
+ALTER TABLE breakfast_items ADD COLUMN IF NOT EXISTS image_url TEXT;

@@ -1,0 +1,2 @@
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE upcoming_order_items ADD COLUMN IF NOT EXISTS notes TEXT;
