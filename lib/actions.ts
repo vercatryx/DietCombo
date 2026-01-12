@@ -2,7 +2,7 @@
 
 import { getCurrentTime } from './time';
 import { revalidatePath } from 'next/cache';
-import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment } from './types';
+import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment, MealCategory, MealItem } from './types';
 import { randomUUID } from 'crypto';
 import { getSession } from './session';
 import {
@@ -12,6 +12,8 @@ import {
     getAllDeliveryDatesForOrder as getAllDeliveryDatesFromUtils
 } from './order-dates';
 import { supabase } from './supabase';
+import { createClient } from '@supabase/supabase-js';
+import { uploadFile, deleteFile } from './storage';
 
 // --- HELPERS ---
 function handleError(error: any, context?: string) {
@@ -388,6 +390,18 @@ export async function deleteMenuItem(id: string) {
         console.error('Error deleting menu item:', error);
         throw error;
     }
+}
+
+export async function updateMenuItemOrder(updates: { id: string; sortOrder: number }[]) {
+    // Perform updates in parallel
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const promises = updates.map(({ id, sortOrder }) =>
+        supabaseAdmin.from('menu_items').update({ sort_order: sortOrder }).eq('id', id)
+    );
+
+    await Promise.all(promises);
+    revalidatePath('/admin');
+    return { success: true };
 }
 
 // --- ITEM CATEGORY ACTIONS ---
@@ -5243,4 +5257,213 @@ export async function getBatchClientDetails(clientIds: string[]) {
         console.error('Error in getBatchClientDetails:', error);
         return {};
     }
+}
+
+// --- FILE UPLOAD ACTION ---
+
+export async function uploadMenuItemImage(formData: FormData) {
+    const file = formData.get('file') as File;
+    if (!file) {
+        throw new Error('No file provided');
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const timestamp = Date.now();
+    const extension = file.name.split('.').pop();
+    // Use a clean filename
+    const key = `menu-item-${timestamp}-${randomUUID()}.${extension}`;
+
+    // Upload to R2
+    const result = await uploadFile(key, buffer, file.type);
+
+    if (!result.success) {
+        throw new Error('Failed to upload image');
+    }
+
+    // Construct public URL
+    // Priority: Env Var -> Hardcoded fallback
+    const publicUrlBase = process.env.R2_PUBLIC_URL_BASE || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
+    const publicUrl = `${publicUrlBase}/${key}`;
+
+    return { success: true, url: publicUrl };
+}
+
+// --- MEAL SELECTION MANAGEMENT ACTIONS ---
+// Uses 'breakfast_categories' and 'breakfast_items' tables but is generic via 'meal_type'
+
+export async function getMealCategories() {
+    const { data, error } = await supabase.from('breakfast_categories').select('*').order('sort_order', { ascending: true }).order('name');
+    if (error) {
+        logQueryError(error, 'breakfast_categories', 'select');
+        return [];
+    }
+    return (data || []).map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        mealType: c.meal_type || 'Breakfast', // Default to Breakfast if missing
+        setValue: c.set_value ?? undefined,
+        sortOrder: c.sort_order ?? 0
+    }));
+}
+
+export async function addMealCategory(mealType: string, name: string, setValue?: number | null) {
+    const payload: any = {
+        name,
+        meal_type: mealType
+    };
+    if (setValue !== undefined) {
+        payload.set_value = setValue;
+    }
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { data: res, error } = await supabaseAdmin.from('breakfast_categories').insert([payload]).select().single();
+    handleError(error, 'addMealCategory');
+    revalidatePath('/admin');
+    return {
+        id: res.id,
+        name: res.name,
+        mealType: res.meal_type,
+        setValue: res.set_value ?? undefined,
+        sortOrder: res.sort_order ?? 0
+    };
+}
+
+export async function updateMealCategory(id: string, name: string, setValue?: number | null) {
+    const payload: any = { name };
+    if (setValue !== undefined) {
+        payload.set_value = setValue;
+    }
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { error } = await supabaseAdmin.from('breakfast_categories').update(payload).eq('id', id);
+    handleError(error, 'updateMealCategory');
+    revalidatePath('/admin');
+}
+
+export async function deleteMealCategory(id: string) {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { error } = await supabaseAdmin.from('breakfast_categories').delete().eq('id', id);
+    handleError(error, 'deleteMealCategory');
+    revalidatePath('/admin');
+}
+
+export async function deleteMealType(mealType: string) {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    // Delete all categories for this meal type. 
+    // Items will cascade delete because of FK 'ON DELETE CASCADE' on breakfast_items.category_id
+    const { error } = await supabaseAdmin
+        .from('breakfast_categories')
+        .delete()
+        .eq('meal_type', mealType);
+
+    handleError(error, 'deleteMealType');
+    revalidatePath('/admin');
+}
+
+export async function getMealItems() {
+    const { data, error } = await supabase.from('breakfast_items')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('name', { ascending: true });
+    if (error) {
+        logQueryError(error, 'breakfast_items', 'select');
+        return [];
+    }
+    return (data || []).map((i: any) => ({
+        id: i.id,
+        categoryId: i.category_id,
+        name: i.name,
+        value: i.quota_value, // Map quota_value to standardized 'value' property
+        quotaValue: i.quota_value,
+        priceEach: i.price_each ?? undefined,
+        isActive: i.is_active,
+        vendorId: i.vendor_id,
+        imageUrl: i.image_url || null,
+        sortOrder: i.sort_order ?? 0
+    }));
+}
+
+export async function addMealItem(data: { categoryId: string, name: string, quotaValue: number, priceEach?: number, isActive: boolean, imageUrl?: string | null, sortOrder?: number }) {
+    const payload: any = {
+        category_id: data.categoryId,
+        name: data.name,
+        quota_value: data.quotaValue,
+        is_active: data.isActive,
+        image_url: data.imageUrl || null,
+        sort_order: data.sortOrder ?? 0
+    };
+    if (data.priceEach !== undefined) {
+        payload.price_each = data.priceEach;
+    }
+
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { data: res, error } = await supabaseAdmin.from('breakfast_items').insert([payload]).select().single();
+    handleError(error, 'addMealItem');
+    revalidatePath('/admin');
+    return { ...data, id: res.id };
+}
+
+export async function updateMealItem(id: string, data: Partial<{ name: string, quotaValue: number, priceEach?: number, isActive: boolean, imageUrl?: string | null, sortOrder?: number }>) {
+    const payload: any = {};
+    if (data.name) payload.name = data.name;
+    if (data.quotaValue !== undefined) payload.quota_value = data.quotaValue;
+    if (data.priceEach !== undefined) payload.price_each = data.priceEach;
+    if (data.isActive !== undefined) payload.is_active = data.isActive;
+    if (data.imageUrl !== undefined) payload.image_url = data.imageUrl;
+    if (data.sortOrder !== undefined) payload.sort_order = data.sortOrder;
+
+    // R2 Cleanup: If image is being updated/removed, delete the old one
+    if (data.imageUrl !== undefined) {
+        const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+        const { data: existing } = await supabaseAdmin.from('breakfast_items').select('image_url').eq('id', id).single();
+        const oldUrl = existing?.image_url;
+
+        if (oldUrl && oldUrl !== data.imageUrl) {
+            try {
+                const key = oldUrl.split('/').pop();
+                if (key) await deleteFile(key);
+            } catch (e) {
+                console.error("Failed to delete stale meal image:", e);
+            }
+        }
+    }
+
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { error } = await supabaseAdmin.from('breakfast_items').update(payload).eq('id', id);
+    handleError(error, 'updateMealItem');
+    revalidatePath('/admin');
+}
+
+export async function deleteMealItem(id: string) {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { data: item } = await supabaseAdmin.from('breakfast_items').select('image_url').eq('id', id).single();
+    const { error } = await supabaseAdmin.from('breakfast_items').delete().eq('id', id);
+    if (!error && item?.image_url) {
+        try {
+            const key = item.image_url.split('/').pop();
+            if (key) await deleteFile(key);
+        } catch (e) {
+            console.error("Failed to delete meal image:", e);
+        }
+    }
+    handleError(error, 'deleteMealItem');
+    revalidatePath('/admin');
+}
+
+export async function updateMealItemOrder(updates: { id: string; sortOrder: number }[]) {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const promises = updates.map(({ id, sortOrder }) =>
+        supabaseAdmin.from('breakfast_items').update({ sort_order: sortOrder }).eq('id', id)
+    );
+    await Promise.all(promises);
+    revalidatePath('/admin');
+    return { success: true };
+}
+
+export async function updateMealCategoryOrder(updates: { id: string; sortOrder: number }[]) {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const promises = updates.map(({ id, sortOrder }) =>
+        supabaseAdmin.from('breakfast_categories').update({ sort_order: sortOrder }).eq('id', id)
+    );
+    await Promise.all(promises);
+    revalidatePath('/admin');
+    return { success: true };
 }
