@@ -563,24 +563,16 @@ export default function DriverDetailPage() {
                                                 })()}
                                             </div>
 
-                                            {/* Temporarily add order tracking info */}
-                                            {(s.orderId || s.orderDate || s.deliveryDate) && (
-                                                <div className="flex muted wrap" style={{ fontSize: 12, marginTop: 4, padding: 6, background: "#f3f4f6", borderRadius: 6 }}>
-                                                    {s.orderId && (
-                                                        <span><strong>Order ID:</strong> {s.orderId.substring(0, 8)}...</span>
-                                                    )}
-                                                    {s.orderDate && (
-                                                        <span style={{ marginLeft: 8 }}>
-                                                            <strong>Order Date:</strong> {new Date(s.orderDate).toLocaleDateString()}
-                                                        </span>
-                                                    )}
-                                                    {s.deliveryDate && (
-                                                        <span style={{ marginLeft: 8 }}>
-                                                            <strong>Delivery Date:</strong> {new Date(s.deliveryDate).toLocaleDateString()}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            )}
+                                            {/* Temporarily add order tracking info - always show for debugging */}
+                                            <div className="flex muted wrap" style={{ fontSize: 12, marginTop: 4, padding: 6, background: "#f3f4f6", borderRadius: 6 }}>
+                                                <span><strong>Order ID:</strong> {s.orderId ? s.orderId.substring(0, 8) + "..." : "N/A"}</span>
+                                                <span style={{ marginLeft: 8 }}>
+                                                    <strong>Order Date:</strong> {s.orderDate ? new Date(s.orderDate).toLocaleDateString() : "N/A"}
+                                                </span>
+                                                <span style={{ marginLeft: 8 }}>
+                                                    <strong>Delivery Date:</strong> {s.deliveryDate ? new Date(s.deliveryDate).toLocaleDateString() : "N/A"}
+                                                </span>
+                                            </div>
 
                                             {s.phone && (
                                                 <div className="flex muted wrap">

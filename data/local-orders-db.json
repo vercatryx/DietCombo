@@ -22,7 +22,7 @@
     {
       "id": "o3333333-3333-3333-3333-333333333333",
       "client_id": "c3333333-3333-3333-3333-333333333333",
-      "service_type": "Meals",
+      "service_type": "Meal",
       "case_id": null,
       "status": "confirmed",
       "scheduled_delivery_date": null,
@@ -43,7 +43,7 @@
     {
       "id": "dbe1f9c8-4b72-49bd-8470-1ea4ef82fc10",
       "client_id": "client777-7777-7777-7777-77777777777",
-      "service_type": "Meals",
+      "service_type": "Meal",
       "case_id": null,
       "status": "scheduled",
       "scheduled_delivery_date": null,
@@ -58,7 +58,8 @@
       "processed_at": null,
       "last_updated": "2026-01-11T21:00:42.052",
       "updated_by": "System Administrator",
-      "created_at": "2026-01-11T21:00:42.853131"
+      "created_at": "2026-01-11T21:00:42.853131",
+      "meal_type": "Lunch"
     }
   ],
   "orderVendorSelections": [],
@@ -67,5 +68,5 @@
   "upcomingOrderVendorSelections": [],
   "upcomingOrderItems": [],
   "upcomingOrderBoxSelections": [],
-  "lastSynced": "2026-01-11T21:00:47.262Z"
+  "lastSynced": "2026-01-12T18:42:51.007Z"
 }

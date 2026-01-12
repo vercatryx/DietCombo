@@ -14,8 +14,9 @@ import FormBuilder from '@/components/forms/FormBuilder';
 import { saveSingleForm } from '@/lib/form-actions';
 
 import { GlobalSettings } from '@/components/admin/GlobalSettings';
+import { MealSelectionManagement } from '@/components/admin/MealSelectionManagement';
 
-type Tab = 'vendors' | 'menus' | 'statuses' | 'boxes' | 'equipment' | 'navigators' | 'nutritionists' | 'settings' | 'admins' | 'form';
+type Tab = 'vendors' | 'menus' | 'statuses' | 'boxes' | 'equipment' | 'navigators' | 'nutritionists' | 'settings' | 'admins' | 'form' | 'meals';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('menus');
@@ -88,6 +89,12 @@ export default function AdminPage() {
                 >
                     Admins
                 </button>
+                <button
+                    className={`${styles.tab} ${activeTab === 'meals' ? styles.activeTab : ''}`}
+                    onClick={() => setActiveTab('meals')}
+                >
+                    Meal Selection
+                </button>
             </div>
 
             <div className={styles.content}>
@@ -114,6 +121,7 @@ export default function AdminPage() {
                 )}
                 {activeTab === 'settings' && <GlobalSettings />}
                 {activeTab === 'admins' && <AdminManagement />}
+                {activeTab === 'meals' && <MealSelectionManagement />}
             </div>
         </div>
     );

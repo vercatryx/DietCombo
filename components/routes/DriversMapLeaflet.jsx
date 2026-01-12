@@ -316,11 +316,31 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     container.style.borderRadius = "10px";
     container.style.padding = "6px";
     container.style.boxShadow = "0 6px 24px rgba(0,0,0,0.15)";
+    // Format dates for display
+    const formatDate = (dateStr) => {
+        if (!dateStr) return null;
+        try {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString();
+        } catch {
+            return null;
+        }
+    };
+    
+    const orderIdDisplay = stop.orderId ? stop.orderId.substring(0, 8) + "..." : "N/A";
+    const orderDateDisplay = formatDate(stop.orderDate) || "N/A";
+    const deliveryDateDisplay = formatDate(stop.deliveryDate) || "N/A";
+    
     container.innerHTML = `
     <div style="font-weight:700">${stop.name || "Unnamed"}</div>
     <div>${stop.address || ""}${stop.apt ? " " + stop.apt : ""}</div>
     <div>${stop.city || ""} ${stop.state || ""} ${stop.zip || ""}</div>
     ${stop.phone ? `<div style="margin-top:4px">${stop.phone}</div>` : ""}
+    <div style="margin-top:8px;padding:6px;background:#f3f4f6;border-radius:6px;font-size:11px;line-height:1.4">
+      <div><strong>Order ID:</strong> ${orderIdDisplay}</div>
+      <div><strong>Order Date:</strong> ${orderDateDisplay}</div>
+      <div><strong>Delivery Date:</strong> ${deliveryDateDisplay}</div>
+    </div>
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
       <label style="font-size:12px">Assign to:</label>
       <select id="__assignSel" style="padding:4px 6px;border-radius:6px;border:1px solid #ccc"></select>

@@ -158,6 +158,27 @@ export interface MenuItem {
   minimumOrder?: number; // Minimum order quantity required for this product (default 0, meaning no minimum)
 }
 
+export interface MealCategory {
+  id: string;
+  name: string;
+  mealType: string; // 'Breakfast', 'Lunch', 'Dinner', etc.
+  setValue?: number | null;
+  sortOrder?: number;
+}
+
+export interface MealItem {
+  id: string;
+  categoryId: string;
+  name: string;
+  value: number; // Standardized value (points)
+  quotaValue: number;
+  priceEach?: number;
+  isActive: boolean;
+  vendorId?: string; // Optional as legacy items might not have it yet
+  imageUrl?: string | null;
+  sortOrder?: number;
+}
+
 export interface BoxQuota {
   id: string;
   boxTypeId: string;

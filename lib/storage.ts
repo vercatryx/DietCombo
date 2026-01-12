@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
@@ -36,6 +36,26 @@ export async function uploadFile(key: string, body: Buffer | Uint8Array, content
         return { success: true, key };
     } catch (error) {
         console.error('Error uploading to R2:', error);
+        throw error;
+    }
+}
+
+export async function deleteFile(key: string, bucketName?: string) {
+    const targetBucket = bucketName || R2_BUCKET_NAME;
+    if (!targetBucket) {
+        throw new Error('Bucket name is not defined. Please set R2_BUCKET_NAME or pass a bucketName.');
+    }
+
+    const command = new DeleteObjectCommand({
+        Bucket: targetBucket,
+        Key: key,
+    });
+
+    try {
+        await S3.send(command);
+        return { success: true };
+    } catch (error) {
+        console.error('Error deleting from R2:', error);
         throw error;
     }
 }

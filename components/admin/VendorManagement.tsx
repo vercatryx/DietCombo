@@ -73,6 +73,12 @@ export function VendorManagement() {
             return;
         }
 
+        // Temporarily disabled: Single vendor mode - only allow editing, not creating
+        if (!editingId) {
+            alert('Vendor creation is temporarily disabled. Only editing existing vendors is allowed.');
+            return;
+        }
+
         if (editingId) {
             // Ensure password is string | undefined, not null (to match updateVendor signature)
             const dataToUpdate = {
@@ -80,16 +86,8 @@ export function VendorManagement() {
                 password: formData.password ?? undefined
             };
             await updateVendor(editingId, dataToUpdate);
-        } else {
-            // Same treatment: ensure password/email are string | undefined, not null
-            const dataToAdd = {
-                ...formData,
-                password: formData.password ?? undefined,
-                email: formData.email ?? undefined
-            };
-            await addVendor(dataToAdd as Omit<Vendor, 'id'> & { password?: string; email?: string });
         }
-        invalidateReferenceData(); // Invalidate cache after update/add
+        invalidateReferenceData(); // Invalidate cache after update
         await loadVendors();
         resetForm();
     }
@@ -113,11 +111,16 @@ export function VendorManagement() {
     }
 
     async function handleDelete(id: string) {
-        if (confirm('Delete this vendor?')) {
-            await deleteVendor(id);
-            invalidateReferenceData(); // Invalidate cache after delete
-            await loadVendors();
-        }
+        // Temporarily disabled: Single vendor mode - prevent deletion
+        alert('Vendor deletion is temporarily disabled in single vendor mode.');
+        return;
+        
+        // Original code (commented out):
+        // if (confirm('Delete this vendor?')) {
+        //     await deleteVendor(id);
+        //     invalidateReferenceData(); // Invalidate cache after delete
+        //     await loadVendors();
+        // }
     }
 
     function toggleDay(day: string) {
@@ -151,8 +154,12 @@ export function VendorManagement() {
                 <div>
                     <h2 className={styles.title}>Vendor Management</h2>
                     <p className={styles.subtitle}>Configure food and box vendors.</p>
+                    <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.25rem', fontStyle: 'italic' }}>
+                        Single vendor mode: Vendor creation is temporarily disabled.
+                    </p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {/* Temporarily disabled: Single vendor mode
                     {!isCreating && !editingId && !isMultiCreating && (
                         <>
                             <button className="btn btn-primary" onClick={() => setIsCreating(true)}>
@@ -163,11 +170,12 @@ export function VendorManagement() {
                             </button>
                         </>
                     )}
+                    */}
                 </div>
             </div>
 
-            {/* Multi Create Modal/Form */}
-            {isMultiCreating && (
+            {/* Multi Create Modal/Form - Temporarily disabled: Single vendor mode */}
+            {false && (
                 <div className={styles.formCard}>
                     <h3 className={styles.formTitle}>Add Multiple Vendors</h3>
                     <p className={styles.hint}>Enter one vendor name per line. They will be created with default settings (Food, Active, Monday delivery).</p>
@@ -368,9 +376,12 @@ export function VendorManagement() {
                                         <button className={styles.iconBtn} onClick={() => handleEditInit(vendor)}>
                                             <Edit2 size={16} />
                                         </button>
-                                        <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => handleDelete(vendor.id)}>
-                                            <Trash2 size={16} />
-                                        </button>
+                                        {/* Temporarily disabled: Single vendor mode - delete button hidden */}
+                                        {false && (
+                                            <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => handleDelete(vendor.id)}>
+                                                <Trash2 size={16} />
+                                            </button>
+                                        )}
                                     </div>
                                 </td>
                             </tr>

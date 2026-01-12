@@ -80,28 +80,48 @@ export async function GET(req: Request) {
         const orderMap = new Map<string, any>();
         
         if (clientIds.length > 0) {
-            // Get the most recent order for each client (preferring orders with scheduled_delivery_date matching stop day or in current week)
+            // Get the most recent order for each client - expand status filter to include more statuses
+            // Also check upcoming_orders table
             const { data: orders } = await supabase
                 .from('orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
                 .in('client_id', clientIds)
-                .in('status', ['pending', 'confirmed', 'processing'])
+                .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
             
-            if (orders) {
+            // Also check upcoming_orders
+            const { data: upcomingOrders } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                .in('client_id', clientIds)
+                .not('status', 'eq', 'cancelled')
+                .order('created_at', { ascending: false });
+            
+            console.log(`[/api/mobile/stops] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients`);
+            
+            // Combine both order sources, prioritizing regular orders
+            const allOrders = [...(orders || []), ...(upcomingOrders || [])];
+            
+            if (allOrders.length > 0) {
                 // Group orders by client_id and pick the most recent one for each client
-                for (const order of orders) {
+                for (const order of allOrders) {
                     const cid = String(order.client_id);
                     if (!orderMap.has(cid)) {
                         orderMap.set(cid, order);
                     }
                 }
+                console.log(`[/api/mobile/stops] Mapped ${orderMap.size} orders to clients`);
+            } else {
+                console.warn(`[/api/mobile/stops] No orders found for any of the ${clientIds.length} clients`);
             }
         }
 
         // Map to expected format (keep id as string if it's a UUID, or convert if it's numeric)
         const mapped = ordered.map((s: any) => {
             const order = orderMap.get(String(s.client_id));
+            if (!order && s.client_id) {
+                console.log(`[/api/mobile/stops] No order found for stop ${s.id} with client_id ${s.client_id}`);
+            }
             return {
                 id: String(s.id), // Keep as string for UUID compatibility
                 userId: s.client_id,
@@ -151,22 +171,39 @@ export async function GET(req: Request) {
         const orderMap = new Map<string, any>();
         
         if (clientIds.length > 0) {
-            // Get the most recent order for each client (preferring orders with scheduled_delivery_date matching stop day or in current week)
+            // Get the most recent order for each client - expand status filter to include more statuses
+            // Also check upcoming_orders table
             const { data: orders } = await supabase
                 .from('orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
                 .in('client_id', clientIds)
-                .in('status', ['pending', 'confirmed', 'processing'])
+                .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
             
-            if (orders) {
+            // Also check upcoming_orders
+            const { data: upcomingOrders } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                .in('client_id', clientIds)
+                .not('status', 'eq', 'cancelled')
+                .order('created_at', { ascending: false });
+            
+            console.log(`[/api/mobile/stops] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients`);
+            
+            // Combine both order sources, prioritizing regular orders
+            const allOrders = [...(orders || []), ...(upcomingOrders || [])];
+            
+            if (allOrders.length > 0) {
                 // Group orders by client_id and pick the most recent one for each client
-                for (const order of orders) {
+                for (const order of allOrders) {
                     const cid = String(order.client_id);
                     if (!orderMap.has(cid)) {
                         orderMap.set(cid, order);
                     }
                 }
+                console.log(`[/api/mobile/stops] Mapped ${orderMap.size} orders to clients`);
+            } else {
+                console.warn(`[/api/mobile/stops] No orders found for any of the ${clientIds.length} clients`);
             }
         }
 

@@ -95,7 +95,46 @@ export async function GET(req: Request) {
         
         console.log(`[route/routes] After sorting: ${drivers.length} drivers (${driversRaw.length} from drivers table, ${routesRaw.length} from routes table)`);
 
-        // 5) Hydrate each stop, preferring live Client fields when available
+        // 5) Fetch order information for all stops
+        const orderMap = new Map<string, any>();
+        if (clientIds.length > 0) {
+            // Get the most recent order for each client - expand status filter to include more statuses
+            // Also check upcoming_orders table
+            const { data: orders } = await supabase
+                .from('orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                .in('client_id', clientIds)
+                .not('status', 'eq', 'cancelled')
+                .order('created_at', { ascending: false });
+            
+            // Also check upcoming_orders
+            const { data: upcomingOrders } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                .in('client_id', clientIds)
+                .not('status', 'eq', 'cancelled')
+                .order('created_at', { ascending: false });
+            
+            console.log(`[route/routes] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients`);
+            
+            // Combine both order sources, prioritizing regular orders
+            const allOrders = [...(orders || []), ...(upcomingOrders || [])];
+            
+            if (allOrders.length > 0) {
+                // Group orders by client_id and pick the most recent one for each client
+                for (const order of allOrders) {
+                    const cid = String(order.client_id);
+                    if (!orderMap.has(cid)) {
+                        orderMap.set(cid, order);
+                    }
+                }
+                console.log(`[route/routes] Mapped ${orderMap.size} orders to clients`);
+            } else {
+                console.warn(`[route/routes] No orders found for any of the ${clientIds.length} clients`);
+            }
+        }
+
+        // 6) Hydrate each stop, preferring live Client fields when available
         const stopById = new Map<string, any>();
 
         for (const s of (allStops || [])) {
@@ -105,6 +144,12 @@ export async function GET(req: Request) {
 
             // prefer live client value; fall back to stop's denorm
             const dislikes = c?.dislikes ?? s.dislikes ?? "";
+            
+            // Get order information for this stop
+            const order = s.client_id ? orderMap.get(String(s.client_id)) : null;
+            if (!order && s.client_id) {
+                console.log(`[route/routes] No order found for stop ${s.id} with client_id ${s.client_id}`);
+            }
 
             stopById.set(sid(s.id), {
                 id: s.id,
@@ -124,10 +169,15 @@ export async function GET(req: Request) {
 
                 // ensure labels receive dislikes at the top level
                 dislikes: typeof dislikes === "string" ? dislikes.trim() : "",
+                
+                // Temporarily add order tracking fields
+                orderId: order?.id || null,
+                orderDate: order?.created_at || null,
+                deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
             });
         }
 
-        // 6) Build driver routes strictly from their stopIds
+        // 7) Build driver routes strictly from their stopIds
         const routes = drivers.map((d) => {
             const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === "string" ? JSON.parse(d.stop_ids) : []);
             const ids: any[] = Array.isArray(stopIds) ? stopIds : [];
@@ -146,14 +196,14 @@ export async function GET(req: Request) {
         
         console.log(`[route/routes] Built ${routes.length} routes with ${routes.reduce((sum, r) => sum + r.stops.length, 0)} total stops`);
 
-        // 7) Unrouted = all hydrated stops not referenced by any driver's current list
+        // 8) Unrouted = all hydrated stops not referenced by any driver's current list
         const claimed = new Set(routes.flatMap((r) => r.stops.map((s) => sid(s.id))));
         const unrouted: any[] = [];
         for (const [k, v] of stopById.entries()) {
             if (!claimed.has(k)) unrouted.push(v);
         }
 
-        // 8) Check clients without stops, create missing stops, and log reasons
+        // 9) Check clients without stops, create missing stops, and log reasons
         // NEW APPROACH: Use orders to determine which clients need stops, not schedules
         const { data: allClients } = await supabase
             .from('clients')
