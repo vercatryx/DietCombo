@@ -732,7 +732,7 @@ export default function DriverDetailPage() {
 html,body{margin:0;padding:0;background:var(--bg);color:#111;
   -webkit-tap-highlight-color: transparent;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial}
-.container{width:100%;margin:0;padding:12px 12px calc(12px + env(safe-area-inset-bottom));}
+.container{width:100%;max-width:1200px;margin:0 auto;padding:12px 12px calc(12px + env(safe-area-inset-bottom));}
 
 .sticky-header{position: sticky; top: 0; z-index: 50; display:flex; align-items:center; gap:10px;
   background: #fff; border-bottom:1px solid var(--border); padding:10px 12px;}
