@@ -310,12 +310,6 @@
     transform: scale(0.98);
 }
 
-.formGroup {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
 @keyframes fadeIn {
     from {
         opacity: 0;

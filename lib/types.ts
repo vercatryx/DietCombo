@@ -298,6 +298,15 @@ export interface DatabaseSchema {
   settings: AppSettings;
 }
 
+export interface Submission {
+  id: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  created_at: string;
+  pdf_url: string | null;
+  token: string;
+  comments: string | null;
+}
+
 export interface ClientFullDetails {
   client: ClientProfile;
   history: DeliveryRecord[];
@@ -305,5 +314,6 @@ export interface ClientFullDetails {
   billingHistory: BillingRecord[];
   activeOrder: any; // Using any to match existing usage in ClientProfile, but ideally typed
   upcomingOrder: any;
+  submissions?: Submission[];
 }
 

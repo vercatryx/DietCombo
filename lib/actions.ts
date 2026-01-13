@@ -14,6 +14,7 @@ import {
 import { supabase } from './supabase';
 import { createClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
+import { getClientSubmissions } from './form-actions';
 
 // --- HELPERS ---
 function handleError(error: any, context?: string) {
@@ -3938,14 +3939,16 @@ export async function getClientFullDetails(clientId: string) {
             orderHistory,
             billingHistory,
             activeOrder,
-            upcomingOrder
+            upcomingOrder,
+            submissionsResult
         ] = await Promise.all([
             getClient(clientId),
             getClientHistory(clientId),
             getOrderHistory(clientId),
             getBillingHistory(clientId),
             getActiveOrderForClient(clientId),
-            getUpcomingOrderForClient(clientId)
+            getUpcomingOrderForClient(clientId),
+            getClientSubmissions(clientId)
         ]);
 
         if (!client) return null;
@@ -3956,7 +3959,8 @@ export async function getClientFullDetails(clientId: string) {
             orderHistory,
             billingHistory,
             activeOrder,
-            upcomingOrder
+            upcomingOrder,
+            submissions: submissionsResult.success ? (submissionsResult.data || []) : []
         };
     } catch (error) {
         console.error('Error fetching full client details:', error);
@@ -4402,6 +4406,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                     console.log(`[Process Pending Order] Creating new Order for Case ${upcomingOrder.case_id} with status 'billing_pending'`);
                     const currentTime = await getCurrentTime();
                     const orderData: any = {
+                        id: randomUUID(),
                         client_id: upcomingOrder.client_id,
                         service_type: upcomingOrder.service_type,
                         case_id: upcomingOrder.case_id,

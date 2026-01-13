@@ -1,6 +1,7 @@
 'use client';
 
 import { ClientProfileDetail } from './ClientProfile';
+import { ClientInfoShelf } from './ClientInfoShelf';
 
 import { useState, useEffect, useRef } from 'react';
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem } from '@/lib/types';
@@ -86,6 +87,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     // Selected Client for Modal
     const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+
+    // Info Shelf State
+    const [infoShelfClientId, setInfoShelfClientId] = useState<string | null>(null);
 
     // Order Details Visibility Toggle
     const [showOrderDetails, setShowOrderDetails] = useState(false);
@@ -281,6 +285,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             });
         }
     }, [clients, detailsCache, isLoading]);
+
+    // Load client details when info shelf opens
+    useEffect(() => {
+        if (infoShelfClientId && !detailsCache[infoShelfClientId] && !pendingPrefetches.current.has(infoShelfClientId)) {
+            prefetchClient(infoShelfClientId);
+        }
+    }, [infoShelfClientId, detailsCache]);
 
     // Click-outside-to-close filter menus
     useEffect(() => {
@@ -796,12 +807,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         return `${st}${content}`;
     }
 
-    function getOrderSummary(client: ClientProfile) {
-        if (!client.activeOrder) return '-';
+    function getOrderSummary(client: ClientProfile, forceDetails: boolean = false) {
+        if (!client.activeOrder) return forceDetails ? <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>No active order</span> : '-';
         const st = client.serviceType;
         const conf = client.activeOrder;
 
-        if (!showOrderDetails) {
+        if (!showOrderDetails && !forceDetails) {
             let vendorSummary = 'Not Set';
 
             if (st === 'Food') {
@@ -1699,9 +1710,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     }
                                     setIsAddingDependent(true);
                                 } else {
-                                    // Check if we have data ready
-                                    // If not, the modal will handle showing a loading state and fetching data.
-                                    setSelectedClientId(client.id);
+                                    // Open the info shelf instead of the full profile directly
+                                    setInfoShelfClientId(client.id);
+                                    // Prefetch client details if not already cached
+                                    if (!detailsCache[client.id]) {
+                                        prefetchClient(client.id);
+                                    }
                                 }
                             }}
                             className={`${styles.clientRow} ${isDependent ? styles.clientRowDependent : ''}`}
@@ -1826,6 +1840,38 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         refreshDataInBackground();
                     }}></div>
                 </div>
+            )}
+
+            {infoShelfClientId && clients.find(c => c.id === infoShelfClientId) && (
+                <ClientInfoShelf
+                    client={detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId)!}
+                    statuses={statuses}
+                    navigators={navigators}
+                    orderSummary={getOrderSummary(detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId)!, true)}
+                    submissions={detailsCache[infoShelfClientId]?.submissions || []}
+                    allClients={allClientsForLookup}
+                    onClose={() => setInfoShelfClientId(null)}
+                    onOpenProfile={(clientId) => {
+                        setInfoShelfClientId(null);
+                        setSelectedClientId(clientId);
+                    }}
+                    onClientUpdated={() => {
+                        // Clear cache for this client to force re-fetch
+                        const updatedClientId = infoShelfClientId;
+                        if (updatedClientId) {
+                            setDetailsCache(prev => {
+                                const newCache = { ...prev };
+                                delete newCache[updatedClientId];
+                                return newCache;
+                            });
+                        }
+                        refreshDataInBackground();
+                    }}
+                    onClientDeleted={() => {
+                        setInfoShelfClientId(null);
+                        refreshDataInBackground();
+                    }}
+                />
             )}
         </div>
     );

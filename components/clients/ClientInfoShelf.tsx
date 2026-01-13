@@ -133,13 +133,11 @@ export function ClientInfoShelf({
 
         setCreatingDependent(true);
         try {
-            const dobValue = dependentDob.trim() || null;
-            const cinValue = dependentCin.trim() ? parseInt(dependentCin.trim()) : null;
             const newDep = await addDependent(
                 dependentName.trim(),
                 client.id,
-                dobValue,
-                cinValue
+                dependentDob || null,
+                dependentCin || null
             );
             if (newDep) {
                 // Update local state
@@ -598,8 +596,7 @@ export function ClientInfoShelf({
                                             <div className={styles.depName}>{dep.fullName}</div>
                                             <div className={styles.depInfo}>
                                                 {dep.dob && <span>DOB: {new Date(dep.dob).toLocaleDateString()}</span>}
-                                                {dep.dob && dep.cin && <span> | </span>}
-                                                {dep.cin && <span>CIN: {dep.cin}</span>}
+                                                {dep.cin && <span> | CIN: {dep.cin}</span>}
                                             </div>
                                         </div>
                                     ))}
