@@ -19,13 +19,13 @@ export async function POST(req: Request) {
         }
 
         // Resolve stop by stopId or userId
+        // TODO: Temporarily disabled day filter - moving to delivery_date basis
         let stop: any;
         if (stopId) {
             const { data: stops } = await supabase
                 .from('stops')
                 .select('*')
                 .eq('id', stopId)
-                .eq('day', day)
                 .limit(1);
             stop = stops?.[0];
         } else if (userId) {
@@ -33,12 +33,11 @@ export async function POST(req: Request) {
                 .from('stops')
                 .select('*')
                 .eq('client_id', userId)
-                .eq('day', day)
                 .limit(1);
             stop = stops?.[0];
         }
 
-        if (!stop) return NextResponse.json({ error: "Stop not found for this day" }, { status: 404 });
+        if (!stop) return NextResponse.json({ error: "Stop not found" }, { status: 404 });
 
         // Fetch drivers for day (also check routes table like routes API does)
         let driversQuery = supabase

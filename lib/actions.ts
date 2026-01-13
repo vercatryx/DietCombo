@@ -1024,7 +1024,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         phone_number: data.phoneNumber,
         secondary_phone_number: data.secondaryPhoneNumber || null,
         navigator_id: data.navigatorId || null,
-        end_date: data.endDate,
+        end_date: data.endDate || null,
         screening_took_place: data.screeningTookPlace,
         screening_signed: data.screeningSigned,
         notes: data.notes,
@@ -1156,7 +1156,7 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         phone_number: '',
         secondary_phone_number: null,
         navigator_id: null,
-        end_date: '',
+        end_date: null,
         screening_took_place: false,
         screening_signed: false,
         notes: '',
@@ -2598,32 +2598,39 @@ async function syncSingleOrderForDeliveryDay(
     }
 
     // Now sync related data (vendor selections, items, box selections)
-    // Delete existing related records
-    // First, get vendor selection IDs for this upcoming order
-    const { data: vendorSelections } = await supabase
-        .from('upcoming_order_vendor_selections')
-        .select('id')
+    // Delete existing related records to avoid duplicates
+    // Delete all items for this upcoming order first (by upcoming_order_id for safety)
+    const { error: deleteItemsError } = await supabase
+        .from('upcoming_order_items')
+        .delete()
         .eq('upcoming_order_id', upcomingOrderId);
     
-    const vendorSelectionIds = (vendorSelections || []).map(vs => vs.id);
-    
-    // Delete items that reference these vendor selections
-    if (vendorSelectionIds.length > 0) {
-        await supabase
-            .from('upcoming_order_items')
-            .delete()
-            .in('upcoming_vendor_selection_id', vendorSelectionIds);
+    if (deleteItemsError) {
+        console.warn(`[syncSingleOrderForDeliveryDay] Error deleting existing items: ${deleteItemsError.message}`);
+        // Don't throw - we'll try to insert anyway and let the insert fail if there's a conflict
     }
     
-    // Then delete vendor selections (this will also cascade delete any remaining items)
-    await supabase
+    // Delete vendor selections (cascade should handle items, but we already deleted them above)
+    const { error: deleteVSError } = await supabase
         .from('upcoming_order_vendor_selections')
         .delete()
         .eq('upcoming_order_id', upcomingOrderId);
-    await supabase
+    
+    if (deleteVSError) {
+        console.warn(`[syncSingleOrderForDeliveryDay] Error deleting existing vendor selections: ${deleteVSError.message}`);
+    }
+    
+    // Delete box selections
+    const { error: deleteBoxError } = await supabase
         .from('upcoming_order_box_selections')
         .delete()
         .eq('upcoming_order_id', upcomingOrderId);
+    
+    if (deleteBoxError) {
+        console.warn(`[syncSingleOrderForDeliveryDay] Error deleting existing box selections: ${deleteBoxError.message}`);
+    }
+    
+    console.log(`[syncSingleOrderForDeliveryDay] Cleaned up existing related records for upcoming_order_id: ${upcomingOrderId}`);
 
     if (orderConfig.serviceType === 'Food' && orderConfig.vendorSelections) {
         // Insert vendor selections and items
@@ -2638,103 +2645,138 @@ async function syncSingleOrderForDeliveryDay(
                 continue;
             }
 
+            // Validate required fields before creating vendor selection
+            if (!upcomingOrderId) {
+                throw new Error(`Cannot create vendor selection: upcomingOrderId is missing`);
+            }
+            if (!selection.vendorId) {
+                console.warn(`[syncSingleOrderForDeliveryDay] Skipping vendor selection - vendorId is missing`);
+                continue;
+            }
+
             console.log(`[syncSingleOrderForDeliveryDay] Creating vendor selection for vendor ${selection.vendorId}`);
             const vsId = randomUUID();
+            const vsInsertPayload = { 
+                id: vsId, 
+                upcoming_order_id: upcomingOrderId, 
+                vendor_id: selection.vendorId 
+            };
+            
+            console.log(`[syncSingleOrderForDeliveryDay] Vendor selection insert payload:`, vsInsertPayload);
+            
             const { data: vsData, error: vsError } = await supabase
                 .from('upcoming_order_vendor_selections')
-                .insert([{ id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId }])
+                .insert([vsInsertPayload])
                 .select()
                 .single();
             
-            if (vsError || !vsData) {
-                console.error(`[syncSingleOrderForDeliveryDay] Error creating vendor selection:`, vsError);
-                continue;
+            if (vsError) {
+                const errorMsg = `Failed to create vendor selection for vendor ${selection.vendorId}: ${vsError.message}`;
+                console.error(`[syncSingleOrderForDeliveryDay] Error creating vendor selection:`, {
+                    error: vsError,
+                    payload: vsInsertPayload,
+                    errorDetails: vsError
+                });
+                throw new Error(errorMsg);
             }
             
-            const vendorSelection = { id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId };
+            if (!vsData) {
+                const errorMsg = `Vendor selection insert returned no data for vendor ${selection.vendorId}`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`);
+                throw new Error(errorMsg);
+            }
+            
+            const vendorSelection = { id: vsData.id, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId };
             allVendorSelections.push(vendorSelection);
-            console.log(`[syncSingleOrderForDeliveryDay] Created vendor selection ${vendorSelection.id}`);
-            
-            if (!vendorSelection) continue;
-
-            // Find an existing vendor selection to use as a template for vendor_selection_id
-            // This is required because vendor_selection_id is NOT NULL and must reference order_vendor_selections
-            // First, get orders for this client, then get vendor selections
-            const { data: clientOrders } = await supabase
-                .from('orders')
-                .select('id')
-                .eq('client_id', clientId)
-                .order('created_at', { ascending: false })
-                .limit(10);
-            
-            let templateVendorSelection: any = null;
-            if (clientOrders && clientOrders.length > 0) {
-                const orderIds = clientOrders.map(o => o.id);
-                const { data: templateVs } = await supabase
-                    .from('order_vendor_selections')
-                    .select('id')
-                    .eq('vendor_id', selection.vendorId)
-                    .in('order_id', orderIds)
-                    .limit(1)
-                    .maybeSingle();
-                templateVendorSelection = templateVs;
-            }
-            
-            // If no template found, try to find any vendor selection for this vendor
-            const { data: fallbackVendorSelection } = templateVendorSelection 
-                ? { data: templateVendorSelection } 
-                : await supabase
-                    .from('order_vendor_selections')
-                    .select('id')
-                    .eq('vendor_id', selection.vendorId)
-                    .limit(1)
-                    .maybeSingle();
-
-            if (!fallbackVendorSelection) {
-                console.warn(`[syncSingleOrderForDeliveryDay] No template vendor selection found for vendor ${selection.vendorId}, skipping items`);
-                continue;
-            }
+            console.log(`[syncSingleOrderForDeliveryDay] Created vendor selection ${vendorSelection.id} for vendor ${selection.vendorId}`);
 
             // Insert items
+            // For upcoming orders, use upcoming_vendor_selection_id (from upcoming_order_vendor_selections)
+            // vendor_selection_id should be NULL for upcoming orders (it's nullable in the schema)
+            const itemInsertErrors: string[] = [];
             for (const [itemId, qty] of Object.entries(selection.items)) {
                 const item = menuItems.find(i => i.id === itemId);
-                const quantity = qty as number;
-                if (item && quantity > 0) {
-                    // Use priceEach if available, otherwise fall back to value
-                    const itemPrice = item.priceEach ?? item.value;
-                    const itemTotal = itemPrice * quantity;
-                    console.log(`[syncSingleOrderForDeliveryDay] Inserting item:`, {
-                        itemId,
-                        itemName: item.name,
-                        quantity,
-                        itemPrice,
-                        itemValue: item.value,
-                        itemPriceEach: item.priceEach,
-                        itemTotal,
-                        calculatedTotalBefore: calculatedTotalFromItems
-                    });
-                    calculatedTotalFromItems += itemTotal;
-                    console.log(`[syncSingleOrderForDeliveryDay] Updated calculatedTotalFromItems: ${calculatedTotalFromItems}`);
-
-                    const itemId_uuid = randomUUID();
-                    const { error: itemError } = await supabase
-                        .from('upcoming_order_items')
-                        .insert([{
-                            id: itemId_uuid,
-                            vendor_selection_id: fallbackVendorSelection.id,
-                            upcoming_vendor_selection_id: vendorSelection.id,
-                            menu_item_id: itemId,
-                            quantity
-                        }]);
-                    
-                    if (itemError) {
-                        console.error(`[syncSingleOrderForDeliveryDay] Error inserting item:`, itemError);
-                    } else {
-                        console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted item ${itemId}`);
-                    }
-                } else {
-                    console.log(`[syncSingleOrderForDeliveryDay] Skipping item ${itemId} - item not found or quantity is 0`);
+                const quantity = typeof qty === 'number' ? qty : Number(qty) || 0;
+                
+                // Validate item exists and quantity is valid
+                if (!item) {
+                    console.error(`[syncSingleOrderForDeliveryDay] Item not found: ${itemId}`);
+                    itemInsertErrors.push(`Item ${itemId} not found in menu items`);
+                    continue;
                 }
+                
+                if (!quantity || quantity <= 0) {
+                    console.log(`[syncSingleOrderForDeliveryDay] Skipping item ${itemId} - quantity is 0 or invalid`);
+                    continue;
+                }
+
+                // Validate required IDs
+                if (!upcomingOrderId) {
+                    throw new Error(`Cannot insert items: upcomingOrderId is missing`);
+                }
+                if (!vendorSelection.id) {
+                    throw new Error(`Cannot insert items: vendorSelection.id is missing for vendor ${selection.vendorId}`);
+                }
+                if (!itemId) {
+                    throw new Error(`Cannot insert items: itemId is missing`);
+                }
+
+                // Use priceEach if available, otherwise fall back to value
+                const itemPrice = item.priceEach ?? item.value;
+                const itemTotal = itemPrice * quantity;
+                console.log(`[syncSingleOrderForDeliveryDay] Inserting item:`, {
+                    itemId,
+                    itemName: item.name,
+                    quantity,
+                    itemPrice,
+                    itemValue: item.value,
+                    itemPriceEach: item.priceEach,
+                    itemTotal,
+                    calculatedTotalBefore: calculatedTotalFromItems,
+                    upcomingOrderId,
+                    upcomingVendorSelectionId: vendorSelection.id
+                });
+                calculatedTotalFromItems += itemTotal;
+                console.log(`[syncSingleOrderForDeliveryDay] Updated calculatedTotalFromItems: ${calculatedTotalFromItems}`);
+
+                const itemId_uuid = randomUUID();
+                const insertPayload = {
+                    id: itemId_uuid,
+                    upcoming_order_id: upcomingOrderId,
+                    vendor_selection_id: null, // NULL for upcoming orders
+                    upcoming_vendor_selection_id: vendorSelection.id, // Use the ID from upcoming_order_vendor_selections
+                    menu_item_id: itemId,
+                    quantity: quantity
+                };
+
+                console.log(`[syncSingleOrderForDeliveryDay] Insert payload:`, insertPayload);
+
+                const { data: insertedItem, error: itemError } = await supabase
+                    .from('upcoming_order_items')
+                    .insert([insertPayload])
+                    .select()
+                    .single();
+                
+                if (itemError) {
+                    const errorMsg = `Failed to insert item ${itemId} (${item.name}): ${itemError.message}`;
+                    console.error(`[syncSingleOrderForDeliveryDay] Error inserting item:`, {
+                        error: itemError,
+                        payload: insertPayload,
+                        errorDetails: itemError
+                    });
+                    itemInsertErrors.push(errorMsg);
+                } else if (!insertedItem) {
+                    const errorMsg = `Item ${itemId} insert returned no data`;
+                    console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`);
+                    itemInsertErrors.push(errorMsg);
+                } else {
+                    console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted item ${itemId} (${item.name}) with id ${insertedItem.id}`);
+                }
+            }
+
+            // If any items failed to insert, throw an error
+            if (itemInsertErrors.length > 0) {
+                throw new Error(`Failed to insert ${itemInsertErrors.length} item(s) for vendor ${selection.vendorId}: ${itemInsertErrors.join('; ')}`);
             }
         }
 
@@ -2758,58 +2800,15 @@ async function syncSingleOrderForDeliveryDay(
             console.log(`[syncSingleOrderForDeliveryDay] Total values match, no update needed`);
         }
 
-        // Add total as a separate item in the order_items table
-        // Use the first vendor selection or create a special one for the total
+        // Add total as a separate item in the upcoming_order_items table
+        // Use the first vendor selection to attach the total item
+        // Note: menu_item_id can be null for total items, but this might cause issues with NOT NULL constraint
+        // Let's skip inserting total items for now since they're not strictly necessary
+        // The total_value is already stored in the upcoming_orders table
         if (allVendorSelections.length > 0 && calculatedTotalFromItems > 0) {
-            // Use the first vendor selection to attach the total item
-            const firstVendorSelection = allVendorSelections[0];
-            // Find a template vendor selection for the total item
-            // First, get orders for this client
-            const { data: clientOrders } = await supabase
-                .from('orders')
-                .select('id')
-                .eq('client_id', clientId)
-                .order('created_at', { ascending: false })
-                .limit(10);
-            
-            let templateVendorSelection: any = null;
-            if (clientOrders && clientOrders.length > 0) {
-                const orderIds = clientOrders.map(o => o.id);
-                const { data: templateVs } = await supabase
-                    .from('order_vendor_selections')
-                    .select('id')
-                    .eq('vendor_id', firstVendorSelection.vendor_id)
-                    .in('order_id', orderIds)
-                    .limit(1)
-                    .maybeSingle();
-                templateVendorSelection = templateVs;
-            }
-            
-            const { data: fallbackVendorSelection } = templateVendorSelection 
-                ? { data: templateVendorSelection } 
-                : await supabase
-                    .from('order_vendor_selections')
-                    .select('id')
-                    .eq('vendor_id', firstVendorSelection.vendor_id)
-                    .limit(1)
-                    .maybeSingle();
-
-            if (fallbackVendorSelection) {
-                const totalItemId = randomUUID();
-                const { error: totalItemError } = await supabase
-                    .from('upcoming_order_items')
-                    .insert([{
-                        id: totalItemId,
-                        vendor_selection_id: fallbackVendorSelection.id,
-                        upcoming_vendor_selection_id: firstVendorSelection.id,
-                        menu_item_id: null,
-                        quantity: 1
-                    }]);
-                
-                if (totalItemError) {
-                    console.error(`[syncSingleOrderForDeliveryDay] Error inserting total item:`, totalItemError);
-                }
-            }
+            console.log(`[syncSingleOrderForDeliveryDay] Skipping total item insertion - total_value (${calculatedTotalFromItems}) is stored in upcoming_orders table`);
+            // Note: We don't insert a total item because menu_item_id is NOT NULL in the schema
+            // The total is already calculated and stored in upcoming_orders.total_value
         }
     } else if (orderConfig.serviceType === 'Boxes') {
         console.log('[syncSingleOrderForDeliveryDay] Processing Boxes order for upcoming_order_id:', upcomingOrderId);
@@ -2874,30 +2873,49 @@ async function syncSingleOrderForDeliveryDay(
             boxSelectionData.box_type_id = orderConfig.boxTypeId;
         }
 
+        // Validate required fields before inserting box selection
+        if (!upcomingOrderId) {
+            throw new Error(`Cannot insert box selection: upcomingOrderId is missing`);
+        }
+
         const boxSelectionId = randomUUID();
-        const { error: boxSelectionError } = await supabase
+        const boxSelectionPayload = {
+            id: boxSelectionId,
+            upcoming_order_id: upcomingOrderId,
+            vendor_id: boxVendorId,
+            box_type_id: orderConfig.boxTypeId || null,
+            quantity,
+            items: boxItems
+        };
+
+        console.log(`[syncSingleOrderForDeliveryDay] Box selection insert payload:`, {
+            ...boxSelectionPayload,
+            items: boxItems // Log items separately for readability
+        });
+
+        const { data: insertedBoxSelection, error: boxSelectionError } = await supabase
             .from('upcoming_order_box_selections')
-            .insert([{
-                id: boxSelectionId,
-                upcoming_order_id: upcomingOrderId,
-                vendor_id: boxVendorId,
-                box_type_id: orderConfig.boxTypeId || null,
-                quantity,
-                items: boxItems
-            }]);
+            .insert([boxSelectionPayload])
+            .select()
+            .single();
         
         if (boxSelectionError) {
-            console.error(`[syncSingleOrderForDeliveryDay] Error inserting box selection:`, boxSelectionError);
-            console.error(`[syncSingleOrderForDeliveryDay] Insert data:`, {
-                upcoming_order_id: upcomingOrderId,
-                vendor_id: boxVendorId,
-                quantity: quantity,
-                items: boxItems
+            const errorMsg = `Failed to insert box selection: ${boxSelectionError.message}`;
+            console.error(`[syncSingleOrderForDeliveryDay] Error inserting box selection:`, {
+                error: boxSelectionError,
+                payload: boxSelectionPayload,
+                errorDetails: boxSelectionError
             });
-            throw new Error(`Failed to insert box selection: ${boxSelectionError.message}`);
+            throw new Error(errorMsg);
+        }
+
+        if (!insertedBoxSelection) {
+            const errorMsg = `Box selection insert returned no data`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`);
+            throw new Error(errorMsg);
         }
         
-        console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box selection for upcoming_order_id=${upcomingOrderId}, vendor_id=${boxVendorId}, items_count=${Object.keys(boxItems).length}, items=${JSON.stringify(boxItems)}`);
+        console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box selection ${insertedBoxSelection.id} for upcoming_order_id=${upcomingOrderId}, vendor_id=${boxVendorId}, items_count=${Object.keys(boxItems).length}`);
     }
 }
 
@@ -3535,11 +3553,12 @@ export async function getActiveOrderForClient(clientId: string) {
                 if (vendorSelections && vendorSelections.length > 0) {
                     orderConfig.vendorSelections = [];
                     for (const vs of vendorSelections) {
-                        // Both upcoming_order_items and order_items use 'vendor_selection_id' field
+                        // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
+                        const selectionIdField = orderData.is_upcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
                         const { data: items, error: itemsError } = await supabase
                             .from(itemsTable)
                             .select('*')
-                            .eq('vendor_selection_id', vs.id);
+                            .eq(selectionIdField, vs.id);
 
                         if (itemsError) {
                             console.error('Error fetching order items:', itemsError);
@@ -3614,11 +3633,12 @@ export async function getActiveOrderForClient(clientId: string) {
                         .maybeSingle();
 
                     if (vendorSelection) {
-                        // Fetch box items - both upcoming_order_items and order_items use 'vendor_selection_id' field
+                        // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
+                        const selectionIdField = orderData.is_upcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
                         const { data: boxItems } = await supabase
                             .from(itemsTable)
                             .select('*')
-                            .eq('vendor_selection_id', vendorSelection.id);
+                            .eq(selectionIdField, vendorSelection.id);
 
                         if (boxItems && boxItems.length > 0) {
                             const itemsMap: any = {};
@@ -4111,11 +4131,12 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
             .maybeSingle();
 
         if (vs) {
-            // Both upcoming_order_items and order_items use 'vendor_selection_id' field
+            // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
+            const selectionIdField = isUpcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
             const { data: items } = await supabase
                 .from(itemsTable)
                 .select('*')
-                .eq('vendor_selection_id', vs.id);
+                .eq(selectionIdField, vs.id);
 
             result.items = items || [];
         }
@@ -4178,11 +4199,12 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
                         .maybeSingle();
 
                     if (vendorSelection) {
-                        // Fetch box items - both upcoming_order_items and order_items use 'vendor_selection_id' field
+                        // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
+                        const selectionIdField = isUpcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
                         const { data: boxItems } = await supabase
                             .from(itemsTable)
                             .select('*')
-                            .eq('vendor_selection_id', vendorSelection.id);
+                            .eq(selectionIdField, vendorSelection.id);
 
                         if (boxItems && boxItems.length > 0) {
                             // Convert items array to object format: { itemId: quantity }

@@ -138,66 +138,136 @@ export async function POST(request: NextRequest) {
 
             // Try to determine delivery_day if it's null
             let deliveryDay = upOrder.delivery_day;
+            let inferenceAttempted = false;
+            let inferenceFailureReason = '';
+            
             if (!deliveryDay || deliveryDay.trim() === '') {
                 console.warn(`[Simulate Delivery] Order ${upOrder.id} has null/empty delivery_day. Attempting to infer from vendor data...`);
+                inferenceAttempted = true;
                 
                 // Try to infer delivery_day from vendor selections
                 if (upOrder.service_type === 'Food') {
                     const { data: vendorSelections } = await supabase
                         .from('upcoming_order_vendor_selections')
                         .select('vendor_id')
-                        .eq('upcoming_order_id', upOrder.id)
-                        .limit(1);
+                        .eq('upcoming_order_id', upOrder.id);
 
-                    if (vendorSelections && vendorSelections.length > 0) {
-                        const vendorId = vendorSelections[0].vendor_id;
-                        const vendor = vendors.find(v => v.id === vendorId);
-                        if (vendor && vendor.deliveryDays && vendor.deliveryDays.length > 0) {
+                    if (!vendorSelections || vendorSelections.length === 0) {
+                        inferenceFailureReason = 'No vendor selections found for Food order';
+                    } else {
+                        // Try all vendor selections to find one with deliveryDays
+                        let foundDeliveryDay = false;
+                        for (const vs of vendorSelections) {
+                            if (!vs.vendor_id) continue;
+                            
+                            const vendor = vendors.find(v => v.id === vs.vendor_id);
+                            if (!vendor) {
+                                inferenceFailureReason = `Vendor ${vs.vendor_id} not found in vendor list`;
+                                continue;
+                            }
+                            
+                            if (!vendor.deliveryDays || vendor.deliveryDays.length === 0) {
+                                inferenceFailureReason = `Vendor ${vs.vendor_id} (${vendor.name || 'Unknown'}) has no delivery_days configured`;
+                                continue;
+                            }
+                            
                             // Use the first delivery day from the vendor
                             deliveryDay = vendor.deliveryDays[0];
-                            console.log(`[Simulate Delivery] Inferred delivery_day "${deliveryDay}" from vendor ${vendorId} for order ${upOrder.id}`);
-                            debugLogs.push(`Order ${upOrder.id}: Inferred delivery_day "${deliveryDay}" from vendor ${vendorId}`);
+                            foundDeliveryDay = true;
+                            console.log(`[Simulate Delivery] Inferred delivery_day "${deliveryDay}" from vendor ${vs.vendor_id} (${vendor.name || 'Unknown'}) for order ${upOrder.id}`);
+                            debugLogs.push(`Order ${upOrder.id}: Inferred delivery_day "${deliveryDay}" from vendor ${vs.vendor_id}`);
                             
                             // Update the upcoming_order with the inferred delivery_day
                             await supabase
                                 .from('upcoming_orders')
                                 .update({ delivery_day: deliveryDay })
                                 .eq('id', upOrder.id);
+                            break;
+                        }
+                        
+                        if (!foundDeliveryDay && !inferenceFailureReason) {
+                            inferenceFailureReason = 'None of the vendors have delivery_days configured';
                         }
                     }
                 } else if (upOrder.service_type === 'Boxes') {
                     const { data: boxSelections } = await supabase
                         .from('upcoming_order_box_selections')
                         .select('vendor_id')
-                        .eq('upcoming_order_id', upOrder.id)
-                        .limit(1);
+                        .eq('upcoming_order_id', upOrder.id);
 
-                    if (boxSelections && boxSelections.length > 0 && boxSelections[0].vendor_id) {
-                        const vendorId = boxSelections[0].vendor_id;
-                        const vendor = vendors.find(v => v.id === vendorId);
-                        if (vendor && vendor.deliveryDays && vendor.deliveryDays.length > 0) {
+                    if (!boxSelections || boxSelections.length === 0) {
+                        inferenceFailureReason = 'No box selections found for Boxes order';
+                    } else {
+                        // Try all box selections to find one with deliveryDays
+                        let foundDeliveryDay = false;
+                        for (const bs of boxSelections) {
+                            if (!bs.vendor_id) continue;
+                            
+                            const vendor = vendors.find(v => v.id === bs.vendor_id);
+                            if (!vendor) {
+                                inferenceFailureReason = `Vendor ${bs.vendor_id} not found in vendor list`;
+                                continue;
+                            }
+                            
+                            if (!vendor.deliveryDays || vendor.deliveryDays.length === 0) {
+                                inferenceFailureReason = `Vendor ${bs.vendor_id} (${vendor.name || 'Unknown'}) has no delivery_days configured`;
+                                continue;
+                            }
+                            
                             // Use the first delivery day from the vendor
                             deliveryDay = vendor.deliveryDays[0];
-                            console.log(`[Simulate Delivery] Inferred delivery_day "${deliveryDay}" from vendor ${vendorId} for order ${upOrder.id}`);
-                            debugLogs.push(`Order ${upOrder.id}: Inferred delivery_day "${deliveryDay}" from vendor ${vendorId}`);
+                            foundDeliveryDay = true;
+                            console.log(`[Simulate Delivery] Inferred delivery_day "${deliveryDay}" from vendor ${bs.vendor_id} (${vendor.name || 'Unknown'}) for order ${upOrder.id}`);
+                            debugLogs.push(`Order ${upOrder.id}: Inferred delivery_day "${deliveryDay}" from vendor ${bs.vendor_id}`);
                             
                             // Update the upcoming_order with the inferred delivery_day
                             await supabase
                                 .from('upcoming_orders')
                                 .update({ delivery_day: deliveryDay })
                                 .eq('id', upOrder.id);
+                            break;
+                        }
+                        
+                        if (!foundDeliveryDay && !inferenceFailureReason) {
+                            inferenceFailureReason = 'None of the vendors have delivery_days configured';
                         }
                     }
+                } else if (upOrder.service_type === 'Equipment') {
+                    // Equipment orders might have vendor info in notes
+                    inferenceFailureReason = 'Equipment orders require manual delivery_day configuration';
+                } else {
+                    inferenceFailureReason = `Unknown service type: ${upOrder.service_type}`;
                 }
+            }
+
+            // Validate delivery_day before attempting to calculate date
+            if (!deliveryDay || deliveryDay.trim() === '') {
+                let errorMsg: string;
+                let skipReason: string;
+                
+                if (inferenceAttempted) {
+                    errorMsg = `Cannot calculate delivery date for order ${upOrder.id}: delivery_day is null. Inference failed - ${inferenceFailureReason || 'Unknown reason'}.`;
+                    skipReason = `Order ${upOrder.id}: Missing delivery_day. ${inferenceFailureReason || 'Could not infer from vendor data'}. Please set delivery_day manually in the upcoming order or ensure vendors have delivery_days configured.`;
+                } else {
+                    errorMsg = `Cannot calculate delivery date for order ${upOrder.id}: delivery_day is null or empty.`;
+                    skipReason = `Order ${upOrder.id}: Missing delivery_day. Please set delivery_day manually in the upcoming order.`;
+                }
+                
+                console.warn(`[Simulate Delivery] SKIPPED: ${errorMsg}`);
+                errors.push(errorMsg);
+                skippedReasons.push(skipReason);
+                skippedCount++;
+                continue;
             }
 
             const nextDeliveryDate = getNextOccurrence(deliveryDay || '', currentTime);
 
             if (!nextDeliveryDate) {
-                const errorMsg = `Cannot calculate delivery date for order ${upOrder.id}: delivery_day is "${deliveryDay || 'null'}" (could not infer from vendor data)`;
+                // This should rarely happen if delivery_day is valid, but handle it anyway
+                const errorMsg = `Cannot calculate delivery date for order ${upOrder.id}: delivery_day "${deliveryDay}" is not a valid day name (must be one of: Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday)`;
                 console.warn(`[Simulate Delivery] SKIPPED: ${errorMsg}`);
                 errors.push(errorMsg);
-                skippedReasons.push(`Order ${upOrder.id}: Invalid delivery_day "${deliveryDay || 'null'}" - please set delivery_day manually or ensure vendor has delivery_days configured`);
+                skippedReasons.push(`Order ${upOrder.id}: Invalid delivery_day "${deliveryDay}" - must be a valid day name`);
                 skippedCount++;
                 continue;
             }

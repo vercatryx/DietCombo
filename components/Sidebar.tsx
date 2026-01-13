@@ -390,39 +390,133 @@ function SimulationButton() {
 function TimeWidget() {
     const { currentTime, isFakeTime, setFakeTime } = useTime();
     const [isEditing, setIsEditing] = useState(false);
+    const [mounted, setMounted] = useState(false);
+    const [inputValue, setInputValue] = useState('');
+    const [error, setError] = useState<string | null>(null);
+
+    // Only render time after client-side hydration to avoid hydration mismatches
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     // Format for datetime-local: YYYY-MM-DDThh:mm
-    const formatForInput = (date: Date) => {
-        const offset = date.getTimezoneOffset() * 60000;
-        const localISOTime = (new Date(date.getTime() - offset)).toISOString().slice(0, 16);
-        return localISOTime;
-    };
+    const formatForInput = useCallback((date: Date): string => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return `${year}-${month}-${day}T${hours}:${minutes}`;
+    }, []);
 
-    const [inputValue, setInputValue] = useState(formatForInput(currentTime));
+    // Initialize input value when component mounts or when entering edit mode
+    useEffect(() => {
+        if (isEditing && mounted) {
+            setInputValue(formatForInput(currentTime));
+            setError(null);
+        }
+    }, [isEditing, mounted, currentTime, formatForInput]);
 
     // Sync input when not editing or when time changes naturally (if real time)
     useEffect(() => {
-        if (!isEditing) {
+        if (!isEditing && mounted) {
             setInputValue(formatForInput(currentTime));
         }
-    }, [currentTime, isEditing]);
+    }, [currentTime, isEditing, mounted, formatForInput]);
 
-    const handleSave = () => {
-        const date = new Date(inputValue);
-        if (!isNaN(date.getTime())) {
-            setFakeTime(date);
-            setIsEditing(false);
+    const handleSave = useCallback(() => {
+        if (!inputValue.trim()) {
+            setError('Please enter a valid date and time');
+            return;
         }
-    };
 
-    const handleClear = () => {
+        const date = new Date(inputValue);
+        if (isNaN(date.getTime())) {
+            setError('Invalid date format');
+            return;
+        }
+
+        setFakeTime(date);
+        setIsEditing(false);
+        setError(null);
+    }, [inputValue, setFakeTime]);
+
+    const handleClear = useCallback(() => {
         setFakeTime(null);
         setIsEditing(false);
-    };
+        setError(null);
+    }, [setFakeTime]);
 
-    if (isEditing) {
+    const handleCancel = useCallback(() => {
+        setIsEditing(false);
+        setError(null);
+        // Reset input to current time
+        if (mounted) {
+            setInputValue(formatForInput(currentTime));
+        }
+    }, [mounted, currentTime, formatForInput]);
+
+    const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleSave();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            handleCancel();
+        }
+    }, [handleSave, handleCancel]);
+
+    // Display mode
+    if (!isEditing) {
         return (
-            <div style={{
+            <div
+                onClick={() => setIsEditing(true)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setIsEditing(true);
+                    }
+                }}
+                style={{
+                    backgroundColor: isFakeTime ? 'rgba(220, 38, 38, 0.1)' : 'var(--bg-surface)',
+                    border: isFakeTime ? '1px solid var(--color-danger)' : '1px solid var(--border-color)',
+                    borderRadius: '0.5rem',
+                    padding: '0.75rem',
+                    fontSize: '0.85rem',
+                    color: isFakeTime ? 'var(--color-danger)' : 'var(--text-secondary)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.25rem',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    position: 'relative'
+                }}
+                title="Click to override system time"
+                aria-label={`${isFakeTime ? 'Fake time active' : 'System time'}: ${mounted ? currentTime.toLocaleString() : 'Loading...'}`}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 600 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Clock size={14} aria-hidden="true" />
+                        <span>{isFakeTime ? 'Fake Time Active' : 'System Time'}</span>
+                    </div>
+                    <Edit2 size={12} style={{ opacity: 0.5 }} aria-hidden="true" />
+                </div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 500, color: isFakeTime ? 'var(--color-danger)' : 'var(--text-primary)' }}>
+                    {mounted ? currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}
+                </div>
+                <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                    {mounted ? currentTime.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : '---'}
+                </div>
+            </div>
+        );
+    }
+
+    // Edit mode
+    return (
+        <div
+            style={{
                 backgroundColor: 'var(--bg-panel)',
                 border: '1px solid var(--color-primary)',
                 borderRadius: '0.5rem',
@@ -432,100 +526,119 @@ function TimeWidget() {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '0.5rem'
-            }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>Set System Time</span>
-                    <button onClick={() => setIsEditing(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                        <X size={14} />
-                    </button>
-                </div>
+            }}
+            role="dialog"
+            aria-labelledby="time-widget-title"
+        >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <span id="time-widget-title" style={{ fontWeight: 600, color: 'var(--color-primary)' }}>
+                    Set System Time
+                </span>
+                <button
+                    onClick={handleCancel}
+                    aria-label="Cancel editing"
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                    }}
+                >
+                    <X size={14} aria-hidden="true" />
+                </button>
+            </div>
 
+            <div>
+                <label htmlFor="time-input" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.75rem', opacity: 0.8 }}>
+                    Date & Time
+                </label>
                 <input
+                    id="time-input"
                     type="datetime-local"
                     value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
+                    onChange={(e) => {
+                        setInputValue(e.target.value);
+                        setError(null);
+                    }}
+                    onKeyDown={handleKeyDown}
+                    autoFocus
+                    aria-describedby={error ? 'time-error' : undefined}
+                    aria-invalid={error ? 'true' : 'false'}
                     style={{
                         background: 'var(--bg-panel)',
-                        border: '1px solid var(--border-color)',
+                        border: error ? '1px solid var(--color-danger)' : '1px solid var(--border-color)',
                         color: 'var(--text-primary)',
                         borderRadius: '0.25rem',
-                        padding: '0.25rem',
+                        padding: '0.5rem',
                         fontSize: '0.8rem',
-                        width: '100%'
+                        width: '100%',
+                        boxSizing: 'border-box'
                     }}
                 />
+                {error && (
+                    <div id="time-error" role="alert" style={{ color: 'var(--color-danger)', fontSize: '0.7rem', marginTop: '0.25rem' }}>
+                        {error}
+                    </div>
+                )}
+            </div>
 
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '4px' }}>
-                    <button
-                        onClick={handleSave}
-                        style={{
-                            flex: 1,
-                            backgroundColor: 'var(--color-primary)',
-                            color: 'black',
-                            border: 'none',
-                            borderRadius: '0.25rem',
-                            padding: '0.25rem',
-                            fontSize: '0.75rem',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '4px'
-                        }}
-                    >
-                        <Check size={12} /> Set
-                    </button>
-                    <button
-                        onClick={handleClear}
-                        style={{
-                            flex: 1,
-                            backgroundColor: 'var(--color-danger)',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '0.25rem',
-                            padding: '0.25rem',
-                            fontSize: '0.75rem',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        Reset
-                    </button>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div
-            onClick={() => setIsEditing(true)}
-            style={{
-                backgroundColor: isFakeTime ? 'rgba(220, 38, 38, 0.1)' : 'var(--bg-surface)',
-                border: isFakeTime ? '1px solid var(--color-danger)' : '1px solid var(--border-color)',
-                borderRadius: '0.5rem',
-                padding: '0.75rem',
-                fontSize: '0.85rem',
-                color: isFakeTime ? 'var(--color-danger)' : 'var(--text-secondary)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.25rem',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-                position: 'relative'
-            }}
-            title="Click to override system time"
-        >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 600 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Clock size={14} />
-                    <span>{isFakeTime ? 'Fake Time Active' : 'System Time'}</span>
-                </div>
-                <Edit2 size={12} style={{ opacity: 0.5 }} />
-            </div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 500, color: isFakeTime ? 'var(--color-danger)' : 'var(--text-primary)' }}>
-                {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </div>
-            <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
-                {currentTime.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '4px' }}>
+                <button
+                    onClick={handleSave}
+                    aria-label="Save time"
+                    style={{
+                        flex: 1,
+                        backgroundColor: 'var(--color-primary)',
+                        color: 'black',
+                        border: 'none',
+                        borderRadius: '0.25rem',
+                        padding: '0.5rem',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px',
+                        fontWeight: 500,
+                        transition: 'opacity 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.opacity = '0.9';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.opacity = '1';
+                    }}
+                >
+                    <Check size={12} aria-hidden="true" /> Set
+                </button>
+                <button
+                    onClick={handleClear}
+                    aria-label="Reset to real time"
+                    style={{
+                        flex: 1,
+                        backgroundColor: 'var(--color-danger)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.25rem',
+                        padding: '0.5rem',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                        transition: 'opacity 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.opacity = '0.9';
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.opacity = '1';
+                    }}
+                >
+                    Reset
+                </button>
             </div>
         </div>
     );

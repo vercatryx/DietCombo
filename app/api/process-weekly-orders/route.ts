@@ -189,10 +189,11 @@ async function precheckAndTransferUpcomingOrders() {
                                     if (vsError || !newVs) continue;
 
                                     // Copy items
+                                    // For upcoming_order_items, use upcoming_vendor_selection_id (not vendor_selection_id)
                                     const { data: items } = await supabase
                                         .from('upcoming_order_items')
                                         .select('*')
-                                        .eq('vendor_selection_id', vs.id);
+                                        .eq('upcoming_vendor_selection_id', vs.id);
 
                                     if (items) {
                                         for (const item of items) {
@@ -693,10 +694,11 @@ export async function GET(request: NextRequest) {
                                         vendorSelectionsCopied++;
 
                                         // Copy ALL items for this vendor selection from upcoming_order_items to order_items
+                                        // For upcoming_order_items, use upcoming_vendor_selection_id (not vendor_selection_id)
                                         const { data: items, error: itemsFetchError } = await supabase
                                             .from('upcoming_order_items')
                                             .select('*')
-                                            .eq('vendor_selection_id', vs.id);
+                                            .eq('upcoming_vendor_selection_id', vs.id);
 
                                         if (itemsFetchError) {
                                             copyErrors.push(`Failed to fetch items for vendor selection ${vs.id}: ${itemsFetchError.message}`);
