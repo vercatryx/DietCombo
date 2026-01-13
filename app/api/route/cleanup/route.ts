@@ -12,8 +12,10 @@ export async function POST(req: Request) {
     try {
         // Try to get day from body first, then fall back to query string
         let day = "all";
+        let deliveryDate: string | null = null;
         const { searchParams } = new URL(req.url);
         const queryDay = searchParams.get("day");
+        const queryDeliveryDate = searchParams.get("delivery_date");
         
         try {
             const body = await req.json().catch(() => null);
@@ -22,10 +24,18 @@ export async function POST(req: Request) {
             } else if (queryDay) {
                 day = queryDay.toLowerCase();
             }
+            if (body?.delivery_date) {
+                deliveryDate = String(body.delivery_date);
+            } else if (queryDeliveryDate) {
+                deliveryDate = queryDeliveryDate;
+            }
         } catch {
             // If body parsing fails, use query string
             if (queryDay) {
                 day = queryDay.toLowerCase();
+            }
+            if (queryDeliveryDate) {
+                deliveryDate = queryDeliveryDate;
             }
         }
 
@@ -35,19 +45,21 @@ export async function POST(req: Request) {
             .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
             .order('id', { ascending: true });
 
-        // Check which clients have stops for THIS day
-        let stopsQuery = supabase
+        // Check which clients have stops for delivery dates
+        // We need to check by delivery_date, not just day
+        const { data: existingStops } = await supabase
             .from('stops')
-            .select('client_id');
-        if (day !== "all") {
-            stopsQuery = stopsQuery.eq('day', day);
-        }
-        const { data: stopsForDay } = await stopsQuery;
+            .select('client_id, delivery_date, day');
         
-        const clientsWithStops = new Set<string>();
-        for (const s of (stopsForDay || [])) {
-            if (s.client_id) {
-                clientsWithStops.add(String(s.client_id));
+        // Build map of client_id -> Set of delivery dates they already have stops for
+        const clientStopsByDate = new Map<string, Set<string>>();
+        for (const s of (existingStops || [])) {
+            if (s.client_id && s.delivery_date) {
+                const clientId = String(s.client_id);
+                if (!clientStopsByDate.has(clientId)) {
+                    clientStopsByDate.set(clientId, new Set());
+                }
+                clientStopsByDate.get(clientId)!.add(s.delivery_date);
             }
         }
 
@@ -55,23 +67,27 @@ export async function POST(req: Request) {
         // Active order statuses: 'pending', 'scheduled', 'confirmed'
         const activeOrderStatuses = ["pending", "scheduled", "confirmed"];
         
-        // Get orders with scheduled_delivery_date and extract day of week
-        // Also check delivery_day field if present
+        // Get orders with scheduled_delivery_date
         const { data: activeOrders } = await supabase
             .from('orders')
-            .select('client_id, scheduled_delivery_date, delivery_day, status')
+            .select('id, client_id, scheduled_delivery_date, delivery_day, status, case_id')
             .in('status', activeOrderStatuses)
-            .or('scheduled_delivery_date.not.is.null,delivery_day.not.is.null');
+            .not('scheduled_delivery_date', 'is', null);
 
-        // Get upcoming_orders with delivery_day
+        // Get upcoming_orders with delivery_day (we'll calculate delivery_date from this)
         const { data: upcomingOrders } = await supabase
             .from('upcoming_orders')
-            .select('client_id, delivery_day, status')
+            .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
             .eq('status', 'scheduled')
-            .not('delivery_day', 'is', null);
+            .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null');
 
-        // Build map of client_id -> set of delivery days they have orders for
-        const clientDeliveryDays = new Map<string, Set<string>>();
+        // Import getNextOccurrence for calculating delivery dates from delivery_day
+        const { getNextOccurrence } = await import('@/lib/order-dates');
+        const currentTime = new Date();
+
+        // Build map of client_id -> Map of delivery_date -> order info
+        // This allows multiple stops per client for different delivery dates
+        const clientDeliveryDates = new Map<string, Map<string, { deliveryDate: string; dayOfWeek: string; orderId: string | null; caseId: string | null }>>();
         
         // Helper to convert day name to lowercase
         const normalizeDay = (dayName: string | null): string | null => {
@@ -91,35 +107,59 @@ export async function POST(req: Request) {
             }
         };
 
-        // Process active orders
-        for (const order of activeOrders) {
-            const clientId = String(order.client_id);
-            if (!clientDeliveryDays.has(clientId)) {
-                clientDeliveryDays.set(clientId, new Set());
-            }
-            const daysSet = clientDeliveryDays.get(clientId)!;
+        // Process active orders - use scheduled_delivery_date directly
+        for (const order of activeOrders || []) {
+            if (!order.scheduled_delivery_date) continue;
             
-            // Use delivery_day if available, otherwise extract from scheduled_delivery_date
-            if (order.delivery_day) {
-                const normalizedDay = normalizeDay(order.delivery_day);
-                if (normalizedDay) daysSet.add(normalizedDay);
-            } else if (order.scheduled_delivery_date) {
-                const dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
-                if (dayOfWeek) daysSet.add(dayOfWeek);
+            const clientId = String(order.client_id);
+            const deliveryDateStr = order.scheduled_delivery_date.split('T')[0]; // Get date part only
+            const dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
+            
+            if (!dayOfWeek) continue;
+            
+            if (!clientDeliveryDates.has(clientId)) {
+                clientDeliveryDates.set(clientId, new Map());
+            }
+            const datesMap = clientDeliveryDates.get(clientId)!;
+            
+            // Store delivery date info with order_id and case_id (allows multiple orders on same date, prefer first one)
+            if (!datesMap.has(deliveryDateStr)) {
+                datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: order.id, caseId: order.case_id || null });
             }
         }
 
-        // Process upcoming orders
-        for (const order of upcomingOrders) {
+        // Process upcoming orders - calculate delivery_date from delivery_day or use scheduled_delivery_date
+        // Note: upcoming_orders don't have order_id in orders table yet, so we'll set order_id to null
+        // The order will be created later and we can update the stop then
+        for (const order of upcomingOrders || []) {
             const clientId = String(order.client_id);
-            if (!clientDeliveryDays.has(clientId)) {
-                clientDeliveryDays.set(clientId, new Set());
-            }
-            const daysSet = clientDeliveryDays.get(clientId)!;
+            let deliveryDateStr: string | null = null;
+            let dayOfWeek: string | null = null;
             
-            if (order.delivery_day) {
-                const normalizedDay = normalizeDay(order.delivery_day);
-                if (normalizedDay) daysSet.add(normalizedDay);
+            if (order.scheduled_delivery_date) {
+                // Use scheduled_delivery_date if available
+                deliveryDateStr = order.scheduled_delivery_date.split('T')[0];
+                dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
+            } else if (order.delivery_day) {
+                // Calculate next occurrence of delivery_day
+                const nextDate = getNextOccurrence(order.delivery_day, currentTime);
+                if (nextDate) {
+                    deliveryDateStr = nextDate.toISOString().split('T')[0];
+                    dayOfWeek = getDayOfWeek(deliveryDateStr);
+                }
+            }
+            
+            if (!deliveryDateStr || !dayOfWeek) continue;
+            
+            if (!clientDeliveryDates.has(clientId)) {
+                clientDeliveryDates.set(clientId, new Map());
+            }
+            const datesMap = clientDeliveryDates.get(clientId)!;
+            
+            // Store delivery date info (upcoming orders don't have order_id in orders table yet, set to null)
+            // Note: order_id FK constraint only allows references to orders table, not upcoming_orders
+            if (!datesMap.has(deliveryDateStr)) {
+                datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: null, caseId: order.case_id || null });
             }
         }
 
@@ -130,21 +170,32 @@ export async function POST(req: Request) {
         };
 
         const hasOrderForDay = (clientId: string, dayValue: string): boolean => {
+            const datesMap = clientDeliveryDates.get(String(clientId));
+            if (!datesMap || datesMap.size === 0) return false;
+            
             if (dayValue === "all") {
                 // For "all" day, check if client has any orders
-                const daysSet = clientDeliveryDays.get(String(clientId));
-                return daysSet ? daysSet.size > 0 : false;
+                return true;
             }
-            const daysSet = clientDeliveryDays.get(String(clientId));
-            if (!daysSet || daysSet.size === 0) return false;
-            return daysSet.has(dayValue.toLowerCase());
+            
+            // Check if any delivery date falls on the requested day
+            const targetDay = dayValue.toLowerCase();
+            for (const dateInfo of datesMap.values()) {
+                if (dateInfo.dayOfWeek === targetDay) {
+                    return true;
+                }
+            }
+            return false;
         };
 
         // Build list of stops to create for clients who should have them
+        // Each stop is unique per client + delivery_date combination
         const stopsToCreate: Array<{
             id: string;
             day: string;
+            delivery_date: string;
             client_id: string;
+            order_id: string | null;
             name: string;
             address: string;
             apt: string | null;
@@ -156,41 +207,62 @@ export async function POST(req: Request) {
             lng: number | null;
         }> = [];
 
-        for (const client of allClients) {
+        for (const client of allClients || []) {
             const clientId = String(client.id);
             
-            // Skip if client already has a stop for this day
-            if (clientsWithStops.has(clientId)) {
-                continue;
-            }
-
-            // Check if client should have a stop
+            // Check if client should have stops
             if (client.paused) {
                 continue; // Paused clients don't get stops
             }
             if (!isDeliverable(client)) {
                 continue; // Delivery disabled clients don't get stops
             }
-            if (!hasOrderForDay(clientId, day)) {
-                continue; // Client has no active order for this day
+            
+            // Get delivery dates for this client
+            const datesMap = clientDeliveryDates.get(clientId);
+            if (!datesMap || datesMap.size === 0) {
+                continue; // Client has no active orders
             }
-
-            // Client should have a stop - create it
-            const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
-            stopsToCreate.push({
-                id: uuidv4(),
-                day: day,
-                client_id: clientId,
-                name: name || "(Unnamed)",
-                address: s(client.address),
-                apt: client.apt ? s(client.apt) : null,
-                city: s(client.city),
-                state: s(client.state),
-                zip: s(client.zip),
-                phone: client.phone_number ? s(client.phone_number) : null,
-                lat: n(client.lat),
-                lng: n(client.lng),
-            });
+            
+            // Get existing stops for this client
+            const existingStopDates = clientStopsByDate.get(clientId) || new Set<string>();
+            
+            // Create a stop for each unique delivery date
+            for (const [deliveryDateStr, dateInfo] of datesMap.entries()) {
+                // Skip if stop already exists for this delivery date
+                if (existingStopDates.has(deliveryDateStr)) {
+                    continue;
+                }
+                
+                // If filtering by specific day, only create stops for that day
+                if (day !== "all" && dateInfo.dayOfWeek !== day.toLowerCase()) {
+                    continue;
+                }
+                
+                // If filtering by specific delivery_date, only create stops for that date
+                if (deliveryDate && deliveryDateStr !== deliveryDate) {
+                    continue;
+                }
+                
+                // Client should have a stop for this delivery date - create it
+                const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
+                stopsToCreate.push({
+                    id: uuidv4(),
+                    day: dateInfo.dayOfWeek, // Keep day for backward compatibility
+                    delivery_date: deliveryDateStr,
+                    client_id: clientId,
+                    order_id: dateInfo.orderId,
+                    name: name || "(Unnamed)",
+                    address: s(client.address),
+                    apt: client.apt ? s(client.apt) : null,
+                    city: s(client.city),
+                    state: s(client.state),
+                    zip: s(client.zip),
+                    phone: client.phone_number ? s(client.phone_number) : null,
+                    lat: n(client.lat),
+                    lng: n(client.lng),
+                });
+            }
         }
 
         // Create missing stops
@@ -205,7 +277,9 @@ export async function POST(req: Request) {
                             .upsert({
                                 id: stopData.id,
                                 day: stopData.day,
+                                delivery_date: stopData.delivery_date,
                                 client_id: stopData.client_id,
+                                order_id: stopData.order_id,
                                 name: stopData.name,
                                 address: stopData.address,
                                 apt: stopData.apt,
@@ -217,10 +291,6 @@ export async function POST(req: Request) {
                                 lng: stopData.lng,
                             }, { onConflict: 'id' });
                         if (insertError) throw insertError;
-                            stopData.name,
-                            stopData.address,
-                            stopData.apt,
-                            stopData.city,
                         stopsCreated++;
                     } catch (createError: any) {
                         // Skip if stop already exists (duplicate key)

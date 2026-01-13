@@ -189,6 +189,15 @@ export default function DriversDialog({
                                       }) {
     const [driverCount, setDriverCount] = React.useState(Number(initialDriverCount || 6));
     const [selectedDay] = React.useState(initialSelectedDay || "all");
+    // Default to today's date in YYYY-MM-DD format
+    const getTodayDate = () => {
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    const [selectedDeliveryDate, setSelectedDeliveryDate] = React.useState(getTodayDate());
 
     const [routes, setRoutes] = React.useState([]);
     const [unrouted, setUnrouted] = React.useState([]);
@@ -215,7 +224,11 @@ export default function DriversDialog({
     const loadRoutes = React.useCallback(async () => {
         setBusy(true);
         try {
-            const res = await fetch(`/api/route/routes?day=${selectedDay}`, { cache: "no-store" });
+            let url = `/api/route/routes?day=${selectedDay}`;
+            if (selectedDeliveryDate) {
+                url += `&delivery_date=${selectedDeliveryDate}`;
+            }
+            const res = await fetch(url, { cache: "no-store" });
             const data = await res.json();
             setRoutes(data.routes || []);
             setUnrouted(data.unrouted || []);
@@ -248,19 +261,23 @@ export default function DriversDialog({
         } finally {
             setBusy(false);
         }
-    }, [selectedDay]);
+    }, [selectedDay, selectedDeliveryDate]);
 
     // NEW: fetch last 10 runs
     const fetchRuns = React.useCallback(async () => {
         try {
-            const res = await fetch(`/api/route/runs?day=${selectedDay}`, { cache: "no-store" });
+            let url = `/api/route/runs?day=${selectedDay}`;
+            if (selectedDeliveryDate) {
+                url += `&delivery_date=${selectedDeliveryDate}`;
+            }
+            const res = await fetch(url, { cache: "no-store" });
             const data = await res.json();
             setRuns(Array.isArray(data.runs) ? data.runs : []);
         } catch (e) {
             console.error("Failed to load runs:", e);
             setRuns([]);
         }
-    }, [selectedDay]);
+    }, [selectedDay, selectedDeliveryDate]);
 
     React.useEffect(() => {
         if (!open) return;
@@ -273,7 +290,11 @@ export default function DriversDialog({
             setBusy(true);
             try {
                 // Load initial data
-                const res1 = await fetch(`/api/route/routes?day=${selectedDay}`, { cache: "no-store" });
+                let url1 = `/api/route/routes?day=${selectedDay}`;
+                if (selectedDeliveryDate) {
+                    url1 += `&delivery_date=${selectedDeliveryDate}`;
+                }
+                const res1 = await fetch(url1, { cache: "no-store" });
                 const data1 = await res1.json();
                 setRoutes(data1.routes || []);
                 setUnrouted(data1.unrouted || []);
@@ -307,7 +328,11 @@ export default function DriversDialog({
 
                 // Auto-cleanup after initial load (for selected day and "all" for drivers)
                 // This ensures all active users (not paused, delivery=true) have stops
-                const res3 = await fetch(`/api/route/cleanup?day=${selectedDay}`, {
+                let cleanupUrl = `/api/route/cleanup?day=${selectedDay}`;
+                if (selectedDeliveryDate) {
+                    cleanupUrl += `&delivery_date=${selectedDeliveryDate}`;
+                }
+                const res3 = await fetch(cleanupUrl, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                 });
@@ -343,12 +368,20 @@ export default function DriversDialog({
 
                 if (res3.ok) {
                     // Reload after cleanup
-                    const res4 = await fetch(`/api/route/routes?day=${selectedDay}`, { cache: "no-store" });
+                    let url4 = `/api/route/routes?day=${selectedDay}`;
+                    if (selectedDeliveryDate) {
+                        url4 += `&delivery_date=${selectedDeliveryDate}`;
+                    }
+                    const res4 = await fetch(url4, { cache: "no-store" });
                     const data4 = await res4.json();
                     setRoutes(data4.routes || []);
                     setUnrouted(data4.unrouted || []);
 
-                    const res5 = await fetch(`/api/route/runs?day=${selectedDay}`, { cache: "no-store" });
+                    let url5 = `/api/route/runs?day=${selectedDay}`;
+                    if (selectedDeliveryDate) {
+                        url5 += `&delivery_date=${selectedDeliveryDate}`;
+                    }
+                    const res5 = await fetch(url5, { cache: "no-store" });
                     const data5 = await res5.json();
                     setRuns(Array.isArray(data5.runs) ? data5.runs : []);
                 }
@@ -359,7 +392,7 @@ export default function DriversDialog({
                 setBusy(false);
             }
         })();
-    }, [open, users, selectedDay]);
+    }, [open, users, selectedDay, selectedDeliveryDate]);
 
     async function handleManualGeocoded(updates) {
         try {
@@ -479,7 +512,8 @@ export default function DriversDialog({
                     day: selectedDay,
                     toDriverId: toId,
                     stopId: String(stop.id),
-                    userId: stop.userId ? String(stop.userId) : undefined
+                    userId: stop.userId ? String(stop.userId) : undefined,
+                    delivery_date: selectedDeliveryDate || undefined
                 }),
             });
             if (!res.ok) throw new Error(await res.text());
@@ -556,7 +590,10 @@ export default function DriversDialog({
             const res = await fetch("/api/route/cleanup", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ day: selectedDay }),
+                body: JSON.stringify({ 
+                    day: selectedDay,
+                    delivery_date: selectedDeliveryDate || undefined
+                }),
             });
             if (!res.ok) throw new Error(await res.text());
             await loadRoutes();
@@ -592,7 +629,11 @@ export default function DriversDialog({
             const res = await fetch("/api/route/generate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ day: selectedDay, driverCount: count }),
+                body: JSON.stringify({ 
+                    day: selectedDay, 
+                    driverCount: count,
+                    delivery_date: selectedDeliveryDate || undefined
+                }),
             });
             if (!res.ok) throw new Error(await res.text());
 
@@ -604,7 +645,11 @@ export default function DriversDialog({
 
             // Select newest run as active
             try {
-                const r = await fetch(`/api/route/runs?day=${selectedDay}`, { cache: "no-store" });
+                let runUrl = `/api/route/runs?day=${selectedDay}`;
+                if (selectedDeliveryDate) {
+                    runUrl += `&delivery_date=${selectedDeliveryDate}`;
+                }
+                const r = await fetch(runUrl, { cache: "no-store" });
                 const d = await r.json();
                 if (Array.isArray(d.runs) && d.runs.length > 0) {
                     setSelectedRunId(String(d.runs[0].id));
@@ -905,9 +950,26 @@ export default function DriversDialog({
                             gap: 1,
                         }}
                     >
-                        {/* LEFT: Title + history dropdown */}
+                        {/* LEFT: Title + history dropdown + date filter */}
                         <Box sx={{ justifySelf: "start", fontWeight: 600, display: "flex", alignItems: "center", gap: 1 }}>
                             <span>Routes Map</span>
+
+                            {/* Delivery Date filter */}
+                            <input
+                                type="date"
+                                value={selectedDeliveryDate}
+                                onChange={(e) => {
+                                    setSelectedDeliveryDate(e.target.value);
+                                }}
+                                style={{
+                                    padding: "6px 12px",
+                                    border: "1px solid #ccc",
+                                    borderRadius: "4px",
+                                    fontSize: "14px",
+                                    fontFamily: "inherit"
+                                }}
+                                disabled={busy}
+                            />
 
                             {/* Last 10 Runs dropdown */}
                             <FormControl size="small" sx={{ minWidth: 220 }}>
