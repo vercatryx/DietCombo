@@ -38,7 +38,7 @@ interface Props {
     currentUser?: { role: string; id: string } | null;
 }
 
-const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes'];
+const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes', 'Custom'];
 
 // Min/Max validation for approved meals per week
 const MIN_APPROVED_MEALS_PER_WEEK = 1;
@@ -302,8 +302,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // For simplicity, let's just fetch everything missing in background but show content immediately if we have the basics.
             // If we don't have vendors/statuses props, we probably should show loader or fetch fast.
 
-            if (!initialStatuses || !initialVendors) {
+            if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
                 // Should hopefully not happen in ClientList usage, but handle it
+                // Also check if vendors array is empty (not just undefined)
                 setLoading(true);
                 loadLookups().then(() => setLoading(false));
             } else {
@@ -317,6 +318,25 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             loadData().then(() => setLoading(false));
         }
     }, [clientId, initialData, isNewClient]);
+
+    // Sync vendors state when initialVendors prop changes
+    useEffect(() => {
+        if (initialVendors && initialVendors.length > 0) {
+            setVendors(initialVendors);
+            console.log(`[ClientProfile] Updated vendors from prop: ${initialVendors.length} vendors`);
+        } else if (vendors.length === 0 && initialVendors !== undefined) {
+            // If vendors are empty and we explicitly got an empty array from props, try to load
+            console.warn('[ClientProfile] Vendors prop is empty, attempting to load vendors');
+            getVendors().then(v => {
+                if (v && v.length > 0) {
+                    setVendors(v);
+                    console.log(`[ClientProfile] Loaded ${v.length} vendors after empty prop`);
+                } else {
+                    console.error('[ClientProfile] Failed to load vendors - getVendors returned empty');
+                }
+            });
+        }
+    }, [initialVendors]);
 
     useEffect(() => {
         // Load submissions for this client
@@ -573,6 +593,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             const defaultOrder: any = { serviceType: data.client.serviceType };
             if (data.client.serviceType === 'Food') {
                 defaultOrder.vendorSelections = [{ vendorId: '', items: {} }];
+            } else if (data.client.serviceType === 'Custom') {
+                defaultOrder.vendorId = '';
+                defaultOrder.customItems = [];
             }
             setOrderConfig(defaultOrder);
         }
@@ -621,6 +644,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Log Food vendors specifically
             const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
             console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
+            // Log vendors with empty serviceTypes for debugging
+            const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
+            if (vendorsWithEmptyServiceTypes.length > 0) {
+                console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
+            }
         } else {
             console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
         }
@@ -667,6 +695,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Log Food vendors specifically
             const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
             console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
+            // Log vendors with empty serviceTypes for debugging
+            const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
+            if (vendorsWithEmptyServiceTypes.length > 0) {
+                console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
+            }
         } else {
             console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
         }
@@ -771,6 +804,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const defaultOrder: any = { serviceType: c.serviceType };
                 if (c.serviceType === 'Food') {
                     defaultOrder.vendorSelections = [{ vendorId: '', items: {} }];
+                } else if (c.serviceType === 'Custom') {
+                    defaultOrder.vendorId = '';
+                    defaultOrder.customItems = [];
                 }
                 configToSet = defaultOrder;
             }
@@ -1198,6 +1234,40 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             return { isValid: true, messages: [] };
         }
 
+        if (formData.serviceType === 'Custom') {
+            const messages: string[] = [];
+
+            // Validate vendor is selected
+            if (!orderConfig.vendorId || orderConfig.vendorId.trim() === '') {
+                messages.push('Please select a vendor for the custom order.');
+            }
+
+            // Validate custom items exist
+            const customItems = orderConfig.customItems || [];
+            if (customItems.length === 0) {
+                messages.push('Please add at least one custom item to the order.');
+            } else {
+                // Validate each custom item has name, price, and quantity
+                customItems.forEach((item: any, index: number) => {
+                    if (!item.name || item.name.trim() === '') {
+                        messages.push(`Custom item ${index + 1}: Item name is required.`);
+                    }
+                    const price = parseFloat(item.price);
+                    if (isNaN(price) || price <= 0) {
+                        messages.push(`Custom item ${index + 1}: Valid price greater than 0 is required.`);
+                    }
+                    const quantity = parseInt(item.quantity);
+                    if (isNaN(quantity) || quantity < 1) {
+                        messages.push(`Custom item ${index + 1}: Valid quantity of at least 1 is required.`);
+                    }
+                });
+            }
+
+            if (messages.length > 0) {
+                return { isValid: false, messages };
+            }
+        }
+
         return { isValid: true, messages: [] };
     }
 
@@ -1273,6 +1343,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         // The user must enter a NEW case ID for the new service type.
         if (type === 'Food') {
             setOrderConfig({ serviceType: type, vendorSelections: [{ vendorId: '', items: {} }] });
+        } else if (type === 'Custom') {
+            setOrderConfig({ serviceType: type, vendorId: '', customItems: [] });
         } else {
             setOrderConfig({ serviceType: type, items: {} });
         }
@@ -2422,15 +2494,31 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                     onChange={e => updateVendorSelection(index, 'vendorId', e.target.value, null)}
                                                                                 >
                                                                                     <option value="">Select Vendor...</option>
-                                                                                    {vendors && vendors.length > 0 ? vendors.filter(v => {
-                                                                                        const hasFoodService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
-                                                                                        const isActive = v.isActive !== undefined ? v.isActive : true;
-                                                                                        return hasFoodService && isActive;
-                                                                                    }).map(v => (
-                                                                                        <option key={v.id} value={v.id} disabled={currentSelections.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
-                                                                                            {v.name}
-                                                                                        </option>
-                                                                                    )) : <option value="" disabled>Loading vendors...</option>}
+                                                                                    {vendors && vendors.length > 0 ? (() => {
+                                                                                        // Debug logging for vendor filtering
+                                                                                        console.log(`[ClientProfile] Food dropdown - Total vendors: ${vendors.length}`);
+                                                                                        const filteredVendors = vendors.filter(v => {
+                                                                                            // Check if vendor has Food service type
+                                                                                            const hasFoodService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
+                                                                                            const isActive = v.isActive !== undefined ? v.isActive : true;
+                                                                                            return hasFoodService && isActive;
+                                                                                        });
+                                                                                        console.log(`[ClientProfile] Food dropdown - Filtered vendors: ${filteredVendors.length}`, filteredVendors.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+                                                                                        
+                                                                                        // Fallback: if no vendors have Food service type, show all active vendors
+                                                                                        const vendorsToShow = filteredVendors.length > 0 
+                                                                                            ? filteredVendors 
+                                                                                            : vendors.filter(v => v.isActive !== undefined ? v.isActive : true);
+                                                                                        
+                                                                                        if (filteredVendors.length === 0 && vendors.length > 0) {
+                                                                                            console.warn('[ClientProfile] Food dropdown - No vendors with Food service type found. Showing all active vendors instead. All vendors:', vendors.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+                                                                                        }
+                                                                                        return vendorsToShow.map(v => (
+                                                                                            <option key={v.id} value={v.id} disabled={currentSelections.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
+                                                                                                {v.name}
+                                                                                            </option>
+                                                                                        ));
+                                                                                    })() : <option value="" disabled>Loading vendors...</option>}
                                                                                 </select>
                                                                                 <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => removeVendorBlock(index, null)} title="Remove Vendor">
                                                                                     <Trash2 size={16} />
@@ -2745,15 +2833,31 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                 onChange={e => updateVendorSelection(index, 'vendorId', e.target.value, null)}
                                                                             >
                                                                                 <option value="">Select Vendor...</option>
-                                                                                {vendors && vendors.length > 0 ? vendors.filter(v => {
-                                                                                    const hasFoodService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
-                                                                                    const isActive = v.isActive !== undefined ? v.isActive : true;
-                                                                                    return hasFoodService && isActive;
-                                                                                }).map(v => (
-                                                                                    <option key={v.id} value={v.id} disabled={currentSelections.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
-                                                                                        {v.name}
-                                                                                    </option>
-                                                                                )) : <option value="" disabled>Loading vendors...</option>}
+                                                                                {vendors && vendors.length > 0 ? (() => {
+                                                                                    // Debug logging for vendor filtering
+                                                                                    console.log(`[ClientProfile] Food dropdown (single form) - Total vendors: ${vendors.length}`);
+                                                                                    const filteredVendors = vendors.filter(v => {
+                                                                                        // Check if vendor has Food service type
+                                                                                        const hasFoodService = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
+                                                                                        const isActive = v.isActive !== undefined ? v.isActive : true;
+                                                                                        return hasFoodService && isActive;
+                                                                                    });
+                                                                                    console.log(`[ClientProfile] Food dropdown (single form) - Filtered vendors: ${filteredVendors.length}`, filteredVendors.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+                                                                                    
+                                                                                    // Fallback: if no vendors have Food service type, show all active vendors
+                                                                                    const vendorsToShow = filteredVendors.length > 0 
+                                                                                        ? filteredVendors 
+                                                                                        : vendors.filter(v => v.isActive !== undefined ? v.isActive : true);
+                                                                                    
+                                                                                    if (filteredVendors.length === 0 && vendors.length > 0) {
+                                                                                        console.warn('[ClientProfile] Food dropdown (single form) - No vendors with Food service type found. Showing all active vendors instead. All vendors:', vendors.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+                                                                                    }
+                                                                                    return vendorsToShow.map(v => (
+                                                                                        <option key={v.id} value={v.id} disabled={currentSelections.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
+                                                                                            {v.name}
+                                                                                        </option>
+                                                                                    ));
+                                                                                })() : <option value="" disabled>Loading vendors...</option>}
                                                                             </select>
                                                                             <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => removeVendorBlock(index, null)} title="Remove Vendor">
                                                                                 <Trash2 size={16} />
@@ -3337,6 +3441,151 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                 </div>
                                             );
                                         })()}
+
+                                        {formData.serviceType === 'Custom' && (
+                                            <div className="animate-fade-in">
+                                                <div className={styles.formGroup}>
+                                                    <label className="label">Vendor</label>
+                                                    <select
+                                                        className="input"
+                                                        value={orderConfig.vendorId || ''}
+                                                        onChange={e => {
+                                                            setOrderConfig({
+                                                                ...orderConfig,
+                                                                vendorId: e.target.value
+                                                            });
+                                                        }}
+                                                    >
+                                                        <option value="">Select Vendor...</option>
+                                                        {vendors && vendors.length > 0 ? vendors.filter(v => {
+                                                            // For Custom orders, show all active vendors (not filtered by service type)
+                                                            const isActive = v.isActive !== undefined ? v.isActive : true;
+                                                            return isActive;
+                                                        }).map(v => (
+                                                            <option key={v.id} value={v.id}>{v.name}</option>
+                                                        )) : <option value="" disabled>Loading vendors...</option>}
+                                                    </select>
+                                                    {vendors.filter(v => v.isActive !== undefined ? v.isActive : true).length === 0 && (
+                                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                                                            No active vendors found. Please create a vendor in the admin panel.
+                                                        </p>
+                                                    )}
+                                                </div>
+
+                                                {orderConfig.vendorId && (
+                                                    <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                                                            <h4 style={{ fontSize: '0.9rem', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                                <Package size={14} /> Custom Order Items
+                                                            </h4>
+                                                            <button
+                                                                className="btn btn-secondary"
+                                                                onClick={() => {
+                                                                    const customItems = orderConfig.customItems || [];
+                                                                    setOrderConfig({
+                                                                        ...orderConfig,
+                                                                        customItems: [...customItems, { name: '', price: 0, quantity: 1 }]
+                                                                    });
+                                                                }}
+                                                                style={{ fontSize: '0.8rem', padding: '0.375rem 0.75rem' }}
+                                                            >
+                                                                <Plus size={14} /> Add Item
+                                                            </button>
+                                                        </div>
+
+                                                        {(orderConfig.customItems || []).length === 0 ? (
+                                                            <div style={{
+                                                                padding: '1.5rem',
+                                                                backgroundColor: 'var(--bg-surface-active)',
+                                                                borderRadius: 'var(--radius-md)',
+                                                                border: '1px dashed var(--border-color)',
+                                                                color: 'var(--text-secondary)',
+                                                                textAlign: 'center'
+                                                            }}>
+                                                                <p style={{ margin: 0, fontSize: '0.9rem' }}>
+                                                                    No custom items added yet. Click "Add Item" to add custom order items.
+                                                                </p>
+                                                            </div>
+                                                        ) : (
+                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                                {(orderConfig.customItems || []).map((item: any, index: number) => (
+                                                                    <div
+                                                                        key={index}
+                                                                        style={{
+                                                                            padding: '0.75rem',
+                                                                            backgroundColor: 'var(--bg-surface-hover)',
+                                                                            borderRadius: 'var(--radius-sm)',
+                                                                            border: '1px solid var(--border-color)',
+                                                                            display: 'flex',
+                                                                            gap: '0.5rem',
+                                                                            alignItems: 'flex-start'
+                                                                        }}
+                                                                    >
+                                                                        <div style={{ flex: 1 }}>
+                                                                            <label className="label" style={{ fontSize: '0.8rem', marginBottom: '0.25rem' }}>Item Name</label>
+                                                                            <input
+                                                                                className="input"
+                                                                                value={item.name || ''}
+                                                                                onChange={e => {
+                                                                                    const customItems = [...(orderConfig.customItems || [])];
+                                                                                    customItems[index] = { ...customItems[index], name: e.target.value };
+                                                                                    setOrderConfig({ ...orderConfig, customItems });
+                                                                                }}
+                                                                                placeholder="Enter item name"
+                                                                                style={{ fontSize: '0.9rem' }}
+                                                                            />
+                                                                        </div>
+                                                                        <div style={{ width: '120px' }}>
+                                                                            <label className="label" style={{ fontSize: '0.8rem', marginBottom: '0.25rem' }}>Price</label>
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                className="input"
+                                                                                value={item.price || 0}
+                                                                                onChange={e => {
+                                                                                    const customItems = [...(orderConfig.customItems || [])];
+                                                                                    customItems[index] = { ...customItems[index], price: parseFloat(e.target.value) || 0 };
+                                                                                    setOrderConfig({ ...orderConfig, customItems });
+                                                                                }}
+                                                                                placeholder="0.00"
+                                                                                style={{ fontSize: '0.9rem' }}
+                                                                            />
+                                                                        </div>
+                                                                        <div style={{ width: '100px' }}>
+                                                                            <label className="label" style={{ fontSize: '0.8rem', marginBottom: '0.25rem' }}>Quantity</label>
+                                                                            <input
+                                                                                type="number"
+                                                                                min="1"
+                                                                                className="input"
+                                                                                value={item.quantity || 1}
+                                                                                onChange={e => {
+                                                                                    const customItems = [...(orderConfig.customItems || [])];
+                                                                                    customItems[index] = { ...customItems[index], quantity: parseInt(e.target.value) || 1 };
+                                                                                    setOrderConfig({ ...orderConfig, customItems });
+                                                                                }}
+                                                                                style={{ fontSize: '0.9rem' }}
+                                                                            />
+                                                                        </div>
+                                                                        <button
+                                                                            className={`${styles.iconBtn} ${styles.danger}`}
+                                                                            onClick={() => {
+                                                                                const customItems = [...(orderConfig.customItems || [])];
+                                                                                customItems.splice(index, 1);
+                                                                                setOrderConfig({ ...orderConfig, customItems });
+                                                                            }}
+                                                                            style={{ marginTop: '1.5rem' }}
+                                                                            title="Remove Item"
+                                                                        >
+                                                                            <Trash2 size={16} />
+                                                                        </button>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                         {/* Equipment Order Section - Always visible */}
                                         <div className={styles.divider} style={{ marginTop: '2rem', marginBottom: '1rem' }} />
@@ -4233,6 +4482,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 cleanedOrderConfig.boxQuantity = orderConfig.boxQuantity || 1; // Preserve quantity
                 cleanedOrderConfig.items = orderConfig.items || {}; // Preserve items
                 cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {}; // Preserve item prices
+            } else if (formData.serviceType === 'Custom') {
+                // For Custom: Preserve vendorId and customItems
+                if (orderConfig.vendorId !== undefined) {
+                    cleanedOrderConfig.vendorId = orderConfig.vendorId;
+                }
+                cleanedOrderConfig.caseId = orderConfig.caseId; // Preserve case ID (also set above)
+                // Preserve customItems array, filtering out items with empty names
+                cleanedOrderConfig.customItems = (orderConfig.customItems || [])
+                    .filter((item: any) => item.name && item.name.trim() !== '')
+                    .map((item: any) => ({
+                        name: item.name || '',
+                        price: parseFloat(item.price) || 0,
+                        quantity: parseInt(item.quantity) || 1
+                    }));
             }
 
             return {

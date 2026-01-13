@@ -1,7 +1,7 @@
 
 export type OrderStatus = 'pending' | 'confirmed' | 'completed' | 'waiting_for_proof' | 'billing_pending' | 'cancelled';
 
-export type ServiceType = 'Food' | 'Boxes' | 'Equipment';
+export type ServiceType = 'Food' | 'Meal' | 'Boxes' | 'Equipment' | 'Custom';
 
 export interface ClientProfile {
   id: string;

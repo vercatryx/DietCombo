@@ -142,6 +142,7 @@ async function precheckAndTransferUpcomingOrders() {
 
                         // Create order in orders table
                         const orderData: any = {
+                            id: randomUUID(),
                             client_id: upcomingOrder.client_id,
                             service_type: upcomingOrder.service_type,
                             case_id: upcomingOrder.case_id,
@@ -178,6 +179,7 @@ async function precheckAndTransferUpcomingOrders() {
                                     const { data: newVs, error: vsError } = await supabase
                                         .from('order_vendor_selections')
                                         .insert({
+                                            id: randomUUID(),
                                             order_id: newOrder.id,
                                             vendor_id: vs.vendor_id
                                         })
@@ -629,6 +631,7 @@ export async function GET(request: NextRequest) {
 
                         // Create order in orders table (copy, not transfer)
                         const orderData: any = {
+                            id: randomUUID(),
                             client_id: order.client_id,
                             service_type: order.service_type,
                             case_id: order.case_id,
@@ -675,6 +678,7 @@ export async function GET(request: NextRequest) {
                                         const { data: newVs, error: vsError } = await supabase
                                             .from('order_vendor_selections')
                                             .insert({
+                                                id: randomUUID(),
                                                 order_id: newOrder.id,
                                                 vendor_id: vs.vendor_id
                                             })
@@ -893,10 +897,31 @@ export async function GET(request: NextRequest) {
                             // Generate unique case_id
                             const uniqueCaseId = generateUniqueCaseId();
 
+                            // Validate and normalize service_type to match database constraint
+                            // Allowed values: 'Food', 'Meal', 'Boxes', 'Equipment', 'Custom'
+                            const validServiceTypes = ['Food', 'Meal', 'Boxes', 'Equipment', 'Custom'] as const;
+                            let serviceType = order.service_type;
+                            
+                            if (!serviceType || typeof serviceType !== 'string') {
+                                console.error('[process-weekly-orders] Invalid serviceType:', serviceType, 'Defaulting to Food');
+                                serviceType = 'Food';
+                            } else {
+                                // Normalize common variations
+                                const normalized = serviceType.trim();
+                                if (normalized === 'Meals') {
+                                    serviceType = 'Meal';
+                                } else if (!validServiceTypes.includes(normalized as any)) {
+                                    console.error('[process-weekly-orders] Invalid serviceType:', serviceType, 'Defaulting to Food');
+                                    serviceType = 'Food';
+                                } else {
+                                    serviceType = normalized;
+                                }
+                            }
+
                             // Create upcoming order
                             const upcomingOrderData: any = {
                                 client_id: order.client_id,
-                                service_type: order.service_type,
+                                service_type: serviceType,
                                 case_id: uniqueCaseId,
                                 status: 'scheduled',
                                 last_updated: (await getCurrentTime()).toISOString(),

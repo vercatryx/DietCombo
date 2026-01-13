@@ -4,6 +4,7 @@ import { getCurrentTime } from '@/lib/time';
 import { getMenuItems, getSettings, getVendors, getStatuses } from '@/lib/actions';
 // import { isDeliveryDateLocked, getLockedWeekDescription, getEarliestEffectiveDate } from '@/lib/weekly-lock';
 import { getNextDeliveryDateForDay } from '@/lib/order-dates';
+import { randomUUID } from 'crypto';
 
 /**
  * API Route: Simulate Delivery Cycle
@@ -135,13 +136,68 @@ export async function POST(request: NextRequest) {
             const { getNextOccurrence } = await import('@/lib/order-dates');
             const currentTime = await getCurrentTime();
 
-            const nextDeliveryDate = getNextOccurrence(upOrder.delivery_day || '', currentTime);
+            // Try to determine delivery_day if it's null
+            let deliveryDay = upOrder.delivery_day;
+            if (!deliveryDay || deliveryDay.trim() === '') {
+                console.warn(`[Simulate Delivery] Order ${upOrder.id} has null/empty delivery_day. Attempting to infer from vendor data...`);
+                
+                // Try to infer delivery_day from vendor selections
+                if (upOrder.service_type === 'Food') {
+                    const { data: vendorSelections } = await supabase
+                        .from('upcoming_order_vendor_selections')
+                        .select('vendor_id')
+                        .eq('upcoming_order_id', upOrder.id)
+                        .limit(1);
+
+                    if (vendorSelections && vendorSelections.length > 0) {
+                        const vendorId = vendorSelections[0].vendor_id;
+                        const vendor = vendors.find(v => v.id === vendorId);
+                        if (vendor && vendor.deliveryDays && vendor.deliveryDays.length > 0) {
+                            // Use the first delivery day from the vendor
+                            deliveryDay = vendor.deliveryDays[0];
+                            console.log(`[Simulate Delivery] Inferred delivery_day "${deliveryDay}" from vendor ${vendorId} for order ${upOrder.id}`);
+                            debugLogs.push(`Order ${upOrder.id}: Inferred delivery_day "${deliveryDay}" from vendor ${vendorId}`);
+                            
+                            // Update the upcoming_order with the inferred delivery_day
+                            await supabase
+                                .from('upcoming_orders')
+                                .update({ delivery_day: deliveryDay })
+                                .eq('id', upOrder.id);
+                        }
+                    }
+                } else if (upOrder.service_type === 'Boxes') {
+                    const { data: boxSelections } = await supabase
+                        .from('upcoming_order_box_selections')
+                        .select('vendor_id')
+                        .eq('upcoming_order_id', upOrder.id)
+                        .limit(1);
+
+                    if (boxSelections && boxSelections.length > 0 && boxSelections[0].vendor_id) {
+                        const vendorId = boxSelections[0].vendor_id;
+                        const vendor = vendors.find(v => v.id === vendorId);
+                        if (vendor && vendor.deliveryDays && vendor.deliveryDays.length > 0) {
+                            // Use the first delivery day from the vendor
+                            deliveryDay = vendor.deliveryDays[0];
+                            console.log(`[Simulate Delivery] Inferred delivery_day "${deliveryDay}" from vendor ${vendorId} for order ${upOrder.id}`);
+                            debugLogs.push(`Order ${upOrder.id}: Inferred delivery_day "${deliveryDay}" from vendor ${vendorId}`);
+                            
+                            // Update the upcoming_order with the inferred delivery_day
+                            await supabase
+                                .from('upcoming_orders')
+                                .update({ delivery_day: deliveryDay })
+                                .eq('id', upOrder.id);
+                        }
+                    }
+                }
+            }
+
+            const nextDeliveryDate = getNextOccurrence(deliveryDay || '', currentTime);
 
             if (!nextDeliveryDate) {
-                const errorMsg = `Cannot calculate delivery date for order ${upOrder.id}: delivery_day is "${upOrder.delivery_day || 'null'}"`;
+                const errorMsg = `Cannot calculate delivery date for order ${upOrder.id}: delivery_day is "${deliveryDay || 'null'}" (could not infer from vendor data)`;
                 console.warn(`[Simulate Delivery] SKIPPED: ${errorMsg}`);
                 errors.push(errorMsg);
-                skippedReasons.push(`Order ${upOrder.id}: Invalid delivery_day "${upOrder.delivery_day}"`);
+                skippedReasons.push(`Order ${upOrder.id}: Invalid delivery_day "${deliveryDay || 'null'}" - please set delivery_day manually or ensure vendor has delivery_days configured`);
                 skippedCount++;
                 continue;
             }
@@ -366,6 +422,7 @@ export async function POST(request: NextRequest) {
 
                     // Create Order for this vendor
                     const orderData: any = {
+                        id: randomUUID(),
                         client_id: upOrder.client_id,
                         service_type: upOrder.service_type,
                         case_id: upOrder.case_id || `CASE-${Date.now()}-${processedCount}-${vs.vendor_id.substring(0, 8)}`,
@@ -399,18 +456,48 @@ export async function POST(request: NextRequest) {
                     console.log(`[Simulate Delivery] SUCCESS: Created order ${newOrder.id} (Order #${nextOrderNumber}) for client ${upOrder.client_id}, vendor ${vs.vendor_id} with delivery date ${deliveryDateStr}`);
 
                     // Create vendor selection for this order
+                    const vendorSelectionId = randomUUID();
+                    
+                    // Validate UUID was generated and is a valid string
+                    if (!vendorSelectionId || typeof vendorSelectionId !== 'string' || vendorSelectionId.trim() === '') {
+                        const errorMsg = `[Simulate Delivery] Failed to generate UUID for vendor selection (order ${newOrder.id}, vendor ${vs.vendor_id}). Generated value: ${vendorSelectionId}`;
+                        console.error(errorMsg);
+                        debugLogs.push(errorMsg);
+                        errors.push(errorMsg);
+                        continue;
+                    }
+                    
+                    // Ensure UUID is trimmed and valid format (should be 36 chars with dashes)
+                    const trimmedId = vendorSelectionId.trim();
+                    if (trimmedId.length !== 36 || !trimmedId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+                        const errorMsg = `[Simulate Delivery] Invalid UUID format for vendor selection (order ${newOrder.id}, vendor ${vs.vendor_id}). Generated: ${trimmedId}`;
+                        console.error(errorMsg);
+                        debugLogs.push(errorMsg);
+                        errors.push(errorMsg);
+                        continue;
+                    }
+                    
+                    console.log(`[Simulate Delivery] Creating vendor selection with id: ${trimmedId} for order ${newOrder.id}, vendor ${vs.vendor_id}`);
+                    
+                    const insertData = {
+                        id: trimmedId,
+                        order_id: newOrder.id,
+                        vendor_id: vs.vendor_id
+                    };
+                    
+                    console.log(`[Simulate Delivery] Insert data:`, JSON.stringify(insertData));
+                    
                     const { data: newVs, error: vsError } = await supabase
                         .from('order_vendor_selections')
-                        .insert({
-                            order_id: newOrder.id,
-                            vendor_id: vs.vendor_id
-                        })
+                        .insert(insertData)
                         .select()
                         .single();
 
                     if (vsError || !newVs) {
-                        const errorMsg = `[Simulate Delivery] Error creating vendor selection: ${vsError?.message || 'Unknown error'}`;
+                        const errorMsg = `[Simulate Delivery] Error creating vendor selection (id: ${trimmedId}, order: ${newOrder.id}, vendor: ${vs.vendor_id}): ${vsError?.message || 'Unknown error'}`;
                         console.error(errorMsg);
+                        console.error(`[Simulate Delivery] Insert data was:`, insertData);
+                        console.error(`[Simulate Delivery] Full error object:`, vsError);
                         debugLogs.push(errorMsg);
                         errors.push(errorMsg);
                         continue;
@@ -531,6 +618,7 @@ export async function POST(request: NextRequest) {
 
                 // Create Order with calculated delivery date
                 const orderData: any = {
+                    id: randomUUID(),
                     client_id: upOrder.client_id,
                     service_type: upOrder.service_type,
                     case_id: upOrder.case_id || `CASE-${Date.now()}-${processedCount}`,

@@ -2467,9 +2467,31 @@ async function syncSingleOrderForDeliveryDay(
 
     // Upsert upcoming order for this delivery day
     const currentTime = await getCurrentTime();
+    
+    // Validate and normalize service_type to match database constraint
+    // Allowed values: 'Food', 'Meal', 'Boxes', 'Equipment', 'Custom'
+    const validServiceTypes = ['Food', 'Meal', 'Boxes', 'Equipment', 'Custom'] as const;
+    let serviceType = orderConfig.serviceType;
+    
+    if (!serviceType || typeof serviceType !== 'string') {
+        console.error('[syncSingleOrderForDeliveryDay] Invalid serviceType:', serviceType, 'Defaulting to Food');
+        serviceType = 'Food';
+    } else {
+        // Normalize common variations
+        const normalized = serviceType.trim();
+        if (normalized === 'Meals') {
+            serviceType = 'Meal';
+        } else if (!validServiceTypes.includes(normalized as any)) {
+            console.error('[syncSingleOrderForDeliveryDay] Invalid serviceType:', serviceType, 'Defaulting to Food');
+            serviceType = 'Food';
+        } else {
+            serviceType = normalized;
+        }
+    }
+    
     const upcomingOrderData: any = {
         client_id: clientId,
-        service_type: orderConfig.serviceType,
+        service_type: serviceType,
         case_id: orderConfig.caseId,
         status: 'scheduled',
         last_updated: orderConfig.lastUpdated || currentTime.toISOString(),
@@ -2488,12 +2510,14 @@ async function syncSingleOrderForDeliveryDay(
     }
 
     // Check if upcoming order exists for this delivery day
+    // IMPORTANT: Must filter by service_type to avoid conflicts between Food and Boxes orders
     let existing;
     if (deliveryDay) {
         const { data: existingData } = await supabase
             .from('upcoming_orders')
             .select('id')
             .eq('client_id', clientId)
+            .eq('service_type', serviceType)
             .eq('delivery_day', deliveryDay)
             .maybeSingle();
         existing = existingData;
@@ -2503,6 +2527,7 @@ async function syncSingleOrderForDeliveryDay(
             .from('upcoming_orders')
             .select('id')
             .eq('client_id', clientId)
+            .eq('service_type', serviceType)
             .is('delivery_day', null)
             .maybeSingle();
         existing = existingData;
@@ -2530,30 +2555,46 @@ async function syncSingleOrderForDeliveryDay(
             }
         }
         
-        try {
-            await supabase
-                .from('upcoming_orders')
-                .update(updatePayload)
-                .eq('id', existing.id);
-            upcomingOrderId = existing.id;
-        } catch (error: any) {
-            console.error('[syncSingleOrderForDeliveryDay] Error updating upcoming order:', error);
-            throw new Error(`Failed to update upcoming order: ${error.message}`);
+        const { error: updateError } = await supabase
+            .from('upcoming_orders')
+            .update(updatePayload)
+            .eq('id', existing.id);
+        
+        if (updateError) {
+            console.error('[syncSingleOrderForDeliveryDay] Error updating upcoming order:', updateError);
+            throw new Error(`Failed to update upcoming order: ${updateError.message}`);
         }
+        
+        upcomingOrderId = existing.id;
     } else {
         // Insert new
         const upcomingOrderId_new = randomUUID();
         const insertPayload = { ...upcomingOrderData, id: upcomingOrderId_new };
         
-        try {
-            await supabase
-                .from('upcoming_orders')
-                .insert([insertPayload]);
-            upcomingOrderId = upcomingOrderId_new;
-        } catch (error: any) {
-            console.error('[syncSingleOrderForDeliveryDay] Error creating upcoming order:', error);
-            throw new Error(`Failed to create upcoming order: ${error.message}`);
+        const { data: insertedData, error: insertError } = await supabase
+            .from('upcoming_orders')
+            .insert([insertPayload])
+            .select()
+            .single();
+        
+        if (insertError || !insertedData) {
+            console.error('[syncSingleOrderForDeliveryDay] Error creating upcoming order:', {
+                error: insertError,
+                insertPayload: {
+                    ...insertPayload,
+                    // Don't log sensitive data, but show structure
+                    client_id: insertPayload.client_id,
+                    service_type: insertPayload.service_type,
+                    case_id: insertPayload.case_id,
+                    status: insertPayload.status
+                },
+                originalServiceType: orderConfig.serviceType,
+                normalizedServiceType: serviceType
+            });
+            throw new Error(`Failed to create upcoming order: ${insertError?.message || 'Unknown error'}. Service type: ${serviceType} (original: ${orderConfig.serviceType})`);
         }
+        
+        upcomingOrderId = upcomingOrderId_new;
     }
 
     // Now sync related data (vendor selections, items, box selections)
@@ -2599,18 +2640,20 @@ async function syncSingleOrderForDeliveryDay(
 
             console.log(`[syncSingleOrderForDeliveryDay] Creating vendor selection for vendor ${selection.vendorId}`);
             const vsId = randomUUID();
-            let vendorSelection;
-            try {
-                await supabase
-                    .from('upcoming_order_vendor_selections')
-                    .insert([{ id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId }]);
-                vendorSelection = { id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId };
-                allVendorSelections.push(vendorSelection);
-                console.log(`[syncSingleOrderForDeliveryDay] Created vendor selection ${vendorSelection.id}`);
-            } catch (error) {
-                console.error(`[syncSingleOrderForDeliveryDay] Error creating vendor selection:`, error);
+            const { data: vsData, error: vsError } = await supabase
+                .from('upcoming_order_vendor_selections')
+                .insert([{ id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId }])
+                .select()
+                .single();
+            
+            if (vsError || !vsData) {
+                console.error(`[syncSingleOrderForDeliveryDay] Error creating vendor selection:`, vsError);
                 continue;
             }
+            
+            const vendorSelection = { id: vsId, upcoming_order_id: upcomingOrderId, vendor_id: selection.vendorId };
+            allVendorSelections.push(vendorSelection);
+            console.log(`[syncSingleOrderForDeliveryDay] Created vendor selection ${vendorSelection.id}`);
             
             if (!vendorSelection) continue;
 
@@ -2674,19 +2717,20 @@ async function syncSingleOrderForDeliveryDay(
                     console.log(`[syncSingleOrderForDeliveryDay] Updated calculatedTotalFromItems: ${calculatedTotalFromItems}`);
 
                     const itemId_uuid = randomUUID();
-                    try {
-                        await supabase
-                            .from('upcoming_order_items')
-                            .insert([{
-                                id: itemId_uuid,
-                                vendor_selection_id: fallbackVendorSelection.id,
-                                upcoming_vendor_selection_id: vendorSelection.id,
-                                menu_item_id: itemId,
-                                quantity
-                            }]);
+                    const { error: itemError } = await supabase
+                        .from('upcoming_order_items')
+                        .insert([{
+                            id: itemId_uuid,
+                            vendor_selection_id: fallbackVendorSelection.id,
+                            upcoming_vendor_selection_id: vendorSelection.id,
+                            menu_item_id: itemId,
+                            quantity
+                        }]);
+                    
+                    if (itemError) {
+                        console.error(`[syncSingleOrderForDeliveryDay] Error inserting item:`, itemError);
+                    } else {
                         console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted item ${itemId}`);
-                    } catch (error) {
-                        console.error(`[syncSingleOrderForDeliveryDay] Error inserting item:`, error);
                     }
                 } else {
                     console.log(`[syncSingleOrderForDeliveryDay] Skipping item ${itemId} - item not found or quantity is 0`);
@@ -2752,7 +2796,7 @@ async function syncSingleOrderForDeliveryDay(
 
             if (fallbackVendorSelection) {
                 const totalItemId = randomUUID();
-                await supabase
+                const { error: totalItemError } = await supabase
                     .from('upcoming_order_items')
                     .insert([{
                         id: totalItemId,
@@ -2761,6 +2805,10 @@ async function syncSingleOrderForDeliveryDay(
                         menu_item_id: null,
                         quantity: 1
                     }]);
+                
+                if (totalItemError) {
+                    console.error(`[syncSingleOrderForDeliveryDay] Error inserting total item:`, totalItemError);
+                }
             }
         }
     } else if (orderConfig.serviceType === 'Boxes') {
@@ -2827,28 +2875,29 @@ async function syncSingleOrderForDeliveryDay(
         }
 
         const boxSelectionId = randomUUID();
-        try {
-            await supabase
-                .from('upcoming_order_box_selections')
-                .insert([{
-                    id: boxSelectionId,
-                    upcoming_order_id: upcomingOrderId,
-                    vendor_id: boxVendorId,
-                    box_type_id: orderConfig.boxTypeId || null,
-                    quantity,
-                    items: boxItems
-                }]);
-            console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box selection for upcoming_order_id=${upcomingOrderId}, vendor_id=${boxVendorId}, items_count=${Object.keys(boxItems).length}, items=${JSON.stringify(boxItems)}`);
-        } catch (error) {
-            console.error(`[syncSingleOrderForDeliveryDay] Error inserting box selection:`, error);
+        const { error: boxSelectionError } = await supabase
+            .from('upcoming_order_box_selections')
+            .insert([{
+                id: boxSelectionId,
+                upcoming_order_id: upcomingOrderId,
+                vendor_id: boxVendorId,
+                box_type_id: orderConfig.boxTypeId || null,
+                quantity,
+                items: boxItems
+            }]);
+        
+        if (boxSelectionError) {
+            console.error(`[syncSingleOrderForDeliveryDay] Error inserting box selection:`, boxSelectionError);
             console.error(`[syncSingleOrderForDeliveryDay] Insert data:`, {
                 upcoming_order_id: upcomingOrderId,
                 vendor_id: boxVendorId,
                 quantity: quantity,
                 items: boxItems
             });
-            throw error;
+            throw new Error(`Failed to insert box selection: ${boxSelectionError.message}`);
         }
+        
+        console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box selection for upcoming_order_id=${upcomingOrderId}, vendor_id=${boxVendorId}, items_count=${Object.keys(boxItems).length}, items=${JSON.stringify(boxItems)}`);
     }
 }
 
@@ -2881,19 +2930,20 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
     // full sync to upcoming_orders fails (e.g. if the vendor/delivery day isn't fully set yet).
     if (!skipClientUpdate && client.activeOrder) {
         const currentTime = await getCurrentTime();
-        try {
-            await supabase
-                .from('clients')
-                .update({ 
-                    active_order: client.activeOrder,
-                    updated_at: currentTime.toISOString()
-                })
-                .eq('id', clientId);
-            revalidatePath('/clients');
-        } catch (updateError: any) {
+        const { error: updateError } = await supabase
+            .from('clients')
+            .update({ 
+                active_order: client.activeOrder,
+                updated_at: currentTime.toISOString()
+            })
+            .eq('id', clientId);
+        
+        if (updateError) {
             console.error('[syncCurrentOrderToUpcoming] Error updating clients.active_order:', updateError);
             throw new Error(`Failed to save order: ${updateError.message}`);
         }
+        
+        revalidatePath('/clients');
     }
 
     if (!orderConfig) {
@@ -2944,10 +2994,12 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         // });
 
         // Delete orders for delivery days that are no longer in the config
+        // Filter by service_type to only delete orders of the same type
         const { data: existingOrders } = await supabase
             .from('upcoming_orders')
             .select('id, delivery_day')
-            .eq('client_id', clientId);
+            .eq('client_id', clientId)
+            .eq('service_type', orderConfig.serviceType);
 
         if (existingOrders && existingOrders.length > 0) {
             const existingDeliveryDays = new Set((existingOrders || []).map(o => o.delivery_day).filter(Boolean));
