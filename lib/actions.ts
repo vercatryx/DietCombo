@@ -321,7 +321,9 @@ export async function getMenuItems() {
             isActive: i.is_active,
             categoryId: i.category_id,
             quotaValue: i.quota_value,
-            minimumOrder: i.minimum_order ?? 0
+            minimumOrder: i.minimum_order ?? 0,
+            imageUrl: i.image_url || null,
+            sortOrder: i.sort_order ?? 0
         }));
     } catch (error) {
         console.error('Error fetching menu items:', error);
@@ -344,7 +346,9 @@ export async function addMenuItem(data: Omit<MenuItem, 'id'>) {
         is_active: data.isActive,
         category_id: data.categoryId || null,
         quota_value: data.quotaValue || null,
-        minimum_order: data.minimumOrder ?? 0
+        minimum_order: data.minimumOrder ?? 0,
+        image_url: (data as any).imageUrl || null,
+        sort_order: (data as any).sortOrder ?? 0
     };
     
     const { error } = await supabase.from('menu_items').insert([payload]);
@@ -363,6 +367,8 @@ export async function updateMenuItem(id: string, data: Partial<MenuItem>) {
     if (data.quotaValue !== undefined) payload.quota_value = data.quotaValue;
     if (data.minimumOrder !== undefined) payload.minimum_order = data.minimumOrder;
     if (data.vendorId !== undefined) payload.vendor_id = data.vendorId || null;
+    if ((data as any).imageUrl !== undefined) payload.image_url = (data as any).imageUrl || null;
+    if ((data as any).sortOrder !== undefined) payload.sort_order = (data as any).sortOrder ?? 0;
     
     if (Object.keys(payload).length > 0) {
         const { error } = await supabase.from('menu_items').update(payload).eq('id', id);
@@ -409,12 +415,13 @@ export async function updateMenuItemOrder(updates: { id: string; sortOrder: numb
 
 export async function getCategories() {
     try {
-        const { data, error } = await supabase.from('item_categories').select('*').order('name');
+        const { data, error } = await supabase.from('item_categories').select('*').order('sort_order', { ascending: true }).order('name');
         if (error) return [];
         return (data || []).map((c: any) => ({
             id: c.id,
             name: c.name,
-            setValue: c.set_value ?? undefined
+            setValue: c.set_value ?? undefined,
+            sortOrder: c.sort_order ?? 0
         }));
     } catch (error) {
         console.error('Error fetching categories:', error);
@@ -424,15 +431,18 @@ export async function getCategories() {
 
 export async function addCategory(name: string, setValue?: number | null) {
     const id = randomUUID();
+    // Get max sort_order to append new category at the end
+    const { data: maxData } = await supabase.from('item_categories').select('sort_order').order('sort_order', { ascending: false }).limit(1).single();
+    const maxSortOrder = maxData?.sort_order ?? -1;
     const { data, error } = await supabase
         .from('item_categories')
-        .insert([{ id, name, set_value: setValue ?? null }])
+        .insert([{ id, name, set_value: setValue ?? null, sort_order: maxSortOrder + 1 }])
         .select()
         .single();
     handleError(error);
     if (!data) throw new Error('Failed to retrieve created category');
     revalidatePath('/admin');
-    return { id: data.id, name: data.name, setValue: data.set_value ?? undefined };
+    return { id: data.id, name: data.name, setValue: data.set_value ?? undefined, sortOrder: data.sort_order ?? 0 };
 }
 
 export async function deleteCategory(id: string) {
@@ -448,6 +458,18 @@ export async function updateCategory(id: string, name: string, setValue?: number
         .eq('id', id);
     handleError(error);
     revalidatePath('/admin');
+}
+
+export async function updateCategoryOrder(updates: { id: string; sortOrder: number }[]) {
+    // Perform updates in parallel
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const promises = updates.map(({ id, sortOrder }) =>
+        supabaseAdmin.from('item_categories').update({ sort_order: sortOrder }).eq('id', id)
+    );
+
+    await Promise.all(promises);
+    revalidatePath('/admin');
+    return { success: true };
 }
 
 // --- EQUIPMENT ACTIONS ---
@@ -2376,8 +2398,14 @@ async function syncSingleOrderForDeliveryDay(
     // For Boxes orders, dates are optional - they can be set later
     // Only require dates for Food orders
     if (orderConfig.serviceType === 'Food' && (!takeEffectDate || !scheduledDeliveryDate)) {
-        console.warn(`[syncSingleOrderForDeliveryDay] Skipping sync - missing dates for Food order`);
-        return;
+        const errorMsg = `Cannot save Food order: Missing delivery dates. Please ensure vendor has delivery days configured.`;
+        console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+            serviceType: orderConfig.serviceType,
+            hasTakeEffectDate: !!takeEffectDate,
+            hasScheduledDeliveryDate: !!scheduledDeliveryDate,
+            vendorIds: orderConfig.vendorSelections?.map((s: any) => s.vendorId) || []
+        });
+        throw new Error(errorMsg);
     }
 
     // For Boxes orders without dates, we'll save with null dates (can be set later)
@@ -2561,8 +2589,25 @@ async function syncSingleOrderForDeliveryDay(
             .eq('id', existing.id);
         
         if (updateError) {
-            console.error('[syncSingleOrderForDeliveryDay] Error updating upcoming order:', updateError);
-            throw new Error(`Failed to update upcoming order: ${updateError.message}`);
+            // Check for RLS/permission errors
+            const isRLSError = updateError?.code === 'PGRST301' || 
+                              updateError?.message?.includes('permission denied') || 
+                              updateError?.message?.includes('RLS') ||
+                              updateError?.message?.includes('row-level security');
+            
+            console.error('[syncSingleOrderForDeliveryDay] Error updating upcoming order:', {
+                error: updateError,
+                errorCode: updateError?.code,
+                errorMessage: updateError?.message,
+                isRLSError,
+                upcomingOrderId: existing.id
+            });
+            
+            if (isRLSError) {
+                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+            }
+            
+            throw new Error(`Failed to update upcoming order: ${updateError.message || 'Unknown error'}`);
         }
         
         upcomingOrderId = existing.id;
@@ -2578,20 +2623,50 @@ async function syncSingleOrderForDeliveryDay(
             .single();
         
         if (insertError || !insertedData) {
-            console.error('[syncSingleOrderForDeliveryDay] Error creating upcoming order:', {
+            // Check for RLS/permission errors
+            const isRLSError = insertError?.code === 'PGRST301' || 
+                              insertError?.message?.includes('permission denied') || 
+                              insertError?.message?.includes('RLS') ||
+                              insertError?.message?.includes('row-level security');
+            
+            const errorDetails = {
                 error: insertError,
+                errorCode: insertError?.code,
+                errorMessage: insertError?.message,
                 insertPayload: {
                     ...insertPayload,
                     // Don't log sensitive data, but show structure
                     client_id: insertPayload.client_id,
                     service_type: insertPayload.service_type,
-                    case_id: insertPayload.case_id,
+                    case_id: insertPayload.case_id ? '***' : null,
                     status: insertPayload.status
                 },
                 originalServiceType: orderConfig.serviceType,
-                normalizedServiceType: serviceType
-            });
-            throw new Error(`Failed to create upcoming order: ${insertError?.message || 'Unknown error'}. Service type: ${serviceType} (original: ${orderConfig.serviceType})`);
+                normalizedServiceType: serviceType,
+                isRLSError
+            };
+            
+            console.error('[syncSingleOrderForDeliveryDay] Error creating upcoming order:', errorDetails);
+            
+            if (isRLSError) {
+                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+            }
+            
+            // Provide more specific error messages based on error type
+            let userFriendlyMessage = `Failed to create upcoming order`;
+            if (insertError?.message) {
+                if (insertError.message.includes('foreign key')) {
+                    userFriendlyMessage = `Invalid reference: ${insertError.message}`;
+                } else if (insertError.message.includes('NOT NULL')) {
+                    userFriendlyMessage = `Missing required field: ${insertError.message}`;
+                } else if (insertError.message.includes('unique constraint') || insertError.message.includes('duplicate')) {
+                    userFriendlyMessage = `Order already exists. Please refresh the page.`;
+                } else {
+                    userFriendlyMessage = insertError.message;
+                }
+            }
+            
+            throw new Error(`${userFriendlyMessage}. Service type: ${serviceType} (original: ${orderConfig.serviceType})`);
         }
         
         upcomingOrderId = upcomingOrderId_new;
@@ -2925,12 +3000,31 @@ async function syncSingleOrderForDeliveryDay(
  * Now supports multiple orders per client (one per delivery day)
  */
 export async function syncCurrentOrderToUpcoming(clientId: string, client: ClientProfile, skipClientUpdate: boolean = false) {
-    // console.log('[syncCurrentOrderToUpcoming] START', { clientId, serviceType: client.activeOrder?.serviceType });
+    console.log('[syncCurrentOrderToUpcoming] START', { 
+        clientId, 
+        serviceType: client.activeOrder?.serviceType,
+        hasActiveOrder: !!client.activeOrder,
+        activeOrderKeys: client.activeOrder ? Object.keys(client.activeOrder) : []
+    });
 
     // 1. DRAFT PERSISTENCE: Save the raw activeOrder metadata to the clients table.
     // This ensures Case ID, Vendor, and other selections are persisted even if the 
     // full sync to upcoming_orders fails (e.g. if the vendor/delivery day isn't fully set yet).
     const orderConfig = client.activeOrder;
+    
+    console.log('[syncCurrentOrderToUpcoming] orderConfig received:', {
+        serviceType: orderConfig?.serviceType,
+        vendorId: orderConfig?.vendorId,
+        boxTypeId: orderConfig?.boxTypeId,
+        boxQuantity: orderConfig?.boxQuantity,
+        caseId: orderConfig?.caseId ? '***' : null,
+        hasVendorSelections: !!(orderConfig as any)?.vendorSelections,
+        vendorSelectionsCount: (orderConfig as any)?.vendorSelections?.length || 0,
+        hasDeliveryDayOrders: !!(orderConfig as any)?.deliveryDayOrders,
+        deliveryDayOrdersKeys: (orderConfig as any)?.deliveryDayOrders ? Object.keys((orderConfig as any).deliveryDayOrders) : [],
+        hasItems: !!(orderConfig as any)?.items && Object.keys((orderConfig as any).items || {}).length > 0,
+        itemsCount: (orderConfig as any)?.items ? Object.keys((orderConfig as any).items || {}).length : 0
+    });
     // console.log('[syncCurrentOrderToUpcoming] orderConfig received:', {
     //     serviceType: orderConfig?.serviceType,
     //     vendorId: orderConfig?.vendorId,
@@ -2957,19 +3051,43 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
             .eq('id', clientId);
         
         if (updateError) {
-            console.error('[syncCurrentOrderToUpcoming] Error updating clients.active_order:', updateError);
-            throw new Error(`Failed to save order: ${updateError.message}`);
+            // Check for RLS/permission errors
+            const isRLSError = updateError?.code === 'PGRST301' || 
+                              updateError?.message?.includes('permission denied') || 
+                              updateError?.message?.includes('RLS') ||
+                              updateError?.message?.includes('row-level security');
+            
+            console.error('[syncCurrentOrderToUpcoming] Error updating clients.active_order:', {
+                error: updateError,
+                errorCode: updateError?.code,
+                errorMessage: updateError?.message,
+                isRLSError,
+                clientId
+            });
+            
+            if (isRLSError) {
+                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+            }
+            
+            throw new Error(`Failed to save order: ${updateError.message || 'Unknown error'}`);
         }
         
         revalidatePath('/clients');
     }
 
     if (!orderConfig) {
+        console.log('[syncCurrentOrderToUpcoming] No orderConfig - removing existing upcoming orders');
         // If no active order, remove any existing upcoming orders
-        await supabase
+        const { error: deleteError } = await supabase
             .from('upcoming_orders')
             .delete()
             .eq('client_id', clientId);
+        
+        if (deleteError) {
+            console.error('[syncCurrentOrderToUpcoming] Error deleting upcoming orders:', deleteError);
+        } else {
+            console.log('[syncCurrentOrderToUpcoming] Successfully removed existing upcoming orders');
+        }
         return;
     }
 
@@ -3186,10 +3304,18 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
 
     // Force synchronous local DB sync to ensure data is fresh for immediate re-fetch
     const { syncLocalDBFromSupabase } = await import('./local-db');
-    await syncLocalDBFromSupabase();
+    try {
+        await syncLocalDBFromSupabase();
+        console.log('[syncCurrentOrderToUpcoming] Local DB sync completed');
+    } catch (syncError) {
+        console.warn('[syncCurrentOrderToUpcoming] Local DB sync failed (non-critical):', syncError);
+        // Don't throw - local DB is just a cache
+    }
 
     revalidatePath('/clients');
     revalidatePath(`/client-portal/${clientId}`);
+    
+    console.log('[syncCurrentOrderToUpcoming] COMPLETE - Order saved successfully');
 }
 
 /**

@@ -86,15 +86,18 @@ export function MenuManagement() {
             const foodVendors = vData.filter(v => v.serviceTypes.includes('Food'));
             setVendors(foodVendors);
             setMenuItems(mData);
+            // Only set selectedVendorId if it's not already set and we have vendors
             if (foodVendors.length > 0 && !selectedVendorId) {
                 setSelectedVendorId(foodVendors[0].id);
             }
         }
         loadData();
-    }, [getVendors, getMenuItems, selectedVendorId]);
+    }, [getVendors, getMenuItems]); // Removed selectedVendorId from dependencies to prevent re-render loop
 
-    const filteredItems = menuItems.filter(item => item.vendorId === selectedVendorId)
-        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    const filteredItems = selectedVendorId 
+        ? menuItems.filter(item => item.vendorId === selectedVendorId)
+            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+        : [];
 
     // Dnd Sensors
     const sensors = useSensors(

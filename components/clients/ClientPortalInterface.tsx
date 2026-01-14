@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota, BoxConfiguration } from '@/lib/types';
 import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient } from '@/lib/actions';
+import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
 import { Package, Truck, User, Loader2, Info, Plus, Calendar, AlertTriangle, Check, Trash2 } from 'lucide-react';
 import styles from './ClientProfile.module.css';
 
@@ -195,6 +196,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             configToSet = defaultOrder;
         }
 
+        // Migrate legacy box order format to new format if needed
+        if (configToSet.serviceType === 'Boxes') {
+            configToSet = migrateLegacyBoxOrder(configToSet);
+        }
+        
         setOrderConfig(configToSet);
         const deepCopy = JSON.parse(JSON.stringify(configToSet));
         setOriginalOrderConfig(deepCopy);
@@ -209,19 +215,24 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         lastUpcomingOrderIdRef.current = currentUpcomingOrderId;
     }, [upcomingOrder, activeOrder, client]);
 
-    // Box Logic - Load quotas if boxTypeId is set (optional for box contents)
+    // Box Logic - Load quotas if boxTypeId is set (supports both legacy and new format)
     useEffect(() => {
-        if (client.serviceType === 'Boxes' && orderConfig.boxTypeId) {
-            getBoxQuotas(orderConfig.boxTypeId).then(quotas => {
-                setActiveBoxQuotas(quotas);
-            }).catch(err => {
-                console.error('Error loading box quotas:', err);
+        if (client.serviceType === 'Boxes') {
+            const boxTypeId = orderConfig.boxes?.[0]?.boxTypeId || orderConfig.boxTypeId;
+            if (boxTypeId) {
+                getBoxQuotas(boxTypeId).then(quotas => {
+                    setActiveBoxQuotas(quotas);
+                }).catch(err => {
+                    console.error('Error loading box quotas:', err);
+                    setActiveBoxQuotas([]);
+                });
+            } else {
                 setActiveBoxQuotas([]);
-            });
+            }
         } else {
             setActiveBoxQuotas([]);
         }
-    }, [orderConfig.boxTypeId, client.serviceType]);
+    }, [orderConfig.boxes, orderConfig.boxTypeId, client.serviceType]);
 
     // Extract dependencies for auto-save
     const caseId = useMemo(() => orderConfig?.caseId ?? null, [orderConfig?.caseId]);
@@ -236,10 +247,203 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     // Auto-Save Logic - matching ClientProfile exactly
     // Manual Save Logic
     const handleSave = async () => {
-        if (!client || !orderConfig) return;
+        if (!client || !orderConfig) {
+            setMessage('Error: Missing client or order configuration. Please refresh the page.');
+            setTimeout(() => setMessage(null), 5000);
+            return;
+        }
+
+        // Check if orderConfig is effectively empty (no meaningful data)
+        const hasOrderData = 
+            (orderConfig.caseId && orderConfig.caseId.trim() !== '') ||
+            (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) ||
+            (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0) ||
+            (orderConfig.vendorId && orderConfig.vendorId.trim() !== '') ||
+            (orderConfig.boxTypeId && orderConfig.boxTypeId.trim() !== '') ||
+            (orderConfig.boxes && orderConfig.boxes.length > 0) ||
+            (orderConfig.customItems && orderConfig.customItems.length > 0);
+        
+        if (!hasOrderData) {
+            setMessage('Error: Please configure your order (select vendors, items, or boxes) before saving.');
+            setTimeout(() => setMessage(null), 5000);
+            return;
+        }
 
         // For Food clients, caseId is required. For Boxes, it's optional
-        if (serviceType === 'Food' && !caseId) return;
+        if (serviceType === 'Food' && !caseId) {
+            setMessage('Error: Case ID is required for Food orders. Please enter a Case ID before saving.');
+            setTimeout(() => setMessage(null), 5000);
+            return;
+        }
+
+        // Comprehensive pre-save validation
+        const validationErrors: string[] = [];
+
+        if (serviceType === 'Food') {
+            // Check if order has items after cleaning
+            const hasItemsInVendorSelections = orderConfig.vendorSelections?.some((s: any) => {
+                if (!s.vendorId) return false;
+                const items = s.items || {};
+                return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+            });
+
+            const hasItemsInDeliveryDayOrders = orderConfig.deliveryDayOrders && Object.values(orderConfig.deliveryDayOrders).some((day: any) => {
+                if (!day.vendorSelections || day.vendorSelections.length === 0) return false;
+                return day.vendorSelections.some((s: any) => {
+                    if (!s.vendorId) return false;
+                    const items = s.items || {};
+                    return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                });
+            });
+
+            const hasItemsInItemsByDay = orderConfig.vendorSelections?.some((s: any) => {
+                if (!s.vendorId || !s.itemsByDay || !s.selectedDeliveryDays) return false;
+                return s.selectedDeliveryDays.some((day: string) => {
+                    const dayItems = s.itemsByDay[day] || {};
+                    return Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
+                });
+            });
+
+            if (!hasItemsInVendorSelections && !hasItemsInDeliveryDayOrders && !hasItemsInItemsByDay) {
+                validationErrors.push('Please select at least one item before saving');
+            }
+
+            // Validate vendors have delivery days configured (if we can check)
+            if (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) {
+                const vendorsWithoutDays = orderConfig.vendorSelections
+                    .filter((s: any) => s.vendorId)
+                    .map((s: any) => {
+                        const vendor = vendors.find(v => v.id === s.vendorId);
+                        return vendor && (!vendor.deliveryDays || vendor.deliveryDays.length === 0) ? vendor.name : null;
+                    })
+                    .filter(Boolean);
+
+                if (vendorsWithoutDays.length > 0) {
+                    validationErrors.push(`Vendor(s) ${vendorsWithoutDays.join(', ')} have no delivery days configured. Please contact support.`);
+                }
+            }
+        } else if (serviceType === 'Boxes') {
+            // Migrate to boxes format if needed
+            const migratedConfig = migrateLegacyBoxOrder(orderConfig);
+            const boxes = migratedConfig.boxes || [];
+
+            // Validate boxes array exists and has at least one box
+            if (boxes.length === 0) {
+                // Fallback to legacy validation
+                if (!orderConfig.vendorId && !orderConfig.boxTypeId) {
+                    validationErrors.push('Please add at least one box to the order.');
+                }
+            } else {
+                // Validate each box has a boxTypeId
+                for (const box of boxes) {
+                    if (!box.boxTypeId || box.boxTypeId.trim() === '') {
+                        validationErrors.push(`Box #${box.boxNumber} must have a box type selected.`);
+                    }
+                }
+
+                // Validate against authorization
+                if (boxes.length > 0) {
+                    const firstBoxType = boxTypes.find(bt => bt.id === boxes[0].boxTypeId);
+                    const validation = validateBoxCountAgainstAuthorization(
+                        boxes.length,
+                        client.authorizedAmount,
+                        firstBoxType?.priceEach
+                    );
+
+                    if (!validation.valid) {
+                        validationErrors.push(validation.message || 'Box count exceeds authorization.');
+                    }
+                }
+
+                // Validate category set values per box
+                for (const box of boxes) {
+                    const selectedItems = box.items || {};
+                    const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
+                    const boxQuotas = boxType ? activeBoxQuotas.filter(q => q.boxTypeId === box.boxTypeId) : [];
+
+                    // Check each category that has a setValue
+                    for (const category of categories) {
+                        if (category.setValue !== undefined && category.setValue !== null) {
+                            // Calculate total quota value for this category in this box
+                            let categoryQuotaValue = 0;
+
+                            for (const [itemId, qty] of Object.entries(selectedItems)) {
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item && item.categoryId === category.id) {
+                                    const itemQuotaValue = item.quotaValue || 1;
+                                    categoryQuotaValue += (qty as number) * itemQuotaValue;
+                                }
+                            }
+
+                            // Check if it matches exactly the setValue
+                            if (categoryQuotaValue !== category.setValue) {
+                                validationErrors.push(
+                                    `Box #${box.boxNumber}: You must have a total of ${category.setValue} ${category.name} points, but you have ${categoryQuotaValue}. ` +
+                                    `Please adjust items in this category to match exactly.`
+                                );
+                            }
+                        }
+                    }
+
+                    // Validate box quotas if applicable
+                    if (boxType && boxQuotas.length > 0) {
+                        for (const quota of boxQuotas) {
+                            let categoryQuotaValue = 0;
+
+                            for (const [itemId, qty] of Object.entries(selectedItems)) {
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item && item.categoryId === quota.categoryId) {
+                                    const itemQuotaValue = item.quotaValue || 1;
+                                    categoryQuotaValue += (qty as number) * itemQuotaValue;
+                                }
+                            }
+
+                            const requiredQuotaValue = quota.targetValue; // Per box
+                            if (categoryQuotaValue !== requiredQuotaValue) {
+                                const category = categories.find(c => c.id === quota.categoryId);
+                                const categoryName = category?.name || 'Unknown Category';
+                                validationErrors.push(
+                                    `Box #${box.boxNumber}: Category "${categoryName}" requires exactly ${requiredQuotaValue} quota value, but you have ${categoryQuotaValue}. ` +
+                                    `Please adjust items in this category to match exactly.`
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Legacy format validation (fallback)
+            if (boxes.length === 0 && orderConfig.items) {
+                const selectedItems = orderConfig.items || {};
+
+                for (const category of categories) {
+                    if (category.setValue !== undefined && category.setValue !== null) {
+                        let categoryQuotaValue = 0;
+
+                        for (const [itemId, qty] of Object.entries(selectedItems)) {
+                            const item = menuItems.find(i => i.id === itemId);
+                            if (item && item.categoryId === category.id) {
+                                const itemQuotaValue = item.quotaValue || 1;
+                                categoryQuotaValue += (qty as number) * itemQuotaValue;
+                            }
+                        }
+
+                        if (categoryQuotaValue !== category.setValue) {
+                            validationErrors.push(
+                                `You must have a total of ${category.setValue} ${category.name} points, but you have ${categoryQuotaValue}. ` +
+                                `Please adjust items in this category to match exactly.`
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if (validationErrors.length > 0) {
+            setMessage(`Error: ${validationErrors.join('; ')}`);
+            setTimeout(() => setMessage(null), 8000);
+            return;
+        }
 
         try {
             // Ensure structure is correct and convert per-vendor delivery days to deliveryDayOrders format
@@ -258,6 +462,22 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                 vendorId: s.vendorId,
                                 items: s.items || {}
                             }));
+                    }
+
+                    // Validate that after cleaning, we still have orders with items
+                    const hasValidOrders = Object.values(cleanedOrderConfig.deliveryDayOrders).some((day: any) => {
+                        if (!day.vendorSelections || day.vendorSelections.length === 0) return false;
+                        return day.vendorSelections.some((s: any) => {
+                            if (!s.vendorId) return false;
+                            const items = s.items || {};
+                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                        });
+                    });
+
+                    if (!hasValidOrders) {
+                        setMessage('Error: After filtering, no valid orders remain. Please ensure at least one vendor has items selected.');
+                        setTimeout(() => setMessage(null), 8000);
+                        return;
                     }
                 } else if (cleanedOrderConfig.vendorSelections) {
                     // Check if any vendor has per-vendor delivery days (itemsByDay)
@@ -295,16 +515,40 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                 vendorId: s.vendorId,
                                 items: s.items || {}
                             }));
+
+                        // Validate that after cleaning, we still have vendors with items
+                        const hasValidSelections = cleanedOrderConfig.vendorSelections.some((s: any) => {
+                            if (!s.vendorId) return false;
+                            const items = s.items || {};
+                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                        });
+
+                        if (!hasValidSelections) {
+                            setMessage('Error: After filtering, no valid vendor selections remain. Please ensure at least one vendor has items selected.');
+                            setTimeout(() => setMessage(null), 8000);
+                            return;
+                        }
                     }
                 }
             } else if (serviceType === 'Boxes') {
-                // For Boxes: Explicitly preserve all critical fields
-                cleanedOrderConfig.vendorId = orderConfig.vendorId;
+                // Migrate to boxes format if needed
+                const migratedConfig = migrateLegacyBoxOrder(orderConfig);
+                
+                // Save in new format (boxes array)
+                if (migratedConfig.boxes && migratedConfig.boxes.length > 0) {
+                    cleanedOrderConfig.boxes = migratedConfig.boxes;
+                    // Also preserve vendorId from first box if available
+                    cleanedOrderConfig.vendorId = migratedConfig.boxes[0]?.vendorId || orderConfig.vendorId;
+                    cleanedOrderConfig.boxTypeId = migratedConfig.boxes[0]?.boxTypeId || orderConfig.boxTypeId;
+                } else {
+                    // Legacy format fallback
+                    cleanedOrderConfig.vendorId = orderConfig.vendorId;
+                    cleanedOrderConfig.boxTypeId = orderConfig.boxTypeId;
+                    cleanedOrderConfig.boxQuantity = orderConfig.boxQuantity || 1;
+                    cleanedOrderConfig.items = orderConfig.items || {};
+                    cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {};
+                }
                 cleanedOrderConfig.caseId = orderConfig.caseId; // Also set above
-                cleanedOrderConfig.boxTypeId = orderConfig.boxTypeId;
-                cleanedOrderConfig.boxQuantity = orderConfig.boxQuantity || 1;
-                cleanedOrderConfig.items = orderConfig.items || {};
-                cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {};
             }
 
             // Create a temporary client object for syncCurrentOrderToUpcoming
@@ -321,8 +565,22 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             setSaving(true);
             setMessage('Saving...');
 
+            // Debug logging
+            console.log('[ClientPortalInterface] About to save order:', {
+                clientId: client.id,
+                serviceType: serviceType,
+                orderConfig: cleanedOrderConfig,
+                tempClientActiveOrder: tempClient.activeOrder
+            });
+
             // Sync to upcoming_orders table
-            await syncCurrentOrderToUpcoming(client.id, tempClient);
+            try {
+                await syncCurrentOrderToUpcoming(client.id, tempClient);
+                console.log('[ClientPortalInterface] syncCurrentOrderToUpcoming completed successfully');
+            } catch (syncError: any) {
+                console.error('[ClientPortalInterface] Error in syncCurrentOrderToUpcoming:', syncError);
+                throw syncError; // Re-throw to be caught by outer catch
+            }
 
             // Refresh the router to refetch server data
             router.refresh();
@@ -341,9 +599,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         } catch (error: any) {
             console.error('Error saving Service Configuration:', error);
             setSaving(false);
-            const errorMessage = error?.message || 'Error saving';
+            
+            // Parse error message for user-friendly display
+            const errorMessage = parseErrorMessage(error);
             setMessage(errorMessage);
-            setTimeout(() => setMessage(null), 5000);
+            setTimeout(() => setMessage(null), 10000); // Increased timeout for better visibility
         }
     };
 
@@ -353,6 +613,55 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         setMessage('Changes discarded');
         setTimeout(() => setMessage(null), 2000);
     };
+
+    // Helper function to parse error messages for user-friendly display
+    function parseErrorMessage(error: any): string {
+        const message = error?.message || '';
+        const errorString = String(message).toLowerCase();
+        
+        // RLS and permission errors
+        if (error?.code === 'PGRST301' || errorString.includes('permission denied') || errorString.includes('rls') || errorString.includes('row-level security')) {
+            return 'Database permission error. Please contact support. If this persists, check that SUPABASE_SERVICE_ROLE_KEY is configured correctly.';
+        }
+        
+        // Foreign key violations
+        if (errorString.includes('foreign key') || errorString.includes('violates foreign key constraint')) {
+            return 'Invalid reference detected. Please refresh the page and try again. If the problem persists, contact support.';
+        }
+        
+        // NOT NULL constraint violations
+        if (errorString.includes('not null') || errorString.includes('null value in column')) {
+            return 'Missing required information. Please check that all required fields are filled.';
+        }
+        
+        // Date-related errors
+        if (errorString.includes('missing dates') || errorString.includes('delivery dates') || errorString.includes('cannot calculate')) {
+            return message || 'Cannot calculate delivery dates. Please ensure vendor has delivery days configured.';
+        }
+        
+        // Database connection errors
+        if (errorString.includes('network') || errorString.includes('connection') || errorString.includes('fetch')) {
+            return 'Network error. Please check your internet connection and try again.';
+        }
+        
+        // Service type errors
+        if (errorString.includes('service type') || errorString.includes('invalid service')) {
+            return 'Invalid service type. Please refresh the page and try again.';
+        }
+        
+        // Generic database errors
+        if (errorString.includes('database') || errorString.includes('sql') || errorString.includes('constraint')) {
+            return `Database error: ${message || 'An unexpected database error occurred. Please try again or contact support.'}`;
+        }
+        
+        // Return original message if it exists and is meaningful
+        if (message && message.length > 0 && message !== 'Error saving') {
+            return message;
+        }
+        
+        // Fallback
+        return 'An unexpected error occurred while saving. Please try again. If the problem persists, contact support.';
+    }
 
     // Auto-Save Profile Logic - DISABLED: Profile editing is not allowed in client portal
     // useEffect(() => {
@@ -401,14 +710,143 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         return menuItems.filter(i => i.vendorId === vendorId && i.isActive);
     }
 
-    function handleBoxItemChange(itemId: string, qty: number) {
-        const currentItems = { ...(orderConfig.items || {}) };
-        if (qty > 0) {
-            currentItems[itemId] = qty;
+    // Legacy handler - now works with boxes array
+    function handleBoxItemChange(itemId: string, qty: number, boxNumber?: number) {
+        // If using new boxes format
+        if (orderConfig.boxes && orderConfig.boxes.length > 0) {
+            const targetBoxNumber = boxNumber || 1; // Default to first box
+            const updatedBoxes = orderConfig.boxes.map((box: BoxConfiguration) => {
+                if (box.boxNumber !== targetBoxNumber) return box;
+                
+                const newItems = { ...box.items };
+                if (qty > 0) {
+                    newItems[itemId] = qty;
+                } else {
+                    delete newItems[itemId];
+                }
+                return { ...box, items: newItems };
+            });
+            
+            setOrderConfig({ ...orderConfig, boxes: updatedBoxes });
         } else {
-            delete currentItems[itemId];
+            // Legacy format
+            const currentItems = { ...(orderConfig.items || {}) };
+            if (qty > 0) {
+                currentItems[itemId] = qty;
+            } else {
+                delete currentItems[itemId];
+            }
+            setOrderConfig({ ...orderConfig, items: currentItems });
         }
-        setOrderConfig({ ...orderConfig, items: currentItems });
+    }
+
+    // New helper functions for multiple boxes
+    function canAddMoreBoxes(): boolean {
+        if (!client.authorizedAmount) return true; // No limit
+        
+        const currentBoxCount = getTotalBoxCount(orderConfig);
+        const firstBox = orderConfig.boxes?.[0];
+        const boxType = firstBox ? boxTypes.find(bt => bt.id === firstBox.boxTypeId) : null;
+        if (!boxType?.priceEach) return true;
+        
+        const maxBoxes = getMaxBoxesAllowed(client.authorizedAmount, boxType.priceEach);
+        return maxBoxes === null || currentBoxCount < maxBoxes;
+    }
+
+    function handleAddBox() {
+        if (!canAddMoreBoxes()) return;
+        
+        // Ensure we're using boxes format
+        let currentBoxes = orderConfig.boxes || [];
+        
+        // If no boxes yet, migrate from legacy or create first box
+        if (currentBoxes.length === 0) {
+            const migrated = migrateLegacyBoxOrder(orderConfig);
+            currentBoxes = migrated.boxes || [];
+            
+            // If still no boxes, create first one
+            if (currentBoxes.length === 0) {
+                const defaultBoxTypeId = boxTypes.find(bt => bt.isActive)?.id || '';
+                currentBoxes = [{
+                    boxNumber: 1,
+                    boxTypeId: defaultBoxTypeId,
+                    items: {},
+                    itemPrices: {}
+                }];
+            }
+        }
+        
+        const nextBoxNumber = currentBoxes.length + 1;
+        const defaultBoxTypeId = boxTypes.find(bt => bt.isActive)?.id || currentBoxes[0]?.boxTypeId || '';
+        
+        const newBox: BoxConfiguration = {
+            boxNumber: nextBoxNumber,
+            boxTypeId: defaultBoxTypeId,
+            vendorId: currentBoxes[0]?.vendorId,
+            items: {},
+            itemPrices: {},
+            itemNotes: {}
+        };
+        
+        setOrderConfig({
+            ...orderConfig,
+            boxes: [...currentBoxes, newBox]
+        });
+    }
+
+    function removeBox(boxNumber: number) {
+        const currentBoxes = orderConfig.boxes || [];
+        if (currentBoxes.length <= 1) return; // Can't remove last box
+        
+            const updatedBoxes = currentBoxes
+                .filter((b: BoxConfiguration) => b.boxNumber !== boxNumber)
+                .map((b: BoxConfiguration, index: number) => ({ ...b, boxNumber: index + 1 })); // Renumber
+        
+        setOrderConfig({
+            ...orderConfig,
+            boxes: updatedBoxes
+        });
+    }
+
+    function updateBoxItem(boxNumber: number, itemId: string, delta: number) {
+        const currentBoxes = orderConfig.boxes || [];
+        const updatedBoxes = currentBoxes.map((box: BoxConfiguration) => {
+            if (box.boxNumber !== boxNumber) return box;
+            
+            const currentQty = box.items[itemId] || 0;
+            const newQty = Math.max(0, currentQty + delta);
+            
+            const newItems = { ...box.items };
+            const newItemNotes = { ...(box.itemNotes || {}) };
+            
+            if (newQty > 0) {
+                newItems[itemId] = newQty;
+                // Keep existing note if item still has quantity
+            } else {
+                delete newItems[itemId];
+                delete newItemNotes[itemId]; // Remove note when quantity is 0
+            }
+            
+            return { ...box, items: newItems, itemNotes: newItemNotes };
+        });
+        
+        setOrderConfig({
+            ...orderConfig,
+            boxes: updatedBoxes
+        });
+    }
+
+    function updateBoxType(boxNumber: number, boxTypeId: string) {
+        const currentBoxes = orderConfig.boxes || [];
+        const updatedBoxes = currentBoxes.map((box: BoxConfiguration) => {
+            if (box.boxNumber !== boxNumber) return box;
+            return { ...box, boxTypeId };
+        });
+        
+        setOrderConfig({
+            ...orderConfig,
+            boxes: updatedBoxes
+        });
     }
 
     function getVendorSelectionsForDay(day: string | null): any[] {
@@ -1051,230 +1489,523 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         </>
                     )}
 
-                    {client.serviceType === 'Boxes' && (
-                        <div>
-                            {/* Box Content Selection - Show all categories with box items */}
-                            {/* Box items are menu items where vendorId is null/empty */}
-                            {(() => {
-                                // Check if there are any box items (items without vendorId)
-                                const hasBoxItems = menuItems.some(i =>
-                                    (i.vendorId === null || i.vendorId === '') &&
-                                    i.isActive
-                                );
+                    {client.serviceType === 'Boxes' && (() => {
+                        // Ensure we're using boxes format
+                        const migratedConfig = migrateLegacyBoxOrder(orderConfig);
+                        const boxes = migratedConfig.boxes || [];
+                        
+                        // Check if there are any box items (items without vendorId)
+                        const hasBoxItems = menuItems.some(i =>
+                            (i.vendorId === null || i.vendorId === '') &&
+                            i.isActive
+                        );
 
-                                if (!hasBoxItems) {
-                                    return (
-                                        <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '6px', border: '1px solid var(--color-danger)' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: 'var(--color-danger)', fontWeight: 600 }}>
-                                                <AlertTriangle size={16} />
-                                                No box items found
-                                            </div>
-                                            <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                                                There are no box items (menu items without a vendor) configured. Please contact support.
-                                            </div>
-                                        </div>
-                                    );
-                                }
+                        if (!hasBoxItems) {
+                            return (
+                                <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '6px', border: '1px solid var(--color-danger)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: 'var(--color-danger)', fontWeight: 600 }}>
+                                        <AlertTriangle size={16} />
+                                        No box items found
+                                    </div>
+                                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                                        There are no box items (menu items without a vendor) configured. Please contact support.
+                                    </div>
+                                </div>
+                            );
+                        }
 
-                                return (
-                                    <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-                                        <h4 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <Package size={14} /> Box Contents
-                                        </h4>
+                        // Ensure at least one box exists
+                        const displayBoxes = boxes.length > 0 ? boxes : [{
+                            boxNumber: 1,
+                            boxTypeId: boxTypes.find(bt => bt.isActive)?.id || '',
+                            items: {},
+                            itemPrices: {},
+                            itemNotes: {}
+                        }];
 
-                                        {/* Show all categories with box items */}
-                                        {categories.map(category => {
-                                            // Filter items for this category - box items are universal (vendorId is null/empty)
-                                            const availableItems = menuItems.filter(i =>
-                                                (i.vendorId === null || i.vendorId === '') &&
-                                                i.isActive &&
-                                                i.categoryId === category.id
-                                            );
+                        const currentBoxCount = displayBoxes.length;
+                        const firstBoxType = displayBoxes[0] ? boxTypes.find(bt => bt.id === displayBoxes[0].boxTypeId) : null;
+                        const maxBoxesAllowed = getMaxBoxesAllowed(client.authorizedAmount, firstBoxType?.priceEach);
 
-                                            if (availableItems.length === 0) return null;
-
-                                            const selectedItems = orderConfig.items || {};
-
-                                            // Calculate total quota value for this category
-                                            let categoryQuotaValue = 0;
-                                            Object.entries(selectedItems).forEach(([itemId, qty]) => {
-                                                const item = menuItems.find(i => i.id === itemId);
-                                                if (item && item.categoryId === category.id) {
-                                                    const itemQuotaValue = item.quotaValue || 1;
-                                                    categoryQuotaValue += (qty as number) * itemQuotaValue;
-                                                }
+                        return (
+                            <div style={{ marginTop: '1rem' }}>
+                                {/* Case ID Field */}
+                                <div className={styles.formGroup} style={{ marginBottom: '1rem' }}>
+                                    <label className="label">Case ID (Required)</label>
+                                    <input
+                                        type="text"
+                                        className="input"
+                                        value={orderConfig.caseId || ''}
+                                        onChange={(e) => {
+                                            setOrderConfig({
+                                                ...orderConfig,
+                                                caseId: e.target.value
                                             });
+                                        }}
+                                        placeholder="Enter Case ID"
+                                    />
+                                </div>
 
-                                            // Find quota requirement for this category (from box quotas - optional)
-                                            const quota = orderConfig.boxTypeId ? activeBoxQuotas.find(q => q.categoryId === category.id) : null;
-                                            const boxQuantity = orderConfig.boxQuantity || 1;
-                                            const requiredQuotaValueFromBox = quota ? quota.targetValue * boxQuantity : null;
+                                {/* Max Boxes Authorized - Editable Input Field */}
+                                <div className={styles.formGroup} style={{ marginBottom: '1rem' }}>
+                                    <label className="label">Max Boxes Authorized</label>
+                                    <input
+                                        type="number"
+                                        className="input"
+                                        value={client.authorizedAmount || ''}
+                                        onChange={async (e) => {
+                                            const newValue = parseFloat(e.target.value) || 0;
+                                            try {
+                                                await updateClient(client.id, { authorizedAmount: newValue });
+                                                setClient({ ...client, authorizedAmount: newValue });
+                                            } catch (err) {
+                                                console.error('Error updating authorized amount:', err);
+                                            }
+                                        }}
+                                        min="0"
+                                        step="1"
+                                        style={{
+                                            border: '2px solid #fbbf24',
+                                            fontWeight: 500
+                                        }}
+                                    />
+                                </div>
 
-                                            // Check if category has a setValue requirement
-                                            const requiredQuotaValueFromCategory = category.setValue !== undefined && category.setValue !== null ? category.setValue : null;
+                                {/* Boxes List */}
+                                {displayBoxes.map((box: BoxConfiguration) => {
+                                    const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
+                                    const boxQuotas = boxType ? activeBoxQuotas.filter(q => q.boxTypeId === box.boxTypeId) : [];
 
-                                            // Use setValue if present, otherwise use box quota requirement
-                                            const requiredQuotaValue = requiredQuotaValueFromCategory !== null ? requiredQuotaValueFromCategory : requiredQuotaValueFromBox;
-
-                                            const meetsQuota = requiredQuotaValue !== null ? categoryQuotaValue === requiredQuotaValue : true;
-
-                                            return (
-                                                <div key={category.id} style={{ marginBottom: '1rem', background: 'var(--bg-surface-hover)', padding: '0.75rem', borderRadius: '6px', border: requiredQuotaValue !== null && !meetsQuota ? '2px solid var(--color-danger)' : '1px solid var(--border-color)' }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                            <span style={{ fontWeight: 600 }}>{category.name}</span>
-                                                            {requiredQuotaValueFromCategory !== null && (
-                                                                <span style={{
-                                                                    fontSize: '0.7rem',
-                                                                    color: 'var(--color-primary)',
-                                                                    background: 'var(--bg-app)',
-                                                                    padding: '2px 6px',
-                                                                    borderRadius: '4px',
-                                                                    fontWeight: 500
-                                                                }}>
-                                                                    Set Value: {requiredQuotaValueFromCategory}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                            {requiredQuotaValue !== null && (
-                                                                <span style={{
-                                                                    color: meetsQuota ? 'var(--color-success)' : 'var(--color-danger)',
-                                                                    fontSize: '0.8rem',
-                                                                    fontWeight: 500
-                                                                }}>
-                                                                    Quota: {categoryQuotaValue} / {requiredQuotaValue}
-                                                                </span>
-                                                            )}
-                                                            {categoryQuotaValue > 0 && requiredQuotaValue === null && (
-                                                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                                                                    Total: {categoryQuotaValue}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    {requiredQuotaValue !== null && !meetsQuota && (
-                                                        <div style={{
-                                                            marginBottom: '0.5rem',
+                                    return (
+                                        <div key={box.boxNumber} style={{
+                                            marginBottom: '1.5rem',
+                                            padding: '1rem',
+                                            background: 'var(--bg-app)',
+                                            borderRadius: '8px',
+                                            border: '2px solid var(--border-color)',
+                                            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                        }}>
+                                            <div style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                marginBottom: '1rem',
+                                                paddingBottom: '0.75rem',
+                                                borderBottom: '1px solid var(--border-color)'
+                                            }}>
+                                                <h4 style={{
+                                                    fontSize: '1rem',
+                                                    fontWeight: 600,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.5rem'
+                                                }}>
+                                                    <Package size={18} />
+                                                    Box #{box.boxNumber}
+                                                </h4>
+                                                {displayBoxes.length > 1 && (
+                                                    <button
+                                                        onClick={() => removeBox(box.boxNumber)}
+                                                        className="btn btn-secondary"
+                                                        style={{
                                                             padding: '0.5rem',
-                                                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                                                            borderRadius: '4px',
-                                                            fontSize: '0.75rem',
-                                                            color: 'var(--color-danger)',
                                                             display: 'flex',
                                                             alignItems: 'center',
                                                             gap: '0.25rem'
+                                                        }}
+                                                        title="Remove this box"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                        Remove
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* Vendor Selection */}
+                                            <div className={styles.formGroup} style={{ marginBottom: '1rem' }}>
+                                                <label className="label">Vendor</label>
+                                                <select
+                                                    className="input"
+                                                    value={box.vendorId || orderConfig.vendorId || ''}
+                                                    onChange={(e) => {
+                                                        const newVendorId = e.target.value;
+                                                        // Auto-select first active box type when vendor is selected
+                                                        const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+                                                        const updatedBoxes = orderConfig.boxes?.map((b: BoxConfiguration) => 
+                                                            b.boxNumber === box.boxNumber 
+                                                                ? { 
+                                                                    ...b, 
+                                                                    vendorId: newVendorId,
+                                                                    boxTypeId: b.boxTypeId || firstActiveBoxType?.id || ''
+                                                                }
+                                                                : b
+                                                        ) || [];
+                                                        setOrderConfig({
+                                                            ...orderConfig,
+                                                            boxes: updatedBoxes,
+                                                            vendorId: newVendorId,
+                                                            boxTypeId: orderConfig.boxTypeId || firstActiveBoxType?.id || ''
+                                                        });
+                                                    }}
+                                                >
+                                                    <option value="">Select Vendor...</option>
+                                                    {vendors.filter(v => v.serviceTypes.includes('Boxes') && v.isActive).map(v => (
+                                                        <option key={v.id} value={v.id}>{v.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Take Effect Date */}
+                                            {(box.vendorId || orderConfig.vendorId) && (() => {
+                                                const vendorId = box.vendorId || orderConfig.vendorId;
+                                                const vendor = vendors.find(v => v.id === vendorId);
+                                                if (!vendor || !vendor.deliveryDays || vendor.deliveryDays.length === 0) {
+                                                    return null;
+                                                }
+                                                // Calculate take effect date (simplified - would need settings)
+                                                const takeEffectDate = new Date();
+                                                takeEffectDate.setDate(takeEffectDate.getDate() + (7 - takeEffectDate.getDay()));
+                                                return (
+                                                    <div style={{
+                                                        marginBottom: '1rem',
+                                                        padding: '0.75rem',
+                                                        backgroundColor: 'var(--bg-surface-hover)',
+                                                        borderRadius: 'var(--radius-sm)',
+                                                        border: '1px solid var(--border-color)',
+                                                        fontSize: '0.85rem',
+                                                        textAlign: 'center'
+                                                    }}>
+                                                        <strong>Take Effect Date:</strong> {takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} (always a Sunday)
+                                                    </div>
+                                                );
+                                            })()}
+
+                                            {/* Box Contents - Show all categories with items */}
+                                            <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                                                <h4 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                    <Package size={14} /> Box Contents
+                                                </h4>
+
+                                                {/* Show all categories with box items */}
+                                                {[...categories]
+                                                    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+                                                    .map(category => {
+                                                        const availableItems = menuItems
+                                                            .filter(i =>
+                                                                (i.vendorId === null || i.vendorId === '') &&
+                                                                i.isActive &&
+                                                                i.categoryId === category.id
+                                                            )
+                                                            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+                                                        if (availableItems.length === 0) return null;
+
+                                                        const selectedItems = box.items || {};
+                                                        const boxQty = 1; // Per-box quota calculation
+                                                        
+                                                        // Calculate quota for this box's category
+                                                        let categoryQuotaValue = 0;
+                                                        Object.entries(selectedItems).forEach(([itemId, qty]) => {
+                                                            const item = menuItems.find(i => i.id === itemId);
+                                                            if (item && item.categoryId === category.id) {
+                                                                const itemQuotaValue = item.quotaValue || 1;
+                                                                categoryQuotaValue += (qty as number) * itemQuotaValue;
+                                                            }
+                                                        });
+
+                                                        const quota = boxType ? boxQuotas.find(q => q.categoryId === category.id) : null;
+                                                        const requiredQuotaValueFromBox = quota ? quota.targetValue * boxQty : null;
+                                                        const requiredQuotaValueFromCategory = category.setValue !== undefined && category.setValue !== null ? category.setValue : null;
+                                                        const requiredQuotaValue = requiredQuotaValueFromCategory !== null ? requiredQuotaValueFromCategory : requiredQuotaValueFromBox;
+                                                        const meetsQuota = requiredQuotaValue !== null ? categoryQuotaValue === requiredQuotaValue : true;
+
+                                                        return (
+                                                            <div key={category.id} style={{
+                                                                marginBottom: '1rem',
+                                                                background: 'var(--bg-surface-hover)',
+                                                                padding: '0.75rem',
+                                                                borderRadius: '6px',
+                                                                border: requiredQuotaValue !== null && !meetsQuota ? '2px solid var(--color-danger)' : '1px solid var(--border-color)'
+                                                            }}>
+                                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                                        <span style={{ fontWeight: 600 }}>{category.name}</span>
+                                                                        {requiredQuotaValueFromCategory !== null && (
+                                                                            <span style={{
+                                                                                fontSize: '0.7rem',
+                                                                                color: 'var(--color-primary)',
+                                                                                background: 'var(--bg-app)',
+                                                                                padding: '2px 6px',
+                                                                                borderRadius: '4px',
+                                                                                fontWeight: 500
+                                                                            }}>
+                                                                                Set Value: {requiredQuotaValueFromCategory}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                                        {requiredQuotaValue !== null && (
+                                                                            <span style={{
+                                                                                color: meetsQuota ? 'var(--color-success)' : 'var(--color-danger)',
+                                                                                fontSize: '0.8rem',
+                                                                                fontWeight: 500
+                                                                            }}>
+                                                                                Quota: {categoryQuotaValue} / {requiredQuotaValue}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                                {requiredQuotaValue !== null && !meetsQuota && (
+                                                                    <div style={{
+                                                                        marginBottom: '0.5rem',
+                                                                        padding: '0.5rem',
+                                                                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                                                        borderRadius: '4px',
+                                                                        fontSize: '0.75rem',
+                                                                        color: 'var(--color-danger)',
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '0.25rem'
+                                                                    }}>
+                                                                        <AlertTriangle size={12} />
+                                                                        <span>You must have a total of {requiredQuotaValue} {category.name} points</span>
+                                                                    </div>
+                                                                )}
+
+                                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                                    {availableItems.map(item => {
+                                                                        const qty = Number(selectedItems[item.id] || 0);
+                                                                        const itemVal = item.quotaValue || 1;
+                                                                        const canAdd = requiredQuotaValue === null || (categoryQuotaValue + itemVal <= requiredQuotaValue);
+                                                                        const itemNote = box.itemNotes?.[item.id] || '';
+
+                                                                        return (
+                                                                            <div key={item.id} style={{
+                                                                                padding: '0.75rem',
+                                                                                background: qty > 0 ? 'rgba(251, 191, 36, 0.1)' : 'var(--bg-app)',
+                                                                                border: qty > 0 ? '2px solid #fbbf24' : '1px solid var(--border-color)',
+                                                                                borderRadius: '6px'
+                                                                            }}>
+                                                                                <div style={{
+                                                                                    display: 'flex',
+                                                                                    alignItems: 'center',
+                                                                                    justifyContent: 'space-between',
+                                                                                    marginBottom: qty > 0 ? '0.5rem' : '0'
+                                                                                }}>
+                                                                                    <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>
+                                                                                        {item.name}
+                                                                                        {(item.quotaValue || 1) > 1 && (
+                                                                                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>
+                                                                                                (Counts as {item.quotaValue || 1} meals)
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </span>
+                                                                                    <div className={styles.quantityControl} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                                        <button
+                                                                                            onClick={() => updateBoxItem(box.boxNumber, item.id, -1)}
+                                                                                            className="btn btn-secondary"
+                                                                                            style={{ padding: '2px 8px' }}
+                                                                                        >-</button>
+                                                                                        <span style={{ width: '30px', textAlign: 'center', fontWeight: 500 }}>{qty}</span>
+                                                                                        <button
+                                                                                            onClick={() => {
+                                                                                                if (!canAdd) {
+                                                                                                    alert("Adding this item would exceed the category limit");
+                                                                                                    return;
+                                                                                                }
+                                                                                                updateBoxItem(box.boxNumber, item.id, 1);
+                                                                                            }}
+                                                                                            className="btn btn-secondary"
+                                                                                            style={{
+                                                                                                padding: '2px 8px',
+                                                                                                opacity: canAdd ? 1 : 0.5,
+                                                                                                cursor: canAdd ? 'pointer' : 'not-allowed'
+                                                                                            }}
+                                                                                            title={!canAdd ? "Adding this item would exceed the category limit" : "Add item"}
+                                                                                        >+</button>
+                                                                                    </div>
+                                                                                </div>
+                                                                                {qty > 0 && (
+                                                                                    <textarea
+                                                                                        className="input"
+                                                                                        placeholder="Add notes for this item..."
+                                                                                        value={itemNote}
+                                                                                        onChange={(e) => {
+                                                                                            const updatedBoxes = orderConfig.boxes?.map((b: BoxConfiguration) => {
+                                                                                                if (b.boxNumber !== box.boxNumber) return b;
+                                                                                                const newItemNotes = { ...(b.itemNotes || {}) };
+                                                                                                if (e.target.value.trim()) {
+                                                                                                    newItemNotes[item.id] = e.target.value;
+                                                                                                } else {
+                                                                                                    delete newItemNotes[item.id];
+                                                                                                }
+                                                                                                return { ...b, itemNotes: newItemNotes };
+                                                                                            }) || [];
+                                                                                            setOrderConfig({ ...orderConfig, boxes: updatedBoxes });
+                                                                                        }}
+                                                                                        rows={2}
+                                                                                        style={{
+                                                                                            width: '100%',
+                                                                                            fontSize: '0.85rem',
+                                                                                            resize: 'vertical',
+                                                                                            marginTop: '0.5rem'
+                                                                                        }}
+                                                                                    />
+                                                                                )}
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+
+                                                {/* Show uncategorized items if any */}
+                                                {(() => {
+                                                    const uncategorizedItems = menuItems
+                                                        .filter(i =>
+                                                            (i.vendorId === null || i.vendorId === '') &&
+                                                            i.isActive &&
+                                                            (!i.categoryId || i.categoryId === '')
+                                                        )
+                                                        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+                                                    if (uncategorizedItems.length === 0) return null;
+
+                                                    const selectedItems = box.items || {};
+
+                                                    return (
+                                                        <div style={{
+                                                            marginTop: '1rem',
+                                                            marginBottom: '1rem',
+                                                            background: 'var(--bg-surface-hover)',
+                                                            padding: '0.75rem',
+                                                            borderRadius: '6px',
+                                                            border: '1px solid var(--border-color)'
                                                         }}>
-                                                            <AlertTriangle size={12} />
-                                                            <span>You must have a total of {requiredQuotaValue} {category.name} points</span>
+                                                            <div style={{ marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: 600 }}>Other Items</div>
+                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                                {uncategorizedItems.map(item => {
+                                                                    const qty = Number(selectedItems[item.id] || 0);
+                                                                    const itemNote = box.itemNotes?.[item.id] || '';
+                                                                    return (
+                                                                        <div key={item.id} style={{
+                                                                            padding: '0.75rem',
+                                                                            background: qty > 0 ? 'rgba(251, 191, 36, 0.1)' : 'var(--bg-app)',
+                                                                            border: qty > 0 ? '2px solid #fbbf24' : '1px solid var(--border-color)',
+                                                                            borderRadius: '6px'
+                                                                        }}>
+                                                                            <div style={{
+                                                                                display: 'flex',
+                                                                                alignItems: 'center',
+                                                                                justifyContent: 'space-between',
+                                                                                marginBottom: qty > 0 ? '0.5rem' : '0'
+                                                                            }}>
+                                                                                <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>
+                                                                                    {item.name}
+                                                                                    {(item.quotaValue || 1) > 1 && (
+                                                                                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>
+                                                                                            (Counts as {item.quotaValue || 1} meals)
+                                                                                        </span>
+                                                                                    )}
+                                                                                </span>
+                                                                                <div className={styles.quantityControl} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                                    <button
+                                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, -1)}
+                                                                                        className="btn btn-secondary"
+                                                                                        style={{ padding: '2px 8px' }}
+                                                                                    >-</button>
+                                                                                    <span style={{ width: '30px', textAlign: 'center', fontWeight: 500 }}>{qty}</span>
+                                                                                    <button
+                                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, 1)}
+                                                                                        className="btn btn-secondary"
+                                                                                        style={{ padding: '2px 8px' }}
+                                                                                    >+</button>
+                                                                                </div>
+                                                                            </div>
+                                                                            {qty > 0 && (
+                                                                                <textarea
+                                                                                    className="input"
+                                                                                    placeholder="Add notes for this item..."
+                                                                                    value={itemNote}
+                                                                                    onChange={(e) => {
+                                                                                        const updatedBoxes = orderConfig.boxes?.map((b: BoxConfiguration) => {
+                                                                                            if (b.boxNumber !== box.boxNumber) return b;
+                                                                                            const newItemNotes = { ...(b.itemNotes || {}) };
+                                                                                            if (e.target.value.trim()) {
+                                                                                                newItemNotes[item.id] = e.target.value;
+                                                                                            } else {
+                                                                                                delete newItemNotes[item.id];
+                                                                                            }
+                                                                                            return { ...b, itemNotes: newItemNotes };
+                                                                                        }) || [];
+                                                                                        setOrderConfig({ ...orderConfig, boxes: updatedBoxes });
+                                                                                    }}
+                                                                                    rows={2}
+                                                                                    style={{
+                                                                                        width: '100%',
+                                                                                        fontSize: '0.85rem',
+                                                                                        resize: 'vertical',
+                                                                                        marginTop: '0.5rem'
+                                                                                    }}
+                                                                                />
+                                                                            )}
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
                                                         </div>
-                                                    )}
+                                                    );
+                                                })()}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
 
-                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                                        {availableItems.map(item => {
-                                                            const qty = Number(selectedItems[item.id] || 0);
-                                                            const itemVal = item.quotaValue || 1;
-                                                            // Check if adding this item would exceed the limit
-                                                            // If requiredQuotaValue is null, there is no limit.
-                                                            const canAdd = requiredQuotaValue === null || (categoryQuotaValue + itemVal <= requiredQuotaValue);
-
-                                                            return (
-                                                                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-app)', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                                                                    <span style={{ fontSize: '0.8rem' }}>
-                                                                        {item.name}
-                                                                        {(item.quotaValue || 1) > 1 && (
-                                                                            <span style={{ color: 'var(--text-tertiary)', marginLeft: '4px' }}>
-                                                                                (counts as {item.quotaValue || 1} meals)
-                                                                            </span>
-                                                                        )}
-                                                                    </span>
-                                                                    <div className={styles.quantityControl} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                        <button onClick={() => handleBoxItemChange(item.id, Math.max(0, qty - 1))} className="btn btn-secondary" style={{ padding: '2px 8px' }}>-</button>
-                                                                        <span style={{ width: '20px', textAlign: 'center' }}>{qty}</span>
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                if (!canAdd) {
-                                                                                    alert("Adding this item would exceed the category limit");
-                                                                                    return;
-                                                                                }
-                                                                                handleBoxItemChange(item.id, qty + 1);
-                                                                            }}
-                                                                            className="btn btn-secondary"
-                                                                            style={{
-                                                                                padding: '2px 8px',
-                                                                                opacity: canAdd ? 1 : 0.5,
-                                                                                cursor: canAdd ? 'pointer' : 'not-allowed'
-                                                                            }}
-                                                                            title={!canAdd ? "Adding this item would exceed the category limit" : "Add item"}
-                                                                        >+</button>
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-
-                                        {/* Show uncategorized items if any */}
-                                        {(() => {
-                                            const uncategorizedItems = menuItems.filter(i =>
-                                                (i.vendorId === null || i.vendorId === '') &&
-                                                i.isActive &&
-                                                (!i.categoryId || i.categoryId === '')
-                                            );
-
-                                            if (uncategorizedItems.length === 0) return null;
-
-                                            const selectedItems = orderConfig.items || {};
-
-                                            return (
-                                                <div style={{ marginTop: '1rem', marginBottom: '1rem', background: 'var(--bg-surface-hover)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                                                    <div style={{ marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: 600 }}>Other Items</div>
-                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                                                        {uncategorizedItems.map(item => {
-                                                            const qty = Number(selectedItems[item.id] || 0);
-                                                            return (
-                                                                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-app)', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                                                                    <span style={{ fontSize: '0.8rem' }}>
-                                                                        {item.name}
-                                                                        {(item.quotaValue || 1) > 1 && (
-                                                                            <span style={{ color: 'var(--text-tertiary)', marginLeft: '4px' }}>
-                                                                                (counts as {item.quotaValue || 1} meals)
-                                                                            </span>
-                                                                        )}
-                                                                    </span>
-                                                                    <div className={styles.quantityControl} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                        <button onClick={() => handleBoxItemChange(item.id, Math.max(0, qty - 1))} className="btn btn-secondary" style={{ padding: '2px 8px' }}>-</button>
-                                                                        <span style={{ width: '20px', textAlign: 'center' }}>{qty}</span>
-                                                                        <button onClick={() => handleBoxItemChange(item.id, qty + 1)} className="btn btn-secondary" style={{ padding: '2px 8px' }}>+</button>
-                                                                    </div>
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })()}
-
-                                        {/* Show message if no categories have items */}
-                                        {categories.every(category => {
-                                            const hasItems = menuItems.some(i =>
-                                                (i.vendorId === null || i.vendorId === '') &&
-                                                i.isActive &&
-                                                i.categoryId === category.id
-                                            );
-                                            return !hasItems;
-                                        }) && (
-                                                <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                                                    No box items available. Please contact support.
-                                                </div>
-                                            )}
-                                    </div>
-                                );
-                            })()}
-                        </div>
-                    )}
+                                {/* Add Box Button */}
+                                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                    <button
+                                        onClick={handleAddBox}
+                                        disabled={!canAddMoreBoxes()}
+                                        className="btn btn-primary"
+                                        style={{
+                                            padding: '0.75rem 1.5rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.5rem',
+                                            opacity: canAddMoreBoxes() ? 1 : 0.5,
+                                            cursor: canAddMoreBoxes() ? 'pointer' : 'not-allowed'
+                                        }}
+                                    >
+                                        <Plus size={18} />
+                                        Add Another Box
+                                    </button>
+                                    
+                                    {!canAddMoreBoxes() && (() => {
+                                        const firstBoxType = displayBoxes[0] ? boxTypes.find(bt => bt.id === displayBoxes[0].boxTypeId) : null;
+                                        const maxBoxes = getMaxBoxesAllowed(client.authorizedAmount, firstBoxType?.priceEach);
+                                        return (
+                                            <div style={{
+                                                padding: '0.75rem',
+                                                background: 'rgba(239, 68, 68, 0.1)',
+                                                borderRadius: '6px',
+                                                border: '1px solid var(--color-danger)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '0.5rem',
+                                                fontSize: '0.85rem',
+                                                color: 'var(--color-danger)'
+                                            }}>
+                                                <AlertTriangle size={16} />
+                                                <span>Maximum boxes reached based on authorized amount ({maxBoxes !== null ? maxBoxes : 'N/A'} boxes).</span>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     {/* Spacer to prevent content from being hidden behind fixed save bar */}
                     {(configChanged || saving) && (

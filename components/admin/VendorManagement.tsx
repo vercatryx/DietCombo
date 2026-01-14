@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Vendor, ServiceType } from '@/lib/types';
 import { addVendor, updateVendor, deleteVendor } from '@/lib/actions';
 import { useDataCache } from '@/lib/data-cache';
@@ -13,6 +13,8 @@ const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes', 'Equipment'];
 export function VendorManagement() {
     const { getVendors, invalidateReferenceData } = useDataCache();
     const [vendors, setVendors] = useState<Vendor[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [isCreating, setIsCreating] = useState(false);
     const [isMultiCreating, setIsMultiCreating] = useState(false); // New state
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -29,14 +31,25 @@ export function VendorManagement() {
     });
     const [multiCreateInput, setMultiCreateInput] = useState(''); // New state
 
+    const loadVendors = useCallback(async () => {
+        try {
+            setIsLoading(true);
+            setError(null);
+            const data = await getVendors();
+            setVendors(data);
+            console.log('[VendorManagement] Loaded vendors:', data.length);
+        } catch (err) {
+            console.error('[VendorManagement] Error loading vendors:', err);
+            setError(err instanceof Error ? err.message : 'Failed to load vendors');
+            setVendors([]);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [getVendors]);
+
     useEffect(() => {
         loadVendors();
-    }, []);
-
-    async function loadVendors() {
-        const data = await getVendors();
-        setVendors(data);
-    }
+    }, [loadVendors]);
 
     function resetForm() {
         setFormData({
@@ -159,6 +172,14 @@ export function VendorManagement() {
                     </p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button 
+                        className="btn btn-secondary" 
+                        onClick={loadVendors}
+                        disabled={isLoading}
+                        title="Refresh vendors list"
+                    >
+                        Refresh
+                    </button>
                     {/* Temporarily disabled: Single vendor mode
                     {!isCreating && !editingId && !isMultiCreating && (
                         <>
@@ -337,61 +358,75 @@ export function VendorManagement() {
                 </div>
             )}
 
-            <div className={styles.tableContainer}>
-                <table className={styles.table}>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Services</th>
-                            <th>Status</th>
-                            <th>Days</th>
-                            <th>Frequency</th>
-                            <th>Min Meals</th>
-                            <th>Cutoff (h)</th>
-                            <th style={{ textAlign: 'right' }}>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {vendors.map(vendor => (
-                            <tr key={vendor.id}>
-                                <td style={{ fontWeight: 500 }}>{vendor.name}</td>
-                                <td>
-                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                        {vendor.serviceTypes.map(t => (
-                                            <span key={t} className="badge" style={{ fontSize: '0.75rem' }}>{t}</span>
-                                        ))}
-                                    </div>
-                                </td>
-                                <td>{vendor.isActive ? <span style={{ color: 'var(--color-success)' }}>Active</span> : <span style={{ color: 'var(--text-tertiary)' }}>Inactive</span>}</td>
-                                <td>{vendor.deliveryDays.join(', ')}</td>
-                                <td>
-                                    <span style={{ fontSize: '0.85rem' }}>
-                                        {vendor.allowsMultipleDeliveries ? 'Multiple' : 'Once'}
-                                    </span>
-                                </td>
-                                <td>{vendor.minimumMeals && vendor.minimumMeals > 0 ? vendor.minimumMeals : '-'}</td>
-                                <td>{vendor.cutoffHours && vendor.cutoffHours > 0 ? vendor.cutoffHours : '-'}</td>
-                                <td style={{ textAlign: 'right' }}>
-                                    <div className={styles.actions}>
-                                        <button className={styles.iconBtn} onClick={() => handleEditInit(vendor)}>
-                                            <Edit2 size={16} />
-                                        </button>
-                                        {/* Temporarily disabled: Single vendor mode - delete button hidden */}
-                                        {false && (
-                                            <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => handleDelete(vendor.id)}>
-                                                <Trash2 size={16} />
-                                            </button>
-                                        )}
-                                    </div>
-                                </td>
+            {isLoading ? (
+                <div className={styles.emptyState}>
+                    <div className="spinner" style={{ margin: '0 auto 1rem' }}></div>
+                    <p>Loading vendors...</p>
+                </div>
+            ) : error ? (
+                <div className={styles.emptyState} style={{ color: 'var(--color-danger)' }}>
+                    <p>Error loading vendors: {error}</p>
+                    <button className="btn btn-secondary" onClick={loadVendors} style={{ marginTop: '1rem' }}>
+                        Retry
+                    </button>
+                </div>
+            ) : (
+                <div className={styles.tableContainer}>
+                    <table className={styles.table}>
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Services</th>
+                                <th>Status</th>
+                                <th>Days</th>
+                                <th>Frequency</th>
+                                <th>Min Meals</th>
+                                <th>Cutoff (h)</th>
+                                <th style={{ textAlign: 'right' }}>Actions</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {vendors.length === 0 && !isCreating && !isMultiCreating && (
-                    <div className={styles.emptyState}>No vendors configured. Create one to get started.</div>
-                )}
-            </div>
+                        </thead>
+                        <tbody>
+                            {vendors.map(vendor => (
+                                <tr key={vendor.id}>
+                                    <td style={{ fontWeight: 500 }}>{vendor.name}</td>
+                                    <td>
+                                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                            {vendor.serviceTypes.map(t => (
+                                                <span key={t} className="badge" style={{ fontSize: '0.75rem' }}>{t}</span>
+                                            ))}
+                                        </div>
+                                    </td>
+                                    <td>{vendor.isActive ? <span style={{ color: 'var(--color-success)' }}>Active</span> : <span style={{ color: 'var(--text-tertiary)' }}>Inactive</span>}</td>
+                                    <td>{vendor.deliveryDays.join(', ')}</td>
+                                    <td>
+                                        <span style={{ fontSize: '0.85rem' }}>
+                                            {vendor.allowsMultipleDeliveries ? 'Multiple' : 'Once'}
+                                        </span>
+                                    </td>
+                                    <td>{vendor.minimumMeals && vendor.minimumMeals > 0 ? vendor.minimumMeals : '-'}</td>
+                                    <td>{vendor.cutoffHours && vendor.cutoffHours > 0 ? vendor.cutoffHours : '-'}</td>
+                                    <td style={{ textAlign: 'right' }}>
+                                        <div className={styles.actions}>
+                                            <button className={styles.iconBtn} onClick={() => handleEditInit(vendor)}>
+                                                <Edit2 size={16} />
+                                            </button>
+                                            {/* Temporarily disabled: Single vendor mode - delete button hidden */}
+                                            {false && (
+                                                <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => handleDelete(vendor.id)}>
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {vendors.length === 0 && !isCreating && !isMultiCreating && (
+                        <div className={styles.emptyState}>No vendors configured. Create one to get started.</div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

@@ -89,11 +89,19 @@ export interface OrderConfiguration {
   lastUpdated?: string;
   updatedBy?: string; // Admin ID or Name
 
-  // For Boxes (still typically single vendor per box type, but keeping flexible)
+  // For Boxes - NEW: Multiple boxes support
+  boxes?: BoxConfiguration[]; // Array of individual box configurations
+
+  // For Boxes - LEGACY: Keep for backward compatibility
+  /** @deprecated Use boxes[] array instead */
   vendorId?: string; // Vendor ID for Boxes service
+  /** @deprecated Use boxes[] array instead */
   boxTypeId?: string;
+  /** @deprecated Use boxes.length instead */
   boxQuantity?: number;
+  /** @deprecated Use boxes[].items instead */
   items?: { [itemId: string]: number }; // itemId -> quantity (for box contents)
+  /** @deprecated Use boxes[].itemPrices instead */
   itemPrices?: { [itemId: string]: number }; // itemId -> price (for box item pricing)
 
   // Delivery Schedule Configuration
@@ -144,6 +152,7 @@ export interface ItemCategory {
   id: string;
   name: string;
   setValue?: number | null; // Required quota value for this category (enforces exact amount)
+  sortOrder?: number; // Sort order for displaying categories (default 0)
 }
 
 export interface MenuItem {
@@ -156,6 +165,8 @@ export interface MenuItem {
   categoryId?: string | null;
   quotaValue?: number; // How much this item counts towards a quota (default 1)
   minimumOrder?: number; // Minimum order quantity required for this product (default 0, meaning no minimum)
+  imageUrl?: string | null; // Image URL for the menu item
+  sortOrder?: number; // Sort order for displaying menu items (default 0)
 }
 
 export interface MealCategory {
@@ -184,6 +195,16 @@ export interface BoxQuota {
   boxTypeId: string;
   categoryId: string;
   targetValue: number;
+}
+
+export interface BoxConfiguration {
+  boxNumber: number; // Sequential: 1, 2, 3, ...
+  boxTypeId: string;
+  vendorId?: string; // Optional, can inherit from boxType
+  items: { [itemId: string]: number }; // itemId -> quantity for THIS box
+  itemPrices?: { [itemId: string]: number }; // Optional pricing per item
+  itemNotes?: { [itemId: string]: string }; // Optional notes per item for THIS box
+  notes?: string; // Optional notes specific to this box
 }
 
 export interface BoxType {
