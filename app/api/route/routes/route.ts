@@ -291,12 +291,38 @@ export async function GET(req: Request) {
             .in('status', activeOrderStatuses)
             .not('scheduled_delivery_date', 'is', null);
 
-        // Get upcoming_orders with delivery_day (we'll calculate delivery_date from this)
-        const { data: upcomingOrders } = await supabase
+        // Get upcoming_orders with delivery_day or scheduled_delivery_date
+        // When filtering by delivery_date, also fetch upcoming orders with matching scheduled_delivery_date
+        let upcomingOrdersQuery = supabase
             .from('upcoming_orders')
             .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
             .eq('status', 'scheduled')
             .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null');
+        
+        const { data: upcomingOrders } = await upcomingOrdersQuery;
+        
+        // If filtering by delivery_date, also fetch upcoming orders with matching scheduled_delivery_date
+        // This ensures we get all upcoming orders for that specific date
+        let upcomingOrdersByDate: any[] = [];
+        if (deliveryDate) {
+            const { data: upcomingOrdersMatchingDate } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
+                .eq('status', 'scheduled')
+                .eq('scheduled_delivery_date', deliveryDate);
+            
+            if (upcomingOrdersMatchingDate) {
+                upcomingOrdersByDate = upcomingOrdersMatchingDate;
+            }
+        }
+        
+        // Combine both sets, removing duplicates
+        const allUpcomingOrders = [...(upcomingOrders || []), ...upcomingOrdersByDate];
+        const uniqueUpcomingOrders = Array.from(
+            new Map(allUpcomingOrders.map(o => [o.id, o])).values()
+        );
+        
+        console.log(`[route/routes] Found ${uniqueUpcomingOrders.length} upcoming orders (${upcomingOrders?.length || 0} general, ${upcomingOrdersByDate.length} matching delivery_date=${deliveryDate || 'none'})`);
 
         // Import getNextOccurrence for calculating delivery dates from delivery_day
         const { getNextOccurrence } = await import('@/lib/order-dates');
@@ -342,13 +368,14 @@ export async function GET(req: Request) {
         // Process upcoming orders - calculate delivery_date from delivery_day or use scheduled_delivery_date
         // Note: upcoming_orders don't have order_id in orders table yet, so we'll set order_id to null
         // The order will be created later and we can update the stop then
-        for (const order of upcomingOrders || []) {
+        // IMPORTANT: Always include upcoming orders with scheduled_delivery_date, especially when filtering by delivery_date
+        for (const order of uniqueUpcomingOrders) {
             const clientId = String(order.client_id);
             let deliveryDateStr: string | null = null;
             let dayOfWeek: string | null = null;
             
             if (order.scheduled_delivery_date) {
-                // Use scheduled_delivery_date if available
+                // Use scheduled_delivery_date if available (prioritize this)
                 deliveryDateStr = order.scheduled_delivery_date.split('T')[0];
                 dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
             } else if (order.delivery_day) {
@@ -362,6 +389,12 @@ export async function GET(req: Request) {
             
             if (!deliveryDateStr || !dayOfWeek) continue;
             
+            // If filtering by delivery_date, only include upcoming orders that match
+            // Otherwise, include all upcoming orders
+            if (deliveryDate && deliveryDateStr !== deliveryDate) {
+                continue;
+            }
+            
             if (!clientDeliveryDates.has(clientId)) {
                 clientDeliveryDates.set(clientId, new Map());
             }
@@ -369,6 +402,7 @@ export async function GET(req: Request) {
             
             // Store delivery date info (upcoming orders don't have order_id in orders table yet, set to null)
             // Note: order_id FK constraint only allows references to orders table, not upcoming_orders
+            // Use upcoming order id as a reference (we'll store it in a way that doesn't violate FK)
             if (!datesMap.has(deliveryDateStr)) {
                 datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: null, caseId: order.case_id || null });
             }
@@ -447,11 +481,21 @@ export async function GET(req: Request) {
             // Get existing stops for this client
             const existingStopDates = clientStopsByDate.get(clientId) || new Set<string>();
             
-            // Check if client has orders for the requested day
+            // Check if client has orders for the requested day or delivery_date
             let hasOrderForRequestedDay = false;
             if (day === "all") {
                 hasOrderForRequestedDay = true;
+            } else if (deliveryDate) {
+                // When filtering by delivery_date, check if any delivery date matches
+                // This ensures upcoming orders with scheduled_delivery_date are included
+                for (const dateInfo of datesMap.values()) {
+                    if (dateInfo.deliveryDate === deliveryDate) {
+                        hasOrderForRequestedDay = true;
+                        break;
+                    }
+                }
             } else {
+                // When filtering by day only, check day of week
                 for (const dateInfo of datesMap.values()) {
                     if (dateInfo.dayOfWeek === day.toLowerCase()) {
                         hasOrderForRequestedDay = true;
@@ -461,7 +505,7 @@ export async function GET(req: Request) {
             }
             
             if (!hasOrderForRequestedDay) {
-                reasons.push(`no active order for ${day}`);
+                reasons.push(`no active order for ${day}${deliveryDate ? ` on ${deliveryDate}` : ''}`);
             }
             
             const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
@@ -475,8 +519,13 @@ export async function GET(req: Request) {
                         continue;
                     }
                     
-                    // If filtering by specific day, only create stops for that day
-                    if (day !== "all" && dateInfo.dayOfWeek !== day.toLowerCase()) {
+                    // If filtering by delivery_date, only create stops for that specific date
+                    if (deliveryDate && deliveryDateStr !== deliveryDate) {
+                        continue;
+                    }
+                    
+                    // If filtering by specific day (and not delivery_date), only create stops for that day
+                    if (!deliveryDate && day !== "all" && dateInfo.dayOfWeek !== day.toLowerCase()) {
                         continue;
                     }
                     

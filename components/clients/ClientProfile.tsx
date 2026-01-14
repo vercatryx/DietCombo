@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
 import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
@@ -561,13 +562,23 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const firstDayOrder = (upcomingOrderData as any)[firstDayKey];
 
                 if (firstDayOrder?.serviceType === 'Boxes') {
-                    setOrderConfig(firstDayOrder);
+                    let configToSet = firstDayOrder;
+                    // Merge activeOrder items into orderConfig
+                    if (data.activeOrder) {
+                        configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
+                    }
+                    setOrderConfig(configToSet);
                 } else {
-                    setOrderConfig({
+                    let configToSet = {
                         serviceType: firstDayOrder?.serviceType || data.client.serviceType,
                         caseId: firstDayOrder?.caseId,
                         deliveryDayOrders
-                    });
+                    };
+                    // Merge activeOrder items into orderConfig
+                    if (data.activeOrder) {
+                        configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
+                    }
+                    setOrderConfig(configToSet);
                 }
             } else if (upcomingOrderData.serviceType === 'Food' && !upcomingOrderData.vendorSelections && !upcomingOrderData.deliveryDayOrders) {
                 if (upcomingOrderData.vendorId) {
@@ -575,9 +586,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 } else {
                     upcomingOrderData.vendorSelections = [{ vendorId: '', items: {} }];
                 }
-                setOrderConfig(upcomingOrderData);
+                let configToSet = upcomingOrderData;
+                // Merge activeOrder items into orderConfig
+                if (data.activeOrder) {
+                    configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
+                }
+                setOrderConfig(configToSet);
             } else {
-                setOrderConfig(upcomingOrderData);
+                let configToSet = upcomingOrderData;
+                // Merge activeOrder items into orderConfig
+                if (data.activeOrder) {
+                    configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
+                }
+                setOrderConfig(configToSet);
             }
         } else if (data.client.activeOrder) {
             // No upcoming order, but we have active_order from clients table - use that
@@ -588,7 +609,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 activeOrderConfig.serviceType = data.client.serviceType;
             }
 
-            setOrderConfig(activeOrderConfig);
+            let configToSet = activeOrderConfig;
+            // Merge activeOrder items into orderConfig
+            if (data.activeOrder) {
+                configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
+            }
+            setOrderConfig(configToSet);
         } else {
             const defaultOrder: any = { serviceType: data.client.serviceType };
             if (data.client.serviceType === 'Food') {
@@ -597,7 +623,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 defaultOrder.vendorId = '';
                 defaultOrder.customItems = [];
             }
-            setOrderConfig(defaultOrder);
+            let configToSet = defaultOrder;
+            // Merge activeOrder items into orderConfig
+            if (data.activeOrder) {
+                configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
+            }
+            setOrderConfig(configToSet);
         }
 
         // Fix for Boxes: If vendorId is missing but boxTypeId exists, try to find vendor from boxType
@@ -824,6 +855,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
 
+            // Merge activeOrder items into orderConfig's deliveryDayOrders
+            if (activeOrderData && configToSet) {
+                configToSet = mergeActiveOrderIntoOrderConfig(configToSet, activeOrderData);
+            }
+
             setOrderConfig(configToSet);
             setOriginalOrderConfig(JSON.parse(JSON.stringify(configToSet))); // Deep copy for comparison
         }
@@ -831,6 +867,68 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
 
     // -- Logic Helpers --
+
+    /**
+     * Merge activeOrder items into orderConfig's deliveryDayOrders
+     * This projects updated order items from activeOrder (orders table) into the current order request (orderConfig)
+     */
+    function mergeActiveOrderIntoOrderConfig(orderConfig: any, activeOrder: any): any {
+        if (!activeOrder || !activeOrder.vendorSelections || !Array.isArray(activeOrder.vendorSelections)) {
+            return orderConfig;
+        }
+
+        // Only merge if orderConfig has deliveryDayOrders structure
+        if (!orderConfig.deliveryDayOrders || typeof orderConfig.deliveryDayOrders !== 'object') {
+            return orderConfig;
+        }
+
+        const mergedConfig = { ...orderConfig };
+        mergedConfig.deliveryDayOrders = { ...orderConfig.deliveryDayOrders };
+
+        // For each day in deliveryDayOrders, merge items from activeOrder
+        for (const day of Object.keys(mergedConfig.deliveryDayOrders)) {
+            const dayOrder = mergedConfig.deliveryDayOrders[day];
+            const dayVendorSelections = [...(dayOrder.vendorSelections || [])];
+
+            // For each vendor selection in activeOrder, merge items into the day's vendor selections
+            for (const activeVs of activeOrder.vendorSelections) {
+                if (!activeVs.vendorId || !activeVs.items) continue;
+
+                // Find matching vendor selection in this day
+                const existingVsIndex = dayVendorSelections.findIndex(vs => vs.vendorId === activeVs.vendorId);
+                
+                if (existingVsIndex >= 0) {
+                    // Merge items: combine quantities
+                    const existingVs = dayVendorSelections[existingVsIndex];
+                    const mergedItems = { ...(existingVs.items || {}) };
+                    
+                    // Add items from activeOrder, combining quantities
+                    for (const [itemId, qty] of Object.entries(activeVs.items)) {
+                        const existingQty = mergedItems[itemId] || 0;
+                        mergedItems[itemId] = (existingQty as number) + (qty as number);
+                    }
+                    
+                    dayVendorSelections[existingVsIndex] = {
+                        ...existingVs,
+                        items: mergedItems
+                    };
+                } else {
+                    // Vendor not found in this day, add it
+                    dayVendorSelections.push({
+                        vendorId: activeVs.vendorId,
+                        items: { ...activeVs.items }
+                    });
+                }
+            }
+
+            mergedConfig.deliveryDayOrders[day] = {
+                ...dayOrder,
+                vendorSelections: dayVendorSelections
+            };
+        }
+
+        return mergedConfig;
+    }
 
     function getVendorMenuItems(vendorId: string) {
         return menuItems.filter(i => i.vendorId === vendorId && i.isActive);
@@ -3771,10 +3869,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                         fontWeight: 600,
                                                                         color: 'var(--text-secondary)'
                                                                     }}>
-                                                                        {order.orderNumber ? `Order #${order.orderNumber}` : `Order ${orderIdx + 1}`}
+                                                                        {order.id ? (
+                                                                            <Link href={`/orders/${order.id}`} style={{ color: 'var(--color-primary)', textDecoration: 'none', cursor: 'pointer' }}>
+                                                                                {order.orderNumber ? `Order #${order.orderNumber}` : `Order ${orderIdx + 1}`}
+                                                                            </Link>
+                                                                        ) : (
+                                                                            <span>{order.orderNumber ? `Order #${order.orderNumber}` : `Order ${orderIdx + 1}`}</span>
+                                                                        )}
                                                                         {isMultiple && !order.orderNumber && ` of ${ordersToDisplay.length}`}
                                                                         {order.scheduledDeliveryDate && (
-                                                                            <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400 }}>
+                                                                            <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400, color: 'var(--text-secondary)' }}>
                                                                                 • Scheduled: {new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
                                                                             </span>
                                                                         )}
@@ -3869,52 +3973,57 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                     )}
 
                                                                     {/* Boxes Order Display - Show vendor, box type, and all items */}
-                                                                    {isBoxes && order.boxTypeId && (
-                                                                        <div style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                                    {isBoxes && (order.boxTypeId || (order.boxOrders && order.boxOrders.length > 0)) && (
+                                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                                                             {(() => {
-                                                                                const box = boxTypes.find(b => b.id === order.boxTypeId);
-                                                                                // Get vendorId from order first, then fall back to box.vendorId
-                                                                                const boxVendorId = order.vendorId || box?.vendorId || null;
-                                                                                const vendor = boxVendorId ? vendors.find(v => v.id === boxVendorId) : null;
-                                                                                const vendorName = vendor?.name || 'Unassigned';
-                                                                                const boxName = box?.name || 'Unknown Box';
-                                                                                const nextDelivery = boxVendorId ? getNextDeliveryDate(boxVendorId) : null;
-                                                                                const items = order.items || {};
+                                                                                const boxesToDisplay = (order.boxOrders && order.boxOrders.length > 0)
+                                                                                    ? order.boxOrders
+                                                                                    : [{
+                                                                                        boxTypeId: order.boxTypeId,
+                                                                                        vendorId: order.vendorId,
+                                                                                        quantity: order.boxQuantity,
+                                                                                        items: order.items
+                                                                                    }];
 
-                                                                                return (
-                                                                                    <>
-                                                                                        {/* Vendor */}
-                                                                                        <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                                                                                            {vendorName}
+                                                                                return boxesToDisplay.map((boxData: any, bIdx: number) => {
+                                                                                    const box = boxTypes.find(b => b.id === boxData.boxTypeId);
+                                                                                    const boxVendorId = boxData.vendorId || box?.vendorId || null;
+                                                                                    const vendor = boxVendorId ? vendors.find(v => v.id === boxVendorId) : null;
+                                                                                    const vendorName = vendor?.name || 'Unassigned';
+                                                                                    const boxName = box?.name || 'Unknown Box';
+                                                                                    const items = boxData.items || {};
+
+                                                                                    return (
+                                                                                        <div key={bIdx} style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                                                            {/* Vendor */}
+                                                                                            <div style={{ marginBottom: 'var(--spacing-xs)', fontSize: '0.8rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.025em', fontWeight: 600 }}>
+                                                                                                {vendorName}
+                                                                                            </div>
+                                                                                            {/* Box Type and Quantity */}
+                                                                                            <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+                                                                                                {boxName} × {boxData.quantity || 1}
+                                                                                            </div>
+                                                                                            {/* Items List */}
+                                                                                            {Object.keys(items).length > 0 ? (
+                                                                                                <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                                                                                                    {Object.entries(items).map(([itemId, qty]: [string, any]) => {
+                                                                                                        const item = menuItems.find(i => i.id === itemId);
+                                                                                                        return item ? (
+                                                                                                            <div key={itemId} style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                                                                                                                <span>{item.name}</span>
+                                                                                                                <span style={{ color: 'var(--text-secondary)' }}>× {qty}</span>
+                                                                                                            </div>
+                                                                                                        ) : null;
+                                                                                                    })}
+                                                                                                </div>
+                                                                                            ) : (
+                                                                                                <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                                                                                                    No items selected
+                                                                                                </div>
+                                                                                            )}
                                                                                         </div>
-                                                                                        {/* Box Type and Quantity */}
-                                                                                        <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                                                                                            {boxName} × {order.boxQuantity || 1}
-                                                                                        </div>
-                                                                                        {/* Items List */}
-                                                                                        {Object.keys(items).length > 0 ? (
-                                                                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                                                                                                {Object.entries(items).map(([itemId, qty]: [string, any]) => {
-                                                                                                    const item = menuItems.find(i => i.id === itemId);
-                                                                                                    return item ? (
-                                                                                                        <div key={itemId} style={{ marginBottom: '4px' }}>
-                                                                                                            {item.name} × {qty}
-                                                                                                        </div>
-                                                                                                    ) : null;
-                                                                                                })}
-                                                                                            </div>
-                                                                                        ) : (
-                                                                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
-                                                                                                No items selected
-                                                                                            </div>
-                                                                                        )}
-                                                                                        {nextDelivery && (
-                                                                                            <div style={{ marginTop: 'var(--spacing-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                                                                                                Next delivery: {nextDelivery.dayOfWeek}, {nextDelivery.date}
-                                                                                            </div>
-                                                                                        )}
-                                                                                    </>
-                                                                                );
+                                                                                    );
+                                                                                });
                                                                             })()}
                                                                         </div>
                                                                     )}

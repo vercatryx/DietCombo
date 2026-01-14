@@ -2784,7 +2784,7 @@ async function syncSingleOrderForDeliveryDay(
         last_updated: orderConfig.lastUpdated || currentTime.toISOString(),
         updated_by: updatedBy,
         // For Boxes orders, dates are optional (can be null)
-        // Note: scheduled_delivery_date column doesn't exist in upcoming_orders table
+        scheduled_delivery_date: scheduledDeliveryDate ? scheduledDeliveryDate.toISOString().split('T')[0] : null,
         take_effect_date: takeEffectDate ? takeEffectDate.toISOString().split('T')[0] : null,
         total_value: totalValue,
         total_items: totalItems,

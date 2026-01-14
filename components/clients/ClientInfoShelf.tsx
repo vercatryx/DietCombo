@@ -338,7 +338,7 @@ export function ClientInfoShelf({
                                 <div
                                     className={styles.orderSummaryBox}
                                     onClick={() => onOpenProfile(client.id)}
-                                    style={{ cursor: 'pointer', transition: 'background-color 0.2s' }}
+                                    style={{ cursor: 'pointer' }}
                                     title="Click to view full order details"
                                 >
                                     {orderSummary || 'No active order'}

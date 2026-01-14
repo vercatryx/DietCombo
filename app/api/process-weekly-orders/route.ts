@@ -1020,6 +1020,7 @@ export async function GET(request: NextRequest) {
                                 status: 'scheduled',
                                 last_updated: (await getCurrentTime()).toISOString(),
                                 updated_by: order.updated_by || 'System',
+                                scheduled_delivery_date: scheduledDeliveryDate ? scheduledDeliveryDate.toISOString().split('T')[0] : null,
                                 take_effect_date: takeEffectDate.toISOString().split('T')[0],
                                 total_value: totalValue,
                                 total_items: boxQuantity,

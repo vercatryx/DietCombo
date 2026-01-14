@@ -21,6 +21,7 @@ const navItems = [
 
 import { useTime } from '@/lib/time-context';
 import { Clock, Edit2, X, Check } from 'lucide-react';
+import { SidebarActiveOrderSummary } from './SidebarActiveOrderSummary';
 
 function SimulationButton() {
     const { getSettings } = useDataCache();
@@ -856,6 +857,9 @@ export function Sidebar({
                     );
                 })}
             </nav>
+
+            {/* Active Order Summary */}
+            {!isCollapsed && <SidebarActiveOrderSummary />}
 
             {/* Create Orders Button and Time Display Widget */}
             {!isCollapsed && (
