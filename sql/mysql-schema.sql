@@ -463,7 +463,9 @@ CREATE TABLE IF NOT EXISTS schedules (
 CREATE TABLE IF NOT EXISTS stops (
     id VARCHAR(36) PRIMARY KEY,
     day VARCHAR(20) NOT NULL,
+    delivery_date DATE NULL,
     client_id VARCHAR(36) NULL,
+    order_id VARCHAR(36) NULL,
     `order` INT NULL,
     name VARCHAR(255) NOT NULL,
     address VARCHAR(500) NOT NULL,
@@ -481,8 +483,12 @@ CREATE TABLE IF NOT EXISTS stops (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
     INDEX idx_stops_day (day),
-    INDEX idx_stops_client_id (client_id)
+    INDEX idx_stops_delivery_date (delivery_date),
+    INDEX idx_stops_client_id (client_id),
+    INDEX idx_stops_order_id (order_id),
+    UNIQUE KEY idx_stops_client_delivery_date (client_id, delivery_date)
 );
 
 -- Drivers (from dietfantasy - driver management)

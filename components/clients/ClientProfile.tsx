@@ -3,7 +3,7 @@
 import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getEquipment, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -4856,7 +4856,63 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // CRITICAL: Execute the single update call
             await updateClient(clientId, updateData);
 
+            // Sync to new independent tables if there's order data
+            // Sync to new independent tables if there's order data OR if we need to clear data
+            if (updateData.activeOrder && updateData.activeOrder.caseId) {
+                const serviceType = formData.serviceType;
+
+                if (serviceType === 'Custom') {
+                    if (updateData.activeOrder.custom_name && updateData.activeOrder.custom_price && updateData.activeOrder.vendorId && updateData.activeOrder.deliveryDay) {
+                        await saveClientCustomOrder(
+                            clientId,
+                            updateData.activeOrder.vendorId,
+                            updateData.activeOrder.custom_name,
+                            Number(updateData.activeOrder.custom_price),
+                            updateData.activeOrder.deliveryDay,
+                            updateData.activeOrder.caseId
+                        );
+                    }
+                }
+
+                // Save to appropriate independent tables based on what data exists
+                // NOTE: A Food service client can have BOTH deliveryDayOrders AND mealSelections (e.g., Breakfast)
+
+                // Save food orders: ALWAYS if service type is Food, to allow clearing
+                if (serviceType === 'Food') {
+                    await saveClientFoodOrder(clientId, {
+                        caseId: updateData.activeOrder.caseId,
+                        deliveryDayOrders: (updateData.activeOrder as any).deliveryDayOrders || {}
+                    });
+                }
+
+                // Also handle the case where we might have food orders but currently not Food service? 
+                // No, only save to Food table if type is Food.
+
+                // Save meal orders if mealSelections exists OR if service type is Meal OR if service type is Food (to allow clearing)
+                if ((updateData.activeOrder as any).mealSelections || serviceType === 'Meal' || serviceType === 'Food') {
+                    await saveClientMealOrder(clientId, {
+                        caseId: updateData.activeOrder.caseId,
+                        mealSelections: (updateData.activeOrder as any).mealSelections || {}
+                    });
+                }
+
+                // Save box orders if it's a Boxes service
+                if (serviceType === 'Boxes') {
+                    const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
+                    await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
+                        ...box,
+                        caseId: updateData.activeOrder?.caseId
+                    })));
+                }
+            }
+            // Still call legacy sync for backward compatibility during migration
+            await syncCurrentOrderToUpcoming(clientId, { ...client, ...updateData } as ClientProfile, true);
+
             // Reload upcoming order if we had order changes
+            // COMMENTED OUT: We rely on updatedClient.activeOrder which we just loaded above.
+            // Fetching upcomingOrder here caused Draft orders (which don't exist in upcoming_orders table)
+            // to be overwritten with null/empty, clearing the form.
+            /*
             if (hasOrderConfigChanges || hasOrderChanges) {
                 const updatedUpcomingOrder = await getUpcomingOrderForClient(clientId);
                 if (updatedUpcomingOrder) {
@@ -4864,6 +4920,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     setOriginalOrderConfig(JSON.parse(JSON.stringify(updatedUpcomingOrder)));
                 }
             }
+            */
 
             // Show cutoff-aware confirmation message if order was saved
             let confirmationMessage = 'Changes saved successfully.';

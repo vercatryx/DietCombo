@@ -549,6 +549,18 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {};
                 }
                 cleanedOrderConfig.caseId = orderConfig.caseId; // Also set above
+            } else if (serviceType === 'Custom') {
+                // For Custom: Preserve vendorId and customItems
+                cleanedOrderConfig.vendorId = orderConfig.vendorId;
+                cleanedOrderConfig.caseId = orderConfig.caseId; // Also set above
+                // Preserve customItems array, filtering out items with empty names
+                cleanedOrderConfig.customItems = (orderConfig.customItems || [])
+                    .filter((item: any) => item.name && item.name.trim() !== '')
+                    .map((item: any) => ({
+                        name: item.name || '',
+                        price: parseFloat(item.price) || 0,
+                        quantity: parseInt(item.quantity) || 1
+                    }));
             }
 
             // Create a temporary client object for syncCurrentOrderToUpcoming
@@ -2010,6 +2022,202 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     {/* Spacer to prevent content from being hidden behind fixed save bar */}
                     {(configChanged || saving) && (
                         <div style={{ height: 'clamp(140px, 20vh, 200px)' }} />
+                    )}
+                </div>
+
+                {/* Recent Orders Panel */}
+                <div className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: 'var(--spacing-md)' }}>
+                        <Calendar size={18} />
+                        <h3 className={styles.sectionTitle} style={{ marginBottom: 0, borderBottom: 'none', paddingBottom: 0 }}>
+                            Recent Orders
+                        </h3>
+                    </div>
+                    {previousOrders && previousOrders.length > 0 ? (
+                        <div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+                                {previousOrders.map((order: any, orderIdx: number) => {
+                                    const isFood = order.serviceType === 'Food';
+                                    const isBoxes = order.serviceType === 'Boxes';
+                                    const isEquipment = order.serviceType === 'Equipment';
+
+                                    return (
+                                        <div key={order.id || orderIdx} style={{
+                                            padding: 'var(--spacing-md)',
+                                            backgroundColor: 'var(--bg-surface)',
+                                            borderRadius: 'var(--radius-md)',
+                                            border: '1px solid var(--border-color)'
+                                        }}>
+                                            <div style={{
+                                                marginBottom: 'var(--spacing-md)',
+                                                paddingBottom: 'var(--spacing-sm)',
+                                                borderBottom: '1px solid var(--border-color)',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                flexWrap: 'wrap',
+                                                gap: '8px'
+                                            }}>
+                                                <div style={{
+                                                    fontSize: '0.9rem',
+                                                    fontWeight: 600,
+                                                    color: 'var(--text-secondary)'
+                                                }}>
+                                                    {order.orderNumber ? `Order #${order.orderNumber}` : `Order ${orderIdx + 1}`}
+                                                    {order.scheduledDeliveryDate && (
+                                                        <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400 }}>
+                                                            • Scheduled: {new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                                                        </span>
+                                                    )}
+                                                    {order.actualDeliveryDate && (
+                                                        <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400 }}>
+                                                            • Delivered: {new Date(order.actualDeliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {/* Proof of Delivery / Status */}
+                                                <div style={{ fontSize: '0.85rem' }}>
+                                                    {order.deliveryProofUrl ? (
+                                                        <a
+                                                            href={order.deliveryProofUrl}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            style={{
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: '4px',
+                                                                color: 'var(--color-primary)',
+                                                                fontWeight: 500,
+                                                                textDecoration: 'none'
+                                                            }}
+                                                        >
+                                                            View Proof of Delivery
+                                                        </a>
+                                                    ) : (
+                                                        <span style={{
+                                                            color: 'var(--text-tertiary)',
+                                                            fontStyle: 'italic',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '4px'
+                                                        }}>
+                                                            {order.status === 'completed' ? 'Delivered' : order.status || 'Pending'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                {/* Service Type Header */}
+                                                <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                    {isFood ? 'Food' : isBoxes ? 'Boxes' : isEquipment ? 'Equipment' : 'Unknown Service'}
+                                                </div>
+
+                                                {/* Food Order Display */}
+                                                {isFood && order.vendorSelections && order.vendorSelections.length > 0 && (
+                                                    <div style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+                                                            {order.vendorSelections.map((vendorSelection: any, idx: number) => {
+                                                                const vendor = vendors.find(v => v.id === vendorSelection.vendorId);
+                                                                const vendorName = vendor?.name || 'Unassigned';
+                                                                const items = vendorSelection.items || [];
+
+                                                                return (
+                                                                    <div key={idx} style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                                        <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                                                            {vendorName}
+                                                                        </div>
+                                                                        {items.length > 0 ? (
+                                                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                                                                                {items.map((item: any) => (
+                                                                                    <div key={item.id || item.menuItemId} style={{ marginBottom: '4px' }}>
+                                                                                        {item.menuItemName || 'Unknown Item'} × {item.quantity || 0}
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                                                                                No items
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* Boxes Order Display */}
+                                                {isBoxes && order.boxTypeId && (
+                                                    <div style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                        {(() => {
+                                                            const box = boxTypes.find(b => b.id === order.boxTypeId);
+                                                            const boxVendorId = order.vendorId || box?.vendorId || null;
+                                                            const vendor = boxVendorId ? vendors.find(v => v.id === boxVendorId) : null;
+                                                            const vendorName = vendor?.name || 'Unassigned';
+                                                            const boxName = box?.name || 'Unknown Box';
+                                                            const items = order.items || {};
+
+                                                            return (
+                                                                <>
+                                                                    <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                                                        {vendorName}
+                                                                    </div>
+                                                                    <div style={{ marginBottom: 'var(--spacing-sm)', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                                                                        {boxName} × {order.boxQuantity || 1}
+                                                                    </div>
+                                                                    {Object.keys(items).length > 0 ? (
+                                                                        <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                                                                            {Object.entries(items).map(([itemId, qty]: [string, any]) => {
+                                                                                const item = menuItems.find(i => i.id === itemId);
+                                                                                return item ? (
+                                                                                    <div key={itemId} style={{ marginBottom: '4px' }}>
+                                                                                        {item.name} × {qty}
+                                                                                    </div>
+                                                                                ) : null;
+                                                                            })}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                                                                            No items selected
+                                                                        </div>
+                                                                    )}
+                                                                </>
+                                                            );
+                                                        })()}
+                                                    </div>
+                                                )}
+
+                                                {/* Equipment Order Display */}
+                                                {isEquipment && (
+                                                    <div style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                        <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                                                            {order.notes || 'Equipment order'}
+                                                        </div>
+                                                        {order.totalValue > 0 && (
+                                                            <div style={{ marginTop: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-primary)' }}>
+                                                                ${order.totalValue.toFixed(2)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {/* Total Value */}
+                                                {order.totalValue > 0 && (
+                                                    <div style={{ marginTop: 'var(--spacing-sm)', paddingTop: 'var(--spacing-sm)', borderTop: '1px solid var(--border-color)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                        Total: ${order.totalValue.toFixed(2)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className={styles.empty} style={{ padding: 'var(--spacing-lg)', textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                            No recent orders.
+                        </div>
                     )}
                 </div>
             </div>

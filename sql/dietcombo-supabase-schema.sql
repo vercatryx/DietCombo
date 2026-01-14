@@ -179,7 +179,8 @@ CREATE TABLE IF NOT EXISTS clients (
     expiration_date DATE NULL,
     active_order JSONB NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by VARCHAR(255) NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_clients_client_id_external ON clients(client_id_external);
@@ -606,7 +607,9 @@ CREATE INDEX IF NOT EXISTS idx_signatures_order_id ON signatures(order_id);
 CREATE TABLE IF NOT EXISTS stops (
     id VARCHAR(36) PRIMARY KEY,
     day VARCHAR(20) NOT NULL,
+    delivery_date DATE NULL,
     client_id VARCHAR(36) NULL,
+    order_id VARCHAR(36) NULL,
     "order" INTEGER NULL,
     name VARCHAR(255) NOT NULL,
     address VARCHAR(500) NOT NULL,
@@ -622,12 +625,16 @@ CREATE TABLE IF NOT EXISTS stops (
     proof_url VARCHAR(500) NULL,
     assigned_driver_id VARCHAR(36) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_stops_day ON stops(day);
+CREATE INDEX IF NOT EXISTS idx_stops_delivery_date ON stops(delivery_date);
 CREATE INDEX IF NOT EXISTS idx_stops_client_id ON stops(client_id);
+CREATE INDEX IF NOT EXISTS idx_stops_order_id ON stops(order_id);
 CREATE INDEX IF NOT EXISTS idx_stops_completed ON stops(completed);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stops_client_delivery_date ON stops(client_id, delivery_date) WHERE delivery_date IS NOT NULL;
 
 CREATE TRIGGER update_stops_updated_at BEFORE UPDATE ON stops
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
