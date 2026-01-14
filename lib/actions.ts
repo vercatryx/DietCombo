@@ -1356,9 +1356,22 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
 
     // If activeOrder was updated, sync to upcoming_orders
     if (data.activeOrder) {
+        console.log('[updateClient] activeOrder provided, syncing to upcoming_orders:', {
+            clientId: id,
+            serviceType: data.activeOrder.serviceType,
+            hasVendorSelections: !!(data.activeOrder as any).vendorSelections,
+            vendorSelectionsCount: (data.activeOrder as any).vendorSelections?.length || 0,
+            hasDeliveryDayOrders: !!(data.activeOrder as any).deliveryDayOrders,
+            deliveryDayOrdersKeys: (data.activeOrder as any).deliveryDayOrders ? Object.keys((data.activeOrder as any).deliveryDayOrders) : []
+        });
         const updatedClient = await getClient(id);
         if (updatedClient) {
+            // Ensure activeOrder is set on the client object
+            updatedClient.activeOrder = data.activeOrder;
             await syncCurrentOrderToUpcoming(id, updatedClient, true);
+            console.log('[updateClient] Successfully synced order to upcoming_orders');
+        } else {
+            console.error('[updateClient] Failed to fetch updated client after update');
         }
     } else {
         // Trigger local DB sync in background even if activeOrder wasn't updated

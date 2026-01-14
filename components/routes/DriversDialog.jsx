@@ -443,40 +443,6 @@ export default function DriversDialog({
         saveTimerRef.current = setTimeout(doPost, 800); // debounce rapid edits
     }, [selectedDay, selectedRunId]);
 
-    // Manual "Save Snapshot" (always creates a NEW history item)
-    const saveSnapshotNow = React.useCallback(async () => {
-        setBusy(true);
-        try {
-            const res = await fetch("/api/route/runs/save-current", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ day: selectedDay, asNew: true }),
-            });
-            if (!res.ok) throw new Error(await res.text());
-
-            let createdId = null;
-            try {
-                const payload = await res.json().catch(() => null);
-                createdId = payload?.id ?? null;
-            } catch {}
-
-            await fetchRuns();
-            try {
-                const rr = await fetch(`/api/route/runs?day=${selectedDay}`, { cache: "no-store" });
-                const dd = await rr.json();
-                const newest = Array.isArray(dd.runs) && dd.runs.length > 0 ? dd.runs[0].id : null;
-                setSelectedRunId(String(createdId ?? newest ?? ""));
-            } catch {}
-
-            alert("Snapshot saved to history.");
-        } catch (e) {
-            console.error("Save snapshot failed:", e);
-            alert("Save snapshot failed: " + (e.message || "Unknown error"));
-        } finally {
-            setBusy(false);
-        }
-    }, [selectedDay, fetchRuns]);
-
     // === Single reassign used by the map for individual popup assigns ===
     const handleReassign = React.useCallback(async (stop, toDriverId) => {
         const toId = String(toDriverId); // Keep as string to match API expectations
@@ -995,18 +961,9 @@ export default function DriversDialog({
                             </FormControl>
                         </Box>
 
-                        {/* CENTER: Save + Generate + Driver Management */}
+                        {/* CENTER: Generate + Driver Management */}
                         <Box sx={{ justifySelf: "center", display: "flex", flexDirection: "column", gap: 1, alignItems: "center" }}>
                             <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                                <Button
-                                    onClick={saveSnapshotNow}
-                                    variant="outlined"
-                                    disabled={busy || !hasRoutes}
-                                    sx={{ fontWeight: 700, borderRadius: 2 }}
-                                >
-                                    Save Snapshot
-                                </Button>
-
                                 <Button
                                     onClick={regenerateRoutes}
                                     variant="contained"

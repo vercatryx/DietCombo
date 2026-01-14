@@ -82,17 +82,26 @@ export function MenuManagement() {
     useEffect(() => {
         async function loadData() {
             const [vData, mData] = await Promise.all([getVendors(), getMenuItems()]);
-            // Filter: Menus only for companies that ship 'Food'
-            const foodVendors = vData.filter(v => v.serviceTypes.includes('Food'));
-            setVendors(foodVendors);
+            // Show all vendors (no filtering by service type)
+            setVendors(vData);
             setMenuItems(mData);
-            // Only set selectedVendorId if it's not already set and we have vendors
-            if (foodVendors.length > 0 && !selectedVendorId) {
-                setSelectedVendorId(foodVendors[0].id);
-            }
+            // Set or validate selectedVendorId
+            // Use functional update to avoid stale closure issue
+            setSelectedVendorId(prev => {
+                // If no vendors, clear selection
+                if (vData.length === 0) {
+                    return '';
+                }
+                // If no selection or current selection is invalid, select first vendor
+                if (!prev || !vData.find(v => v.id === prev)) {
+                    return vData[0].id;
+                }
+                // Keep current selection if it's still valid
+                return prev;
+            });
         }
         loadData();
-    }, [getVendors, getMenuItems]); // Removed selectedVendorId from dependencies to prevent re-render loop
+    }, [getVendors, getMenuItems]);
 
     const filteredItems = selectedVendorId 
         ? menuItems.filter(item => item.vendorId === selectedVendorId)

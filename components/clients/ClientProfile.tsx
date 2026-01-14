@@ -4458,15 +4458,34 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             for (const day of daysWithVendors) cleanedDeliveryDayOrders[day] = deliveryDayOrders[day];
                             cleanedOrderConfig.deliveryDayOrders = cleanedDeliveryDayOrders;
                             cleanedOrderConfig.vendorSelections = undefined;
+                        } else {
+                            // CRITICAL FIX: If no days have vendors with items, preserve the original vendorSelections format
+                            // Don't set vendorSelections to undefined - keep the original structure
+                            console.warn('[prepareActiveOrder] No days with vendors found after conversion, preserving original vendorSelections format');
+                            // Keep vendorSelections as-is, don't convert to deliveryDayOrders
+                            cleanedOrderConfig.deliveryDayOrders = undefined;
                         }
                     } else {
                         // Single-day format: Clean and preserve vendor selections
+                        // CRITICAL FIX: Only filter out selections without vendorId, but keep all selections with vendorId
+                        // even if items are empty (they might be added later or items might be in a different format)
                         cleanedOrderConfig.vendorSelections = (cleanedOrderConfig.vendorSelections || [])
-                            .filter((s: any) => s.vendorId) // Only keep selections with a vendor
+                            .filter((s: any) => s.vendorId && s.vendorId.trim() !== '') // Only keep selections with a valid vendor
                             .map((s: any) => ({
                                 vendorId: s.vendorId, // Preserve vendor ID
-                                items: s.items || {} // Preserve items
+                                items: s.items || {} // Preserve items (even if empty - they might be added in a different format)
                             }));
+                        
+                        // Validate that we have at least one vendor selection with items
+                        const hasItems = cleanedOrderConfig.vendorSelections.some((s: any) => {
+                            const items = s.items || {};
+                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                        });
+                        
+                        if (!hasItems && cleanedOrderConfig.vendorSelections.length > 0) {
+                            console.warn('[prepareActiveOrder] Vendor selections exist but no items found. This might indicate items are in itemsByDay format.');
+                            // Don't remove vendor selections - they might have items in itemsByDay format that we missed
+                        }
                     }
                 }
             } else if (formData.serviceType === 'Boxes') {
@@ -4768,10 +4787,70 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
             // Sync Current Order Request
             const hasOrderConfigChanges = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
-            if (hasOrderConfigChanges || hasOrderChanges) {
+            
+            // CRITICAL FIX: Check if order has actual vendor selections with items before saving
+            const hasValidOrderData = (() => {
+                if (!orderConfig) return false;
+                
+                // Check for vendor selections with items
+                if (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) {
+                    const hasItemsInSelections = orderConfig.vendorSelections.some((s: any) => {
+                        if (!s.vendorId) return false;
+                        // Check regular items
+                        if (s.items && Object.keys(s.items).length > 0 && Object.values(s.items).some((qty: any) => (Number(qty) || 0) > 0)) {
+                            return true;
+                        }
+                        // Check itemsByDay
+                        if (s.itemsByDay && s.selectedDeliveryDays) {
+                            return s.selectedDeliveryDays.some((day: string) => {
+                                const dayItems = s.itemsByDay[day] || {};
+                                return Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
+                            });
+                        }
+                        return false;
+                    });
+                    if (hasItemsInSelections) return true;
+                }
+                
+                // Check deliveryDayOrders
+                if (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0) {
+                    const hasItemsInDeliveryDays = Object.values(orderConfig.deliveryDayOrders).some((day: any) => {
+                        if (!day.vendorSelections || day.vendorSelections.length === 0) return false;
+                        return day.vendorSelections.some((s: any) => {
+                            if (!s.vendorId) return false;
+                            const items = s.items || {};
+                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                        });
+                    });
+                    if (hasItemsInDeliveryDays) return true;
+                }
+                
+                // For Boxes, check if vendorId or boxTypeId is set
+                if (formData.serviceType === 'Boxes') {
+                    return !!(orderConfig.vendorId || orderConfig.boxTypeId);
+                }
+                
+                return false;
+            })();
+            
+            if ((hasOrderConfigChanges || hasOrderChanges) && hasValidOrderData) {
                 // Add activeOrder to updateData so updateClient handles the full save + sync efficiently
                 // efficiently with only ONE revalidation
-                updateData.activeOrder = prepareActiveOrder();
+                const preparedOrder = prepareActiveOrder();
+                if (preparedOrder) {
+                    updateData.activeOrder = preparedOrder;
+                    console.log('[ClientProfile] Saving order with activeOrder:', {
+                        serviceType: preparedOrder.serviceType,
+                        hasVendorSelections: !!(preparedOrder as any).vendorSelections,
+                        vendorSelectionsCount: (preparedOrder as any).vendorSelections?.length || 0,
+                        hasDeliveryDayOrders: !!(preparedOrder as any).deliveryDayOrders,
+                        deliveryDayOrdersKeys: (preparedOrder as any).deliveryDayOrders ? Object.keys((preparedOrder as any).deliveryDayOrders) : []
+                    });
+                } else {
+                    console.warn('[ClientProfile] prepareActiveOrder returned undefined, skipping order save');
+                }
+            } else if ((hasOrderConfigChanges || hasOrderChanges) && !hasValidOrderData) {
+                console.warn('[ClientProfile] Order changes detected but no valid order data (no items selected), skipping order save');
             }
 
             // CRITICAL: Execute the single update call
