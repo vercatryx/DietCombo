@@ -2434,7 +2434,14 @@ async function syncSingleOrderForDeliveryDay(
         serviceType: orderConfig.serviceType,
         deliveryDay,
         itemsCount: orderConfig.items ? Object.keys(orderConfig.items).length : 0,
-        boxQuantity: orderConfig.boxQuantity
+        boxQuantity: orderConfig.boxQuantity,
+        hasVendorSelections: !!orderConfig.vendorSelections,
+        vendorSelectionsCount: orderConfig.vendorSelections?.length || 0,
+        vendorSelections: orderConfig.vendorSelections?.map((vs: any) => ({
+            vendorId: vs.vendorId,
+            hasItems: !!vs.items,
+            itemCount: vs.items ? Object.keys(vs.items).length : 0
+        })) || []
     });
 
     // Calculate dates for this specific delivery day
@@ -2971,11 +2978,23 @@ async function syncSingleOrderForDeliveryDay(
         let calculatedTotalFromItems = 0;
         const allVendorSelections: any[] = [];
 
-        console.log(`[syncSingleOrderForDeliveryDay] Starting to insert items for upcoming_order_id: ${upcomingOrderId}`);
+        console.log(`[syncSingleOrderForDeliveryDay] Starting to insert items for upcoming_order_id: ${upcomingOrderId}`, {
+            vendorSelectionsCount: orderConfig.vendorSelections.length,
+            vendorSelections: orderConfig.vendorSelections.map((vs: any) => ({
+                vendorId: vs.vendorId,
+                hasItems: !!vs.items,
+                itemCount: vs.items ? Object.keys(vs.items).length : 0,
+                items: vs.items
+            }))
+        });
 
         for (const selection of orderConfig.vendorSelections) {
             if (!selection.vendorId || !selection.items) {
-                console.log(`[syncSingleOrderForDeliveryDay] Skipping vendor selection - missing vendorId or items`);
+                console.log(`[syncSingleOrderForDeliveryDay] Skipping vendor selection - missing vendorId or items`, {
+                    vendorId: selection.vendorId,
+                    hasItems: !!selection.items,
+                    items: selection.items
+                });
                 continue;
             }
 
@@ -3419,23 +3438,41 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
             const dayOrder = deliveryDayOrders[deliveryDay];
             if (dayOrder && dayOrder.vendorSelections) {
                 // Create a full order config for this day
-                const dayOrderConfig = {
-                    serviceType: orderConfig.serviceType,
-                    caseId: orderConfig.caseId,
-                    vendorSelections: dayOrder.vendorSelections.filter((s: any) => {
+                // CRITICAL FIX: Ensure items are preserved when filtering
+                const filteredVendorSelections = dayOrder.vendorSelections
+                    .filter((s: any) => {
                         // Only include vendors with items
                         if (!s.vendorId) return false;
                         const items = s.items || {};
                         const hasItems = Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
                         return hasItems;
-                    }),
+                    })
+                    .map((s: any) => ({
+                        // Explicitly preserve vendorId and items to ensure they're not lost
+                        vendorId: s.vendorId,
+                        items: s.items || {}
+                    }));
+                
+                const dayOrderConfig = {
+                    serviceType: orderConfig.serviceType,
+                    caseId: orderConfig.caseId,
+                    vendorSelections: filteredVendorSelections,
                     lastUpdated: orderConfig.lastUpdated,
                     updatedBy: orderConfig.updatedBy
                 };
 
+                console.log(`[syncCurrentOrderToUpcoming] Syncing order for ${deliveryDay} with ${dayOrderConfig.vendorSelections.length} vendor(s)`, {
+                    deliveryDay,
+                    vendorCount: dayOrderConfig.vendorSelections.length,
+                    vendors: dayOrderConfig.vendorSelections.map((vs: any) => ({
+                        vendorId: vs.vendorId,
+                        itemCount: Object.keys(vs.items || {}).length,
+                        items: vs.items
+                    }))
+                });
+
                 // Only sync if there are vendors with items
                 if (dayOrderConfig.vendorSelections.length > 0) {
-                    // console.log(`[syncCurrentOrderToUpcoming] Syncing order for ${deliveryDay} with ${dayOrderConfig.vendorSelections.length} vendor(s)`);
                     await syncSingleOrderForDeliveryDay(
                         clientId,
                         dayOrderConfig,
@@ -3445,7 +3482,7 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
                         boxTypes
                     );
                 } else {
-                    // console.log(`[syncCurrentOrderToUpcoming] Skipping ${deliveryDay} - no vendors with items`);
+                    console.log(`[syncCurrentOrderToUpcoming] Skipping ${deliveryDay} - no vendors with items`);
                 }
             }
         }

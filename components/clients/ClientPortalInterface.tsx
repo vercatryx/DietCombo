@@ -234,6 +234,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         }
     }, [orderConfig.boxes, orderConfig.boxTypeId, client.serviceType]);
 
+
     // Extract dependencies for auto-save
     const caseId = useMemo(() => orderConfig?.caseId ?? null, [orderConfig?.caseId]);
     const vendorSelections = useMemo(() => orderConfig?.vendorSelections ?? [], [orderConfig?.vendorSelections]);
@@ -323,9 +324,19 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 }
             }
         } else if (serviceType === 'Boxes') {
-            // Migrate to boxes format if needed
-            const migratedConfig = migrateLegacyBoxOrder(orderConfig);
-            const boxes = migratedConfig.boxes || [];
+            // CRITICAL: Always use orderConfig.boxes directly if it exists, even if empty
+            // This ensures we're reading from the current state, not a stale migration
+            let boxes: BoxConfiguration[] = [];
+            
+            if (orderConfig.boxes && Array.isArray(orderConfig.boxes)) {
+                // Use boxes directly from orderConfig (current state)
+                boxes = orderConfig.boxes;
+            } else {
+                // Only migrate if boxes doesn't exist at all
+                const migrated = migrateLegacyBoxOrder(orderConfig);
+                boxes = migrated.boxes || [];
+            }
+
 
             // Validate boxes array exists and has at least one box
             if (boxes.length === 0) {
@@ -357,6 +368,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
 
                 // Validate category set values per box
                 for (const box of boxes) {
+                    // CRITICAL: Read items directly from box.items, ensuring we have the current state
                     const selectedItems = box.items || {};
                     const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
                     const boxQuotas = boxType ? activeBoxQuotas.filter(q => q.boxTypeId === box.boxTypeId) : [];
@@ -371,7 +383,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                 const item = menuItems.find(i => i.id === itemId);
                                 if (item && item.categoryId === category.id) {
                                     const itemQuotaValue = item.quotaValue || 1;
-                                    categoryQuotaValue += (qty as number) * itemQuotaValue;
+                                    const quantity = Number(qty) || 0;
+                                    categoryQuotaValue += quantity * itemQuotaValue;
                                 }
                             }
 
@@ -412,8 +425,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 }
             }
 
-            // Legacy format validation (fallback)
-            if (boxes.length === 0 && orderConfig.items) {
+            // Legacy format validation (fallback) - only if no boxes exist at all
+            // IMPORTANT: Only validate legacy format if boxes array doesn't exist or is truly empty
+            // If orderConfig.boxes exists (even if empty array), we've already validated using boxes format above
+            // CRITICAL: Don't run legacy validation if we have boxes - that means items are in boxes[].items, not orderConfig.items
+            if (boxes.length === 0 && orderConfig.items && (!orderConfig.boxes || (Array.isArray(orderConfig.boxes) && orderConfig.boxes.length === 0))) {
                 const selectedItems = orderConfig.items || {};
 
                 for (const category of categories) {
@@ -821,14 +837,28 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     }
 
     function updateBoxItem(boxNumber: number, itemId: string, delta: number) {
-        const currentBoxes = orderConfig.boxes || [];
+        // CRITICAL: Ensure boxes array exists before updating
+        let currentBoxes = orderConfig.boxes || [];
+        
+        // If no boxes exist, create a default box
+        if (currentBoxes.length === 0) {
+            const defaultBox: BoxConfiguration = {
+                boxNumber: 1,
+                boxTypeId: boxTypes.find(bt => bt.isActive)?.id || '',
+                items: {},
+                itemPrices: {},
+                itemNotes: {}
+            };
+            currentBoxes = [defaultBox];
+        }
+        
         const updatedBoxes = currentBoxes.map((box: BoxConfiguration) => {
             if (box.boxNumber !== boxNumber) return box;
             
-            const currentQty = box.items[itemId] || 0;
+            const currentQty = (box.items && box.items[itemId]) ? box.items[itemId] : 0;
             const newQty = Math.max(0, currentQty + delta);
             
-            const newItems = { ...box.items };
+            const newItems = { ...(box.items || {}) };
             const newItemNotes = { ...(box.itemNotes || {}) };
             
             if (newQty > 0) {
@@ -1526,7 +1556,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                             );
                         }
 
-                        // Ensure at least one box exists
+                        // Ensure at least one box exists for display
+                        // Note: The useEffect above ensures orderConfig.boxes has at least one box
                         const displayBoxes = boxes.length > 0 ? boxes : [{
                             boxNumber: 1,
                             boxTypeId: boxTypes.find(bt => bt.isActive)?.id || '',
