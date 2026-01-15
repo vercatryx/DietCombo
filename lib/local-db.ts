@@ -521,7 +521,7 @@ export async function getUpcomingOrderForClientLocal(clientId: string) {
                 if (vendorSelections.length > 0) {
                     orderConfig.vendorSelections = [];
                     for (const vs of vendorSelections) {
-                        const items = db.upcomingOrderItems.filter(item => item.vendor_selection_id === vs.id);
+                        const items = db.upcomingOrderItems.filter(item => item.upcoming_vendor_selection_id === vs.id);
                         const itemsMap: any = {};
                         for (const item of items) {
                             itemsMap[item.menu_item_id] = item.quantity;
@@ -590,7 +590,7 @@ export async function getUpcomingOrderForClientLocal(clientId: string) {
                 if (vendorSelections.length > 0) {
                     orderConfig.vendorSelections = [];
                     for (const vs of vendorSelections) {
-                        const items = db.upcomingOrderItems.filter(item => item.vendor_selection_id === vs.id);
+                        const items = db.upcomingOrderItems.filter(item => item.upcoming_vendor_selection_id === vs.id);
                         const itemsMap: any = {};
                         for (const item of items) {
                             itemsMap[item.menu_item_id] = item.quantity;

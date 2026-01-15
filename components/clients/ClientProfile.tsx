@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
 import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
-import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getEquipment, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData } from '@/lib/cached-data';
+import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getEquipment, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
 import {
     getNextDeliveryDate as getNextDeliveryDateUtil,
@@ -183,6 +183,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const [orderConfig, setOrderConfig] = useState<any>({}); // Current Order Request (from upcoming_orders)
     const [originalOrderConfig, setOriginalOrderConfig] = useState<any>({}); // Original Order Request for comparison
     const [activeOrder, setActiveOrder] = useState<any>(null); // Recent Orders (from orders table)
+    const [allUpcomingOrders, setAllUpcomingOrders] = useState<any[]>([]); // All upcoming orders for display
 
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
@@ -706,7 +707,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             getClients(),
             getRegularClients(),
             getUpcomingOrderForClient(clientId),
-            getActiveOrderForClient(clientId),
+            getRecentOrdersForClient(clientId),
             getClientHistory(clientId),
             getOrderHistory(clientId),
             getBillingHistory(clientId)
@@ -764,6 +765,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 clientActiveOrder: JSON.stringify(c.activeOrder, null, 2)
             });
             let configToSet: any = null;
+            
+            // If there's a case ID, prioritize loading from upcoming orders
+            const hasCaseId = orderConfig?.caseId || c.activeOrder?.caseId || upcomingOrderData?.caseId;
+            
             if (upcomingOrderData) {
                 // Check if it's the multi-day format (object keyed by delivery day, not deliveryDayOrders)
                 const isMultiDayFormat = upcomingOrderData && typeof upcomingOrderData === 'object' &&
@@ -795,10 +800,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     } else {
                         configToSet = {
                             serviceType: firstDayOrder?.serviceType || c.serviceType,
-                            caseId: firstDayOrder?.caseId,
+                            caseId: firstDayOrder?.caseId || hasCaseId,
                             deliveryDayOrders
                         };
                     }
+                } else if (upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
+                    // Already in deliveryDayOrders format - use it directly
+                    configToSet = {
+                        serviceType: upcomingOrderData.serviceType || c.serviceType,
+                        caseId: upcomingOrderData.caseId || hasCaseId,
+                        deliveryDayOrders: upcomingOrderData.deliveryDayOrders
+                    };
                 } else if (upcomingOrderData.serviceType === 'Food' && !upcomingOrderData.vendorSelections && !upcomingOrderData.deliveryDayOrders) {
                     // Migration/Safety: Ensure vendorSelections exists for Food
                     if (upcomingOrderData.vendorId) {
@@ -807,9 +819,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     } else {
                         upcomingOrderData.vendorSelections = [{ vendorId: '', items: {} }];
                     }
-                    configToSet = upcomingOrderData;
+                    configToSet = {
+                        ...upcomingOrderData,
+                        caseId: upcomingOrderData.caseId || hasCaseId
+                    };
                 } else {
-                    configToSet = upcomingOrderData;
+                    // Single order format - ensure caseId is set
+                    configToSet = {
+                        ...upcomingOrderData,
+                        caseId: upcomingOrderData.caseId || hasCaseId
+                    };
                 }
             }
 
@@ -827,6 +846,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (!configToSet.serviceType) {
                     configToSet.serviceType = c.serviceType;
                 }
+                // Ensure caseId is set if it exists in activeOrder
+                if (!configToSet.caseId && c.activeOrder.caseId) {
+                    configToSet.caseId = c.activeOrder.caseId;
+                }
             }
 
             if (!configToSet) {
@@ -839,6 +862,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     defaultOrder.customItems = [];
                 }
                 configToSet = defaultOrder;
+            }
+            
+            // Ensure caseId is preserved if it exists in orderConfig (from form input)
+            if (orderConfig?.caseId && !configToSet.caseId) {
+                configToSet.caseId = orderConfig.caseId;
             }
 
             // Fix for Boxes: Handle boxOrders array and migrate legacy fields if needed
@@ -904,8 +932,61 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 configToSet = mergeActiveOrderIntoOrderConfig(configToSet, activeOrderData);
             }
 
+            // Ensure caseId is set in orderConfig if it exists in any source
+            if (!configToSet.caseId) {
+                if (orderConfig?.caseId) {
+                    configToSet.caseId = orderConfig.caseId;
+                } else if (c.activeOrder?.caseId) {
+                    configToSet.caseId = c.activeOrder.caseId;
+                }
+            }
+            
             setOrderConfig(configToSet);
             setOriginalOrderConfig(JSON.parse(JSON.stringify(configToSet))); // Deep copy for comparison
+
+            // Extract all upcoming orders for display
+            const extractedOrders: any[] = [];
+            if (upcomingOrderData) {
+                // Check if it's the multi-day format (object keyed by delivery day, not deliveryDayOrders)
+                const isMultiDayFormat = upcomingOrderData && typeof upcomingOrderData === 'object' &&
+                    !upcomingOrderData.serviceType &&
+                    !upcomingOrderData.deliveryDayOrders &&
+                    Object.keys(upcomingOrderData).some(key => {
+                        const val = (upcomingOrderData as any)[key];
+                        return val && (val.serviceType || val.id);
+                    });
+
+                if (isMultiDayFormat) {
+                    // Extract each day's order
+                    for (const day of Object.keys(upcomingOrderData)) {
+                        const dayOrder = (upcomingOrderData as any)[day];
+                        if (dayOrder && (dayOrder.serviceType || dayOrder.id)) {
+                            extractedOrders.push({
+                                ...dayOrder,
+                                deliveryDay: day
+                            });
+                        }
+                    }
+                } else if (upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
+                    // deliveryDayOrders format - extract orders from each day
+                    for (const day of Object.keys(upcomingOrderData.deliveryDayOrders)) {
+                        const dayOrder = (upcomingOrderData.deliveryDayOrders as any)[day];
+                        if (dayOrder && dayOrder.vendorSelections) {
+                            extractedOrders.push({
+                                serviceType: upcomingOrderData.serviceType || configToSet?.serviceType,
+                                caseId: upcomingOrderData.caseId || configToSet?.caseId,
+                                vendorSelections: dayOrder.vendorSelections,
+                                deliveryDay: day,
+                                id: upcomingOrderData.id
+                            });
+                        }
+                    }
+                } else if (upcomingOrderData.serviceType) {
+                    // Single order format
+                    extractedOrders.push(upcomingOrderData);
+                }
+            }
+            setAllUpcomingOrders(extractedOrders);
         }
     }
 
@@ -976,6 +1057,40 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     function getVendorMenuItems(vendorId: string) {
         return menuItems.filter(i => i.vendorId === vendorId && i.isActive);
+    }
+
+    /**
+     * Get the total quantity of a menu item from all upcoming orders for a specific vendor
+     * This reads from the allUpcomingOrders state which contains orders from upcoming_orders table
+     */
+    function getUpcomingOrderQuantityForItem(itemId: string, vendorId: string): number {
+        let totalQuantity = 0;
+        
+        if (!allUpcomingOrders || allUpcomingOrders.length === 0 || !vendorId) {
+            return 0;
+        }
+
+        for (const order of allUpcomingOrders) {
+            if (order.serviceType === 'Food' && order.vendorSelections && Array.isArray(order.vendorSelections)) {
+                // Find vendor selection for this vendor
+                const vendorSelection = order.vendorSelections.find((vs: any) => vs.vendorId === vendorId);
+                if (vendorSelection && vendorSelection.items) {
+                    // Handle both object format {itemId: quantity} and array format
+                    if (typeof vendorSelection.items === 'object' && !Array.isArray(vendorSelection.items)) {
+                        const quantity = Number(vendorSelection.items[itemId] || 0);
+                        totalQuantity += quantity;
+                    }
+                }
+            } else if (order.serviceType === 'Boxes' && order.vendorId === vendorId && order.items) {
+                // For boxes, check if the vendor matches and sum items
+                if (typeof order.items === 'object' && !Array.isArray(order.items)) {
+                    const quantity = Number(order.items[itemId] || 0);
+                    totalQuantity += quantity;
+                }
+            }
+        }
+
+        return totalQuantity;
     }
 
     function getCurrentOrderTotalValue(day: string | null = null) {
@@ -2611,6 +2726,160 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                     </div>
                                                 </div>
 
+                                                {/* Display items from all existing upcoming orders */}
+                                                {allUpcomingOrders.length > 0 && (() => {
+                                                    // Helper function to extract items from an order
+                                                    const extractItemsFromOrder = (order: any): Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; deliveryDay?: string }> => {
+                                                        const items: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; deliveryDay?: string }> = [];
+                                                        
+                                                        if (order.serviceType === 'Food' && order.vendorSelections) {
+                                                            order.vendorSelections.forEach((vs: any) => {
+                                                                const vendor = vendors.find(v => v.id === vs.vendorId);
+                                                                const vendorName = vendor?.name || 'Unknown Vendor';
+                                                                
+                                                                if (vs.items) {
+                                                                    Object.entries(vs.items).forEach(([itemId, qty]: [string, any]) => {
+                                                                        const menuItem = menuItems.find(mi => mi.id === itemId);
+                                                                        const itemName = menuItem?.name || 'Unknown Item';
+                                                                        const quantity = Number(qty) || 0;
+                                                                        
+                                                                        if (quantity > 0) {
+                                                                            items.push({
+                                                                                itemId,
+                                                                                itemName,
+                                                                                quantity,
+                                                                                vendorName,
+                                                                                deliveryDay: order.deliveryDay
+                                                                            });
+                                                                        }
+                                                                    });
+                                                                }
+                                                            });
+                                                        } else if (order.serviceType === 'Boxes' && order.items) {
+                                                            const vendor = vendors.find(v => v.id === order.vendorId);
+                                                            const vendorName = vendor?.name || 'Unknown Vendor';
+                                                            
+                                                            Object.entries(order.items).forEach(([itemId, qty]: [string, any]) => {
+                                                                const menuItem = menuItems.find(mi => mi.id === itemId);
+                                                                const itemName = menuItem?.name || 'Unknown Item';
+                                                                const quantity = Number(qty) || 0;
+                                                                
+                                                                if (quantity > 0) {
+                                                                    items.push({
+                                                                        itemId,
+                                                                        itemName,
+                                                                        quantity,
+                                                                        vendorName,
+                                                                        deliveryDay: order.deliveryDay
+                                                                    });
+                                                                }
+                                                            });
+                                                        }
+                                                        
+                                                        return items;
+                                                    };
+
+                                                    // Collect all items from all upcoming orders
+                                                    const allItems: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; deliveryDay?: string; orderId?: string }> = [];
+                                                    allUpcomingOrders.forEach((order) => {
+                                                        const orderItems = extractItemsFromOrder(order);
+                                                        orderItems.forEach(item => {
+                                                            allItems.push({
+                                                                ...item,
+                                                                orderId: order.id
+                                                            });
+                                                        });
+                                                    });
+
+                                                    // Group items by itemId and vendor, summing quantities
+                                                    const itemMap = new Map<string, { itemId: string; itemName: string; quantity: number; vendorName: string; deliveryDays: Set<string> }>();
+                                                    allItems.forEach(item => {
+                                                        const key = `${item.itemId}-${item.vendorName}`;
+                                                        if (itemMap.has(key)) {
+                                                            const existing = itemMap.get(key)!;
+                                                            existing.quantity += item.quantity;
+                                                            if (item.deliveryDay) {
+                                                                existing.deliveryDays.add(item.deliveryDay);
+                                                            }
+                                                        } else {
+                                                            itemMap.set(key, {
+                                                                itemId: item.itemId,
+                                                                itemName: item.itemName,
+                                                                quantity: item.quantity,
+                                                                vendorName: item.vendorName,
+                                                                deliveryDays: new Set(item.deliveryDay ? [item.deliveryDay] : [])
+                                                            });
+                                                        }
+                                                    });
+
+                                                    const groupedItems = Array.from(itemMap.values());
+
+                                                    if (groupedItems.length > 0) {
+                                                        return (
+                                                            <div style={{
+                                                                marginBottom: 'var(--spacing-md)',
+                                                                padding: 'var(--spacing-md)',
+                                                                backgroundColor: 'var(--bg-surface-hover)',
+                                                                borderRadius: 'var(--radius-md)',
+                                                                border: '1px solid var(--border-color)'
+                                                            }}>
+                                                                <div style={{
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '0.5rem',
+                                                                    marginBottom: 'var(--spacing-sm)',
+                                                                    fontSize: '0.9rem',
+                                                                    fontWeight: 600,
+                                                                    color: 'var(--text-secondary)'
+                                                                }}>
+                                                                    <ShoppingCart size={16} />
+                                                                    <span>Existing Upcoming Orders Items</span>
+                                                                </div>
+                                                                <div style={{
+                                                                    display: 'flex',
+                                                                    flexDirection: 'column',
+                                                                    gap: '0.5rem'
+                                                                }}>
+                                                                    {groupedItems.map((item, idx) => (
+                                                                        <div key={`${item.itemId}-${item.vendorName}-${idx}`} style={{
+                                                                            display: 'flex',
+                                                                            justifyContent: 'space-between',
+                                                                            alignItems: 'center',
+                                                                            padding: '0.5rem',
+                                                                            backgroundColor: 'var(--bg-app)',
+                                                                            borderRadius: 'var(--radius-sm)',
+                                                                            fontSize: '0.85rem'
+                                                                        }}>
+                                                                            <div style={{ flex: 1 }}>
+                                                                                <div style={{ fontWeight: 500 }}>
+                                                                                    {item.itemName}
+                                                                                </div>
+                                                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+                                                                                    {item.vendorName}
+                                                                                    {item.deliveryDays.size > 0 && (
+                                                                                        <span style={{ marginLeft: '0.5rem' }}>
+                                                                                            ({Array.from(item.deliveryDays).join(', ')})
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+                                                                            <div style={{
+                                                                                fontWeight: 600,
+                                                                                color: 'var(--color-primary)',
+                                                                                minWidth: '40px',
+                                                                                textAlign: 'right'
+                                                                            }}>
+                                                                                {item.quantity}
+                                                                            </div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    }
+                                                    return null;
+                                                })()}
+
                                                 {(() => {
                                                     // Unified Warning / Rule Display
 
@@ -2905,6 +3174,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                         <div className={styles.menuItems}>
                                                                                                             {getVendorMenuItems(selection.vendorId).map((item) => {
                                                                                                                 const qty = Number(dayItems[item.id] || 0);
+                                                                                                                const upcomingQty = getUpcomingOrderQuantityForItem(item.id, selection.vendorId);
                                                                                                                 return (
                                                                                                                     <div key={item.id} className={styles.menuItem}>
                                                                                                                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -2913,6 +3183,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                                                 {(item.quotaValue || 1) > 1 && (
                                                                                                                                     <span style={{ color: 'var(--text-tertiary)', fontSize: '0.9em', marginLeft: '4px' }}>
                                                                                                                                         (counts as {item.quotaValue || 1} meals)
+                                                                                                                                    </span>
+                                                                                                                                )}
+                                                                                                                                {upcomingQty > 0 && (
+                                                                                                                                    <span style={{ 
+                                                                                                                                        color: 'var(--color-primary)', 
+                                                                                                                                        fontSize: '0.85em', 
+                                                                                                                                        marginLeft: '6px',
+                                                                                                                                        fontWeight: 500,
+                                                                                                                                        backgroundColor: 'var(--bg-surface-hover)',
+                                                                                                                                        padding: '2px 6px',
+                                                                                                                                        borderRadius: 'var(--radius-sm)'
+                                                                                                                                    }}>
+                                                                                                                                        ({upcomingQty} in upcoming orders)
                                                                                                                                     </span>
                                                                                                                                 )}
                                                                                                                             </span>
@@ -3012,6 +3295,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                 } else {
                                                                                                     qty = Number(selection.items?.[item.id] || 0);
                                                                                                 }
+                                                                                                const upcomingQty = getUpcomingOrderQuantityForItem(item.id, selection.vendorId);
                                                                                                 return (
                                                                                                     <div key={item.id} className={styles.menuItem}>
                                                                                                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -3020,6 +3304,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                                 {(item.quotaValue || 1) > 1 && (
                                                                                                                     <span style={{ color: 'var(--text-tertiary)', fontSize: '0.9em', marginLeft: '4px' }}>
                                                                                                                         (counts as {item.quotaValue || 1} meals)
+                                                                                                                    </span>
+                                                                                                                )}
+                                                                                                                {upcomingQty > 0 && (
+                                                                                                                    <span style={{ 
+                                                                                                                        color: 'var(--color-primary)', 
+                                                                                                                        fontSize: '0.85em', 
+                                                                                                                        marginLeft: '6px',
+                                                                                                                        fontWeight: 500,
+                                                                                                                        backgroundColor: 'var(--bg-surface-hover)',
+                                                                                                                        padding: '2px 6px',
+                                                                                                                        borderRadius: 'var(--radius-sm)'
+                                                                                                                    }}>
+                                                                                                                        ({upcomingQty} in upcoming orders)
                                                                                                                     </span>
                                                                                                                 )}
                                                                                                             </span>
@@ -3243,6 +3540,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                     <div className={styles.menuItems}>
                                                                                                         {getVendorMenuItems(selection.vendorId).map((item) => {
                                                                                                             const qty = Number(dayItems[item.id] || 0);
+                                                                                                            const upcomingQty = getUpcomingOrderQuantityForItem(item.id, selection.vendorId);
                                                                                                             return (
                                                                                                                 <div key={item.id} className={styles.menuItem}>
                                                                                                                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -3251,6 +3549,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                                             {(item.quotaValue || 1) > 1 && (
                                                                                                                                 <span style={{ color: 'var(--text-tertiary)', fontSize: '0.9em', marginLeft: '4px' }}>
                                                                                                                                     (counts as {item.quotaValue || 1} meals)
+                                                                                                                                </span>
+                                                                                                                            )}
+                                                                                                                            {upcomingQty > 0 && (
+                                                                                                                                <span style={{ 
+                                                                                                                                    color: 'var(--color-primary)', 
+                                                                                                                                    fontSize: '0.85em', 
+                                                                                                                                    marginLeft: '6px',
+                                                                                                                                    fontWeight: 500,
+                                                                                                                                    backgroundColor: 'var(--bg-surface-hover)',
+                                                                                                                                    padding: '2px 6px',
+                                                                                                                                    borderRadius: 'var(--radius-sm)'
+                                                                                                                                }}>
+                                                                                                                                    ({upcomingQty} in upcoming orders)
                                                                                                                                 </span>
                                                                                                                             )}
                                                                                                                         </span>
@@ -3356,6 +3667,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                             } else {
                                                                                                 qty = Number(selection.items?.[item.id] || 0);
                                                                                             }
+                                                                                            const upcomingQty = getUpcomingOrderQuantityForItem(item.id, selection.vendorId);
                                                                                             return (
                                                                                                 <div key={item.id} className={styles.menuItem}>
                                                                                                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -3364,6 +3676,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                             {(item.quotaValue || 1) > 1 && (
                                                                                                                 <span style={{ color: 'var(--text-tertiary)', fontSize: '0.9em', marginLeft: '4px' }}>
                                                                                                                     (counts as {item.quotaValue || 1} meals)
+                                                                                                                </span>
+                                                                                                            )}
+                                                                                                            {upcomingQty > 0 && (
+                                                                                                                <span style={{ 
+                                                                                                                    color: 'var(--color-primary)', 
+                                                                                                                    fontSize: '0.85em', 
+                                                                                                                    marginLeft: '6px',
+                                                                                                                    fontWeight: 500,
+                                                                                                                    backgroundColor: 'var(--bg-surface-hover)',
+                                                                                                                    padding: '2px 6px',
+                                                                                                                    borderRadius: 'var(--radius-sm)'
+                                                                                                                }}>
+                                                                                                                    ({upcomingQty} in upcoming orders)
                                                                                                                 </span>
                                                                                                             )}
                                                                                                         </span>
@@ -4017,7 +4342,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                         // Reload data to show the new order in Recent Orders section
                                                                         setLoadingOrderDetails(true);
                                                                         const [activeOrderData, orderHistoryData] = await Promise.all([
-                                                                            getActiveOrderForClient(clientId),
+                                                                            getRecentOrdersForClient(clientId),
                                                                             getOrderHistory(clientId)
                                                                         ]);
                                                                         setActiveOrder(activeOrderData);
@@ -4186,11 +4511,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                         No items selected
                                                                                                     </div>
                                                                                                 )}
-                                                                                                {nextDelivery && (
-                                                                                                    <div style={{ marginTop: 'var(--spacing-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                                                                                                        Next delivery: {nextDelivery.dayOfWeek}, {nextDelivery.date}
-                                                                                                    </div>
-                                                                                                )}
+
                                                                                             </div>
                                                                                         );
                                                                                     })}
@@ -4299,11 +4620,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                 ${price.toFixed(2)}
                                                                                             </span>
                                                                                         </div>
-                                                                                        {nextDelivery && (
-                                                                                            <div style={{ marginTop: 'var(--spacing-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                                                                                                Next delivery: {nextDelivery.dayOfWeek}, {nextDelivery.date}
-                                                                                            </div>
-                                                                                        )}
+
                                                                                     </>
                                                                                 );
                                                                             })()}

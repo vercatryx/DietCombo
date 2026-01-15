@@ -22,6 +22,7 @@ import {
     getBillingHistory as serverGetBillingHistory,
     getUpcomingOrderForClient as serverGetUpcomingOrderForClient,
     getCompletedOrdersWithDeliveryProof as serverGetCompletedOrdersWithDeliveryProof,
+    getRecentOrdersForClient as serverGetRecentOrdersForClient,
 } from './actions';
 
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, AppSettings, ItemCategory, DeliveryRecord, CompletedOrderWithDeliveryProof, Equipment } from './types';
@@ -51,6 +52,7 @@ const orderHistoryCache: Map<string, CacheEntry<any[]>> = new Map();
 const deliveryHistoryCache: Map<string, CacheEntry<DeliveryRecord[]>> = new Map();
 const billingHistoryCache: Map<string, CacheEntry<any[]>> = new Map();
 const completedOrdersWithDeliveryProofCache: Map<string, CacheEntry<CompletedOrderWithDeliveryProof[]>> = new Map();
+const recentOrdersCache: Map<string, CacheEntry<any>> = new Map();
 
 // Helper to check if cache entry is stale
 function isStale<T>(entry: CacheEntry<T> | undefined, duration: number): boolean {
@@ -252,6 +254,17 @@ export async function getBillingHistory(clientId: string): Promise<any[]> {
     return data;
 }
 
+export async function getRecentOrdersForClient(clientId: string, limit: number = 3): Promise<any> {
+    const cacheKey = `${clientId}_${limit}`;
+    const cached = recentOrdersCache.get(cacheKey);
+    if (!isStale(cached, CACHE_DURATION.ORDER_DATA)) {
+        return cached!.data;
+    }
+    const data = await serverGetRecentOrdersForClient(clientId, limit);
+    recentOrdersCache.set(cacheKey, { data, timestamp: Date.now() });
+    return data;
+}
+
 export async function getCompletedOrdersWithDeliveryProof(clientId: string): Promise<CompletedOrderWithDeliveryProof[]> {
     const cached = completedOrdersWithDeliveryProofCache.get(clientId);
     if (!isStale(cached, CACHE_DURATION.ORDER_DATA)) {
@@ -270,5 +283,12 @@ export function invalidateOrderData(clientId: string) {
     deliveryHistoryCache.delete(clientId);
     billingHistoryCache.delete(clientId);
     completedOrdersWithDeliveryProofCache.delete(clientId);
+    recentOrdersCache.delete(clientId);
+    // Also clear with limits since keys include limit
+    for (const key of recentOrdersCache.keys()) {
+        if (key.startsWith(`${clientId}_`)) {
+            recentOrdersCache.delete(key);
+        }
+    }
 }
 

@@ -4119,6 +4119,143 @@ export async function getActiveOrderForClient(clientId: string) {
 }
 
 /**
+ * Get recent orders from orders table for a client
+ * Returns the most recent orders (limited by limit parameter, default 3)
+ * Used for "Recent Orders" display in ClientProfile
+ */
+export async function getRecentOrdersForClient(clientId: string, limit: number = 3) {
+    if (!clientId) return null;
+
+    try {
+        // Query orders table by client_id, ordered by created_at DESC, limited by limit
+        let { data: ordersData, error } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('client_id', clientId)
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (error) {
+            console.error('Error fetching recent orders:', error);
+            return null;
+        }
+
+        if (!ordersData || ordersData.length === 0) {
+            return null;
+        }
+
+        // Fetch related data
+        const menuItems = await getMenuItems();
+        const vendors = await getVendors();
+        const boxTypes = await getBoxTypes();
+
+        // Process all orders
+        const processOrder = async (orderData: any) => {
+            // Build order configuration object
+            const orderConfig: any = {
+                id: orderData.id,
+                serviceType: orderData.service_type,
+                caseId: orderData.case_id,
+                status: orderData.status,
+                lastUpdated: orderData.last_updated,
+                updatedBy: orderData.updated_by,
+                scheduledDeliveryDate: orderData.scheduled_delivery_date,
+                createdAt: orderData.created_at,
+                deliveryDistribution: orderData.delivery_distribution,
+                totalValue: orderData.total_value,
+                totalItems: orderData.total_items,
+                notes: orderData.notes,
+                deliveryDay: orderData.delivery_day,
+                isUpcoming: false,
+                orderNumber: orderData.order_number,
+                proofOfDelivery: orderData.proof_of_delivery_image || orderData.delivery_proof_url
+            };
+
+            const vendorSelectionsTable = 'order_vendor_selections';
+            const itemsTable = 'order_items';
+            const boxSelectionsTable = 'order_box_selections';
+
+            // Get Vendor Selections (for Food service)
+            const { data: vendorSelections } = await supabase
+                .from(vendorSelectionsTable)
+                .select('*')
+                .eq('order_id', orderData.id);
+
+            if (vendorSelections) {
+                const vendorSelectionsWithItems = await Promise.all(vendorSelections.map(async (selection: any) => {
+                    const { data: items } = await supabase
+                        .from(itemsTable)
+                        .select('*')
+                        .eq('vendor_selection_id', selection.id);
+
+                    const itemsMap: any = {};
+                    const itemNotesMap: any = {};
+
+                    if (items) {
+                        items.forEach((item: any) => {
+                            if (item.menu_item_id) {
+                                itemsMap[item.menu_item_id] = item.quantity;
+                                if (item.notes) {
+                                    itemNotesMap[item.menu_item_id] = item.notes;
+                                }
+                            }
+                        });
+                    }
+
+                    return {
+                        id: selection.id, // Keep ID for reference
+                        vendorId: selection.vendor_id,
+                        selectedDeliveryDays: selection.selected_days || [],
+                        items: itemsMap,
+                        itemNotes: itemNotesMap,
+                        itemsByDay: selection.items_by_day || {}, // For new format
+                        itemNotesByDay: selection.item_notes_by_day || {} // For new format
+                    };
+                }));
+
+                orderConfig.vendorSelections = vendorSelectionsWithItems;
+            }
+
+            // Get Box Selections (for Boxes service)
+            const { data: boxSelections } = await supabase
+                .from(boxSelectionsTable)
+                .select('*')
+                .eq('order_id', orderData.id);
+
+            if (boxSelections && boxSelections.length > 0) {
+                // Map to boxOrders format
+                orderConfig.boxOrders = boxSelections.map((box: any) => ({
+                    boxTypeId: box.box_type_id,
+                    vendorId: box.vendor_id,
+                    quantity: box.quantity,
+                    items: box.items || {},
+                    itemNotes: box.item_notes || {}
+                }));
+                // Also set top-level properties for backward compatibility if single box
+                if (boxSelections.length === 1) {
+                    orderConfig.boxTypeId = boxSelections[0].box_type_id;
+                    orderConfig.vendorId = boxSelections[0].vendor_id;
+                    orderConfig.boxQuantity = boxSelections[0].quantity;
+                }
+            }
+
+            return orderConfig;
+        };
+
+        const processedOrders = await Promise.all(ordersData.map(processOrder));
+
+        return {
+            orders: processedOrders,
+            multiple: true // Flag to tell UI it's a list
+        };
+
+    } catch (error) {
+        console.error('getRecentOrdersForClient error:', error);
+        return null;
+    }
+}
+
+/**
  * Get upcoming order from upcoming_orders table for a client
  * This is used for "Current Order Request" form
  */
