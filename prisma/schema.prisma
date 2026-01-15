@@ -1,0 +1,842 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Table: admins
+// ============================================
+model Admin {
+  id        String   @id @default(uuid())
+  username  String   @unique @db.VarChar(255)
+  password  String   @db.VarChar(255)
+  name      String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp
+
+  @@map("admins")
+}
+
+// ============================================
+// Table: app_settings
+// ============================================
+model AppSettings {
+  id                    String   @id @default("1") @db.VarChar(36)
+  weeklyCutoffDay       String   @default("Friday") @map("weekly_cutoff_day") @db.VarChar(50)
+  weeklyCutoffTime      String   @default("17:00") @map("weekly_cutoff_time") @db.VarChar(50)
+  reportEmail           String?  @map("report_email") @db.VarChar(255)
+  enablePasswordlessLogin Boolean @default(false) @map("enable_passwordless_login")
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamp
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamp
+
+  @@map("app_settings")
+}
+
+// ============================================
+// Table: billing_records
+// ============================================
+model BillingRecord {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  clientId  String    @map("client_id") @db.VarChar(36)
+  orderId   String?   @map("order_id") @db.VarChar(36)
+  status    String    @db.VarChar(50)
+  remarks   String?   @db.Text
+  navigator String?   @db.VarChar(255)
+  amount    Decimal   @db.Decimal(10, 2)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  order  Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([clientId], map: "idx_billing_records_client_id")
+  @@index([orderId], map: "idx_billing_records_order_id")
+  @@map("billing_records")
+}
+
+// ============================================
+// Table: box_quotas
+// ============================================
+model BoxQuota {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  boxTypeId  String   @map("box_type_id") @db.VarChar(36)
+  categoryId String   @map("category_id") @db.VarChar(36)
+  targetValue Decimal  @map("target_value") @db.Decimal(10, 2)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamp
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamp
+
+  boxType  BoxType      @relation(fields: [boxTypeId], references: [id], onDelete: Cascade)
+  category ItemCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([boxTypeId], map: "idx_box_quotas_box_type_id")
+  @@index([categoryId], map: "idx_box_quotas_category_id")
+  @@map("box_quotas")
+}
+
+// ============================================
+// Table: box_types
+// ============================================
+model BoxType {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  name      String    @db.VarChar(255)
+  vendorId  String?   @map("vendor_id") @db.VarChar(36)
+  isActive  Boolean   @default(true) @map("is_active")
+  priceEach Decimal?  @map("price_each") @db.Decimal(10, 2)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  vendor            Vendor?                @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  boxQuotas         BoxQuota[]
+  orderBoxSelections        OrderBoxSelection[]
+  upcomingOrderBoxSelections UpcomingOrderBoxSelection[]
+
+  @@index([vendorId], map: "idx_box_types_vendor_id")
+  @@map("box_types")
+}
+
+// ============================================
+// Table: city_colors
+// ============================================
+model CityColor {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  city      String   @unique @db.VarChar(100)
+  color     String   @db.VarChar(7)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp
+
+  @@map("city_colors")
+}
+
+// ============================================
+// Table: client_statuses
+// ============================================
+model ClientStatus {
+  id                  String   @id @default(uuid()) @db.VarChar(36)
+  name                String   @db.VarChar(255)
+  isSystemDefault     Boolean  @default(false) @map("is_system_default")
+  deliveriesAllowed   Boolean  @default(true) @map("deliveries_allowed")
+  requiresUnitsOnChange Boolean @default(false) @map("requires_units_on_change")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamp
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamp
+
+  clients Client[]
+
+  @@map("client_statuses")
+}
+
+// ============================================
+// Table: clients
+// ============================================
+model Client {
+  id                    String    @id @default(uuid()) @db.VarChar(36)
+  fullName              String    @map("full_name") @db.VarChar(255)
+  firstName             String?   @map("first_name") @db.VarChar(255)
+  lastName              String?   @map("last_name") @db.VarChar(255)
+  email                 String?   @db.VarChar(255)
+  address               String?   @db.Text
+  apt                   String?   @db.VarChar(50)
+  city                  String?   @db.VarChar(100)
+  state                 String?   @db.VarChar(2)
+  zip                   String?   @db.VarChar(10)
+  county                String?   @db.VarChar(100)
+  phoneNumber           String?   @map("phone_number") @db.VarChar(255)
+  secondaryPhoneNumber  String?   @map("secondary_phone_number") @db.VarChar(255)
+  clientIdExternal      String?   @map("client_id_external") @db.VarChar(100)
+  caseIdExternal        String?   @map("case_id_external") @db.VarChar(100)
+  medicaid              Boolean   @default(false)
+  paused                Boolean   @default(false)
+  complex               Boolean   @default(false)
+  bill                  Boolean   @default(true)
+  delivery              Boolean   @default(true)
+  dislikes              String?   @db.Text
+  latitude              Float?    @db.DoublePrecision
+  longitude             Float?    @db.DoublePrecision
+  lat                   Float?    @db.DoublePrecision
+  lng                   Float?    @db.DoublePrecision
+  geocodedAt            DateTime? @map("geocoded_at") @db.Timestamp
+  billings              Json?     @db.JsonB
+  visits                Json?     @db.JsonB
+  signToken             String?   @unique @map("sign_token") @db.VarChar(255)
+  navigatorId           String?   @map("navigator_id") @db.VarChar(36)
+  endDate               DateTime? @map("end_date") @db.Date
+  screeningTookPlace    Boolean   @default(false) @map("screening_took_place")
+  screeningSigned       Boolean   @default(false) @map("screening_signed")
+  screeningStatus       String    @default("not_started") @map("screening_status") @db.VarChar(50)
+  notes                 String?   @db.Text
+  statusId              String?   @map("status_id") @db.VarChar(36)
+  serviceType           String    @map("service_type") @db.VarChar(50)
+  approvedMealsPerWeek  Int?      @map("approved_meals_per_week")
+  parentClientId        String?   @map("parent_client_id") @db.VarChar(36)
+  dob                   DateTime? @db.Date
+  cin                   Decimal?  @db.Decimal(10, 0)
+  authorizedAmount      Decimal?  @map("authorized_amount") @db.Decimal(10, 2)
+  expirationDate        DateTime? @map("expiration_date") @db.Date
+  activeOrder           Json?     @map("active_order") @db.JsonB
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamp
+  updatedBy             String?   @map("updated_by") @db.VarChar(255)
+
+  // Relations
+  navigator       Navigator?      @relation(fields: [navigatorId], references: [id], onDelete: SetNull)
+  status          ClientStatus?   @relation(fields: [statusId], references: [id], onDelete: SetNull)
+  parentClient    Client?         @relation("ClientDependents", fields: [parentClientId], references: [id], onDelete: SetNull)
+  dependents      Client[]        @relation("ClientDependents")
+  orders          Order[]
+  upcomingOrders  UpcomingOrder[]
+  billingRecords  BillingRecord[]
+  deliveryHistory DeliveryHistory[]
+  navigatorLogs   NavigatorLog[]
+  formSubmissions FormSubmission[]
+  signatures      Signature[]
+  schedules       Schedule?
+  stops           Stop[]
+  orderHistory    OrderHistory[]
+
+  @@index([clientIdExternal], map: "idx_clients_client_id_external")
+  @@index([caseIdExternal], map: "idx_clients_case_id_external")
+  @@index([signToken], map: "idx_clients_sign_token")
+  @@index([navigatorId], map: "idx_clients_navigator_id")
+  @@index([statusId], map: "idx_clients_status_id")
+  @@index([parentClientId], map: "idx_clients_parent_client_id")
+  @@map("clients")
+}
+
+// ============================================
+// Table: delivery_history
+// ============================================
+model DeliveryHistory {
+  id                  String    @id @default(uuid()) @db.VarChar(36)
+  clientId            String    @map("client_id") @db.VarChar(36)
+  vendorId            String    @map("vendor_id") @db.VarChar(36)
+  serviceType         String    @map("service_type") @db.VarChar(50)
+  deliveryDate        DateTime  @map("delivery_date") @db.Date
+  itemsSummary        String?   @map("items_summary") @db.Text
+  proofOfDeliveryImage String?  @map("proof_of_delivery_image") @db.VarChar(500)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([clientId], map: "idx_delivery_history_client_id")
+  @@index([vendorId], map: "idx_delivery_history_vendor_id")
+  @@map("delivery_history")
+}
+
+// ============================================
+// Table: drivers
+// ============================================
+model Driver {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  day       String   @db.VarChar(20)
+  name      String   @db.VarChar(255)
+  color     String?  @db.VarChar(7)
+  stopIds   Json?    @map("stop_ids") @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp
+
+  assignedStops Stop[] @relation("AssignedDriver")
+
+  @@index([day], map: "idx_drivers_day")
+  @@index([name], map: "idx_drivers_name")
+  @@map("drivers")
+}
+
+// ============================================
+// Table: equipment
+// ============================================
+model Equipment {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  name      String    @db.VarChar(255)
+  price     Decimal   @db.Decimal(10, 2)
+  vendorId  String?   @map("vendor_id") @db.VarChar(36)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([vendorId], map: "idx_equipment_vendor_id")
+  @@map("equipment")
+}
+
+// ============================================
+// Table: filled_forms
+// ============================================
+model FilledForm {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  formId    String    @map("form_id") @db.VarChar(36)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  form     Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers  FormAnswer[]
+
+  @@index([formId], map: "idx_filled_forms_form_id")
+  @@map("filled_forms")
+}
+
+// ============================================
+// Table: forms
+// ============================================
+model Form {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  title       String    @db.VarChar(255)
+  description String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  questions      Question[]
+  filledForms    FilledForm[]
+  formSubmissions FormSubmission[]
+
+  @@map("forms")
+}
+
+// ============================================
+// Table: form_answers
+// ============================================
+model FormAnswer {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  filledFormId String    @map("filled_form_id") @db.VarChar(36)
+  questionId   String    @map("question_id") @db.VarChar(36)
+  value        String    @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  filledForm FilledForm @relation(fields: [filledFormId], references: [id], onDelete: Cascade)
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([filledFormId], map: "idx_form_answers_filled_form_id")
+  @@index([questionId], map: "idx_form_answers_question_id")
+  @@map("form_answers")
+}
+
+// ============================================
+// Table: form_submissions
+// ============================================
+model FormSubmission {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  formId      String    @map("form_id") @db.VarChar(36)
+  clientId    String?   @map("client_id") @db.VarChar(36)
+  token       String    @unique @db.VarChar(255)
+  status      String    @default("pending") @db.VarChar(50)
+  data        Json?     @db.JsonB
+  signatureUrl String?  @map("signature_url") @db.VarChar(500)
+  pdfUrl      String?   @map("pdf_url") @db.VarChar(500)
+  comments    String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  form   Form    @relation(fields: [formId], references: [id], onDelete: Cascade)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([token], map: "idx_form_submissions_token")
+  @@index([clientId], map: "idx_form_submissions_client_id")
+  @@index([formId], map: "idx_form_submissions_form_id")
+  @@map("form_submissions")
+}
+
+// ============================================
+// Table: item_categories
+// ============================================
+model ItemCategory {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  name      String    @db.VarChar(255)
+  setValue  Decimal?  @map("set_value") @db.Decimal(10, 2)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  menuItems MenuItem[]
+  boxQuotas BoxQuota[]
+
+  @@map("item_categories")
+}
+
+// ============================================
+// Table: menu_items
+// ============================================
+model MenuItem {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  vendorId    String?   @map("vendor_id") @db.VarChar(36)
+  name        String    @db.VarChar(255)
+  value       Decimal   @db.Decimal(10, 2)
+  priceEach   Decimal?  @map("price_each") @db.Decimal(10, 2)
+  isActive    Boolean   @default(true) @map("is_active")
+  categoryId  String?   @map("category_id") @db.VarChar(36)
+  quotaValue  Decimal?  @map("quota_value") @db.Decimal(10, 2)
+  minimumOrder Int      @default(0) @map("minimum_order")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  vendor        Vendor?          @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  category      ItemCategory?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  orderItems    OrderItem[]
+  upcomingOrderItems UpcomingOrderItem[]
+
+  @@index([vendorId], map: "idx_menu_items_vendor_id")
+  @@index([categoryId], map: "idx_menu_items_category_id")
+  @@map("menu_items")
+}
+
+// ============================================
+// Table: navigators
+// ============================================
+model Navigator {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  name      String    @db.VarChar(255)
+  email     String?   @db.VarChar(255)
+  password  String?   @db.VarChar(255)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  clients       Client[]
+  navigatorLogs NavigatorLog[]
+
+  @@map("navigators")
+}
+
+// ============================================
+// Table: navigator_logs
+// ============================================
+model NavigatorLog {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  navigatorId String    @map("navigator_id") @db.VarChar(36)
+  clientId    String    @map("client_id") @db.VarChar(36)
+  action      String    @db.VarChar(255)
+  details     String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  navigator Navigator @relation(fields: [navigatorId], references: [id], onDelete: Cascade)
+  client    Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([navigatorId], map: "idx_navigator_logs_navigator_id")
+  @@index([clientId], map: "idx_navigator_logs_client_id")
+  @@map("navigator_logs")
+}
+
+// ============================================
+// Table: nutritionists
+// ============================================
+model Nutritionist {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  name      String    @db.VarChar(255)
+  email     String?   @db.VarChar(255)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  @@map("nutritionists")
+}
+
+// ============================================
+// Table: orders
+// ============================================
+model Order {
+  id                    String    @id @default(uuid()) @db.VarChar(36)
+  clientId              String    @map("client_id") @db.VarChar(36)
+  serviceType           String    @map("service_type") @db.VarChar(50)
+  caseId                String?   @map("case_id") @db.VarChar(255)
+  status                String    @default("pending") @db.VarChar(50)
+  scheduledDeliveryDate DateTime? @map("scheduled_delivery_date") @db.Date
+  actualDeliveryDate    DateTime? @map("actual_delivery_date") @db.Date
+  deliveryDay           String?   @map("delivery_day") @db.VarChar(50)
+  deliveryDistribution  Json?     @map("delivery_distribution") @db.JsonB
+  totalValue            Decimal?  @map("total_value") @db.Decimal(10, 2)
+  totalItems            Int?      @map("total_items")
+  notes                 String?   @db.Text
+  proofOfDeliveryUrl    String?   @map("proof_of_delivery_url") @db.VarChar(500)
+  orderNumber           Int?      @unique @map("order_number")
+  lastUpdated           DateTime  @default(now()) @updatedAt @map("last_updated") @db.Timestamp
+  updatedBy             String?   @map("updated_by") @db.VarChar(255)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  client                  Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  vendorSelections        OrderVendorSelection[]
+  boxSelections           OrderBoxSelection[]
+  billingRecords          BillingRecord[]
+  signatures              Signature[]
+  stops                   Stop[]         @relation("StopOrder")
+  processedUpcomingOrders UpcomingOrder[]
+
+  @@index([orderNumber], map: "idx_orders_order_number")
+  @@index([clientId], map: "idx_orders_client_id")
+  @@index([status], map: "idx_orders_status")
+  @@index([scheduledDeliveryDate], map: "idx_orders_scheduled_delivery_date")
+  @@map("orders")
+}
+
+// ============================================
+// Table: order_box_selections
+// ============================================
+model OrderBoxSelection {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  orderId   String    @map("order_id") @db.VarChar(36)
+  vendorId  String    @map("vendor_id") @db.VarChar(36)
+  boxTypeId String    @map("box_type_id") @db.VarChar(36)
+  quantity  Int       @default(1)
+  items     Json?     @db.JsonB
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  vendor   Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  boxType  BoxType  @relation(fields: [boxTypeId], references: [id], onDelete: Cascade)
+
+  @@index([orderId], map: "idx_order_box_selections_order_id")
+  @@index([vendorId], map: "idx_order_box_selections_vendor_id")
+  @@index([boxTypeId], map: "idx_order_box_selections_box_type_id")
+  @@map("order_box_selections")
+}
+
+// ============================================
+// Table: order_history
+// ============================================
+model OrderHistory {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  clientId  String    @map("client_id") @db.VarChar(36)
+  who       String    @db.VarChar(255)
+  summary   String    @db.Text
+  timestamp DateTime  @default(now()) @map("timestamp") @db.Timestamp
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId], map: "idx_order_history_client_id")
+  @@map("order_history")
+}
+
+// ============================================
+// Table: order_items
+// ============================================
+model OrderItem {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  vendorSelectionId String    @map("vendor_selection_id") @db.VarChar(36)
+  menuItemId        String    @map("menu_item_id") @db.VarChar(36)
+  quantity          Int       @default(1)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  vendorSelection OrderVendorSelection @relation(fields: [vendorSelectionId], references: [id], onDelete: Cascade)
+  menuItem        MenuItem             @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([vendorSelectionId], map: "idx_order_items_vendor_selection_id")
+  @@index([menuItemId], map: "idx_order_items_menu_item_id")
+  @@map("order_items")
+}
+
+// ============================================
+// Table: order_vendor_selections
+// ============================================
+model OrderVendorSelection {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  orderId   String    @map("order_id") @db.VarChar(36)
+  vendorId  String    @map("vendor_id") @db.VarChar(36)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  vendor      Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  items       OrderItem[]
+  upcomingOrderItems UpcomingOrderItem[]
+
+  @@index([orderId], map: "idx_order_vendor_selections_order_id")
+  @@index([vendorId], map: "idx_order_vendor_selections_vendor_id")
+  @@map("order_vendor_selections")
+}
+
+// ============================================
+// Table: passwordless_codes
+// ============================================
+model PasswordlessCode {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  email     String    @db.VarChar(255)
+  code      String    @db.VarChar(10)
+  expiresAt DateTime  @map("expires_at") @db.Timestamp
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  attempts  Int       @default(0)
+
+  @@index([email], map: "idx_passwordless_codes_email")
+  @@map("passwordless_codes")
+}
+
+// ============================================
+// Table: questions
+// ============================================
+model Question {
+  id                   String    @id @default(uuid()) @db.VarChar(36)
+  formId               String    @map("form_id") @db.VarChar(36)
+  text                 String    @db.Text
+  type                 String    @db.VarChar(50)
+  options              Json?     @db.JsonB
+  conditionalTextInputs Json?    @map("conditional_text_inputs") @db.JsonB
+  order                Int       @default(0) @map("order")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  form   Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers FormAnswer[]
+
+  @@index([formId], map: "idx_questions_form_id")
+  @@map("questions")
+}
+
+// ============================================
+// Table: routes
+// ============================================
+model Route {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  name      String    @db.VarChar(255)
+  color     String?   @db.VarChar(7)
+  stopIds   Json?     @map("stop_ids") @db.JsonB
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  @@index([name], map: "idx_routes_name")
+  @@map("routes")
+}
+
+// ============================================
+// Table: route_runs
+// ============================================
+model RouteRun {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  day       String    @db.VarChar(20)
+  snapshot  Json      @db.JsonB
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  @@index([day], map: "idx_route_runs_day")
+  @@index([createdAt], map: "idx_route_runs_created_at")
+  @@map("route_runs")
+}
+
+// ============================================
+// Table: schedules
+// ============================================
+model Schedule {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  clientId  String    @unique @map("client_id") @db.VarChar(36)
+  monday    Boolean   @default(true)
+  tuesday   Boolean   @default(true)
+  wednesday Boolean   @default(true)
+  thursday  Boolean   @default(true)
+  friday    Boolean   @default(true)
+  saturday  Boolean   @default(true)
+  sunday    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId], map: "idx_schedules_client_id")
+  @@map("schedules")
+}
+
+// ============================================
+// Table: settings
+// ============================================
+model Setting {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  key       String    @unique @db.VarChar(255)
+  value     String    @db.Text
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamp
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  @@index([key], map: "idx_settings_key")
+  @@map("settings")
+}
+
+// ============================================
+// Table: signatures
+// ============================================
+model Signature {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  clientId  String    @map("client_id") @db.VarChar(36)
+  orderId   String?   @map("order_id") @db.VarChar(36)
+  slot      Int
+  strokes   Json      @db.JsonB
+  signedAt  DateTime  @default(now()) @map("signed_at") @db.Timestamp
+  ip        String?   @db.VarChar(45)
+  userAgent String?   @map("user_agent") @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  order  Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([clientId, slot])
+  @@index([clientId], map: "idx_signatures_client_id")
+  @@index([signedAt], map: "idx_signatures_signed_at")
+  @@index([orderId], map: "idx_signatures_order_id")
+  @@map("signatures")
+}
+
+// ============================================
+// Table: stops
+// ============================================
+model Stop {
+  id              String    @id @default(uuid()) @db.VarChar(36)
+  day             String    @db.VarChar(20)
+  deliveryDate    DateTime? @map("delivery_date") @db.Date
+  clientId        String?   @map("client_id") @db.VarChar(36)
+  orderId         String?   @map("order_id") @db.VarChar(36)
+  order           Int?      @map("order")
+  name            String    @db.VarChar(255)
+  address         String    @db.VarChar(500)
+  apt             String?   @db.VarChar(50)
+  city            String    @db.VarChar(100)
+  state           String    @db.VarChar(2)
+  zip             String    @db.VarChar(10)
+  phone           String?   @db.VarChar(20)
+  dislikes        String?   @db.Text
+  lat             Float?    @db.DoublePrecision
+  lng             Float?    @db.DoublePrecision
+  completed       Boolean   @default(false)
+  proofUrl        String?   @map("proof_url") @db.VarChar(500)
+  assignedDriverId String?  @map("assigned_driver_id") @db.VarChar(36)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  relatedOrder   Order?   @relation("StopOrder", fields: [orderId], references: [id], onDelete: SetNull)
+  assignedDriver Driver?  @relation("AssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+
+  @@index([day], map: "idx_stops_day")
+  @@index([deliveryDate], map: "idx_stops_delivery_date")
+  @@index([clientId], map: "idx_stops_client_id")
+  @@index([orderId], map: "idx_stops_order_id")
+  @@index([completed], map: "idx_stops_completed")
+  // Note: The unique constraint on (client_id, delivery_date) WHERE delivery_date IS NOT NULL
+  // cannot be directly expressed in Prisma. This should be handled at the database level.
+  @@map("stops")
+}
+
+// ============================================
+// Table: upcoming_orders
+// ============================================
+model UpcomingOrder {
+  id                    String    @id @default(uuid()) @db.VarChar(36)
+  clientId              String    @map("client_id") @db.VarChar(36)
+  serviceType           String    @map("service_type") @db.VarChar(50)
+  caseId                String?   @map("case_id") @db.VarChar(255)
+  status                String    @default("scheduled") @db.VarChar(50)
+  scheduledDeliveryDate DateTime? @map("scheduled_delivery_date") @db.Date
+  takeEffectDate        DateTime? @map("take_effect_date") @db.Date
+  deliveryDay           String?   @map("delivery_day") @db.VarChar(50)
+  deliveryDistribution  Json?     @map("delivery_distribution") @db.JsonB
+  totalValue            Decimal?  @map("total_value") @db.Decimal(10, 2)
+  totalItems            Int?      @map("total_items")
+  notes                 String?   @db.Text
+  orderNumber           Int?      @map("order_number")
+  processedOrderId      String?   @map("processed_order_id") @db.VarChar(36)
+  processedAt           DateTime? @map("processed_at") @db.Timestamp
+  lastUpdated           DateTime  @default(now()) @updatedAt @map("last_updated") @db.Timestamp
+  updatedBy             String?   @map("updated_by") @db.VarChar(255)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  client                  Client                      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  processedOrder          Order?                      @relation(fields: [processedOrderId], references: [id], onDelete: SetNull)
+  vendorSelections        UpcomingOrderVendorSelection[]
+  boxSelections           UpcomingOrderBoxSelection[]
+  items                   UpcomingOrderItem[]
+
+  @@index([orderNumber], map: "idx_upcoming_orders_order_number")
+  @@index([processedOrderId], map: "idx_upcoming_orders_processed_order_id")
+  @@index([clientId], map: "idx_upcoming_orders_client_id")
+  @@index([status], map: "idx_upcoming_orders_status")
+  @@map("upcoming_orders")
+}
+
+// ============================================
+// Table: upcoming_order_box_selections
+// ============================================
+model UpcomingOrderBoxSelection {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  upcomingOrderId String   @map("upcoming_order_id") @db.VarChar(36)
+  vendorId       String    @map("vendor_id") @db.VarChar(36)
+  boxTypeId      String    @map("box_type_id") @db.VarChar(36)
+  quantity       Int       @default(1)
+  items          Json?     @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  upcomingOrder UpcomingOrder @relation(fields: [upcomingOrderId], references: [id], onDelete: Cascade)
+  vendor        Vendor        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  boxType       BoxType       @relation(fields: [boxTypeId], references: [id], onDelete: Cascade)
+
+  @@index([upcomingOrderId], map: "idx_upcoming_order_box_selections_upcoming_order_id")
+  @@index([vendorId], map: "idx_upcoming_order_box_selections_vendor_id")
+  @@index([boxTypeId], map: "idx_upcoming_order_box_selections_box_type_id")
+  @@map("upcoming_order_box_selections")
+}
+
+// ============================================
+// Table: upcoming_order_items
+// ============================================
+model UpcomingOrderItem {
+  id                        String    @id @default(uuid()) @db.VarChar(36)
+  upcomingOrderId           String    @map("upcoming_order_id") @db.VarChar(36)
+  vendorSelectionId         String?   @map("vendor_selection_id") @db.VarChar(36)
+  upcomingVendorSelectionId  String?   @map("upcoming_vendor_selection_id") @db.VarChar(36)
+  menuItemId                String    @map("menu_item_id") @db.VarChar(36)
+  quantity                  Int       @default(1)
+  createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  upcomingOrder          UpcomingOrder            @relation(fields: [upcomingOrderId], references: [id], onDelete: Cascade)
+  vendorSelection        OrderVendorSelection?   @relation(fields: [vendorSelectionId], references: [id], onDelete: Cascade)
+  upcomingVendorSelection UpcomingOrderVendorSelection? @relation(fields: [upcomingVendorSelectionId], references: [id], onDelete: Cascade)
+  menuItem               MenuItem                @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([upcomingOrderId], map: "idx_upcoming_order_items_upcoming_order_id")
+  @@index([vendorSelectionId], map: "idx_upcoming_order_items_vendor_selection_id")
+  @@index([upcomingVendorSelectionId], map: "idx_upcoming_order_items_upcoming_vendor_selection_id")
+  @@index([menuItemId], map: "idx_upcoming_order_items_menu_item_id")
+  @@map("upcoming_order_items")
+}
+
+// ============================================
+// Table: upcoming_order_vendor_selections
+// ============================================
+model UpcomingOrderVendorSelection {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  upcomingOrderId String   @map("upcoming_order_id") @db.VarChar(36)
+  vendorId       String    @map("vendor_id") @db.VarChar(36)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp
+
+  upcomingOrder UpcomingOrder @relation(fields: [upcomingOrderId], references: [id], onDelete: Cascade)
+  vendor        Vendor        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  items         UpcomingOrderItem[]
+
+  @@index([upcomingOrderId], map: "idx_upcoming_order_vendor_selections_upcoming_order_id")
+  @@index([vendorId], map: "idx_upcoming_order_vendor_selections_vendor_id")
+  @@map("upcoming_order_vendor_selections")
+}
+
+// ============================================
+// Table: vendors
+// ============================================
+model Vendor {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  name              String    @db.VarChar(255)
+  email             String?   @db.VarChar(255)
+  password          String?   @db.VarChar(255)
+  serviceType       String?   @map("service_type") @db.VarChar(255)
+  deliveryDays      Json?     @map("delivery_days") @db.JsonB
+  deliveryFrequency String    @default("Once") @map("delivery_frequency") @db.VarChar(50)
+  isActive          Boolean   @default(true) @map("is_active")
+  minimumMeals      Int       @default(0) @map("minimum_meals")
+  cutoffHours       Int       @default(0) @map("cutoff_hours")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamp
+
+  boxTypes                  BoxType[]
+  equipment                 Equipment[]
+  menuItems                 MenuItem[]
+  deliveryHistory           DeliveryHistory[]
+  orderVendorSelections     OrderVendorSelection[]
+  orderBoxSelections         OrderBoxSelection[]
+  upcomingOrderVendorSelections UpcomingOrderVendorSelection[]
+  upcomingOrderBoxSelections    UpcomingOrderBoxSelection[]
+
+  @@map("vendors")
+}
