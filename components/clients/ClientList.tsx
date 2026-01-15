@@ -896,176 +896,159 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             );
         }
 
+        // Full Details for ClientInfoShelf (forceDetails=true)
+        const itemsList: { name: string; quantity: number }[] = [];
+        let vendorName = '';
+
         if (st === 'Food') {
-            // Check if it's multi-day format
+            // Collect all items from all vendors/days
             const isMultiDay = conf.deliveryDayOrders && typeof conf.deliveryDayOrders === 'object';
 
+            // Helper to process selections
+            const processSelections = (selections: any[]) => {
+                selections.forEach(sel => {
+                    const vName = vendors.find(v => v.id === sel.vendorId)?.name;
+                    if (vName && !vendorName.includes(vName)) {
+                        vendorName = vendorName ? `${vendorName}, ${vName}` : vName;
+                    }
+                    if (sel.items) {
+                        Object.entries(sel.items).forEach(([itemId, qty]) => {
+                            const q = Number(qty);
+                            if (q > 0) {
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item) {
+                                    // Check if already in list (aggregate?) - Usually we want row per item per vendor, but here simple list
+                                    const existing = itemsList.find(i => i.name === item.name);
+                                    if (existing) existing.quantity += q;
+                                    else itemsList.push({ name: item.name, quantity: q });
+                                }
+                            }
+                        });
+                    }
+                });
+            };
+
             if (isMultiDay) {
-                // Multi-day format: deliveryDayOrders[day].vendorSelections
-                const days = Object.keys(conf.deliveryDayOrders || {}).sort();
+                Object.values(conf.deliveryDayOrders || {}).forEach((dayOrder: any) => {
+                    if (dayOrder?.vendorSelections) processSelections(dayOrder.vendorSelections);
+                });
+            } else if (conf.vendorSelections) {
+                processSelections(conf.vendorSelections);
+            }
 
-                if (days.length === 0) {
-                    return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div><strong style={{ fontWeight: 600 }}>Food</strong> - Vendor: Not Set</div>
-                        </div>
-                    );
-                }
+            // Add Meal Items
+            const mealSelections = client.mealOrder?.mealSelections || client.activeOrder?.mealSelections;
+            if (mealSelections) {
+                Object.keys(mealSelections).forEach(type => {
+                    const sel = mealSelections[type];
+                    if (sel.items) {
+                        Object.entries(sel.items).forEach(([itemId, qty]) => {
+                            const q = Number(qty);
+                            if (q > 0) {
+                                // Try to find in menu items or meal items (though meal items usually separate)
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item) {
+                                    const existing = itemsList.find(i => i.name === item.name);
+                                    if (existing) existing.quantity += q;
+                                    else itemsList.push({ name: item.name, quantity: q });
+                                } else {
+                                    // Fallback for ID if not found
+                                    itemsList.push({ name: `Item #${itemId.slice(0, 5)}`, quantity: q });
+                                }
+                            }
+                        });
+                    }
+                });
+            }
 
-                const dayLines = days.map(day => {
-                    const dayOrder = conf.deliveryDayOrders?.[day];
-                    const vendorSelections = dayOrder?.vendorSelections || [];
+        } else if (st === 'Boxes') {
+            // Boxes Logic
+            const boxOrders = conf.boxOrders || [];
+            const uniqueVendors = new Set<string>();
 
-                    if (vendorSelections.length === 0) {
-                        return { day, vendors: [] };
+            if (boxOrders.length > 0) {
+                boxOrders.forEach((box: any) => {
+                    const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
+                    const vId = box.vendorId || boxDef?.vendorId;
+                    if (vId) {
+                        const vName = vendors.find(v => v.id === vId)?.name;
+                        if (vName) uniqueVendors.add(vName);
                     }
 
-                    const vendorLines = vendorSelections.map((v: any) => {
-                        const vendorName = vendors.find(ven => ven.id === v.vendorId)?.name || 'Not Set';
-                        const items = v.items || {};
-                        const itemEntries = Object.entries(items);
-
-                        const hasItems = itemEntries.some(([_, qty]) => Number(qty) > 0);
-                        if (!hasItems) return null;
-
-                        const itemDetails = itemEntries
-                            .filter(([_, qty]) => Number(qty) > 0)
-                            .map(([id, qty]) => {
-                                const item = menuItems.find(i => i.id === id);
-                                return item ? `${item.name} x${qty}` : null;
-                            })
-                            .filter((item): item is string => item !== null)
-                            .join(', ');
-
-                        return { vendorName, itemDetails };
-                    }).filter((line): line is { vendorName: string; itemDetails: string } => line !== null);
-
-                    return { day, vendors: vendorLines };
-                }).filter((dayLine): dayLine is { day: string; vendors: { vendorName: string; itemDetails: string }[] } => dayLine.vendors.length > 0);
-
-                if (dayLines.length === 0) {
-                    return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div><strong style={{ fontWeight: 600 }}>Food</strong> - Vendor: Not Set</div>
-                        </div>
-                    );
-                }
-
-                return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {dayLines.map((dayLine, dayIdx) => (
-                            <div key={dayIdx} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <div>
-                                    {dayIdx === 0 && <strong style={{ fontWeight: 600 }}>Food</strong>}
-                                    {dayIdx === 0 && ' - '}
-                                    <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>{dayLine.day}:</span>
-                                </div>
-                                {dayLine.vendors.map((vendor: { vendorName: string; itemDetails: string }, vIdx: number) => (
-                                    <div key={vIdx} style={{ marginLeft: '0' }}>
-                                        <span style={{ fontWeight: 500 }}>Vendor: {vendor.vendorName}</span>
-                                        {vendor.itemDetails && (
-                                            <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginLeft: '0' }}>
-                                                {vendor.itemDetails}
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        ))}
-                    </div>
-                );
+                    if (box.items) {
+                        Object.entries(box.items).forEach(([itemId, qty]) => {
+                            const q = Number(qty);
+                            if (q > 0) {
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item) {
+                                    const existing = itemsList.find(i => i.name === item.name);
+                                    if (existing) existing.quantity += q;
+                                    else itemsList.push({ name: item.name, quantity: q });
+                                }
+                            }
+                        });
+                    }
+                });
+                vendorName = Array.from(uniqueVendors).join(', ') || 'No Vendor';
             } else {
-                // Single-day format: vendorSelections array
-                const vendorSelections = conf.vendorSelections || [];
-
-                if (vendorSelections.length === 0) {
-                    return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div><strong style={{ fontWeight: 600 }}>Food</strong> - Vendor: Not Set</div>
-                        </div>
-                    );
+                // Legacy Fallback
+                let computedVendorId = conf.vendorId;
+                if (!computedVendorId && !conf.boxTypeId && typeof conf === 'object') {
+                    const possibleDayKeys = Object.keys(conf).filter(k => k !== 'id' && k !== 'serviceType' && k !== 'caseId' && typeof (conf as any)[k] === 'object' && (conf as any)[k]?.vendorId);
+                    if (possibleDayKeys.length > 0) computedVendorId = (conf as any)[possibleDayKeys[0]].vendorId;
                 }
+                const box = boxTypes.find(b => b.id === conf.boxTypeId);
+                const vId = computedVendorId || box?.vendorId;
+                vendorName = vendors.find(v => v.id === vId)?.name || 'No Vendor';
 
-                const vendorLines = vendorSelections.map(v => {
-                    const vendorName = vendors.find(ven => ven.id === v.vendorId)?.name || 'Not Set';
-                    const items = v.items || {};
-                    const itemEntries = Object.entries(items);
-
-                    const hasItems = itemEntries.some(([_, qty]) => Number(qty) > 0);
-                    if (!hasItems) return null;
-
-                    const itemDetails = itemEntries
-                        .filter(([_, qty]) => Number(qty) > 0)
-                        .map(([id, qty]) => {
-                            const item = menuItems.find(i => i.id === id);
-                            return item ? `${item.name} x${qty}` : null;
-                        })
-                        .filter((item): item is string => item !== null)
-                        .join(', ');
-
-                    return { vendorName, itemDetails };
-                }).filter((line): line is { vendorName: string; itemDetails: string } => line !== null);
-
-                if (vendorLines.length === 0) {
-                    return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div><strong style={{ fontWeight: 600 }}>Food</strong> - Vendor: Not Set</div>
-                        </div>
-                    );
+                if (conf.items) {
+                    Object.entries(conf.items).forEach(([itemId, qty]) => {
+                        const q = Number(qty);
+                        if (q > 0) {
+                            const item = menuItems.find(i => i.id === itemId);
+                            if (item) itemsList.push({ name: item.name, quantity: q });
+                        }
+                    });
                 }
-
-                return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {vendorLines.map((line, idx) => (
-                            <div key={idx}>
-                                {idx === 0 && <strong style={{ fontWeight: 600 }}>Food</strong>}
-                                {idx === 0 ? ' - ' : ''}
-                                <span style={{ fontWeight: 500 }}>Vendor: {line.vendorName}</span>
-                                {line.itemDetails && (
-                                    <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)', marginLeft: '0' }}>
-                                        {line.itemDetails}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                );
             }
-        } else if (st === 'Boxes') {
-            const box = boxTypes.find(b => b.id === conf.boxTypeId);
-            const vendorId = conf.vendorId || box?.vendorId;
-            const vendorName = vendors.find(v => v.id === vendorId)?.name || 'Not Set';
+        } else if (st === 'Custom') {
+            // Custom Order Logic
+            const vId = conf.vendorId;
+            vendorName = vendors.find(v => v.id === vId)?.name || 'No Vendor';
 
-            const items = conf.items || {};
-            const itemDetails = Object.entries(items)
-                .filter(([_, qty]) => Number(qty) > 0)
-                .map(([id, qty]) => {
-                    const item = menuItems.find(i => i.id === id);
-                    return item ? `${item.name} x${qty}` : null;
-                })
-                .filter(Boolean)
-                .join(', ');
+            const desc = conf.custom_name || 'Custom Item';
+            const price = conf.custom_price || 0;
 
-            return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div>
-                        <strong style={{ fontWeight: 600 }}>Boxes</strong> - Vendor: <span style={{ color: vendorName === 'Not Set' ? 'var(--color-danger)' : 'inherit' }}>{vendorName}</span>
-                    </div>
-                    {itemDetails && (
-                        <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-                            {itemDetails}
-                        </div>
-                    )}
-                    {!itemDetails && (
-                        <div style={{ fontSize: '0.85em', color: 'var(--text-secondary)' }}>
-                            Items: Not Set
-                        </div>
-                    )}
-                </div>
-            );
+            itemsList.push({
+                name: `${desc} ($${Number(price).toFixed(2)})`,
+                quantity: 1
+            });
         }
 
-        return '-';
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                    {st} - <span style={{ fontWeight: 500 }}>{vendorName || 'Vendor Not Set'}</span>
+                </div>
+                {itemsList.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {itemsList.map((item, idx) => (
+                            <div key={idx} style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+                                <span style={{ fontWeight: 600 }}>{item.quantity}</span> * {item.name}
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div style={{ fontStyle: 'italic', color: 'var(--text-tertiary)' }}>No items selected</div>
+                )}
+
+                {/* 
+                   For Meal specific detailed display, we could reuse getMealOrderSummaryJSX logic 
+                   but we just aggregated everything above for a cleaner list as requested.
+                   "2 * Challah"
+                  */}
+            </div>
+        );
     }
 
     function getScreeningStatus(client: ClientProfile) {

@@ -10,10 +10,6 @@ import {
     Button,
     Box,
     Typography,
-    FormControl,
-    InputLabel,
-    MenuItem,
-    Select,
 } from "@mui/material";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -205,9 +201,6 @@ export default function DriversDialog({
     const [mapOpen, setMapOpen] = React.useState(false);
     const [busy, setBusy] = React.useState(false);
 
-    // NEW: last runs
-    const [runs, setRuns] = React.useState([]); // [{id, createdAtISO}]
-    const [selectedRunId, setSelectedRunId] = React.useState("");
 
     // Map API reference (set once via onExpose)
     const mapApiRef = React.useRef(null);
@@ -263,21 +256,6 @@ export default function DriversDialog({
         }
     }, [selectedDay, selectedDeliveryDate]);
 
-    // NEW: fetch last 10 runs
-    const fetchRuns = React.useCallback(async () => {
-        try {
-            let url = `/api/route/runs?day=${selectedDay}`;
-            if (selectedDeliveryDate) {
-                url += `&delivery_date=${selectedDeliveryDate}`;
-            }
-            const res = await fetch(url, { cache: "no-store" });
-            const data = await res.json();
-            setRuns(Array.isArray(data.runs) ? data.runs : []);
-        } catch (e) {
-            console.error("Failed to load runs:", e);
-            setRuns([]);
-        }
-    }, [selectedDay, selectedDeliveryDate]);
 
     React.useEffect(() => {
         if (!open) return;
@@ -322,9 +300,6 @@ export default function DriversDialog({
                     }
                 }
 
-                const res2 = await fetch(`/api/route/runs?day=${selectedDay}`, { cache: "no-store" });
-                const data2 = await res2.json();
-                setRuns(Array.isArray(data2.runs) ? data2.runs : []);
 
                 // Auto-cleanup after initial load (for selected day and "all" for drivers)
                 // This ensures all active users (not paused, delivery=true) have stops
@@ -377,13 +352,6 @@ export default function DriversDialog({
                     setRoutes(data4.routes || []);
                     setUnrouted(data4.unrouted || []);
 
-                    let url5 = `/api/route/runs?day=${selectedDay}`;
-                    if (selectedDeliveryDate) {
-                        url5 += `&delivery_date=${selectedDeliveryDate}`;
-                    }
-                    const res5 = await fetch(url5, { cache: "no-store" });
-                    const data5 = await res5.json();
-                    setRuns(Array.isArray(data5.runs) ? data5.runs : []);
                 }
             } catch (e) {
                 console.error("Auto-cleanup failed:", e);
@@ -427,7 +395,6 @@ export default function DriversDialog({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         day: selectedDay,
-                        runId: selectedRunId && selectedRunId.trim() !== "" ? String(selectedRunId) : undefined,
                     }),
                 });
             } catch (e) {
@@ -441,7 +408,7 @@ export default function DriversDialog({
         }
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(doPost, 800); // debounce rapid edits
-    }, [selectedDay, selectedRunId]);
+    }, [selectedDay]);
 
     // === Single reassign used by the map for individual popup assigns ===
     const handleReassign = React.useCallback(async (stop, toDriverId) => {
@@ -533,21 +500,6 @@ export default function DriversDialog({
         return `${mm}-${dd} ${h}:${String(m).padStart(2, "0")}${ampm}`;
     }
 
-    // NEW: format ISO -> "M/D h:mma"
-    function fmt(iso) {
-        try {
-            const d = new Date(iso);
-            const mo = d.getMonth() + 1;
-            const da = d.getDate();
-            let h = d.getHours();
-            const m = String(d.getMinutes()).padStart(2, "0");
-            const ampm = h >= 12 ? "PM" : "AM";
-            h = h % 12 || 12;
-            return `${mo}/${da} ${h}:${m}${ampm}`;
-        } catch {
-            return iso || "";
-        }
-    }
 
     // ====== NEW: dedicated cleanup ======
     async function cleanUpNow({ silent = false } = {}) {
@@ -563,7 +515,6 @@ export default function DriversDialog({
             });
             if (!res.ok) throw new Error(await res.text());
             await loadRoutes();
-            await fetchRuns();
             // Save the cleaned state back to the active run
             saveCurrentRun(true);
             if (!silent) alert("Cleanup completed.");
@@ -605,24 +556,6 @@ export default function DriversDialog({
 
             // Refresh map data
             await loadRoutes();
-
-            // Refresh the history dropdown (server already prunes to last 10)
-            await fetchRuns();
-
-            // Select newest run as active
-            try {
-                let runUrl = `/api/route/runs?day=${selectedDay}`;
-                if (selectedDeliveryDate) {
-                    runUrl += `&delivery_date=${selectedDeliveryDate}`;
-                }
-                const r = await fetch(runUrl, { cache: "no-store" });
-                const d = await r.json();
-                if (Array.isArray(d.runs) && d.runs.length > 0) {
-                    setSelectedRunId(String(d.runs[0].id));
-                }
-            } catch (selErr) {
-                console.warn("Could not set newest run as active:", selErr);
-            }
         } catch (e) {
             console.error(e);
             alert("Failed to regenerate.");
@@ -766,7 +699,6 @@ export default function DriversDialog({
                 throw new Error(errorMessage);
             }
             await loadRoutes();
-            await fetchRuns();
             saveCurrentRun(true);
             alert("Driver added successfully");
         } catch (e) {
@@ -823,7 +755,6 @@ export default function DriversDialog({
             }
 
             await loadRoutes();
-            await fetchRuns();
             saveCurrentRun(true);
             alert("Driver removed successfully");
         } catch (e) {
@@ -849,7 +780,6 @@ export default function DriversDialog({
             }
 
             await loadRoutes();
-            await fetchRuns();
             saveCurrentRun(true);
         } catch (e) {
             console.error("Rename driver failed:", e);
@@ -857,39 +787,6 @@ export default function DriversDialog({
         }
     }
 
-    // Apply a selected run
-    async function applyRun(id) {
-        if (!id) return;
-        // IDs are UUID strings, not numbers
-        const runId = String(id);
-        if (!runId || runId.trim() === "") {
-            console.error("Invalid run ID:", id);
-            alert("Invalid route ID. Please select a valid route.");
-            return;
-        }
-        const ok = window.confirm("Apply this saved route? This will overwrite current assignments.");
-        if (!ok) return;
-
-        try {
-            setBusy(true);
-
-            const res = await fetch("/api/route/apply-run", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ runId: runId }),
-            });
-            if (!res.ok) throw new Error(await res.text());
-
-            setSelectedRunId(String(id));
-            await loadRoutes();
-            // (Do not auto-save here; future edits will save back to this run.)
-        } catch (e) {
-            console.error(e);
-            alert("Failed to apply route.");
-        } finally {
-            setBusy(false);
-        }
-    }
 
     return (
         <>
@@ -916,7 +813,7 @@ export default function DriversDialog({
                             gap: 1,
                         }}
                     >
-                        {/* LEFT: Title + history dropdown + date filter */}
+                        {/* LEFT: Title + date filter */}
                         <Box sx={{ justifySelf: "start", fontWeight: 600, display: "flex", alignItems: "center", gap: 1 }}>
                             <span>Routes Map</span>
 
@@ -936,29 +833,6 @@ export default function DriversDialog({
                                 }}
                                 disabled={busy}
                             />
-
-                            {/* Last 10 Runs dropdown */}
-                            <FormControl size="small" sx={{ minWidth: 220 }}>
-                                <InputLabel id="route-run-label">Last 10 Routes</InputLabel>
-                                <Select
-                                    labelId="route-run-label"
-                                    label="Last 10 Routes"
-                                    value={selectedRunId}
-                                    onChange={(e) => {
-                                        const id = String(e.target.value || "");
-                                        setSelectedRunId(id);
-                                        if (id) applyRun(id);
-                                    }}
-                                    disabled={busy || runs.length === 0}
-                                >
-                                    {runs.map(r => (
-                                        <MenuItem key={r.id} value={String(r.id)}>
-                                            {fmt(r.createdAt)}
-                                        </MenuItem>
-                                    ))}
-                                    {runs.length === 0 && <MenuItem value="" disabled>(No history)</MenuItem>}
-                                </Select>
-                            </FormControl>
                         </Box>
 
                         {/* CENTER: Generate + Driver Management */}

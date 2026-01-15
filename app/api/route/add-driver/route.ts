@@ -29,25 +29,49 @@ export async function POST(req: Request) {
             .eq('day', day)
             .order('id', { ascending: true });
 
+        // Check if Driver 0 already exists (special reserve - must be unique)
+        const hasDriver0 = (existingDrivers || []).some(driver => 
+            /driver\s+0/i.test(driver.name)
+        );
+
         // Parse driver numbers from names to find the highest number
         const parseDriverNum = (name: string) => {
             const m = /driver\s+(\d+)/i.exec(String(name || ""));
             return m ? parseInt(m[1], 10) : null;
         };
 
-        // Find the highest driver number
-        let maxNum = -1;
-        for (const driver of existingDrivers) {
-            const num = parseDriverNum(driver.name);
-            if (num !== null && num > maxNum) {
-                maxNum = num;
+        // Determine next driver number
+        let nextNum: number;
+        let driverName: string;
+        
+        if (!hasDriver0) {
+            // If Driver 0 doesn't exist, create it (special reserve)
+            nextNum = 0;
+            driverName = 'Driver 0';
+        } else {
+            // If Driver 0 exists, find the highest driver number (excluding 0) and increment
+            let maxNum = 0; // Start at 0, so if no other drivers exist, we'll create Driver 1
+            for (const driver of existingDrivers || []) {
+                const num = parseDriverNum(driver.name);
+                // Skip Driver 0 when finding max, but track other drivers
+                if (num !== null && num !== 0 && num > maxNum) {
+                    maxNum = num;
+                }
             }
+            // Increment from the highest number found (min 1 if only Driver 0 exists)
+            nextNum = maxNum + 1;
+            driverName = `Driver ${nextNum}`;
         }
-
-        // Next driver number
-        const nextNum = maxNum + 1;
-        const driverName = `Driver ${nextNum}`;
+        
         const color = palette[nextNum % palette.length];
+
+        // Final safeguard: Double-check that Driver 0 cannot be duplicated
+        if (nextNum === 0 && hasDriver0) {
+            return NextResponse.json(
+                { error: "Driver 0 already exists and cannot be duplicated" },
+                { status: 400 }
+            );
+        }
 
         // Create new driver
         const newId = uuidv4();

@@ -1,11 +1,33 @@
 {
   "orders": [],
-  "upcomingOrders": [],
+  "upcomingOrders": [
+    {
+      "id": "fae5c2aa-f2a5-4ec5-bddf-61ebdb445536",
+      "client_id": "client666-6666-6666-6666-66666666666",
+      "service_type": "Food",
+      "case_id": null,
+      "status": "scheduled",
+      "scheduled_delivery_date": null,
+      "take_effect_date": null,
+      "delivery_day": null,
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 0,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-15T19:26:58.138",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-15T19:26:54.965928",
+      "meal_type": "Lunch"
+    }
+  ],
   "orderVendorSelections": [],
   "orderItems": [],
   "orderBoxSelections": [],
   "upcomingOrderVendorSelections": [],
   "upcomingOrderItems": [],
   "upcomingOrderBoxSelections": [],
-  "lastSynced": "2026-01-15T19:15:03.217Z"
+  "lastSynced": "2026-01-15T19:35:50.054Z"
 }
