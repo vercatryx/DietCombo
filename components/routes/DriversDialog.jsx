@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import dynamic from "next/dynamic";
 const DriversMapLeaflet = dynamic(() => import("./DriversMapLeaflet"), { ssr: false });
+const ClientDriverAssignment = dynamic(() => import("./ClientDriverAssignment"), { ssr: false });
 
 import ManualGeocodeDialog from "./ManualGeocodeDialog";
 import { exportRouteLabelsPDF } from "@/utils/pdfRouteLabels";
@@ -204,6 +205,7 @@ export default function DriversDialog({
     const [mapOpen, setMapOpen] = React.useState(false);
     const [busy, setBusy] = React.useState(false);
     const [isReadOnlyMode, setIsReadOnlyMode] = React.useState(false);
+    const [activeTab, setActiveTab] = React.useState("map"); // "map" or "clients"
 
 
     // Map API reference (set once via onExpose)
@@ -910,20 +912,66 @@ export default function DriversDialog({
                             }}
                         />
                     </Box>
-                    <Box sx={{ height: "100%", width: "100%", position: "relative", flex: 1 }}>
-                        <DriversMapLeaflet
-                            drivers={mapDrivers}
-                            unrouted={unrouted}
-                            onReassign={isReadOnlyMode ? undefined : handleReassign}
-                            onRenameDriver={isReadOnlyMode ? undefined : handleRenameDriver}
-                            busy={busy}
-                            readonly={isReadOnlyMode}
-                            onExpose={(api) => { mapApiRef.current = api || null; }}
-                            onComputedStats={(s) => setStats(s)}
-                            initialCenter={[40.7128, -74.006]}
-                            initialZoom={5}
-                        />
+
+                    {/* Tabs */}
+                    <Box sx={{ borderBottom: "1px solid #e5e7eb", display: "flex", gap: 0 }}>
+                        <Button
+                            onClick={() => setActiveTab("map")}
+                            variant={activeTab === "map" ? "contained" : "text"}
+                            sx={{
+                                borderRadius: 0,
+                                textTransform: "none",
+                                fontWeight: activeTab === "map" ? 600 : 400,
+                                borderBottom: activeTab === "map" ? "2px solid" : "none",
+                                borderColor: activeTab === "map" ? "primary.main" : "transparent",
+                            }}
+                        >
+                            Map View
+                        </Button>
+                        <Button
+                            onClick={() => setActiveTab("clients")}
+                            variant={activeTab === "clients" ? "contained" : "text"}
+                            sx={{
+                                borderRadius: 0,
+                                textTransform: "none",
+                                fontWeight: activeTab === "clients" ? 600 : 400,
+                                borderBottom: activeTab === "clients" ? "2px solid" : "none",
+                                borderColor: activeTab === "clients" ? "primary.main" : "transparent",
+                            }}
+                        >
+                            Client Assignment
+                        </Button>
                     </Box>
+
+                    {/* Tab Content */}
+                    {activeTab === "map" ? (
+                        <Box sx={{ height: "100%", width: "100%", position: "relative", flex: 1 }}>
+                            <DriversMapLeaflet
+                                drivers={mapDrivers}
+                                unrouted={unrouted}
+                                onReassign={isReadOnlyMode ? undefined : handleReassign}
+                                onRenameDriver={isReadOnlyMode ? undefined : handleRenameDriver}
+                                busy={busy}
+                                readonly={isReadOnlyMode}
+                                onExpose={(api) => { mapApiRef.current = api || null; }}
+                                onComputedStats={(s) => setStats(s)}
+                                initialCenter={[40.7128, -74.006]}
+                                initialZoom={5}
+                            />
+                        </Box>
+                    ) : (
+                        <Box sx={{ height: "100%", width: "100%", position: "relative", flex: 1, minHeight: 0 }}>
+                            <ClientDriverAssignment
+                                routes={routes}
+                                selectedDay={selectedDay}
+                                selectedDeliveryDate={selectedDeliveryDate}
+                                onDriverAssigned={() => {
+                                    loadRoutes();
+                                    saveCurrentRun(true);
+                                }}
+                            />
+                        </Box>
+                    )}
                 </DialogContent>
 
                 <DialogActions sx={{ gap: 1, flexWrap: "wrap" }}>
