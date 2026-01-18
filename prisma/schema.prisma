@@ -344,7 +344,7 @@ model OrderBoxSelection {
   id        String   @id @default(uuid()) @db.VarChar(36)
   orderId   String   @map("order_id") @db.VarChar(36)
   vendorId  String   @map("vendor_id") @db.VarChar(36)
-  boxTypeId String   @map("box_type_id") @db.VarChar(36)
+  boxTypeId String?  @map("box_type_id") @db.VarChar(36)
   quantity  Int      @default(1)
   items     Json?
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
@@ -554,7 +554,7 @@ model UpcomingOrderBoxSelection {
   id              String   @id @default(uuid()) @db.VarChar(36)
   upcomingOrderId String   @map("upcoming_order_id") @db.VarChar(36)
   vendorId        String   @map("vendor_id") @db.VarChar(36)
-  boxTypeId       String   @map("box_type_id") @db.VarChar(36)
+  boxTypeId       String?  @map("box_type_id") @db.VarChar(36)
   quantity        Int      @default(1)
   items           Json?
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamp(6)
@@ -652,6 +652,7 @@ model client_box_orders {
   vendor_id   String?   @db.VarChar(36)
   quantity    Int?      @default(1)
   items       Json?     @default("{}")
+  item_notes  Json?     @default("{}")
   created_at  DateTime? @default(now()) @db.Timestamptz(6)
   updated_at  DateTime? @default(now()) @db.Timestamptz(6)
   box_types   BoxType?  @relation(fields: [box_type_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
