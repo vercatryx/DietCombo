@@ -53,7 +53,7 @@ function makeAddressKey(stop) {
     return addrNoUnit;
 }
 
-export default function DriversGrid({ drivers = [], allStops = [] }) {
+export default function DriversGrid({ drivers = [], allStops = [], selectedDate = '' }) {
     const [sigRows, setSigRows] = useState([]);
 
     useEffect(() => {
@@ -69,35 +69,71 @@ export default function DriversGrid({ drivers = [], allStops = [] }) {
         return () => { active = false; };
     }, []);
 
-    const stopsById = useMemo(() => new Map(allStops.map((s) => [String(s.id), s])), [allStops]);
+    // Filter stops by selected date if a date is provided
+    const filteredStops = useMemo(() => {
+        if (!selectedDate) return allStops;
+        
+        // Normalize date string to YYYY-MM-DD format
+        const normalizeDate = (dateStr: string | null | undefined): string | null => {
+            if (!dateStr) return null;
+            return dateStr.split('T')[0].split(' ')[0];
+        };
+        
+        return allStops.filter((stop: any) => {
+            const stopDate = stop.delivery_date || stop.deliveryDate;
+            if (!stopDate) return false;
+            const stopDateStr = normalizeDate(stopDate);
+            return stopDateStr === selectedDate;
+        });
+    }, [allStops, selectedDate]);
+
+    const stopsById = useMemo(() => new Map(filteredStops.map((s) => [String(s.id), s])), [filteredStops]);
     const sigMap = useMemo(
         () => new Map(sigRows.map((r) => [String(r.userId), Number(r.collected || 0)])),
         [sigRows]
     );
 
-    const getStopsForDriver = (d) => {
-        if (Array.isArray(d?.stopIds) && d.stopIds.length)
-            return d.stopIds.map((sid) => stopsById.get(String(sid))).filter(Boolean);
-        return allStops.filter((s) => Number(s.driverId) === Number(d.id));
-    };
+    const getStopsForDriver = useMemo(() => {
+        return (d) => {
+            if (Array.isArray(d?.stopIds) && d.stopIds.length)
+                return d.stopIds.map((sid) => stopsById.get(String(sid))).filter(Boolean);
+            return filteredStops.filter((s) => Number(s.driverId) === Number(d.id));
+        };
+    }, [stopsById, filteredStops]);
+
+    // Filter drivers to only show those with stops for the selected date (if date is selected)
+    const filteredDrivers = useMemo(() => {
+        if (!selectedDate) return drivers;
+        
+        return drivers.filter((d) => {
+            const driverStops = getStopsForDriver(d);
+            return driverStops.length > 0;
+        });
+    }, [drivers, selectedDate, getStopsForDriver]);
 
     // Show empty state if no drivers
-    if (drivers.length === 0) {
+    if (filteredDrivers.length === 0) {
         return (
             <div style={{
                 textAlign: "center",
                 padding: "48px 24px",
                 color: "var(--muted, #6b7280)"
             }}>
-                <p style={{ fontSize: "16px", fontWeight: 500, marginBottom: "8px" }}>No routes available</p>
-                <p style={{ fontSize: "14px" }}>There are currently no delivery routes to display.</p>
+                <p style={{ fontSize: "16px", fontWeight: 500, marginBottom: "8px" }}>
+                    {selectedDate ? "No routes for selected date" : "No routes available"}
+                </p>
+                <p style={{ fontSize: "14px" }}>
+                    {selectedDate 
+                        ? `There are no delivery routes with stops for ${new Date(selectedDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}.`
+                        : "There are currently no delivery routes to display."}
+                </p>
             </div>
         );
     }
 
     return (
         <div className="grid">
-            {drivers.map((d) => {
+            {filteredDrivers.map((d) => {
                 const cardStops = getStopsForDriver(d);
 
                 // Use actual loaded stops count instead of API count to ensure consistency

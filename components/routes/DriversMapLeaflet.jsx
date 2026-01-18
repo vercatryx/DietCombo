@@ -446,6 +446,7 @@ export default function DriversMapLeaflet({
                                               busy = false, // external loading flag
                                               pausedDetector, // optional override for paused detection
                                               logoSrc, // optional loading logo (path or URL)
+                                              readonly = false, // disable all editing interactions
                                           }) {
     const mapRef = useRef(null);
     const [mapReady, setMapReady] = useState(false);
@@ -799,6 +800,8 @@ export default function DriversMapLeaflet({
 
     const handleMarkerClick = useCallback(
         (id, stop, baseColor, e) => {
+            if (readonly) return; // Disable all interactions in readonly mode
+            
             const map = mapRef.current;
             const ev = e?.originalEvent;
             const modifier = ev?.altKey || ev?.metaKey || ev?.ctrlKey;
@@ -814,11 +817,13 @@ export default function DriversMapLeaflet({
             map?.closePopup();
             openAssignForStop(stop, baseColor);
         },
-        [clickPickMode, openAssignForStop, toggleId]
+        [clickPickMode, openAssignForStop, toggleId, readonly]
     );
 
     /* ------- driver editing ------- */
     const startEditDriver = useCallback((driverId, currentName) => {
+        if (readonly) return; // Disable editing in readonly mode
+        
         // Don't allow editing Driver 0
         const isDriver0 = /driver\s+0/i.test(currentName || "");
         if (isDriver0) return;
@@ -829,7 +834,7 @@ export default function DriversMapLeaflet({
 
         setEditingDriverId(driverId);
         setEditingNumber(currentNum);
-    }, []);
+    }, [readonly]);
 
     const cancelEditDriver = useCallback(() => {
         setEditingDriverId(null);
@@ -1103,6 +1108,8 @@ export default function DriversMapLeaflet({
     /* ======== TRUE SEQUENTIAL BULK ASSIGN ======== */
     const applyBulkAssign = useCallback(
         async (toDriverId) => {
+            if (readonly) return; // Disable bulk assign in readonly mode
+            
             const to = String(toDriverId); // Keep as string (UUID) to match API expectations
             const ids = Array.from(selectedIds);
             if (!to || to.trim() === "" || ids.length === 0 || bulkBusy) return;
@@ -1133,7 +1140,7 @@ export default function DriversMapLeaflet({
                 setBulkBusy(false);
             }
         },
-        [selectedIds, bulkBusy, moveStopsLocally, clearHalo, setIconForId]
+        [selectedIds, bulkBusy, moveStopsLocally, clearHalo, setIconForId, readonly]
     );
 
     const clearSelection = useCallback(() => {
@@ -1480,7 +1487,7 @@ export default function DriversMapLeaflet({
                             <select
                                 value={bulkDriverId}
                                 onChange={(e) => setBulkDriverId(e.target.value)}
-                                disabled={bulkBusy}
+                                disabled={bulkBusy || readonly}
                                 style={{
                                     padding: "6px 8px",
                                     borderRadius: 8,
@@ -1498,7 +1505,7 @@ export default function DriversMapLeaflet({
                             </select>
                             <button
                                 onClick={() => applyBulkAssign(bulkDriverId)}
-                                disabled={!bulkDriverId || bulkBusy || selectedCount === 0}
+                                disabled={!bulkDriverId || bulkBusy || selectedCount === 0 || readonly}
                                 style={{
                                     padding: "8px 10px",
                                     borderRadius: 10,
@@ -1540,7 +1547,7 @@ export default function DriversMapLeaflet({
                         <div style={{ display: "flex", gap: 8 }}>
                             <button
                                 onClick={deleteGeocodingForSelected}
-                                disabled={bulkBusy || selectedCount === 0}
+                                disabled={bulkBusy || selectedCount === 0 || readonly}
                                 style={{
                                     flex: 1,
                                     padding: "8px 10px",
@@ -1595,16 +1602,16 @@ export default function DriversMapLeaflet({
                     <CheckRow
                         id="toggle-area"
                         checked={selectMode}
-                        onChange={setSelectMode}
+                        onChange={readonly ? () => {} : setSelectMode}
                         label="Area select (Shift+drag)"
-                        title="Shift-drag to select, Alt/Option/Ctrl/Cmd to subtract"
+                        title={readonly ? "Readonly mode - selection disabled" : "Shift-drag to select, Alt/Option/Ctrl/Cmd to subtract"}
                     />
                     <CheckRow
                         id="toggle-click"
                         checked={clickPickMode}
-                        onChange={setClickPickMode}
+                        onChange={readonly ? () => {} : setClickPickMode}
                         label="Click to select (one-by-one)"
-                        title="When ON, clicking a dot toggles selection (no popup)"
+                        title={readonly ? "Readonly mode - selection disabled" : "When ON, clicking a dot toggles selection (no popup)"}
                     />
 
                     {/* Filter status row */}
@@ -1786,7 +1793,7 @@ export default function DriversMapLeaflet({
                                             >
                                                 {it.count}
                                             </div>
-                                            {!isDriver0 && onRenameDriver && (
+                                            {!isDriver0 && onRenameDriver && !readonly && (
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {

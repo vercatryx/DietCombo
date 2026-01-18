@@ -10,6 +10,8 @@ import {
     Button,
     Box,
     Typography,
+    Switch,
+    FormControlLabel,
 } from "@mui/material";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -200,6 +202,7 @@ export default function DriversDialog({
 
     const [mapOpen, setMapOpen] = React.useState(false);
     const [busy, setBusy] = React.useState(false);
+    const [isReadOnlyMode, setIsReadOnlyMode] = React.useState(false);
 
 
     // Map API reference (set once via onExpose)
@@ -831,7 +834,7 @@ export default function DriversDialog({
                                     fontSize: "14px",
                                     fontFamily: "inherit"
                                 }}
-                                disabled={busy}
+                                disabled={busy || isReadOnlyMode}
                             />
                         </Box>
 
@@ -842,7 +845,7 @@ export default function DriversDialog({
                                     onClick={regenerateRoutes}
                                     variant="contained"
                                     color="error"
-                                    disabled={busy}
+                                    disabled={busy || isReadOnlyMode}
                                     sx={{ fontWeight: 700, borderRadius: 2 }}
                                 >
                                     Generate New Route
@@ -854,7 +857,7 @@ export default function DriversDialog({
                                     onClick={handleAddDriver}
                                     variant="outlined"
                                     size="small"
-                                    disabled={busy}
+                                    disabled={busy || isReadOnlyMode}
                                     sx={{ borderRadius: 2 }}
                                 >
                                     ➕ Add Driver
@@ -863,7 +866,7 @@ export default function DriversDialog({
                                     onClick={handleRemoveDriver}
                                     variant="outlined"
                                     size="small"
-                                    disabled={busy || routes.length <= 1}
+                                    disabled={busy || isReadOnlyMode || routes.length <= 1}
                                     sx={{ borderRadius: 2 }}
                                 >
                                     ➖ Remove Driver
@@ -877,8 +880,23 @@ export default function DriversDialog({
                             </Box>
                         </Box>
 
-                        {/* RIGHT: link */}
-                        <Box sx={{ justifySelf: "end" }}>
+                        {/* RIGHT: Mode switch + link */}
+                        <Box sx={{ justifySelf: "end", display: "flex", alignItems: "center", gap: 2 }}>
+                            <FormControlLabel
+                                control={
+                                    <Switch
+                                        checked={!isReadOnlyMode}
+                                        onChange={(e) => setIsReadOnlyMode(!e.target.checked)}
+                                        size="small"
+                                    />
+                                }
+                                label={
+                                    <Typography variant="body2" sx={{ fontSize: 12 }}>
+                                        {isReadOnlyMode ? "Readonly" : "Admin Edit"}
+                                    </Typography>
+                                }
+                                sx={{ m: 0 }}
+                            />
                             <Link
                                 href="/drivers"
                                 target="_blank"
@@ -898,9 +916,10 @@ export default function DriversDialog({
                         <DriversMapLeaflet
                             drivers={mapDrivers}
                             unrouted={unrouted}
-                            onReassign={handleReassign}
-                            onRenameDriver={handleRenameDriver}
+                            onReassign={isReadOnlyMode ? undefined : handleReassign}
+                            onRenameDriver={isReadOnlyMode ? undefined : handleRenameDriver}
                             busy={busy}
+                            readonly={isReadOnlyMode}
                             onExpose={(api) => { mapApiRef.current = api || null; }}
                             onComputedStats={(s) => setStats(s)}
                             initialCenter={[40.7128, -74.006]}
@@ -913,7 +932,7 @@ export default function DriversDialog({
                     {missingBatch.length > 0 && (
                         <Typography variant="body2" sx={{ mr: "auto", opacity: 0.8 }}>
                             {missingBatch.length} customer{missingBatch.length === 1 ? "" : "s"} are not geocoded.
-                            <Button size="small" sx={{ ml: 1 }} onClick={() => setManualOpen(true)}>
+                            <Button size="small" sx={{ ml: 1 }} onClick={() => setManualOpen(true)} disabled={isReadOnlyMode}>
                                 Manual Geocoding
                             </Button>
                         </Typography>
@@ -962,16 +981,16 @@ export default function DriversDialog({
                             }
                         }}
                         variant="outlined"
-                        disabled={busy || !hasRoutes}
+                        disabled={busy || !hasRoutes || isReadOnlyMode}
                     >
                         Download Labels
                     </Button>
 
-                    <Button onClick={resetAllRoutes} variant="outlined" disabled={busy || !hasRoutes}>
+                    <Button onClick={resetAllRoutes} variant="outlined" disabled={busy || !hasRoutes || isReadOnlyMode}>
                         Reset All Routes
                     </Button>
 
-                    <Button onClick={optimizeAllRoutes} variant="outlined" disabled={busy || !hasRoutes}>
+                    <Button onClick={optimizeAllRoutes} variant="outlined" disabled={busy || !hasRoutes || isReadOnlyMode}>
                         Optimize All Routes
                     </Button>
                 </DialogActions>
