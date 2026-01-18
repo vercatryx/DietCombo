@@ -11,13 +11,45 @@ interface DateFilterProps {
 }
 
 export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterProps) {
-    const [showCalendar, setShowCalendar] = useState(false);
+    const [showCalendar, setShowCalendar] = useState(false); // Hidden by default
+    const [inputValue, setInputValue] = useState(selectedDate || ''); // Text input value
     const [datesWithStops, setDatesWithStops] = useState<Map<string, number>>(new Map());
     const [loadingDates, setLoadingDates] = useState(false);
     const [currentMonth, setCurrentMonth] = useState(() => {
+        // Set to month of selected date, or current month if no date selected
+        if (selectedDate) {
+            const date = new Date(selectedDate);
+            if (!isNaN(date.getTime())) {
+                return new Date(date.getFullYear(), date.getMonth(), 1);
+            }
+        }
         const today = new Date();
         return new Date(today.getFullYear(), today.getMonth(), 1);
     });
+
+    // Update input value when selectedDate changes externally
+    useEffect(() => {
+        setInputValue(selectedDate || '');
+    }, [selectedDate]);
+
+    // Update current month when selected date changes (if date is outside current view)
+    useEffect(() => {
+        if (selectedDate) {
+            const date = new Date(selectedDate);
+            if (!isNaN(date.getTime())) {
+                const newMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+                setCurrentMonth(prevMonth => {
+                    const prevMonthKey = `${prevMonth.getFullYear()}-${prevMonth.getMonth()}`;
+                    const newMonthKey = `${newMonth.getFullYear()}-${newMonth.getMonth()}`;
+                    // Only update if the selected date is in a different month
+                    if (prevMonthKey !== newMonthKey) {
+                        return newMonth;
+                    }
+                    return prevMonth;
+                });
+            }
+        }
+    }, [selectedDate]);
 
     // Fetch dates with stops and their counts
     useEffect(() => {
@@ -96,8 +128,63 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
     const handleDateClick = (date: Date) => {
         const dateKey = formatDateKey(date);
         onDateChange(dateKey);
+        setInputValue(dateKey);
+        setShowCalendar(false); // Close calendar after selection
+    };
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        setInputValue(value);
+        
+        // Validate and update if it's a valid date format (YYYY-MM-DD)
+        if (value.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            const date = new Date(value);
+            if (!isNaN(date.getTime())) {
+                onDateChange(value);
+            }
+        }
+    };
+
+    const handleInputFocus = () => {
+        setShowCalendar(true);
+    };
+
+    const handleCalendarIconClick = () => {
+        setShowCalendar(!showCalendar);
+    };
+
+    const handleClear = () => {
+        setInputValue('');
+        onClear();
         setShowCalendar(false);
     };
+
+    // Close calendar when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            const target = event.target as HTMLElement;
+            const calendarElement = document.querySelector(`.${styles.calendarView}`);
+            const inputElement = document.querySelector(`.${styles.dateInput}`);
+            const iconElement = document.querySelector(`.${styles.calendarIcon}`);
+            
+            if (
+                showCalendar &&
+                calendarElement &&
+                !calendarElement.contains(target) &&
+                !inputElement?.contains(target) &&
+                !iconElement?.contains(target)
+            ) {
+                setShowCalendar(false);
+            }
+        };
+
+        if (showCalendar) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => {
+                document.removeEventListener('mousedown', handleClickOutside);
+            };
+        }
+    }, [showCalendar]);
 
     const isToday = (date: Date): boolean => {
         const today = new Date();
@@ -128,31 +215,32 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
                 <Calendar 
                     size={18} 
                     className={styles.calendarIcon}
-                    onClick={() => setShowCalendar(!showCalendar)}
+                    onClick={handleCalendarIconClick}
                     style={{ cursor: 'pointer' }}
-                    title="Toggle calendar view"
+                    title={showCalendar ? "Hide calendar" : "Show calendar"}
                 />
                 <input
-                    type="date"
+                    type="text"
                     className={styles.dateInput}
-                    value={selectedDate}
-                    onChange={(e) => onDateChange(e.target.value)}
-                    placeholder="Filter by date..."
+                    value={inputValue}
+                    onChange={handleInputChange}
+                    onFocus={handleInputFocus}
+                    placeholder="YYYY-MM-DD or click calendar icon"
+                    pattern="\d{4}-\d{2}-\d{2}"
                 />
                 {selectedDate && (
                     <button
                         className={styles.clearButton}
-                        onClick={onClear}
+                        onClick={handleClear}
                         title="Clear date filter"
                     >
                         <X size={16} />
                     </button>
                 )}
-            </div>
 
-            {/* Calendar View */}
-            {showCalendar && (
-                <div className={styles.calendarView}>
+                {/* Calendar View - Floating below input */}
+                {showCalendar && (
+                    <div className={styles.calendarView}>
                     <div className={styles.calendarHeader}>
                         <button
                             className={styles.calendarNavButton}
@@ -202,13 +290,14 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
                             );
                         })}
                     </div>
-                    {loadingDates && (
-                        <div className={styles.calendarLoading}>Loading dates with stops...</div>
-                    )}
-                </div>
-            )}
+                        {loadingDates && (
+                            <div className={styles.calendarLoading}>Loading dates with stops...</div>
+                        )}
+                    </div>
+                )}
+            </div>
 
-            {selectedDate && (
+            {selectedDate && !showCalendar && (
                 <div className={styles.selectedDateLabel}>
                     Showing routes for: <strong>{formatDisplayDate(selectedDate)}</strong>
                 </div>
