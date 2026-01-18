@@ -66,3 +66,153 @@
 .selectedDateLabel strong {
     color: var(--text-primary);
 }
+
+/* Calendar View */
+.calendarView {
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-md);
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.calendarHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--spacing-md);
+}
+
+.calendarNavButton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem;
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.calendarNavButton:hover {
+    background-color: var(--bg-surface);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+.calendarMonthYear {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.calendarGrid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 0.25rem;
+}
+
+.calendarDayHeader {
+    text-align: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 0.5rem 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.calendarDayEmpty {
+    aspect-ratio: 1;
+}
+
+.calendarDay {
+    position: relative;
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.calendarDay:hover {
+    background-color: var(--bg-surface);
+    border-color: var(--border-color);
+}
+
+.calendarDayToday {
+    background-color: rgba(37, 99, 235, 0.1);
+    border-color: var(--color-primary);
+    font-weight: 600;
+}
+
+.calendarDaySelected {
+    background-color: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+    font-weight: 600;
+}
+
+.calendarDaySelected:hover {
+    background-color: var(--color-primary);
+    opacity: 0.9;
+}
+
+.calendarDayHasStops {
+    position: relative;
+}
+
+.calendarDayNumber {
+    display: block;
+    line-height: 1;
+}
+
+.calendarDayCount {
+    position: absolute;
+    bottom: 0.125rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    background-color: var(--color-primary);
+    color: #000000;
+    border-radius: 8px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.calendarDaySelected .calendarDayCount {
+    background-color: white;
+    color: var(--color-primary);
+}
+
+.calendarDayToday:not(.calendarDaySelected) .calendarDayCount {
+    background-color: var(--color-primary);
+    color: #000000;
+}
+
+.calendarLoading {
+    text-align: center;
+    padding: var(--spacing-sm);
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}

@@ -19,6 +19,7 @@ const DriversMapLeaflet = dynamic(() => import("./DriversMapLeaflet"), { ssr: fa
 
 import ManualGeocodeDialog from "./ManualGeocodeDialog";
 import { exportRouteLabelsPDF } from "@/utils/pdfRouteLabels";
+import { DateFilter } from "./DateFilter";
 
 /* =================== helpers / palette =================== */
 const palette = [
@@ -816,26 +817,9 @@ export default function DriversDialog({
                             gap: 1,
                         }}
                     >
-                        {/* LEFT: Title + date filter */}
-                        <Box sx={{ justifySelf: "start", fontWeight: 600, display: "flex", alignItems: "center", gap: 1 }}>
+                        {/* LEFT: Title */}
+                        <Box sx={{ justifySelf: "start", fontWeight: 600 }}>
                             <span>Routes Map</span>
-
-                            {/* Delivery Date filter */}
-                            <input
-                                type="date"
-                                value={selectedDeliveryDate}
-                                onChange={(e) => {
-                                    setSelectedDeliveryDate(e.target.value);
-                                }}
-                                style={{
-                                    padding: "6px 12px",
-                                    border: "1px solid #ccc",
-                                    borderRadius: "4px",
-                                    fontSize: "14px",
-                                    fontFamily: "inherit"
-                                }}
-                                disabled={busy || isReadOnlyMode}
-                            />
                         </Box>
 
                         {/* CENTER: Generate + Driver Management */}
@@ -911,8 +895,22 @@ export default function DriversDialog({
                     </Box>
                 </DialogTitle>
 
-                <DialogContent dividers sx={{ position: "relative", p: 0 }}>
-                    <Box sx={{ height: "100%", width: "100%", position: "relative" }}>
+                <DialogContent dividers sx={{ position: "relative", p: 0, display: "flex", flexDirection: "column" }}>
+                    {/* Date Filter */}
+                    <Box sx={{ p: 2, borderBottom: "1px solid #e5e7eb" }}>
+                        <DateFilter
+                            selectedDate={selectedDeliveryDate}
+                            onDateChange={(date) => setSelectedDeliveryDate(date)}
+                            onClear={() => {
+                                const today = new Date();
+                                const year = today.getFullYear();
+                                const month = String(today.getMonth() + 1).padStart(2, '0');
+                                const day = String(today.getDate()).padStart(2, '0');
+                                setSelectedDeliveryDate(`${year}-${month}-${day}`);
+                            }}
+                        />
+                    </Box>
+                    <Box sx={{ height: "100%", width: "100%", position: "relative", flex: 1 }}>
                         <DriversMapLeaflet
                             drivers={mapDrivers}
                             unrouted={unrouted}
