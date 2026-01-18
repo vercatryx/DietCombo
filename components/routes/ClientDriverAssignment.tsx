@@ -25,6 +25,7 @@ interface ClientDriverAssignmentProps {
     routes: any[];
     selectedDay: string;
     selectedDeliveryDate?: string;
+    readOnly?: boolean;
     onDriverAssigned?: () => void;
 }
 
@@ -32,6 +33,7 @@ export default function ClientDriverAssignment({
     routes,
     selectedDay,
     selectedDeliveryDate,
+    readOnly = false,
     onDriverAssigned
 }: ClientDriverAssignmentProps) {
     const [clients, setClients] = useState<Client[]>([]);
@@ -312,7 +314,7 @@ export default function ClientDriverAssignment({
                             value={bulkDriverId}
                             label="Assign Driver to Selected"
                             onChange={(e) => setBulkDriverId(e.target.value)}
-                            disabled={isBulkSaving || drivers.length === 0 || selectedClientIds.size === 0}
+                            disabled={readOnly || isBulkSaving || drivers.length === 0 || selectedClientIds.size === 0}
                         >
                             <MenuItem value="">
                                 <em>Select Driver</em>
@@ -328,7 +330,7 @@ export default function ClientDriverAssignment({
                         variant="contained"
                         size="small"
                         onClick={handleBulkDriverAssignment}
-                        disabled={isBulkSaving || selectedClientIds.size === 0 || !bulkDriverId}
+                        disabled={readOnly || isBulkSaving || selectedClientIds.size === 0 || !bulkDriverId}
                         sx={{ minWidth: 120 }}
                     >
                         {isBulkSaving ? (
@@ -345,7 +347,7 @@ export default function ClientDriverAssignment({
                             variant="outlined"
                             size="small"
                             onClick={() => setSelectedClientIds(new Set())}
-                            disabled={isBulkSaving}
+                            disabled={readOnly || isBulkSaving}
                         >
                             Clear Selection
                         </Button>
@@ -386,6 +388,7 @@ export default function ClientDriverAssignment({
                                 checked={allSelected}
                                 indeterminate={someSelected && !allSelected}
                                 onChange={(e) => handleSelectAll(e.target.checked)}
+                                disabled={readOnly}
                                 size="small"
                             />
                             <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -422,6 +425,7 @@ export default function ClientDriverAssignment({
                                     <Checkbox
                                         checked={isSelected}
                                         onChange={(e) => handleSelectClient(client.id, e.target.checked)}
+                                        disabled={readOnly}
                                         size="small"
                                     />
                                     
@@ -447,7 +451,7 @@ export default function ClientDriverAssignment({
                                             value={currentDriverId}
                                             label="Driver"
                                             onChange={(e) => handleDriverChange(client.id, e.target.value)}
-                                            disabled={isSaving || drivers.length === 0}
+                                            disabled={readOnly || isSaving || drivers.length === 0}
                                         >
                                             <MenuItem value="">
                                                 <em>None</em>

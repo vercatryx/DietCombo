@@ -965,6 +965,7 @@ export default function DriversDialog({
                                 routes={routes}
                                 selectedDay={selectedDay}
                                 selectedDeliveryDate={selectedDeliveryDate}
+                                readOnly={isReadOnlyMode}
                                 onDriverAssigned={() => {
                                     loadRoutes();
                                     saveCurrentRun(true);
