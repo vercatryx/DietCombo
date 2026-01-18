@@ -228,10 +228,11 @@ export async function GET(req: Request) {
                 // Add delivery_date from stop
                 delivery_date: s.delivery_date || null,
                 
-                // Temporarily add order tracking fields
+                // Add order tracking fields including status
                 orderId: order?.id || null,
                 orderDate: order?.created_at || null,
                 deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
+                orderStatus: order?.status || null,
             });
         }
 

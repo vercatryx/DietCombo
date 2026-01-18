@@ -188,6 +188,37 @@ function isPausedStop(s) {
     return false;
 }
 
+/** Get color for stop based on status (completed or order status) */
+function getStopColor(stop, defaultColor) {
+    // Priority 1: Stop completed status
+    if (stop?.completed === true) {
+        return "#22c55e"; // Green for completed stops
+    }
+    
+    // Priority 2: Order status
+    const orderStatus = stop?.orderStatus?.toLowerCase();
+    if (orderStatus) {
+        switch (orderStatus) {
+            case "completed":
+                return "#22c55e"; // Green
+            case "cancelled":
+                return "#ef4444"; // Red
+            case "waiting_for_proof":
+                return "#f59e0b"; // Orange/Amber
+            case "billing_pending":
+                return "#8b5cf6"; // Purple
+            case "pending":
+            case "scheduled":
+            case "confirmed":
+            default:
+                return defaultColor; // Use driver color for active orders
+        }
+    }
+    
+    // Default: use driver color
+    return defaultColor;
+}
+
 /* ==================== Icons (anchor-fixed) ==================== */
 const iconCache = new Map();
 const iconKey = (color, selected) => `${color}|${selected ? "sel" : "norm"}`;
@@ -1897,19 +1928,20 @@ export default function DriversMapLeaflet({
                         if (!ll) return null;
                         const id = sid(s.id);
                         const pos = jitterLL(ll, id);
+                        const stopColor = getStopColor(s, "#666");
                         return (
                             <Marker
                                 key={`u-${id}`}
                                 position={pos}
                                 pane="pins"
                                 zIndexOffset={2000}
-                                icon={makePinIcon("#666", selectedIds.has(id) || hoverIds.has(id))}
+                                icon={makePinIcon(stopColor, selectedIds.has(id) || hoverIds.has(id))}
                                 ref={(ref) => {
                                     const m = asLeafletMarker(ref);
                                     if (m) unroutedMarkerRefs.current.set(id, m);
                                 }}
                                 eventHandlers={{
-                                    click: (e) => handleMarkerClick(id, s, "#666", e),
+                                    click: (e) => handleMarkerClick(id, s, stopColor, e),
                                 }}
                             />
                         );
@@ -1923,6 +1955,7 @@ export default function DriversMapLeaflet({
                             const id = sid(s.id);
                             const pos = jitterLL(ll, id);
                             const base = d.color || "#1f77b4";
+                            const stopColor = getStopColor(s, base);
                             const z = 2100 + di; // slightly above unrouted, and stable order
                             return (
                                 <Marker
@@ -1930,13 +1963,13 @@ export default function DriversMapLeaflet({
                                     position={pos}
                                     pane="pins"
                                     zIndexOffset={z}
-                                    icon={makePinIcon(base, selectedIds.has(id) || hoverIds.has(id))}
+                                    icon={makePinIcon(stopColor, selectedIds.has(id) || hoverIds.has(id))}
                                     ref={(ref) => {
                                         const m = asLeafletMarker(ref);
                                         if (m) assignedMarkerRefs.current.set(id, m);
                                     }}
                                     eventHandlers={{
-                                        click: (e) => handleMarkerClick(id, s, base, e),
+                                        click: (e) => handleMarkerClick(id, s, stopColor, e),
                                     }}
                                 />
                             );

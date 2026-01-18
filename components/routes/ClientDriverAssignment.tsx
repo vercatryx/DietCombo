@@ -40,6 +40,7 @@ export default function ClientDriverAssignment({
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [clientDriverMap, setClientDriverMap] = useState<Map<string, string>>(new Map());
+    const [clientStopMap, setClientStopMap] = useState<Map<string, any>>(new Map()); // Store stop info for each client
     const [savingClientId, setSavingClientId] = useState<string | null>(null);
     const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
     const [bulkDriverId, setBulkDriverId] = useState<string>('');
@@ -105,6 +106,7 @@ export default function ClientDriverAssignment({
             
             // Build a map of client ID to driver ID from stops
             const assignments = new Map<string, string>();
+            const stopInfoMap = new Map<string, any>();
             
             routesData.forEach((route: any) => {
                 const driverId = route.driverId || route.id;
@@ -116,12 +118,26 @@ export default function ClientDriverAssignment({
                         // If client has multiple stops with different drivers, keep the first one
                         if (!assignments.has(clientId)) {
                             assignments.set(clientId, driverId);
+                            // Store stop info for status-based color coding
+                            stopInfoMap.set(clientId, stop);
                         }
                     }
                 });
             });
             
+            // Also check unrouted stops
+            const unroutedStops = data.unrouted || [];
+            unroutedStops.forEach((stop: any) => {
+                if (stop.userId || stop.clientId) {
+                    const clientId = stop.userId || stop.clientId;
+                    if (!assignments.has(clientId) && !stopInfoMap.has(clientId)) {
+                        stopInfoMap.set(clientId, stop);
+                    }
+                }
+            });
+            
             setClientDriverMap(assignments);
+            setClientStopMap(stopInfoMap);
         } catch (error) {
             console.error('Failed to load client driver assignments:', error);
         }
@@ -275,6 +291,38 @@ export default function ClientDriverAssignment({
     const allSelected = filteredClients.length > 0 && filteredClients.every(c => selectedClientIds.has(c.id));
     const someSelected = filteredClients.some(c => selectedClientIds.has(c.id));
 
+    // Helper function to get color based on stop/order status
+    function getStopStatusColor(stop: any): string | null {
+        if (!stop) return null;
+        
+        // Priority 1: Stop completed status
+        if (stop.completed === true) {
+            return "#22c55e"; // Green for completed stops
+        }
+        
+        // Priority 2: Order status
+        const orderStatus = stop?.orderStatus?.toLowerCase();
+        if (orderStatus) {
+            switch (orderStatus) {
+                case "completed":
+                    return "#22c55e"; // Green
+                case "cancelled":
+                    return "#ef4444"; // Red
+                case "waiting_for_proof":
+                    return "#f59e0b"; // Orange/Amber
+                case "billing_pending":
+                    return "#8b5cf6"; // Purple
+                case "pending":
+                case "scheduled":
+                case "confirmed":
+                default:
+                    return null; // No special color for active orders
+            }
+        }
+        
+        return null;
+    }
+
     if (isLoading) {
         return (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', p: 4 }}>
@@ -399,6 +447,8 @@ export default function ClientDriverAssignment({
                         {/* Client List */}
                         {filteredClients.map((client) => {
                             const currentDriverId = clientDriverMap.get(client.id) || '';
+                            const stopInfo = clientStopMap.get(client.id);
+                            const statusColor = getStopStatusColor(stopInfo);
                             const isSaving = savingClientId === client.id;
                             const isSelected = selectedClientIds.has(client.id);
 
@@ -410,7 +460,9 @@ export default function ClientDriverAssignment({
                                         alignItems: 'center',
                                         gap: 2,
                                         p: 1.5,
-                                        border: '1px solid #e5e7eb',
+                                        border: statusColor 
+                                            ? `2px solid ${statusColor}` 
+                                            : '1px solid #e5e7eb',
                                         borderRadius: 1,
                                         backgroundColor: isSelected 
                                             ? '#e3f2fd' 
