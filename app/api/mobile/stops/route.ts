@@ -62,7 +62,7 @@ export async function GET(req: Request) {
         // Get those stops (optionally constrained by day)
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url')
+            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date')
             .in('id', orderedIds);
         
         if (day !== "all") {
@@ -137,10 +137,12 @@ export async function GET(req: Request) {
                 order: s.order ? Number(s.order) : null,
                 completed: Boolean(s.completed),
                 proofUrl: s.proof_url,
-                // Temporarily add order tracking fields
+                // Include stop's delivery_date field (primary source)
+                delivery_date: s.delivery_date || null,
+                // Also include order tracking fields as fallback
                 orderId: order?.id || null,
                 orderDate: order?.created_at || null,
-                deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
+                deliveryDate: s.delivery_date || order?.actual_delivery_date || order?.scheduled_delivery_date || null,
             };
         });
 
@@ -151,7 +153,7 @@ export async function GET(req: Request) {
     // No driverId → return ALL stops for the day (flat array), ordered for stable UI
     let allQuery = supabase
         .from('stops')
-        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url')
+        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date')
         .order('assigned_driver_id', { ascending: true })
         .order('order', { ascending: true })
         .order('id', { ascending: true });
@@ -225,10 +227,12 @@ export async function GET(req: Request) {
             order: s.order ? Number(s.order) : null,
             completed: Boolean(s.completed),
             proofUrl: s.proof_url,
-            // Temporarily add order tracking fields
+            // Include stop's delivery_date field (primary source)
+            delivery_date: s.delivery_date || null,
+            // Also include order tracking fields as fallback
             orderId: order?.id || null,
             orderDate: order?.created_at || null,
-            deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
+            deliveryDate: s.delivery_date || order?.actual_delivery_date || order?.scheduled_delivery_date || null,
         };
     });
 

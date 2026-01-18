@@ -488,8 +488,8 @@ export async function getActiveOrderForClientLocal(clientId: string) {
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
 
-                    // PRIORITY 1: Load items from upcoming_order_items/order_items table (same as food orders)
-                    // This is the primary source for box items now
+                    // Load items from upcoming_order_items/order_items table (same as food orders)
+                    // This follows the same pattern as Food orders: load items directly from items table
                     const boxItems = order.is_upcoming
                         ? db.upcomingOrderItems.filter(
                             item => item.upcoming_order_id === order.id && 
@@ -509,32 +509,6 @@ export async function getActiveOrderForClientLocal(clientId: string) {
                                 // Store price if available (from custom_price or calculated)
                                 if (item.custom_price) {
                                     itemPrices[item.menu_item_id] = parseFloat(item.custom_price.toString());
-                                }
-                            }
-                        }
-                        orderConfig.items = items;
-                        if (Object.keys(itemPrices).length > 0) {
-                            orderConfig.itemPrices = itemPrices;
-                        }
-                    }
-
-                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
-                    // This handles legacy data or cases where items weren't saved to the items table
-                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items) {
-                        console.log('[getActiveOrderForClientLocal] Loading box items from JSON field (fallback)');
-                        // Load box items - handle both old format (itemId -> quantity) and new format (itemId -> { quantity, price })
-                        const itemsRaw = boxSelection.items || {};
-                        const items: any = {};
-                        const itemPrices: any = {};
-                        for (const [itemId, value] of Object.entries(itemsRaw)) {
-                            if (typeof value === 'number') {
-                                // Old format: just quantity
-                                items[itemId] = value;
-                            } else if (value && typeof value === 'object' && 'quantity' in value) {
-                                // New format: { quantity, price? }
-                                items[itemId] = (value as any).quantity;
-                                if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
-                                    itemPrices[itemId] = (value as any).price;
                                 }
                             }
                         }
@@ -607,6 +581,61 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
         const vendors = await getVendors();
         const boxTypes = await getBoxTypes();
 
+        // For Boxes service type, always return the latest single order (first in sorted array)
+        // regardless of how many orders exist, as Boxes don't use delivery_day grouping
+        const firstOrder = upcomingOrders.length > 0 ? upcomingOrders[0] : null;
+        if (firstOrder && firstOrder.service_type === 'Boxes') {
+            const data = firstOrder;
+            const orderConfig: any = {
+                id: data.id,
+                serviceType: data.service_type,
+                caseId: data.case_id,
+                status: data.status,
+                lastUpdated: data.last_updated,
+                updatedBy: data.updated_by,
+                scheduledDeliveryDate: data.scheduled_delivery_date,
+                takeEffectDate: data.take_effect_date,
+                deliveryDistribution: data.delivery_distribution,
+                totalValue: data.total_value,
+                totalItems: data.total_items,
+                notes: data.notes
+            };
+
+            const boxSelection = db.upcomingOrderBoxSelections.find(bs => bs.upcoming_order_id === data.id);
+            if (boxSelection) {
+                orderConfig.vendorId = boxSelection.vendor_id;
+                orderConfig.boxTypeId = boxSelection.box_type_id;
+                orderConfig.boxQuantity = boxSelection.quantity;
+
+                // Load items from upcoming_order_items table (same as food orders)
+                // This follows the same pattern as Food orders: load items directly from items table
+                const boxItems = db.upcomingOrderItems.filter(
+                    item => item.upcoming_order_id === data.id && 
+                    (item.upcoming_vendor_selection_id === null || item.upcoming_vendor_selection_id === undefined || item.upcoming_vendor_selection_id === '') && // Box items don't have upcoming vendor selections
+                    (item.vendor_selection_id === null || item.vendor_selection_id === undefined || item.vendor_selection_id === '') // Box items don't have vendor selections (check both for safety)
+                );
+
+                if (boxItems && boxItems.length > 0) {
+                    const items: any = {};
+                    const itemPrices: any = {};
+                    for (const item of boxItems) {
+                        if (item.menu_item_id) {
+                            items[item.menu_item_id] = item.quantity;
+                            // Store price if available (from custom_price or calculated)
+                            if (item.custom_price) {
+                                itemPrices[item.menu_item_id] = parseFloat(item.custom_price.toString());
+                            }
+                        }
+                    }
+                    orderConfig.items = items;
+                    if (Object.keys(itemPrices).length > 0) {
+                        orderConfig.itemPrices = itemPrices;
+                    }
+                }
+            }
+            return orderConfig;
+        }
+
         // If there's only one order and it doesn't have a delivery_day, return it in the old format for backward compatibility
         if (upcomingOrders.length === 1 && !upcomingOrders[0].delivery_day) {
             const data = upcomingOrders[0];
@@ -648,12 +677,12 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
 
-                    // PRIORITY 1: Load items from upcoming_order_items table (same as food orders)
-                    // This is the primary source for box items now
+                    // Load items from upcoming_order_items table (same as food orders)
+                    // This follows the same pattern as Food orders: load items directly from items table
                     const boxItems = db.upcomingOrderItems.filter(
                         item => item.upcoming_order_id === data.id && 
-                        !item.upcoming_vendor_selection_id && // Box items don't have upcoming vendor selections
-                        !item.vendor_selection_id // Box items don't have vendor selections (check both for safety)
+                        (item.upcoming_vendor_selection_id === null || item.upcoming_vendor_selection_id === undefined || item.upcoming_vendor_selection_id === '') && // Box items don't have upcoming vendor selections
+                        (item.vendor_selection_id === null || item.vendor_selection_id === undefined || item.vendor_selection_id === '') // Box items don't have vendor selections (check both for safety)
                     );
 
                     if (boxItems && boxItems.length > 0) {
@@ -665,29 +694,6 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                                 // Store price if available (from custom_price or calculated)
                                 if (item.custom_price) {
                                     itemPrices[item.menu_item_id] = parseFloat(item.custom_price.toString());
-                                }
-                            }
-                        }
-                        orderConfig.items = items;
-                        if (Object.keys(itemPrices).length > 0) {
-                            orderConfig.itemPrices = itemPrices;
-                        }
-                    }
-
-                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
-                    // This handles legacy data or cases where items weren't saved to the items table
-                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items) {
-                        console.log('[getUpcomingOrderForClientLocal] Loading box items from JSON field (fallback)');
-                        const itemsRaw = boxSelection.items || {};
-                        const items: any = {};
-                        const itemPrices: any = {};
-                        for (const [itemId, value] of Object.entries(itemsRaw)) {
-                            if (typeof value === 'number') {
-                                items[itemId] = value;
-                            } else if (value && typeof value === 'object' && 'quantity' in value) {
-                                items[itemId] = (value as any).quantity;
-                                if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
-                                    itemPrices[itemId] = (value as any).price;
                                 }
                             }
                         }
@@ -754,12 +760,12 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
 
-                    // PRIORITY 1: Load items from upcoming_order_items table (same as food orders)
-                    // This is the primary source for box items now
+                    // Load items from upcoming_order_items table (same as food orders)
+                    // This follows the same pattern as Food orders: load items directly from items table
                     const boxItems = db.upcomingOrderItems.filter(
                         item => item.upcoming_order_id === data.id && 
-                        !item.upcoming_vendor_selection_id && // Box items don't have upcoming vendor selections
-                        !item.vendor_selection_id // Box items don't have vendor selections (check both for safety)
+                        (item.upcoming_vendor_selection_id === null || item.upcoming_vendor_selection_id === undefined || item.upcoming_vendor_selection_id === '') && // Box items don't have upcoming vendor selections
+                        (item.vendor_selection_id === null || item.vendor_selection_id === undefined || item.vendor_selection_id === '') // Box items don't have vendor selections (check both for safety)
                     );
 
                     if (boxItems && boxItems.length > 0) {
@@ -775,39 +781,6 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                             }
                         }
                         orderConfig.items = items;
-                        if (Object.keys(itemPrices).length > 0) {
-                            orderConfig.itemPrices = itemPrices;
-                        }
-                    }
-
-                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
-                    // This handles legacy data or cases where items weren't saved to the items table
-                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items) {
-                        console.log('[getUpcomingOrderForClientLocal] Loading box items from JSON field (fallback)');
-                        const itemsRaw = boxSelection.items || {};
-                        // console.log('[getUpcomingOrderForClientLocal] Processing box items:', {
-                        //     itemsRaw,
-                        //     itemsRawType: typeof itemsRaw,
-                        //     itemsRawKeys: Object.keys(itemsRaw)
-                        // });
-                        const items: any = {};
-                        const itemPrices: any = {};
-                        for (const [itemId, value] of Object.entries(itemsRaw)) {
-                            if (typeof value === 'number') {
-                                items[itemId] = value;
-                            } else if (value && typeof value === 'object' && 'quantity' in value) {
-                                items[itemId] = (value as any).quantity;
-                                if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
-                                    itemPrices[itemId] = (value as any).price;
-                                }
-                            }
-                        }
-                        orderConfig.items = items;
-                        // console.log('[getUpcomingOrderForClientLocal] Final box items:', {
-                        //     itemsCount: Object.keys(items).length,
-                        //     items,
-                        //     itemPrices
-                        // });
                         if (Object.keys(itemPrices).length > 0) {
                             orderConfig.itemPrices = itemPrices;
                         }
