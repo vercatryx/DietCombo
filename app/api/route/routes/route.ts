@@ -67,7 +67,7 @@ export async function GET(req: Request) {
         // 2) All stops - filter by delivery_date if provided
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date')
+            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed')
             .order('id', { ascending: true });
         
         // Filter by delivery_date if provided
@@ -221,6 +221,12 @@ export async function GET(req: Request) {
 
                 // ensure labels receive dislikes at the top level
                 dislikes: typeof dislikes === "string" ? dislikes.trim() : "",
+                
+                // Add completed status from stop
+                completed: s.completed ?? false,
+                
+                // Add delivery_date from stop
+                delivery_date: s.delivery_date || null,
                 
                 // Temporarily add order tracking fields
                 orderId: order?.id || null,

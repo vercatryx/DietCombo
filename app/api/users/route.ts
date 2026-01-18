@@ -9,19 +9,31 @@ import { supabase } from "@/lib/supabase";
  */
 export async function GET(req: Request) {
     try {
-        const { data: clients } = await supabase
+        const { data: clients, error: clientsError } = await supabase
             .from('clients')
             .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex')
             .order('id', { ascending: true });
 
+        if (clientsError) {
+            console.error("[/api/users] Error fetching clients:", clientsError);
+            return NextResponse.json({ error: `Failed to fetch clients: ${clientsError.message}` }, { status: 500 });
+        }
+
         // Get schedules for clients
-        const { data: schedules } = await supabase
+        const { data: schedules, error: schedulesError } = await supabase
             .from('schedules')
             .select('client_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday');
 
+        if (schedulesError) {
+            console.error("[/api/users] Error fetching schedules:", schedulesError);
+            // Don't fail the request if schedules fail, just log it
+        }
+
         const scheduleMap = new Map<string, any>();
-        for (const s of schedules) {
-            scheduleMap.set(s.client_id, s);
+        if (Array.isArray(schedules)) {
+            for (const s of schedules) {
+                scheduleMap.set(s.client_id, s);
+            }
         }
 
         // Format clients as users with schedule

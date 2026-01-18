@@ -170,16 +170,26 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
         // console.log('Starting local DB sync from Supabase...');
 
         // Fetch all orders with status pending, confirmed, or processing
-        const { data: orders } = await supabase
+        const { data: orders, error: ordersError } = await supabase
             .from('orders')
             .select('*')
             .in('status', ['pending', 'confirmed', 'processing']);
 
+        if (ordersError) {
+            console.error('[syncLocalDBFromSupabase] Error fetching orders:', ordersError);
+            throw ordersError;
+        }
+
         // Fetch all scheduled upcoming orders
-        const { data: upcomingOrders } = await supabase
+        const { data: upcomingOrders, error: upcomingOrdersError } = await supabase
             .from('upcoming_orders')
             .select('*')
             .eq('status', 'scheduled');
+
+        if (upcomingOrdersError) {
+            console.error('[syncLocalDBFromSupabase] Error fetching upcoming orders:', upcomingOrdersError);
+            throw upcomingOrdersError;
+        }
 
         // Fetch related data for orders
         const orderIds = (orders || []).map(o => o.id);
@@ -189,29 +199,44 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
         if (orderIds.length > 0) {
             // Fetch vendor selections
-            const { data: vsData } = await supabase
+            const { data: vsData, error: vsError } = await supabase
                 .from('order_vendor_selections')
                 .select('*')
                 .in('order_id', orderIds);
+
+            if (vsError) {
+                console.error('[syncLocalDBFromSupabase] Error fetching vendor selections:', vsError);
+                throw vsError;
+            }
 
             orderVendorSelections = vsData || [];
 
             // Fetch items for these vendor selections
             const vsIds = orderVendorSelections.map(vs => vs.id);
             if (vsIds.length > 0) {
-                const { data: itemsData } = await supabase
+                const { data: itemsData, error: itemsError } = await supabase
                     .from('order_items')
                     .select('*')
                     .in('vendor_selection_id', vsIds);
+
+                if (itemsError) {
+                    console.error('[syncLocalDBFromSupabase] Error fetching order items:', itemsError);
+                    throw itemsError;
+                }
 
                 orderItems = itemsData || [];
             }
 
             // Fetch box selections
-            const { data: boxData } = await supabase
+            const { data: boxData, error: boxError } = await supabase
                 .from('order_box_selections')
                 .select('*')
                 .in('order_id', orderIds);
+
+            if (boxError) {
+                console.error('[syncLocalDBFromSupabase] Error fetching box selections:', boxError);
+                throw boxError;
+            }
 
             orderBoxSelections = boxData || [];
         }
@@ -224,29 +249,63 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
         if (upcomingOrderIds.length > 0) {
             // Fetch vendor selections
-            const { data: uvsData } = await supabase
+            const { data: uvsData, error: uvsError } = await supabase
                 .from('upcoming_order_vendor_selections')
                 .select('*')
                 .in('upcoming_order_id', upcomingOrderIds);
 
+            if (uvsError) {
+                console.error('[syncLocalDBFromSupabase] Error fetching upcoming vendor selections:', uvsError);
+                throw uvsError;
+            }
+
             upcomingOrderVendorSelections = uvsData || [];
 
-            // Fetch items for these vendor selections
+            // Fetch items for these vendor selections (Food orders)
             const uvsIds = upcomingOrderVendorSelections.map(vs => vs.id);
             if (uvsIds.length > 0) {
-                const { data: uitemsData } = await supabase
+                const { data: uitemsData, error: uitemsError } = await supabase
                     .from('upcoming_order_items')
                     .select('*')
-                    .in('vendor_selection_id', uvsIds);
+                    .in('upcoming_vendor_selection_id', uvsIds);
+
+                if (uitemsError) {
+                    console.error('[syncLocalDBFromSupabase] Error fetching upcoming order items:', uitemsError);
+                    throw uitemsError;
+                }
 
                 upcomingOrderItems = uitemsData || [];
             }
 
+            // Fetch box items (items linked directly to upcoming_order_id without vendor_selection_id)
+            // These are items for Boxes orders
+            const { data: boxItemsData, error: boxItemsError } = await supabase
+                .from('upcoming_order_items')
+                .select('*')
+                .in('upcoming_order_id', upcomingOrderIds)
+                .is('upcoming_vendor_selection_id', null)
+                .is('vendor_selection_id', null);
+
+            if (boxItemsError) {
+                console.error('[syncLocalDBFromSupabase] Error fetching upcoming box items:', boxItemsError);
+                throw boxItemsError;
+            }
+
+            // Merge box items with other items
+            if (boxItemsData && boxItemsData.length > 0) {
+                upcomingOrderItems = [...(upcomingOrderItems || []), ...boxItemsData];
+            }
+
             // Fetch box selections
-            const { data: uboxData } = await supabase
+            const { data: uboxData, error: uboxError } = await supabase
                 .from('upcoming_order_box_selections')
                 .select('*')
                 .in('upcoming_order_id', upcomingOrderIds);
+
+            if (uboxError) {
+                console.error('[syncLocalDBFromSupabase] Error fetching upcoming box selections:', uboxError);
+                throw uboxError;
+            }
 
             upcomingOrderBoxSelections = uboxData || [];
         }
@@ -428,25 +487,61 @@ export async function getActiveOrderForClientLocal(clientId: string) {
                     orderConfig.vendorId = boxSelection.vendor_id;
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
-                    // Load box items - handle both old format (itemId -> quantity) and new format (itemId -> { quantity, price })
-                    const itemsRaw = boxSelection.items || {};
-                    const items: any = {};
-                    const itemPrices: any = {};
-                    for (const [itemId, value] of Object.entries(itemsRaw)) {
-                        if (typeof value === 'number') {
-                            // Old format: just quantity
-                            items[itemId] = value;
-                        } else if (value && typeof value === 'object' && 'quantity' in value) {
-                            // New format: { quantity, price? }
-                            items[itemId] = (value as any).quantity;
-                            if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
-                                itemPrices[itemId] = (value as any).price;
+
+                    // PRIORITY 1: Load items from upcoming_order_items/order_items table (same as food orders)
+                    // This is the primary source for box items now
+                    const boxItems = order.is_upcoming
+                        ? db.upcomingOrderItems.filter(
+                            item => item.upcoming_order_id === order.id && 
+                            !item.upcoming_vendor_selection_id // Box items don't have vendor selections
+                          )
+                        : db.orderItems.filter(
+                            item => item.order_id === order.id && 
+                            !item.vendor_selection_id // Box items don't have vendor selections
+                          );
+
+                    if (boxItems && boxItems.length > 0) {
+                        const items: any = {};
+                        const itemPrices: any = {};
+                        for (const item of boxItems) {
+                            if (item.menu_item_id) {
+                                items[item.menu_item_id] = item.quantity;
+                                // Store price if available (from custom_price or calculated)
+                                if (item.custom_price) {
+                                    itemPrices[item.menu_item_id] = parseFloat(item.custom_price.toString());
+                                }
                             }
                         }
+                        orderConfig.items = items;
+                        if (Object.keys(itemPrices).length > 0) {
+                            orderConfig.itemPrices = itemPrices;
+                        }
                     }
-                    orderConfig.items = items;
-                    if (Object.keys(itemPrices).length > 0) {
-                        orderConfig.itemPrices = itemPrices;
+
+                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
+                    // This handles legacy data or cases where items weren't saved to the items table
+                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items) {
+                        console.log('[getActiveOrderForClientLocal] Loading box items from JSON field (fallback)');
+                        // Load box items - handle both old format (itemId -> quantity) and new format (itemId -> { quantity, price })
+                        const itemsRaw = boxSelection.items || {};
+                        const items: any = {};
+                        const itemPrices: any = {};
+                        for (const [itemId, value] of Object.entries(itemsRaw)) {
+                            if (typeof value === 'number') {
+                                // Old format: just quantity
+                                items[itemId] = value;
+                            } else if (value && typeof value === 'object' && 'quantity' in value) {
+                                // New format: { quantity, price? }
+                                items[itemId] = (value as any).quantity;
+                                if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
+                                    itemPrices[itemId] = (value as any).price;
+                                }
+                            }
+                        }
+                        orderConfig.items = items;
+                        if (Object.keys(itemPrices).length > 0) {
+                            orderConfig.itemPrices = itemPrices;
+                        }
                     }
                 }
             }
@@ -473,7 +568,7 @@ export async function getActiveOrderForClientLocal(clientId: string) {
 }
 
 // Get upcoming order for client from local DB
-export async function getUpcomingOrderForClientLocal(clientId: string) {
+export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: string | null) {
     if (!clientId) return null;
 
     try {
@@ -485,9 +580,23 @@ export async function getUpcomingOrderForClientLocal(clientId: string) {
         const db = await readLocalDB();
 
         // Get all scheduled upcoming orders for this client
-        const upcomingOrders = db.upcomingOrders
-            .filter(o => o.client_id === clientId && o.status === 'scheduled')
-            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        // If caseId is provided, filter by both client_id and case_id (for Boxes service type)
+        let upcomingOrders = db.upcomingOrders
+            .filter(o => {
+                const matchesClient = o.client_id === clientId;
+                const matchesStatus = o.status === 'scheduled';
+                const matchesCaseId = caseId ? o.case_id === caseId : true;
+                return matchesClient && matchesStatus && matchesCaseId;
+            })
+            .sort((a, b) => {
+                // Sort by scheduled_delivery_date first (if available), then by created_at
+                const dateA = a.scheduled_delivery_date ? new Date(a.scheduled_delivery_date).getTime() : 0;
+                const dateB = b.scheduled_delivery_date ? new Date(b.scheduled_delivery_date).getTime() : 0;
+                if (dateA !== dateB) {
+                    return dateB - dateA; // Most recent first
+                }
+                return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+            });
 
         if (upcomingOrders.length === 0) {
             return null;
@@ -535,27 +644,57 @@ export async function getUpcomingOrderForClientLocal(clientId: string) {
             } else if (data.service_type === 'Boxes') {
                 const boxSelection = db.upcomingOrderBoxSelections.find(bs => bs.upcoming_order_id === data.id);
                 if (boxSelection) {
-
-
                     orderConfig.vendorId = boxSelection.vendor_id;
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
-                    const itemsRaw = boxSelection.items || {};
-                    const items: any = {};
-                    const itemPrices: any = {};
-                    for (const [itemId, value] of Object.entries(itemsRaw)) {
-                        if (typeof value === 'number') {
-                            items[itemId] = value;
-                        } else if (value && typeof value === 'object' && 'quantity' in value) {
-                            items[itemId] = (value as any).quantity;
-                            if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
-                                itemPrices[itemId] = (value as any).price;
+
+                    // PRIORITY 1: Load items from upcoming_order_items table (same as food orders)
+                    // This is the primary source for box items now
+                    const boxItems = db.upcomingOrderItems.filter(
+                        item => item.upcoming_order_id === data.id && 
+                        !item.upcoming_vendor_selection_id && // Box items don't have upcoming vendor selections
+                        !item.vendor_selection_id // Box items don't have vendor selections (check both for safety)
+                    );
+
+                    if (boxItems && boxItems.length > 0) {
+                        const items: any = {};
+                        const itemPrices: any = {};
+                        for (const item of boxItems) {
+                            if (item.menu_item_id) {
+                                items[item.menu_item_id] = item.quantity;
+                                // Store price if available (from custom_price or calculated)
+                                if (item.custom_price) {
+                                    itemPrices[item.menu_item_id] = parseFloat(item.custom_price.toString());
+                                }
                             }
                         }
+                        orderConfig.items = items;
+                        if (Object.keys(itemPrices).length > 0) {
+                            orderConfig.itemPrices = itemPrices;
+                        }
                     }
-                    orderConfig.items = items;
-                    if (Object.keys(itemPrices).length > 0) {
-                        orderConfig.itemPrices = itemPrices;
+
+                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
+                    // This handles legacy data or cases where items weren't saved to the items table
+                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items) {
+                        console.log('[getUpcomingOrderForClientLocal] Loading box items from JSON field (fallback)');
+                        const itemsRaw = boxSelection.items || {};
+                        const items: any = {};
+                        const itemPrices: any = {};
+                        for (const [itemId, value] of Object.entries(itemsRaw)) {
+                            if (typeof value === 'number') {
+                                items[itemId] = value;
+                            } else if (value && typeof value === 'object' && 'quantity' in value) {
+                                items[itemId] = (value as any).quantity;
+                                if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
+                                    itemPrices[itemId] = (value as any).price;
+                                }
+                            }
+                        }
+                        orderConfig.items = items;
+                        if (Object.keys(itemPrices).length > 0) {
+                            orderConfig.itemPrices = itemPrices;
+                        }
                     }
                 }
             }
@@ -614,32 +753,64 @@ export async function getUpcomingOrderForClientLocal(clientId: string) {
                     orderConfig.vendorId = boxSelection.vendor_id;
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
-                    const itemsRaw = boxSelection.items || {};
-                    // console.log('[getUpcomingOrderForClientLocal] Processing box items:', {
-                    //     itemsRaw,
-                    //     itemsRawType: typeof itemsRaw,
-                    //     itemsRawKeys: Object.keys(itemsRaw)
-                    // });
-                    const items: any = {};
-                    const itemPrices: any = {};
-                    for (const [itemId, value] of Object.entries(itemsRaw)) {
-                        if (typeof value === 'number') {
-                            items[itemId] = value;
-                        } else if (value && typeof value === 'object' && 'quantity' in value) {
-                            items[itemId] = (value as any).quantity;
-                            if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
-                                itemPrices[itemId] = (value as any).price;
+
+                    // PRIORITY 1: Load items from upcoming_order_items table (same as food orders)
+                    // This is the primary source for box items now
+                    const boxItems = db.upcomingOrderItems.filter(
+                        item => item.upcoming_order_id === data.id && 
+                        !item.upcoming_vendor_selection_id && // Box items don't have upcoming vendor selections
+                        !item.vendor_selection_id // Box items don't have vendor selections (check both for safety)
+                    );
+
+                    if (boxItems && boxItems.length > 0) {
+                        const items: any = {};
+                        const itemPrices: any = {};
+                        for (const item of boxItems) {
+                            if (item.menu_item_id) {
+                                items[item.menu_item_id] = item.quantity;
+                                // Store price if available (from custom_price or calculated)
+                                if (item.custom_price) {
+                                    itemPrices[item.menu_item_id] = parseFloat(item.custom_price.toString());
+                                }
                             }
                         }
+                        orderConfig.items = items;
+                        if (Object.keys(itemPrices).length > 0) {
+                            orderConfig.itemPrices = itemPrices;
+                        }
                     }
-                    orderConfig.items = items;
-                    // console.log('[getUpcomingOrderForClientLocal] Final box items:', {
-                    //     itemsCount: Object.keys(items).length,
-                    //     items,
-                    //     itemPrices
-                    // });
-                    if (Object.keys(itemPrices).length > 0) {
-                        orderConfig.itemPrices = itemPrices;
+
+                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
+                    // This handles legacy data or cases where items weren't saved to the items table
+                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items) {
+                        console.log('[getUpcomingOrderForClientLocal] Loading box items from JSON field (fallback)');
+                        const itemsRaw = boxSelection.items || {};
+                        // console.log('[getUpcomingOrderForClientLocal] Processing box items:', {
+                        //     itemsRaw,
+                        //     itemsRawType: typeof itemsRaw,
+                        //     itemsRawKeys: Object.keys(itemsRaw)
+                        // });
+                        const items: any = {};
+                        const itemPrices: any = {};
+                        for (const [itemId, value] of Object.entries(itemsRaw)) {
+                            if (typeof value === 'number') {
+                                items[itemId] = value;
+                            } else if (value && typeof value === 'object' && 'quantity' in value) {
+                                items[itemId] = (value as any).quantity;
+                                if ('price' in value && (value as any).price !== undefined && (value as any).price !== null) {
+                                    itemPrices[itemId] = (value as any).price;
+                                }
+                            }
+                        }
+                        orderConfig.items = items;
+                        // console.log('[getUpcomingOrderForClientLocal] Final box items:', {
+                        //     itemsCount: Object.keys(items).length,
+                        //     items,
+                        //     itemPrices
+                        // });
+                        if (Object.keys(itemPrices).length > 0) {
+                            orderConfig.itemPrices = itemPrices;
+                        }
                     }
                 } else {
                     console.warn('[getUpcomingOrderForClientLocal] No box selection found for upcoming order:', data.id);

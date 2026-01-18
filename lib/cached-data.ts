@@ -214,23 +214,27 @@ export async function getActiveOrderForClient(clientId: string): Promise<any> {
     return data;
 }
 
-export async function getUpcomingOrderForClient(clientId: string): Promise<any> {
-    const cached = upcomingOrderCache.get(clientId);
+export async function getUpcomingOrderForClient(clientId: string, caseId?: string | null): Promise<any> {
+    // Include caseId in cache key when provided (for Boxes service type)
+    const cacheKey = caseId ? `${clientId}_${caseId}` : clientId;
+    const cached = upcomingOrderCache.get(cacheKey);
     if (!isStale(cached, CACHE_DURATION.ORDER_DATA)) {
         return cached!.data;
     }
-    const data = await serverGetUpcomingOrderForClient(clientId);
-    upcomingOrderCache.set(clientId, { data, timestamp: Date.now() });
+    const data = await serverGetUpcomingOrderForClient(clientId, caseId);
+    upcomingOrderCache.set(cacheKey, { data, timestamp: Date.now() });
     return data;
 }
 
-export async function getOrderHistory(clientId: string): Promise<any[]> {
-    const cached = orderHistoryCache.get(clientId);
+export async function getOrderHistory(clientId: string, caseId?: string | null): Promise<any[]> {
+    // Include caseId in cache key when provided (for Boxes service type)
+    const cacheKey = caseId ? `${clientId}_${caseId}` : clientId;
+    const cached = orderHistoryCache.get(cacheKey);
     if (!isStale(cached, CACHE_DURATION.ORDER_DATA)) {
         return cached!.data;
     }
-    const data = await serverGetOrderHistory(clientId);
-    orderHistoryCache.set(clientId, { data, timestamp: Date.now() });
+    const data = await serverGetOrderHistory(clientId, caseId);
+    orderHistoryCache.set(cacheKey, { data, timestamp: Date.now() });
     return data;
 }
 

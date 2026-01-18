@@ -36,6 +36,15 @@ function handleError(error: any, context?: string) {
             console.error('   3. Running sql/enable-permissive-rls.sql to add permissive policies');
         }
         
+        // Check for schema permission errors (42501)
+        if (error.code === '42501' || (error.message?.includes('permission denied for schema') && error.message?.includes('public'))) {
+            console.error('⚠️  Database schema permission error (42501) detected!');
+            console.error('   This means the database roles don\'t have proper permissions on the public schema.');
+            console.error('   SOLUTION: Run the SQL script sql/fix-schema-permissions.sql in your Supabase SQL Editor.');
+            console.error('   This will grant the necessary permissions to anon, authenticated, and service_role roles.');
+            console.error('   See: https://supabase.com/docs/guides/troubleshooting/database-api-42501-errors');
+        }
+        
         throw new Error(error.message);
     }
 }
@@ -1584,15 +1593,22 @@ export async function recordClientChange(clientId: string, summary: string, who?
     }
 }
 
-export async function getOrderHistory(clientId: string) {
+export async function getOrderHistory(clientId: string, caseId?: string | null) {
     if (!clientId) return [];
 
     try {
         // Fetch all orders for this client (not just those with delivery proof)
-        const { data } = await supabase
+        // If caseId is provided, filter by both client_id and case_id (for Boxes service type)
+        let query = supabase
             .from('orders')
             .select('*')
-            .eq('client_id', clientId)
+            .eq('client_id', clientId);
+        
+        if (caseId) {
+            query = query.eq('case_id', caseId);
+        }
+        
+        const { data } = await query
             .order('created_at', { ascending: false })
             .limit(50); // Limit to most recent 50 orders
 
@@ -3184,8 +3200,6 @@ async function syncSingleOrderForDeliveryDay(
             console.log('[syncSingleOrderForDeliveryDay] Vendor ID from boxType:', { boxTypeId: orderConfig.boxTypeId, vendorId: boxVendorId });
         }
 
-        console.log('[syncSingleOrderForDeliveryDay] Final boxVendorId to save:', boxVendorId);
-
         const boxItemsRaw = (orderConfig as any).items || {};
         const boxItemPrices = (orderConfig as any).itemPrices || {};
         console.log('[syncSingleOrderForDeliveryDay] Box items raw:', boxItemsRaw);
@@ -3201,6 +3215,31 @@ async function syncSingleOrderForDeliveryDay(
         }
         console.log('[syncSingleOrderForDeliveryDay] Box items formatted:', boxItems);
         console.log('[syncSingleOrderForDeliveryDay] Box items count:', Object.keys(boxItems).length);
+
+        // If vendor ID is still null, try to get it from the first menu item in the box
+        if (!boxVendorId && Object.keys(boxItemsRaw).length > 0) {
+            const firstItemId = Object.keys(boxItemsRaw)[0];
+            const firstItem = menuItems.find(i => i.id === firstItemId);
+            if (firstItem?.vendorId) {
+                boxVendorId = firstItem.vendorId;
+                console.log('[syncSingleOrderForDeliveryDay] Vendor ID from first menu item:', { itemId: firstItemId, vendorId: boxVendorId });
+            }
+        }
+
+        // Validate that vendor ID is not null before proceeding
+        if (!boxVendorId) {
+            const errorMsg = `Cannot insert box selection: vendor_id is required but could not be determined. Please ensure the box has a vendor ID set in orderConfig.vendorId, boxType.vendorId, or menu items have vendorId.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                orderConfigVendorId: orderConfig.vendorId,
+                boxTypeId: orderConfig.boxTypeId,
+                boxTypeVendorId: orderConfig.boxTypeId ? boxTypes.find(bt => bt.id === orderConfig.boxTypeId)?.vendorId : null,
+                boxItemsCount: Object.keys(boxItemsRaw).length,
+                firstItemVendorId: Object.keys(boxItemsRaw).length > 0 ? menuItems.find(i => i.id === Object.keys(boxItemsRaw)[0])?.vendorId : null
+            });
+            throw new Error(errorMsg);
+        }
+
+        console.log('[syncSingleOrderForDeliveryDay] Final boxVendorId to save:', boxVendorId);
 
         // Calculate total from item prices
         let calculatedTotal = 0;
@@ -3269,6 +3308,95 @@ async function syncSingleOrderForDeliveryDay(
         }
         
         console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box selection ${insertedBoxSelection.id} for upcoming_order_id=${upcomingOrderId}, vendor_id=${boxVendorId}, items_count=${Object.keys(boxItems).length}`);
+
+        // Now save box items as individual records in upcoming_order_items table (similar to food orders)
+        // This ensures items are properly saved and can be loaded consistently
+        if (boxItemsRaw && Object.keys(boxItemsRaw).length > 0) {
+            console.log(`[syncSingleOrderForDeliveryDay] Starting to insert box items as individual records for upcoming_order_id: ${upcomingOrderId}`, {
+                itemsCount: Object.keys(boxItemsRaw).length,
+                items: boxItemsRaw
+            });
+
+            const itemInsertErrors: string[] = [];
+            for (const [itemId, qty] of Object.entries(boxItemsRaw)) {
+                const item = menuItems.find(i => i.id === itemId);
+                const quantity = typeof qty === 'number' ? qty : Number(qty) || 0;
+                
+                // Validate item exists and quantity is valid
+                if (!item) {
+                    console.error(`[syncSingleOrderForDeliveryDay] Box item not found: ${itemId}`);
+                    itemInsertErrors.push(`Item ${itemId} not found in menu items`);
+                    continue;
+                }
+                
+                if (!quantity || quantity <= 0) {
+                    console.log(`[syncSingleOrderForDeliveryDay] Skipping box item ${itemId} - quantity is 0 or invalid`);
+                    continue;
+                }
+
+                // Validate required IDs
+                if (!upcomingOrderId) {
+                    throw new Error(`Cannot insert box items: upcomingOrderId is missing`);
+                }
+                if (!itemId) {
+                    throw new Error(`Cannot insert box items: itemId is missing`);
+                }
+
+                // Get price from itemPrices or fall back to item's priceEach/value
+                const itemPrice = boxItemPrices[itemId] ?? item.priceEach ?? item.value;
+                
+                console.log(`[syncSingleOrderForDeliveryDay] Inserting box item:`, {
+                    itemId,
+                    itemName: item.name,
+                    quantity,
+                    itemPrice,
+                    upcomingOrderId
+                });
+
+                const itemId_uuid = randomUUID();
+                const insertPayload = {
+                    id: itemId_uuid,
+                    upcoming_order_id: upcomingOrderId,
+                    vendor_selection_id: null, // NULL for box orders (no vendor selection)
+                    upcoming_vendor_selection_id: null, // NULL for box orders
+                    menu_item_id: itemId,
+                    quantity: quantity
+                };
+
+                console.log(`[syncSingleOrderForDeliveryDay] Box item insert payload:`, insertPayload);
+
+                const { data: insertedItem, error: itemError } = await supabase
+                    .from('upcoming_order_items')
+                    .insert([insertPayload])
+                    .select()
+                    .single();
+                
+                if (itemError) {
+                    const errorMsg = `Failed to insert box item ${itemId} (${item.name}): ${itemError.message}`;
+                    console.error(`[syncSingleOrderForDeliveryDay] Error inserting box item:`, {
+                        error: itemError,
+                        payload: insertPayload,
+                        errorDetails: itemError
+                    });
+                    itemInsertErrors.push(errorMsg);
+                } else if (!insertedItem) {
+                    const errorMsg = `Box item ${itemId} insert returned no data`;
+                    console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`);
+                    itemInsertErrors.push(errorMsg);
+                } else {
+                    console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted box item ${itemId} (${item.name}) with id ${insertedItem.id}`);
+                }
+            }
+
+            // If any items failed to insert, throw an error
+            if (itemInsertErrors.length > 0) {
+                throw new Error(`Failed to insert ${itemInsertErrors.length} box item(s): ${itemInsertErrors.join('; ')}`);
+            }
+
+            console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted ${Object.keys(boxItemsRaw).length} box items as individual records`);
+        } else {
+            console.log(`[syncSingleOrderForDeliveryDay] No box items to insert as individual records`);
+        }
     }
 }
 
@@ -4036,44 +4164,55 @@ export async function getActiveOrderForClient(clientId: string) {
                     orderConfig.boxTypeId = boxSelection.box_type_id;
                     orderConfig.boxQuantity = boxSelection.quantity;
 
-                    // Pull items from boxSelection.items (JSONB) - this is the source for box orders
-                    if (boxSelection.items && Object.keys(boxSelection.items).length > 0) {
+                    // PRIORITY 1: Load items from upcoming_order_items/order_items table (same as food orders)
+                    // This is the primary source for box items now
+                    const { data: boxItems, error: boxItemsError } = await supabase
+                        .from(itemsTable)
+                        .select('*')
+                        .eq(orderIdField, orderData.id)
+                        .is(orderData.is_upcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id', null); // Box items don't have vendor selections
+
+                    if (boxItemsError) {
+                        console.error('Error fetching box items from items table:', boxItemsError);
+                    }
+
+                    if (boxItems && boxItems.length > 0) {
                         const itemsMap: any = {};
+                        const itemPricesMap: any = {};
+                        for (const item of boxItems) {
+                            if (item.menu_item_id) {
+                                itemsMap[item.menu_item_id] = item.quantity;
+                                // Store price if available (from custom_price or calculated)
+                                if (item.custom_price) {
+                                    itemPricesMap[item.menu_item_id] = parseFloat(item.custom_price.toString());
+                                }
+                            }
+                        }
+                        orderConfig.items = itemsMap;
+                        if (Object.keys(itemPricesMap).length > 0) {
+                            orderConfig.itemPrices = itemPricesMap;
+                        }
+                    }
+
+                    // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
+                    // This handles legacy data or cases where items weren't saved to the items table
+                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items && Object.keys(boxSelection.items).length > 0) {
+                        console.log('[getActiveOrderForClient] Loading box items from JSON field (fallback)');
+                        const itemsMap: any = {};
+                        const itemPricesMap: any = {};
                         for (const [itemId, val] of Object.entries(boxSelection.items)) {
-                            if (val && typeof val === 'object') {
+                            if (val && typeof val === 'object' && 'quantity' in val) {
                                 itemsMap[itemId] = (val as any).quantity;
+                                if ('price' in val && (val as any).price !== undefined && (val as any).price !== null) {
+                                    itemPricesMap[itemId] = (val as any).price;
+                                }
                             } else {
                                 itemsMap[itemId] = val;
                             }
                         }
                         orderConfig.items = itemsMap;
-                    }
-                }
-
-                // If items still empty, try to fetch from separate items table as fallback (for migrated data)
-                if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection?.vendor_id) {
-                    // Find the vendor_selection for the box vendor in this order
-                    const { data: vendorSelection } = await supabase
-                        .from(vendorSelectionsTable)
-                        .select('id')
-                        .eq(orderIdField, orderData.id)
-                        .eq('vendor_id', boxSelection.vendor_id)
-                        .maybeSingle();
-
-                    if (vendorSelection) {
-                        // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
-                        const selectionIdField = orderData.is_upcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
-                        const { data: boxItems } = await supabase
-                            .from(itemsTable)
-                            .select('*')
-                            .eq(selectionIdField, vendorSelection.id);
-
-                        if (boxItems && boxItems.length > 0) {
-                            const itemsMap: any = {};
-                            for (const item of boxItems) {
-                                itemsMap[item.menu_item_id] = item.quantity;
-                            }
-                            orderConfig.items = itemsMap;
+                        if (Object.keys(itemPricesMap).length > 0) {
+                            orderConfig.itemPrices = itemPricesMap;
                         }
                     }
                 }
@@ -4224,18 +4363,44 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
 
             if (boxSelections && boxSelections.length > 0) {
                 // Map to boxOrders format
-                orderConfig.boxOrders = boxSelections.map((box: any) => ({
-                    boxTypeId: box.box_type_id,
-                    vendorId: box.vendor_id,
-                    quantity: box.quantity,
-                    items: box.items || {},
-                    itemNotes: box.item_notes || {}
-                }));
+                orderConfig.boxOrders = boxSelections.map((box: any) => {
+                    // Parse items from JSON if available (similar to getOrderHistory)
+                    let items: any = {};
+                    try {
+                        if (box.items && typeof box.items === 'string') {
+                            items = JSON.parse(box.items);
+                        } else if (box.items && typeof box.items === 'object') {
+                            items = box.items;
+                        }
+                    } catch (e) {
+                        console.error('Error parsing box items:', e);
+                    }
+
+                    return {
+                        boxTypeId: box.box_type_id,
+                        vendorId: box.vendor_id,
+                        quantity: box.quantity,
+                        items: items,
+                        itemNotes: box.item_notes || {}
+                    };
+                });
                 // Also set top-level properties for backward compatibility if single box
                 if (boxSelections.length === 1) {
                     orderConfig.boxTypeId = boxSelections[0].box_type_id;
                     orderConfig.vendorId = boxSelections[0].vendor_id;
                     orderConfig.boxQuantity = boxSelections[0].quantity;
+                    // Parse items for top-level as well
+                    let topLevelItems: any = {};
+                    try {
+                        if (boxSelections[0].items && typeof boxSelections[0].items === 'string') {
+                            topLevelItems = JSON.parse(boxSelections[0].items);
+                        } else if (boxSelections[0].items && typeof boxSelections[0].items === 'object') {
+                            topLevelItems = boxSelections[0].items;
+                        }
+                    } catch (e) {
+                        console.error('Error parsing top-level box items:', e);
+                    }
+                    orderConfig.items = topLevelItems;
                 }
             }
 
@@ -4264,13 +4429,13 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
  * This is used for "Current Order Request" form
  * Now uses local database for fast access
  */
-export async function getUpcomingOrderForClient(clientId: string) {
+export async function getUpcomingOrderForClient(clientId: string, caseId?: string | null) {
     if (!clientId) return null;
 
     try {
         // Use local database for fast access
         const { getUpcomingOrderForClientLocal } = await import('./local-db');
-        return await getUpcomingOrderForClientLocal(clientId);
+        return await getUpcomingOrderForClientLocal(clientId, caseId);
     } catch (err) {
         console.error('Error in getUpcomingOrderForClient:', err);
         return null;
@@ -6365,8 +6530,7 @@ export async function getClientBoxOrder(clientId: string): Promise<ClientBoxOrde
         items: d.items,
         itemNotes: d.item_notes, // Map item_notes from DB
         created_at: d.created_at,
-        updated_at: d.updated_at,
-        updated_by: d.updated_by
+        updated_at: d.updated_at
     }));
 }
 
@@ -6395,17 +6559,39 @@ export async function saveClientBoxOrder(clientId: string, data: Partial<ClientB
 
     console.log('[saveClientBoxOrder] Received data:', JSON.stringify(data, null, 2));
 
+    // Fetch all valid box type IDs to validate against foreign key constraint
+    const { data: validBoxTypes, error: boxTypesError } = await supabaseAdmin
+        .from('box_types')
+        .select('id');
+    
+    if (boxTypesError) {
+        console.warn('[saveClientBoxOrder] Could not fetch box types for validation:', boxTypesError.message);
+    }
+    
+    const validBoxTypeIds = new Set((validBoxTypes || []).map(bt => bt.id));
+
     const insertPayload = data.map(order => {
+        // Validate boxTypeId: if empty, undefined, or not in valid box types, set to null
+        let boxTypeId: string | null | undefined = order.boxTypeId;
+        const boxTypeIdStr = boxTypeId ? String(boxTypeId).trim() : '';
+        if (!boxTypeIdStr || !validBoxTypeIds.has(boxTypeIdStr)) {
+            if (boxTypeIdStr) {
+                console.warn(`[saveClientBoxOrder] Invalid boxTypeId "${boxTypeIdStr}" not found in box_types table. Setting to null.`);
+            }
+            boxTypeId = null;
+        } else {
+            boxTypeId = boxTypeIdStr;
+        }
+
         const payload: any = {
             client_id: clientId,
-            case_id: order.caseId,
-            box_type_id: order.boxTypeId,
-            vendor_id: order.vendorId,
-            quantity: order.quantity,
-            items: order.items,
-            item_notes: (order as any).itemNotes // Save item notes to DB
+            case_id: order.caseId || null,
+            box_type_id: boxTypeId,
+            vendor_id: order.vendorId || null,
+            quantity: order.quantity || 1,
+            items: order.items || {},
+            item_notes: (order as any).itemNotes || {} // Save item notes to DB
         };
-        if (updatedBy) payload.updated_by = updatedBy;
         return payload;
     });
 
@@ -6413,19 +6599,6 @@ export async function saveClientBoxOrder(clientId: string, data: Partial<ClientB
         .from('client_box_orders')
         .insert(insertPayload)
         .select();
-
-    if (error && error.code === '23503') {
-        const payloadWithoutUser = insertPayload.map(p => {
-            const { updated_by, ...rest } = p;
-            return rest;
-        });
-        const retry = await supabaseAdmin
-            .from('client_box_orders')
-            .insert(payloadWithoutUser)
-            .select();
-        created = retry.data;
-        error = retry.error;
-    }
     handleError(error);
     revalidatePath(`/client-portal/${clientId}`);
     revalidatePath(`/clients/${clientId}`);

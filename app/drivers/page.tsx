@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { fetchDrivers, fetchStops } from "../../lib/api";
 import { Truck, RefreshCw } from "lucide-react";
 import SearchStops from "../../components/drivers/SearchStops";
 import DriversGrid from "../../components/drivers/DriversGrid";
+import { DateFilter } from "../../components/routes/DateFilter";
 
 export default function DriversHome() {
     const [drivers, setDrivers] = useState([]);
@@ -12,6 +13,11 @@ export default function DriversHome() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState(false);
+    const [selectedDate, setSelectedDate] = useState<string>(() => {
+        // Set default date to today in YYYY-MM-DD format
+        const today = new Date();
+        return today.toISOString().split('T')[0];
+    });
 
     const loadData = async (showRefreshSpinner = false) => {
         if (showRefreshSpinner) setRefreshing(true);
@@ -130,12 +136,18 @@ export default function DriversHome() {
                         </button>
                     </header>
 
+                    <DateFilter
+                        selectedDate={selectedDate}
+                        onDateChange={setSelectedDate}
+                        onClear={() => setSelectedDate('')}
+                    />
+
                     <div className="search-wrap">
                         <SearchStops allStops={allStops} drivers={drivers} themeColor="#3665F3" />
                     </div>
 
                     {/* Renders the route cards + signature bars */}
-                    <DriversGrid drivers={drivers} allStops={allStops} />
+                    <DriversGrid drivers={drivers} allStops={allStops} selectedDate={selectedDate} />
                 </div>
             </div>
 

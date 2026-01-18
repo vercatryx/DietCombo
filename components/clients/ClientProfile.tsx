@@ -350,9 +350,21 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }, [clientId]);
 
     // Effect: Initialize boxOrders when Boxes service is selected
+    // Only initialize if boxOrders is empty AND there's no existing data (items, vendorId, boxTypeId)
     useEffect(() => {
         // If Boxes service is selected and no boxOrders, initialize it
+        // BUT: Don't overwrite if we already have items, vendorId, or boxTypeId from loaded data
         if (formData.serviceType === 'Boxes' && (!orderConfig.boxOrders || orderConfig.boxOrders.length === 0)) {
+            // Check if we have any existing data that suggests we're waiting for data to load
+            const hasExistingData = orderConfig.vendorId || 
+                                   orderConfig.boxTypeId || 
+                                   (orderConfig.items && Object.keys(orderConfig.items).length > 0);
+            
+            // If we have existing data, don't initialize yet - let loadData handle it
+            if (hasExistingData) {
+                return;
+            }
+            
             const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
             setOrderConfig((prev: any) => ({
                 ...prev,
@@ -364,7 +376,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }]
             }));
         }
-    }, [formData.serviceType, boxTypes]);
+    }, [formData.serviceType, boxTypes, orderConfig.vendorId, orderConfig.boxTypeId, orderConfig.items]);
 
     // Extract dependencies with defaults to ensure consistent array size
     const caseId = useMemo(() => orderConfig?.caseId ?? null, [orderConfig?.caseId]);
@@ -694,8 +706,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     async function loadData() {
         setLoadingOrderDetails(true);
+        
+        // Get client first to determine if we need to filter by case_id for Boxes
+        // For Boxes service type, use case_id from orderConfig or client's activeOrder
+        const client = await getClient(clientId);
+        const caseId = client?.serviceType === 'Boxes' 
+            ? (orderConfig?.caseId || client?.activeOrder?.caseId || null)
+            : null;
+        
         const [c, s, n, v, m, b, appSettings, catData, eData, allClientsData, regularClientsData, upcomingOrderData, activeOrderData, historyData, orderHistoryData, billingHistoryData] = await Promise.all([
-            getClient(clientId),
+            Promise.resolve(client),
             getStatuses(),
             getNavigators(),
             getVendors(),
@@ -706,10 +726,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             getEquipment(),
             getClients(),
             getRegularClients(),
-            getUpcomingOrderForClient(clientId),
+            // For Boxes service type, filter by case_id to get the latest upcoming order for the selected client
+            getUpcomingOrderForClient(clientId, caseId),
             getRecentOrdersForClient(clientId),
             getClientHistory(clientId),
-            getOrderHistory(clientId),
+            // For Boxes service type, filter order history by case_id
+            getOrderHistory(clientId, caseId),
             getBillingHistory(clientId)
         ]);
 
@@ -874,20 +896,41 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // NEW: Handle boxOrders array from backend
                 // If we have boxOrders from the backend, use that
                 if (configToSet.boxOrders && Array.isArray(configToSet.boxOrders) && configToSet.boxOrders.length > 0) {
-                    // boxOrders already exists, keep it
+                    // Ensure vendorId and items are synced from boxOrders to legacy fields for backward compat
+                    const firstBox = configToSet.boxOrders[0];
+                    if (firstBox.vendorId && !configToSet.vendorId) {
+                        configToSet.vendorId = firstBox.vendorId;
+                    }
+                    if (firstBox.items && Object.keys(firstBox.items).length > 0 && (!configToSet.items || Object.keys(configToSet.items).length === 0)) {
+                        configToSet.items = firstBox.items;
+                    }
                 }
                 // Fallback: migrate legacy fields to boxOrders array if array is missing
                 else if (!configToSet.boxOrders || configToSet.boxOrders.length === 0) {
+                    // Use items from configToSet first, fallback to upcomingOrderData.items
+                    const itemsSource = (configToSet.items && Object.keys(configToSet.items).length > 0) 
+                        ? configToSet.items 
+                        : (upcomingOrderData && upcomingOrderData.items ? upcomingOrderData.items : {});
+
                     const legacyBox = {
                         boxTypeId: configToSet.boxTypeId || '',
                         vendorId: configToSet.vendorId || '',
                         quantity: configToSet.boxQuantity || 1,
-                        items: configToSet.items || {},
+                        items: itemsSource || {},
                         itemNotes: configToSet.itemNotes || {}
                     };
 
+                    console.log('[ClientProfile] loadData - Creating boxOrders from legacy fields', {
+                        hasItems: !!(legacyBox.items && Object.keys(legacyBox.items).length > 0),
+                        itemsCount: legacyBox.items ? Object.keys(legacyBox.items).length : 0,
+                        items: legacyBox.items,
+                        vendorId: legacyBox.vendorId,
+                        boxTypeId: legacyBox.boxTypeId,
+                        itemsSource: itemsSource === configToSet.items ? 'configToSet.items' : 'upcomingOrderData.items'
+                    });
+
                     // Only add if there is actual data
-                    if (legacyBox.boxTypeId || legacyBox.vendorId) {
+                    if (legacyBox.boxTypeId || legacyBox.vendorId || (legacyBox.items && Object.keys(legacyBox.items).length > 0)) {
                         configToSet.boxOrders = [legacyBox];
                     } else {
                         // Default empty box
@@ -917,13 +960,65 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     }
                 }
 
-                // Ensure legacy fields are synced for backward compat/other logic
+                // Auto-populate items from upcoming orders if they exist (check both upcomingOrderData and configToSet)
+                const itemsToPopulate = (upcomingOrderData && upcomingOrderData.serviceType === 'Boxes' && upcomingOrderData.items) 
+                    ? upcomingOrderData.items 
+                    : (configToSet.items && Object.keys(configToSet.items).length > 0 ? configToSet.items : null);
+
+                console.log('[ClientProfile] loadData - Items population check', {
+                    hasUpcomingOrderItems: !!(upcomingOrderData && upcomingOrderData.items),
+                    hasConfigToSetItems: !!(configToSet.items && Object.keys(configToSet.items).length > 0),
+                    itemsToPopulateCount: itemsToPopulate ? Object.keys(itemsToPopulate).length : 0,
+                    hasBoxOrders: !!(configToSet.boxOrders && configToSet.boxOrders.length > 0),
+                    firstBoxItemsCount: configToSet.boxOrders && configToSet.boxOrders.length > 0 ? Object.keys(configToSet.boxOrders[0].items || {}).length : 0
+                });
+
+                if (itemsToPopulate && configToSet.boxOrders && configToSet.boxOrders.length > 0) {
+                    const firstBox = configToSet.boxOrders[0];
+                    // Only populate if vendorId matches (or if no vendorId is set yet, or if items are already in configToSet)
+                    const shouldPopulate = !firstBox.vendorId || 
+                                          !upcomingOrderData?.vendorId || 
+                                          firstBox.vendorId === upcomingOrderData?.vendorId ||
+                                          (configToSet.items && Object.keys(configToSet.items).length > 0);
+
+                    if (shouldPopulate) {
+                        const populatedItems: any = {};
+                        // Extract items and populate them
+                        if (typeof itemsToPopulate === 'object' && !Array.isArray(itemsToPopulate)) {
+                            for (const [itemId, qty] of Object.entries(itemsToPopulate)) {
+                                const upcomingQty = typeof qty === 'number' ? qty : (typeof qty === 'object' && qty && 'quantity' in qty ? (qty as any).quantity : 0);
+                                // Populate quantity from upcoming order
+                                if (upcomingQty > 0) {
+                                    populatedItems[itemId] = upcomingQty;
+                                }
+                            }
+                        }
+                        // Only update if there are items to populate and current box doesn't have items
+                        if (Object.keys(populatedItems).length > 0) {
+                            // Merge with existing items if any, otherwise use populated items
+                            const existingItems = firstBox.items || {};
+                            if (Object.keys(existingItems).length === 0) {
+                                firstBox.items = populatedItems;
+                            } else {
+                                // Merge: prioritize existing items but add any missing from populated
+                                firstBox.items = { ...populatedItems, ...existingItems };
+                            }
+                            // Update legacy fields
+                            configToSet.items = firstBox.items;
+                        }
+                    }
+                }
+
+                // Ensure legacy fields are synced for backward compat/other logic (do this AFTER populating items)
                 if (configToSet.boxOrders && configToSet.boxOrders.length > 0) {
                     const firstBox = configToSet.boxOrders[0];
                     configToSet.vendorId = firstBox.vendorId;
                     configToSet.boxTypeId = firstBox.boxTypeId;
                     configToSet.boxQuantity = firstBox.quantity;
-                    configToSet.items = firstBox.items;
+                    // Only update configToSet.items if box has items (don't overwrite with empty)
+                    if (firstBox.items && Object.keys(firstBox.items).length > 0) {
+                        configToSet.items = firstBox.items;
+                    }
                 }
             }
 
@@ -939,6 +1034,46 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 } else if (c.activeOrder?.caseId) {
                     configToSet.caseId = c.activeOrder.caseId;
                 }
+            }
+
+            // Final safety check: If Boxes and we have items in configToSet.items but not in boxOrders[0].items, migrate them
+            if (c.serviceType === 'Boxes' && configToSet.items && Object.keys(configToSet.items).length > 0) {
+                if (configToSet.boxOrders && configToSet.boxOrders.length > 0) {
+                    const firstBox = configToSet.boxOrders[0];
+                    // If box has no items or empty items, populate from configToSet.items
+                    if (!firstBox.items || Object.keys(firstBox.items).length === 0) {
+                        console.log('[ClientProfile] loadData - Final safety: Migrating items to boxOrders[0].items', {
+                            itemsCount: Object.keys(configToSet.items).length,
+                            items: configToSet.items
+                        });
+                        firstBox.items = { ...configToSet.items };
+                    }
+                } else {
+                    // If boxOrders doesn't exist, create it with items
+                    console.log('[ClientProfile] loadData - Final safety: Creating boxOrders with items', {
+                        itemsCount: Object.keys(configToSet.items).length
+                    });
+                    configToSet.boxOrders = [{
+                        boxTypeId: configToSet.boxTypeId || '',
+                        vendorId: configToSet.vendorId || '',
+                        quantity: configToSet.boxQuantity || 1,
+                        items: { ...configToSet.items },
+                        itemNotes: configToSet.itemNotes || {}
+                    }];
+                }
+            }
+
+            // Final verification log before setting orderConfig
+            if (c.serviceType === 'Boxes' && configToSet.boxOrders && configToSet.boxOrders.length > 0) {
+                const firstBox = configToSet.boxOrders[0];
+                console.log('[ClientProfile] loadData - Final orderConfig state before setOrderConfig', {
+                    hasBoxOrders: true,
+                    firstBoxVendorId: firstBox.vendorId,
+                    firstBoxBoxTypeId: firstBox.boxTypeId,
+                    firstBoxItemsCount: firstBox.items ? Object.keys(firstBox.items).length : 0,
+                    firstBoxItems: firstBox.items,
+                    configToSetItemsCount: configToSet.items ? Object.keys(configToSet.items).length : 0
+                });
             }
             
             setOrderConfig(configToSet);
@@ -1086,6 +1221,34 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (typeof order.items === 'object' && !Array.isArray(order.items)) {
                     const quantity = Number(order.items[itemId] || 0);
                     totalQuantity += quantity;
+                }
+            }
+        }
+
+        return totalQuantity;
+    }
+
+    /**
+     * Get the total quantity of a menu item from all upcoming Boxes orders
+     * This reads from the allUpcomingOrders state and sums quantities across all Boxes orders
+     * Used for Boxes service type where items are vendor-agnostic
+     */
+    function getUpcomingOrderQuantityForBoxItem(itemId: string, boxVendorId?: string): number {
+        let totalQuantity = 0;
+        
+        if (!allUpcomingOrders || allUpcomingOrders.length === 0) {
+            return 0;
+        }
+
+        for (const order of allUpcomingOrders) {
+            if (order.serviceType === 'Boxes' && order.items) {
+                // If boxVendorId is provided, only count items from orders with matching vendorId
+                // Otherwise, count items from all Boxes orders
+                if (!boxVendorId || order.vendorId === boxVendorId) {
+                    if (typeof order.items === 'object' && !Array.isArray(order.items)) {
+                        const quantity = Number(order.items[itemId] || 0);
+                        totalQuantity += quantity;
+                    }
                 }
             }
         }
@@ -1420,18 +1583,41 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (formData.serviceType === 'Boxes') {
             const messages: string[] = [];
 
-            // Validate box category quotas - each category must have exactly the required quota value
-            if (orderConfig.boxTypeId && boxQuotas.length > 0 && orderConfig.items) {
-                const selectedItems = orderConfig.items || {};
-                const boxQuantity = orderConfig.boxQuantity || 1;
+            // Get items from either boxOrders array or legacy items field
+            // Priority: boxOrders (new format) > items (legacy format)
+            let itemsToValidate: { [itemId: string]: number } = {};
+            let boxTypeIdToValidate: string | undefined;
+            let boxQuantityToValidate: number = 1;
 
+            if (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0) {
+                // New format: aggregate items from all boxes in boxOrders array
+                const firstBox = orderConfig.boxOrders[0];
+                boxTypeIdToValidate = firstBox.boxTypeId;
+                boxQuantityToValidate = firstBox.quantity || 1;
+                
+                // Merge items from all boxes
+                orderConfig.boxOrders.forEach((box: any) => {
+                    const boxItems = box.items || {};
+                    Object.entries(boxItems).forEach(([itemId, qty]) => {
+                        itemsToValidate[itemId] = (itemsToValidate[itemId] || 0) + (qty as number);
+                    });
+                });
+            } else if (orderConfig.items) {
+                // Legacy format: use items and boxTypeId from top level
+                itemsToValidate = orderConfig.items || {};
+                boxTypeIdToValidate = orderConfig.boxTypeId;
+                boxQuantityToValidate = orderConfig.boxQuantity || 1;
+            }
+
+            // Validate box category quotas - each category must have exactly the required quota value
+            if (boxTypeIdToValidate && boxQuotas.length > 0 && Object.keys(itemsToValidate).length > 0) {
                 // Check each quota requirement
                 for (const quota of boxQuotas) {
                     // Calculate total quota value for this category
                     let categoryQuotaValue = 0;
 
                     // Sum up (item quantity * item quotaValue) for all items in this category
-                    for (const [itemId, qty] of Object.entries(selectedItems)) {
+                    for (const [itemId, qty] of Object.entries(itemsToValidate)) {
                         const item = menuItems.find(i => i.id === itemId);
                         if (item && item.categoryId === quota.categoryId) {
                             const itemQuotaValue = item.quotaValue || 1;
@@ -1440,7 +1626,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     }
 
                     // Calculate required quota value (targetValue * boxQuantity)
-                    const requiredQuotaValue = quota.targetValue * boxQuantity;
+                    const requiredQuotaValue = quota.targetValue * boxQuantityToValidate;
 
                     // Check if it matches exactly
                     if (categoryQuotaValue !== requiredQuotaValue) {
@@ -1455,9 +1641,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
 
             // Validate category set values - categories with setValue must have exactly that quota value
-            if (orderConfig.items) {
-                const selectedItems = orderConfig.items || {};
-
+            if (Object.keys(itemsToValidate).length > 0) {
                 // Check each category that has a setValue
                 for (const category of categories) {
                     if (category.setValue !== undefined && category.setValue !== null) {
@@ -1465,7 +1649,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         let categoryQuotaValue = 0;
 
                         // Sum up (item quantity * item quotaValue) for all items in this category
-                        for (const [itemId, qty] of Object.entries(selectedItems)) {
+                        for (const [itemId, qty] of Object.entries(itemsToValidate)) {
                             const item = menuItems.find(i => i.id === itemId);
                             if (item && item.categoryId === category.id) {
                                 const itemQuotaValue = item.quotaValue || 1;
@@ -3899,6 +4083,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                             const qty = Number(selectedItems[item.id] || 0);
                                                                                             const note = box.itemNotes?.[item.id] || '';
                                                                                             const isSelected = qty > 0;
+                                                                                            const upcomingQty = getUpcomingOrderQuantityForBoxItem(item.id, box.vendorId);
 
                                                                                             return (
                                                                                                 <div key={item.id} style={{
@@ -3920,6 +4105,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                             {(item.quotaValue || 1) !== 1 && (
                                                                                                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
                                                                                                                     Counts as {item.quotaValue} meals
+                                                                                                                </div>
+                                                                                                            )}
+                                                                                                            {upcomingQty > 0 && (
+                                                                                                                <div style={{ 
+                                                                                                                    color: 'var(--color-primary)', 
+                                                                                                                    fontSize: '0.85em', 
+                                                                                                                    marginTop: '4px',
+                                                                                                                    fontWeight: 500,
+                                                                                                                    backgroundColor: 'var(--bg-surface-hover)',
+                                                                                                                    padding: '2px 6px',
+                                                                                                                    borderRadius: 'var(--radius-sm)',
+                                                                                                                    display: 'inline-block'
+                                                                                                                }}>
+                                                                                                                    ({upcomingQty} in upcoming orders)
                                                                                                                 </div>
                                                                                                             )}
                                                                                                         </div>
@@ -3993,6 +4192,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                             const qty = Number(selectedItems[item.id] || 0);
                                                                                             const note = box.itemNotes?.[item.id] || '';
                                                                                             const isSelected = qty > 0;
+                                                                                            const upcomingQty = getUpcomingOrderQuantityForBoxItem(item.id, box.vendorId);
 
                                                                                             return (
                                                                                                 <div key={item.id} style={{
@@ -4014,6 +4214,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                             {(item.quotaValue || 1) !== 1 && (
                                                                                                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
                                                                                                                     Counts as {item.quotaValue} meals
+                                                                                                                </div>
+                                                                                                            )}
+                                                                                                            {upcomingQty > 0 && (
+                                                                                                                <div style={{ 
+                                                                                                                    color: 'var(--color-primary)', 
+                                                                                                                    fontSize: '0.85em', 
+                                                                                                                    marginTop: '4px',
+                                                                                                                    fontWeight: 500,
+                                                                                                                    backgroundColor: 'var(--bg-surface-hover)',
+                                                                                                                    padding: '2px 6px',
+                                                                                                                    borderRadius: 'var(--radius-sm)',
+                                                                                                                    display: 'inline-block'
+                                                                                                                }}>
+                                                                                                                    ({upcomingQty} in upcoming orders)
                                                                                                                 </div>
                                                                                                             )}
                                                                                                         </div>
@@ -5025,7 +5239,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
 
         // Validate Order Config before saving (if we have config)
-        if (orderConfig && orderConfig.caseId) {
+        // For Boxes, validate even without caseId (caseId is optional for boxes)
+        // For other services, require caseId
+        const shouldValidate = orderConfig && (
+            formData.serviceType === 'Boxes' 
+                ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
+                : orderConfig.caseId
+        );
+        if (shouldValidate) {
             const validation = validateOrder();
             if (!validation.isValid) {
                 setValidationError({ show: true, messages: validation.messages });
@@ -5147,14 +5368,29 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             } else if (formData.serviceType === 'Boxes') {
                 // For Boxes: Use the boxOrders array which supports multiple boxes
+                // Match triangleorder approach: Clean items and notes, only keep items with qty > 0
                 if (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders)) {
-                    cleanedOrderConfig.boxOrders = orderConfig.boxOrders.map((box: any) => ({
-                        boxTypeId: box.boxTypeId || '',
-                        vendorId: box.vendorId || '',
-                        quantity: box.quantity || 1,
-                        items: box.items || {},
-                        itemNotes: box.itemNotes || {}
-                    }));
+                    cleanedOrderConfig.boxOrders = orderConfig.boxOrders.map((box: any) => {
+                        const cleanedItems: any = {};
+                        const cleanedNotes: any = {};
+
+                        if (box.items) {
+                            Object.entries(box.items).forEach(([itemId, qty]) => {
+                                if (Number(qty) > 0) {
+                                    cleanedItems[itemId] = Number(qty);
+                                    if (box.itemNotes && box.itemNotes[itemId]) {
+                                        cleanedNotes[itemId] = box.itemNotes[itemId];
+                                    }
+                                }
+                            });
+                        }
+
+                        return {
+                            ...box,
+                            items: cleanedItems,
+                            itemNotes: cleanedNotes
+                        };
+                    });
                 } else {
                     // Fallback: migrate legacy fields to boxOrders array if array is missing
                     const legacyBox = {
@@ -5176,6 +5412,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
                 cleanedOrderConfig.caseId = orderConfig.caseId; // Preserve case ID (also set above)
                 cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {}; // Preserve item prices
+                console.log('[prepareActiveOrder] Box Orders prepared:', JSON.stringify(cleanedOrderConfig.boxOrders, null, 2));
             } else if (formData.serviceType === 'Custom') {
                 // For Custom: Preserve vendorId and customItems
                 if (orderConfig.vendorId !== undefined) {
@@ -5437,7 +5674,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
 
             // Check if order configuration changed
-            const hasOrderChanges = orderConfig && orderConfig.caseId;
+            // For Boxes, check if boxOrders exist (caseId is optional)
+            // For other services, require caseId
+            const hasOrderChanges = orderConfig && (
+                formData.serviceType === 'Boxes' 
+                    ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
+                    : orderConfig.caseId
+            );
             if (hasOrderChanges) {
                 changes.push('Order configuration changed');
             }
@@ -5464,52 +5707,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Sync Current Order Request
             const hasOrderConfigChanges = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
             
-            // CRITICAL FIX: Check if order has actual vendor selections with items before saving
-            const hasValidOrderData = (() => {
-                if (!orderConfig) return false;
-                
-                // Check for vendor selections with items
-                if (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) {
-                    const hasItemsInSelections = orderConfig.vendorSelections.some((s: any) => {
-                        if (!s.vendorId) return false;
-                        // Check regular items
-                        if (s.items && Object.keys(s.items).length > 0 && Object.values(s.items).some((qty: any) => (Number(qty) || 0) > 0)) {
-                            return true;
-                        }
-                        // Check itemsByDay
-                        if (s.itemsByDay && s.selectedDeliveryDays) {
-                            return s.selectedDeliveryDays.some((day: string) => {
-                                const dayItems = s.itemsByDay[day] || {};
-                                return Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
-                            });
-                        }
-                        return false;
-                    });
-                    if (hasItemsInSelections) return true;
-                }
-                
-                // Check deliveryDayOrders
-                if (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0) {
-                    const hasItemsInDeliveryDays = Object.values(orderConfig.deliveryDayOrders).some((day: any) => {
-                        if (!day.vendorSelections || day.vendorSelections.length === 0) return false;
-                        return day.vendorSelections.some((s: any) => {
-                            if (!s.vendorId) return false;
-                            const items = s.items || {};
-                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
-                        });
-                    });
-                    if (hasItemsInDeliveryDays) return true;
-                }
-                
-                // For Boxes, check if vendorId or boxTypeId is set
-                if (formData.serviceType === 'Boxes') {
-                    return !!(orderConfig.vendorId || orderConfig.boxTypeId);
-                }
-                
-                return false;
-            })();
+            console.log('[ClientProfile] Order save check:', {
+                serviceType: formData.serviceType,
+                hasOrderConfigChanges,
+                hasOrderChanges,
+                hasCaseId: !!orderConfig?.caseId,
+                caseId: orderConfig?.caseId,
+                hasBoxOrders: !!(orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0),
+                boxOrdersCount: orderConfig?.boxOrders?.length || 0
+            });
             
-            if ((hasOrderConfigChanges || hasOrderChanges) && hasValidOrderData) {
+            // Match triangleorder approach: Save if there are order config changes OR order changes
+            // Don't check hasValidOrderData - let the backend handle validation
+            if (hasOrderConfigChanges || hasOrderChanges) {
                 // Add activeOrder to updateData so updateClient handles the full save + sync efficiently
                 // efficiently with only ONE revalidation
                 const preparedOrder = prepareActiveOrder();
@@ -5517,16 +5727,23 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     updateData.activeOrder = preparedOrder;
                     console.log('[ClientProfile] Saving order with activeOrder:', {
                         serviceType: preparedOrder.serviceType,
+                        hasCaseId: !!preparedOrder.caseId,
+                        caseId: preparedOrder.caseId,
                         hasVendorSelections: !!(preparedOrder as any).vendorSelections,
                         vendorSelectionsCount: (preparedOrder as any).vendorSelections?.length || 0,
                         hasDeliveryDayOrders: !!(preparedOrder as any).deliveryDayOrders,
-                        deliveryDayOrdersKeys: (preparedOrder as any).deliveryDayOrders ? Object.keys((preparedOrder as any).deliveryDayOrders) : []
+                        deliveryDayOrdersKeys: (preparedOrder as any).deliveryDayOrders ? Object.keys((preparedOrder as any).deliveryDayOrders) : [],
+                        hasBoxOrders: !!(preparedOrder as any).boxOrders,
+                        boxOrdersCount: (preparedOrder as any).boxOrders?.length || 0,
+                        boxOrders: (preparedOrder as any).boxOrders?.map((box: any) => ({
+                            boxTypeId: box.boxTypeId,
+                            vendorId: box.vendorId,
+                            itemsCount: Object.keys(box.items || {}).length
+                        })) || []
                     });
                 } else {
                     console.warn('[ClientProfile] prepareActiveOrder returned undefined, skipping order save');
                 }
-            } else if ((hasOrderConfigChanges || hasOrderChanges) && !hasValidOrderData) {
-                console.warn('[ClientProfile] Order changes detected but no valid order data (no items selected), skipping order save');
             }
 
             // CRITICAL: Execute the single update call
@@ -5534,9 +5751,34 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
             // Sync to new independent tables if there's order data
             // Sync to new independent tables if there's order data OR if we need to clear data
+            const serviceType = formData.serviceType;
+            
+            // For Boxes service, save even without caseId (caseId is optional for boxes)
+            if (serviceType === 'Boxes' && updateData.activeOrder) {
+                const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
+                console.log('[ClientProfile] Saving box orders:', {
+                    serviceType,
+                    hasCaseId: !!updateData.activeOrder.caseId,
+                    caseId: updateData.activeOrder.caseId,
+                    boxesCount: boxesToSave.length,
+                    boxes: boxesToSave.map((box: any) => ({
+                        boxTypeId: box.boxTypeId,
+                        vendorId: box.vendorId,
+                        quantity: box.quantity,
+                        itemsCount: Object.keys(box.items || {}).length,
+                        hasItems: Object.keys(box.items || {}).length > 0
+                    }))
+                });
+                if (boxesToSave.length > 0) {
+                    await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
+                        ...box,
+                        caseId: updateData.activeOrder?.caseId
+                    })));
+                }
+            }
+            
+            // For other service types, require caseId
             if (updateData.activeOrder && updateData.activeOrder.caseId) {
-                const serviceType = formData.serviceType;
-
                 if (serviceType === 'Custom') {
                     if (updateData.activeOrder.custom_name && updateData.activeOrder.custom_price && updateData.activeOrder.vendorId && updateData.activeOrder.deliveryDay) {
                         await saveClientCustomOrder(
@@ -5570,15 +5812,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         caseId: updateData.activeOrder.caseId,
                         mealSelections: (updateData.activeOrder as any).mealSelections || {}
                     });
-                }
-
-                // Save box orders if it's a Boxes service
-                if (serviceType === 'Boxes') {
-                    const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
-                    await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
-                        ...box,
-                        caseId: updateData.activeOrder?.caseId
-                    })));
                 }
             }
             // Still call legacy sync for backward compatibility during migration
