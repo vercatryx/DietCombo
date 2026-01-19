@@ -188,31 +188,35 @@ function isPausedStop(s) {
     return false;
 }
 
-/** Get color for stop based on status (completed or order status) */
+/** Get color for stop based on status (completed or order status)
+ * Only applies status colors for specific statuses; otherwise uses driver color
+ */
 function getStopColor(stop, defaultColor) {
-    // Priority 1: Stop completed status
-    if (stop?.completed === true) {
-        return "#22c55e"; // Green for completed stops
-    }
-    
-    // Priority 2: Order status
+    // Priority 1: Order status (only override driver color for specific statuses)
     const orderStatus = stop?.orderStatus?.toLowerCase();
     if (orderStatus) {
         switch (orderStatus) {
-            case "completed":
-                return "#22c55e"; // Green
             case "cancelled":
-                return "#ef4444"; // Red
+                return "#ef4444"; // Red for cancelled orders
             case "waiting_for_proof":
-                return "#f59e0b"; // Orange/Amber
+                return "#f59e0b"; // Orange/Amber for waiting for proof
             case "billing_pending":
-                return "#8b5cf6"; // Purple
+                return "#8b5cf6"; // Purple for billing pending
+            case "completed":
+                // Completed orders still use driver color to maintain route visibility
+                return defaultColor;
             case "pending":
             case "scheduled":
             case "confirmed":
             default:
                 return defaultColor; // Use driver color for active orders
         }
+    }
+    
+    // Priority 2: Stop completed status (only if no order status)
+    // If stop is completed but no order status, still use driver color
+    if (stop?.completed === true && !orderStatus) {
+        return defaultColor; // Use driver color even for completed stops
     }
     
     // Default: use driver color
@@ -804,12 +808,13 @@ export default function DriversMapLeaflet({
             if (!map || !ll) return;
             map.setView(ll, Math.max(map.getZoom(), 14), { animate: true });
 
-            const { stop, color } = findStopByIdLocal(
-                row.id,
-                localDriversRef.current,
-                localUnroutedRef.current
-            );
-            openAssignForStop(stop || row, color || row.__color || "#1f77b4");
+            // Disable assign driver feature for stops - driver assignment is now done directly to clients
+            // const { stop, color } = findStopByIdLocal(
+            //     row.id,
+            //     localDriversRef.current,
+            //     localUnroutedRef.current
+            // );
+            // openAssignForStop(stop || row, color || row.__color || "#1f77b4");
 
             if (clear) clearSearch();
         },
@@ -845,8 +850,9 @@ export default function DriversMapLeaflet({
                 ev?.stopPropagation?.();
                 return;
             }
-            map?.closePopup();
-            openAssignForStop(stop, baseColor);
+            // Disable assign driver feature for stops - driver assignment is now done directly to clients
+            // map?.closePopup();
+            // openAssignForStop(stop, baseColor);
         },
         [clickPickMode, openAssignForStop, toggleId, readonly]
     );
@@ -1513,7 +1519,8 @@ export default function DriversMapLeaflet({
                             {selectedCount} selected
                             {hoverIds.size ? ` (+${hoverIds.size} preview)` : ""}
                         </div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        {/* Disabled: Assign driver feature for stops - driver assignment is now done directly to clients */}
+                        {/* <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <label style={{ fontSize: 12 }}>Assign to:</label>
                             <select
                                 value={bulkDriverId}
@@ -1556,7 +1563,7 @@ export default function DriversMapLeaflet({
                             >
                                 {bulkBusy ? "Assigning…" : `Assign ${selectedCount}`}
                             </button>
-                        </div>
+                        </div> */}
                         <div style={{ display: "flex", gap: 8 }}>
                             <button
                                 onClick={clearSelection}
