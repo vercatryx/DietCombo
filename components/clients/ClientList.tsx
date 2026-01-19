@@ -976,8 +976,28 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     }
 
                     if (box.items) {
-                        Object.entries(box.items).forEach(([itemId, qty]) => {
-                            const q = Number(qty);
+                        // Handle items that might be stored as JSON string
+                        let itemsObj = box.items;
+                        if (typeof box.items === 'string') {
+                            try {
+                                itemsObj = JSON.parse(box.items);
+                            } catch (e) {
+                                console.error('Error parsing box.items:', e);
+                                itemsObj = {};
+                            }
+                        }
+                        
+                        Object.entries(itemsObj).forEach(([itemId, qtyOrObj]) => {
+                            // Handle both formats: { itemId: number } or { itemId: { quantity: number, price: number } }
+                            let q = 0;
+                            if (typeof qtyOrObj === 'number') {
+                                q = qtyOrObj;
+                            } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                                q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                            } else {
+                                q = parseInt(qtyOrObj as any) || 0;
+                            }
+                            
                             if (q > 0) {
                                 const item = menuItems.find(i => i.id === itemId);
                                 if (item) {
@@ -1002,8 +1022,28 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 vendorName = vendors.find(v => v.id === vId)?.name || 'No Vendor';
 
                 if (conf.items) {
-                    Object.entries(conf.items).forEach(([itemId, qty]) => {
-                        const q = Number(qty);
+                    // Handle items that might be stored as JSON string
+                    let itemsObj = conf.items;
+                    if (typeof conf.items === 'string') {
+                        try {
+                            itemsObj = JSON.parse(conf.items);
+                        } catch (e) {
+                            console.error('Error parsing conf.items:', e);
+                            itemsObj = {};
+                        }
+                    }
+                    
+                    Object.entries(itemsObj).forEach(([itemId, qtyOrObj]) => {
+                        // Handle both formats: { itemId: number } or { itemId: { quantity: number, price: number } }
+                        let q = 0;
+                        if (typeof qtyOrObj === 'number') {
+                            q = qtyOrObj;
+                        } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                            q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                        } else {
+                            q = parseInt(qtyOrObj as any) || 0;
+                        }
+                        
                         if (q > 0) {
                             const item = menuItems.find(i => i.id === itemId);
                             if (item) itemsList.push({ name: item.name, quantity: q });

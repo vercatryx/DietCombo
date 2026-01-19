@@ -60,6 +60,7 @@ export interface ClientProfile {
   billings?: any; // JSON data
   visits?: any; // JSON data
   signToken?: string | null;
+  assignedDriverId?: string | null;
 
   createdAt: string;
   updatedAt: string;

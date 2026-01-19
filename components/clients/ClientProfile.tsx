@@ -3907,6 +3907,165 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                                             return (
                                                 <div className="animate-fade-in">
+                                                    {/* Display items from all existing upcoming Boxes orders */}
+                                                    {allUpcomingOrders.length > 0 && (() => {
+                                                        // Helper function to extract items from Boxes orders
+                                                        const extractItemsFromBoxOrder = (order: any): Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; orderId?: string }> => {
+                                                            const items: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; orderId?: string }> = [];
+                                                            
+                                                            if (order.serviceType === 'Boxes') {
+                                                                // Handle boxOrders array structure (new format)
+                                                                if (order.boxOrders && Array.isArray(order.boxOrders)) {
+                                                                    order.boxOrders.forEach((box: any) => {
+                                                                        const vendor = vendors.find(v => v.id === box.vendorId || box.vendorId);
+                                                                        const vendorName = vendor?.name || 'Unknown Vendor';
+                                                                        
+                                                                        if (box.items && typeof box.items === 'object' && !Array.isArray(box.items)) {
+                                                                            Object.entries(box.items).forEach(([itemId, qty]: [string, any]) => {
+                                                                                const menuItem = menuItems.find(mi => mi.id === itemId);
+                                                                                const itemName = menuItem?.name || 'Unknown Item';
+                                                                                const quantity = Number(qty) || 0;
+                                                                                
+                                                                                if (quantity > 0) {
+                                                                                    items.push({
+                                                                                        itemId,
+                                                                                        itemName,
+                                                                                        quantity,
+                                                                                        vendorName,
+                                                                                        orderId: order.id
+                                                                                    });
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    });
+                                                                }
+                                                                // Handle legacy items structure (flat format)
+                                                                else if (order.items) {
+                                                                    const vendor = vendors.find(v => v.id === order.vendorId);
+                                                                    const vendorName = vendor?.name || 'Unknown Vendor';
+                                                                    
+                                                                    if (typeof order.items === 'object' && !Array.isArray(order.items)) {
+                                                                        Object.entries(order.items).forEach(([itemId, qty]: [string, any]) => {
+                                                                            const menuItem = menuItems.find(mi => mi.id === itemId);
+                                                                            const itemName = menuItem?.name || 'Unknown Item';
+                                                                            const quantity = Number(qty) || 0;
+                                                                            
+                                                                            if (quantity > 0) {
+                                                                                items.push({
+                                                                                    itemId,
+                                                                                    itemName,
+                                                                                    quantity,
+                                                                                    vendorName,
+                                                                                    orderId: order.id
+                                                                                });
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                }
+                                                            }
+                                                            
+                                                            return items;
+                                                        };
+
+                                                        // Collect all items from all upcoming Boxes orders
+                                                        const allBoxItems: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; orderId?: string }> = [];
+                                                        allUpcomingOrders.forEach((order) => {
+                                                            if (order.serviceType === 'Boxes') {
+                                                                const orderItems = extractItemsFromBoxOrder(order);
+                                                                orderItems.forEach(item => {
+                                                                    allBoxItems.push(item);
+                                                                });
+                                                            }
+                                                        });
+
+                                                        // Group items by itemId and vendor, summing quantities
+                                                        const itemMap = new Map<string, { itemId: string; itemName: string; quantity: number; vendorName: string; orderIds: Set<string> }>();
+                                                        allBoxItems.forEach(item => {
+                                                            const key = `${item.itemId}-${item.vendorName}`;
+                                                            if (itemMap.has(key)) {
+                                                                const existing = itemMap.get(key)!;
+                                                                existing.quantity += item.quantity;
+                                                                if (item.orderId) {
+                                                                    existing.orderIds.add(item.orderId);
+                                                                }
+                                                            } else {
+                                                                itemMap.set(key, {
+                                                                    itemId: item.itemId,
+                                                                    itemName: item.itemName,
+                                                                    quantity: item.quantity,
+                                                                    vendorName: item.vendorName,
+                                                                    orderIds: new Set(item.orderId ? [item.orderId] : [])
+                                                                });
+                                                            }
+                                                        });
+
+                                                        const groupedItems = Array.from(itemMap.values());
+
+                                                        if (groupedItems.length > 0) {
+                                                            return (
+                                                                <div style={{
+                                                                    marginBottom: 'var(--spacing-md)',
+                                                                    padding: 'var(--spacing-md)',
+                                                                    backgroundColor: 'var(--bg-surface-hover)',
+                                                                    borderRadius: 'var(--radius-md)',
+                                                                    border: '1px solid var(--border-color)'
+                                                                }}>
+                                                                    <div style={{
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '0.5rem',
+                                                                        marginBottom: 'var(--spacing-sm)',
+                                                                        fontSize: '0.9rem',
+                                                                        fontWeight: 600,
+                                                                        color: 'var(--text-secondary)'
+                                                                    }}>
+                                                                        <ShoppingCart size={16} />
+                                                                        <span>Selected Upcoming Box Orders Items</span>
+                                                                    </div>
+                                                                    <div style={{
+                                                                        display: 'flex',
+                                                                        flexDirection: 'column',
+                                                                        gap: '0.5rem'
+                                                                    }}>
+                                                                        {groupedItems.map((item, idx) => (
+                                                                            <div key={`${item.itemId}-${item.vendorName}-${idx}`} style={{
+                                                                                display: 'flex',
+                                                                                justifyContent: 'space-between',
+                                                                                alignItems: 'center',
+                                                                                padding: '0.5rem',
+                                                                                backgroundColor: 'var(--bg-app)',
+                                                                                borderRadius: 'var(--radius-sm)',
+                                                                                fontSize: '0.85rem'
+                                                                            }}>
+                                                                                <div style={{ flex: 1 }}>
+                                                                                    <div style={{ fontWeight: 500 }}>
+                                                                                        {item.itemName}
+                                                                                    </div>
+                                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+                                                                                        {item.vendorName}
+                                                                                        {item.orderIds.size > 0 && (
+                                                                                            <span style={{ marginLeft: '0.5rem' }}>
+                                                                                                ({item.orderIds.size} order{item.orderIds.size > 1 ? 's' : ''})
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div style={{
+                                                                                    fontWeight: 600,
+                                                                                    color: 'var(--color-primary)',
+                                                                                    minWidth: '40px',
+                                                                                    textAlign: 'right'
+                                                                                }}>
+                                                                                    {item.quantity}
+                                                                                </div>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        }
+                                                        return null;
+                                                    })()}
                                                     {currentBoxes.map((box: any, index: number) => (
                                                         <div key={index} style={{
                                                             marginBottom: '2rem',
