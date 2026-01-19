@@ -164,8 +164,71 @@ function getOrderSummary(
     } else if (st === 'Boxes') {
         // Check vendorId from order config first, then fall back to boxType
         let computedVendorId = conf.vendorId;
+        const uniqueVendors = new Set<string>();
+        const itemDetails: string[] = [];
 
-        if (!computedVendorId && !conf.boxTypeId && typeof conf === 'object') {
+        // NEW: Handle boxOrders array format first
+        if (conf.boxOrders && Array.isArray(conf.boxOrders) && conf.boxOrders.length > 0) {
+            conf.boxOrders.forEach((box: any) => {
+                const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
+                const vId = box.vendorId || boxDef?.vendorId;
+                if (vId) {
+                    const vName = vendors.find(v => v.id === vId)?.name;
+                    if (vName) uniqueVendors.add(vName);
+                    // Also set computedVendorId from first box if not already set
+                    if (!computedVendorId) {
+                        computedVendorId = vId;
+                    }
+                }
+
+                // Collect items from this box
+                if (box.items) {
+                    // Handle items that might be stored as JSON string
+                    let itemsObj = box.items;
+                    if (typeof box.items === 'string') {
+                        try {
+                            itemsObj = JSON.parse(box.items);
+                        } catch (e) {
+                            console.error('Error parsing box.items:', e);
+                            itemsObj = {};
+                        }
+                    }
+                    
+                    Object.entries(itemsObj).forEach(([itemId, qtyOrObj]) => {
+                        // Handle both formats: { itemId: number } or { itemId: { quantity: number, price: number } }
+                        let q = 0;
+                        if (typeof qtyOrObj === 'number') {
+                            q = qtyOrObj;
+                        } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                            q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                        } else {
+                            q = parseInt(qtyOrObj as any) || 0;
+                        }
+                        
+                        if (q > 0) {
+                            const item = menuItems.find(i => i.id === itemId);
+                            if (item) {
+                                // Check if item already in list (aggregate quantities)
+                                const existingIndex = itemDetails.findIndex(d => d.startsWith(item.name));
+                                if (existingIndex >= 0) {
+                                    // Extract existing quantity and add to it
+                                    const match = itemDetails[existingIndex].match(/x(\d+)$/);
+                                    if (match) {
+                                        const existingQty = parseInt(match[1]) || 0;
+                                        itemDetails[existingIndex] = `${item.name} x${existingQty + q}`;
+                                    }
+                                } else {
+                                    itemDetails.push(`${item.name} x${q}`);
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        // LEGACY: Fall back to legacy format if boxOrders array is empty or doesn't exist
+        if (uniqueVendors.size === 0 && !computedVendorId && !conf.boxTypeId && typeof conf === 'object') {
             // Check if it's nested (e.g. { "Thursday": { vendorId: ... } })
             const possibleDayKeys = Object.keys(conf).filter(k =>
                 k !== 'id' && k !== 'serviceType' && k !== 'caseId' && typeof (conf as any)[k] === 'object' && (conf as any)[k]?.vendorId
@@ -179,18 +242,51 @@ function getOrderSummary(
             }
         }
 
-        const box = boxTypes.find(b => b.id === conf.boxTypeId);
-        const vendorId = computedVendorId || box?.vendorId;
-        const vendorName = vendors.find(v => v.id === vendorId)?.name || 'Not Set';
+        // Fallback to boxType vendor if still no vendor found
+        if (uniqueVendors.size === 0) {
+            const box = boxTypes.find(b => b.id === conf.boxTypeId);
+            const vendorId = computedVendorId || box?.vendorId;
+            const vendorName = vendors.find(v => v.id === vendorId)?.name;
+            if (vendorName) {
+                uniqueVendors.add(vendorName);
+            }
+        }
 
-        const itemDetails = Object.entries(conf.items || {})
-            .filter(([_, qty]) => Number(qty) > 0)
-            .map(([id, qty]) => {
-                const item = menuItems.find(i => i.id === id);
-                return item ? `${item.name} x${qty}` : null;
-            })
-            .filter(Boolean)
-            .join(', ');
+        // LEGACY: Also check conf.items if itemDetails is still empty
+        if (itemDetails.length === 0 && conf.items) {
+            // Handle items that might be stored as JSON string
+            let itemsObj = conf.items;
+            if (typeof conf.items === 'string') {
+                try {
+                    itemsObj = JSON.parse(conf.items);
+                } catch (e) {
+                    console.error('Error parsing conf.items:', e);
+                    itemsObj = {};
+                }
+            }
+            
+            Object.entries(itemsObj).forEach(([id, qtyOrObj]) => {
+                // Handle both formats: { itemId: number } or { itemId: { quantity: number, price: number } }
+                let q = 0;
+                if (typeof qtyOrObj === 'number') {
+                    q = qtyOrObj;
+                } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                    q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                } else {
+                    q = parseInt(qtyOrObj as any) || 0;
+                }
+                
+                if (q > 0) {
+                    const item = menuItems.find(i => i.id === id);
+                    if (item) {
+                        itemDetails.push(`${item.name} x${q}`);
+                    }
+                }
+            });
+        }
+
+        const vendorName = Array.from(uniqueVendors).join(', ') || 'Not Set';
+        const itemsList = itemDetails.length > 0 ? itemDetails.join(', ') : '';
 
         return (
             <div className={styles.orderSummaryBoxes}>
@@ -201,9 +297,9 @@ function getOrderSummary(
                 <div className={styles.orderSummaryDetails}>
                     {vendorName}
                 </div>
-                {itemDetails && (
+                {itemsList && (
                     <div className={styles.orderSummaryItems}>
-                        {itemDetails}
+                        {itemsList}
                     </div>
                 )}
             </div>
