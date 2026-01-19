@@ -93,48 +93,56 @@ export default function ClientDriverAssignment({
 
     async function loadClientDriverAssignments(clientsList: Client[]) {
         try {
-            // Fetch stops to see which driver is assigned to each client
+            // Fetch clients directly to get their assigned_driver_id
+            const res = await fetch('/api/users', { cache: 'no-store' });
+            if (!res.ok) return;
+            
+            const usersData = await res.json();
+            
+            // Build a map of client ID to driver ID from clients table
+            const assignments = new Map<string, string>();
+            const stopInfoMap = new Map<string, any>();
+            
+            // Map users to get assigned_driver_id
+            (usersData || []).forEach((user: any) => {
+                if (user.id && user.assignedDriverId) {
+                    assignments.set(user.id, user.assignedDriverId);
+                }
+            });
+            
+            // Also fetch stops to get stop info for status-based color coding
             const url = selectedDeliveryDate 
                 ? `/api/route/routes?day=${selectedDay}&delivery_date=${selectedDeliveryDate}`
                 : `/api/route/routes?day=${selectedDay}`;
             
-            const res = await fetch(url, { cache: 'no-store' });
-            if (!res.ok) return;
-            
-            const data = await res.json();
-            const routesData = data.routes || [];
-            
-            // Build a map of client ID to driver ID from stops
-            const assignments = new Map<string, string>();
-            const stopInfoMap = new Map<string, any>();
-            
-            routesData.forEach((route: any) => {
-                const driverId = route.driverId || route.id;
-                const stops = route.stops || [];
+            const routesRes = await fetch(url, { cache: 'no-store' });
+            if (routesRes.ok) {
+                const routesData = await routesRes.json();
+                const routes = routesData.routes || [];
+                const unroutedStops = routesData.unrouted || [];
                 
-                stops.forEach((stop: any) => {
+                // Build stop info map from routes and unrouted stops
+                routes.forEach((route: any) => {
+                    const stops = route.stops || [];
+                    stops.forEach((stop: any) => {
+                        if (stop.userId || stop.clientId) {
+                            const clientId = stop.userId || stop.clientId;
+                            if (!stopInfoMap.has(clientId)) {
+                                stopInfoMap.set(clientId, stop);
+                            }
+                        }
+                    });
+                });
+                
+                unroutedStops.forEach((stop: any) => {
                     if (stop.userId || stop.clientId) {
                         const clientId = stop.userId || stop.clientId;
-                        // If client has multiple stops with different drivers, keep the first one
-                        if (!assignments.has(clientId)) {
-                            assignments.set(clientId, driverId);
-                            // Store stop info for status-based color coding
+                        if (!stopInfoMap.has(clientId)) {
                             stopInfoMap.set(clientId, stop);
                         }
                     }
                 });
-            });
-            
-            // Also check unrouted stops
-            const unroutedStops = data.unrouted || [];
-            unroutedStops.forEach((stop: any) => {
-                if (stop.userId || stop.clientId) {
-                    const clientId = stop.userId || stop.clientId;
-                    if (!assignments.has(clientId) && !stopInfoMap.has(clientId)) {
-                        stopInfoMap.set(clientId, stop);
-                    }
-                }
-            });
+            }
             
             setClientDriverMap(assignments);
             setClientStopMap(stopInfoMap);
@@ -292,34 +300,30 @@ export default function ClientDriverAssignment({
     const someSelected = filteredClients.some(c => selectedClientIds.has(c.id));
 
     // Helper function to get color based on stop/order status
+    // Only returns colors for specific statuses that should override default styling
     function getStopStatusColor(stop: any): string | null {
         if (!stop) return null;
         
-        // Priority 1: Stop completed status
-        if (stop.completed === true) {
-            return "#22c55e"; // Green for completed stops
-        }
-        
-        // Priority 2: Order status
+        // Priority: Order status (only override for specific statuses)
         const orderStatus = stop?.orderStatus?.toLowerCase();
         if (orderStatus) {
             switch (orderStatus) {
-                case "completed":
-                    return "#22c55e"; // Green
                 case "cancelled":
-                    return "#ef4444"; // Red
+                    return "#ef4444"; // Red for cancelled orders
                 case "waiting_for_proof":
-                    return "#f59e0b"; // Orange/Amber
+                    return "#f59e0b"; // Orange/Amber for waiting for proof
                 case "billing_pending":
-                    return "#8b5cf6"; // Purple
+                    return "#8b5cf6"; // Purple for billing pending
+                case "completed":
                 case "pending":
                 case "scheduled":
                 case "confirmed":
                 default:
-                    return null; // No special color for active orders
+                    return null; // No special color - use default styling
             }
         }
         
+        // Stop completed status without order status - no special color
         return null;
     }
 

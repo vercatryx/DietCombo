@@ -984,6 +984,7 @@ function mapClientFromDB(c: any): ClientProfile {
         billings: billings,
         visits: visits,
         signToken: c.sign_token || null,
+        assignedDriverId: c.assigned_driver_id || null,
         createdAt: c.created_at,
         updatedAt: c.updated_at
     };

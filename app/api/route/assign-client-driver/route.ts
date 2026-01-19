@@ -20,41 +20,7 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Build query to find stops for this client
-        let query = supabase
-            .from('stops')
-            .select('id')
-            .eq('client_id', clientId);
-
-        // Filter by day if provided
-        if (day && day !== 'all') {
-            query = query.eq('day', day);
-        }
-
-        // Filter by delivery_date if provided
-        if (delivery_date) {
-            query = query.eq('delivery_date', delivery_date);
-        }
-
-        const { data: stops, error: stopsError } = await query;
-
-        if (stopsError) {
-            console.error('[assign-client-driver] Error fetching stops:', stopsError);
-            return NextResponse.json(
-                { error: `Failed to fetch stops: ${stopsError.message}` },
-                { status: 500 }
-            );
-        }
-
-        if (!stops || stops.length === 0) {
-            return NextResponse.json({
-                message: 'No stops found for this client',
-                stopsUpdated: 0
-            });
-        }
-
-        // Update all stops to assign/unassign the driver
-        const stopIds = stops.map(s => s.id);
+        // Update the client's assigned_driver_id
         const updatePayload: any = {};
 
         if (driverId) {
@@ -65,22 +31,69 @@ export async function POST(request: NextRequest) {
         }
 
         const { error: updateError } = await supabase
-            .from('stops')
+            .from('clients')
             .update(updatePayload)
-            .in('id', stopIds);
+            .eq('id', clientId);
 
         if (updateError) {
-            console.error('[assign-client-driver] Error updating stops:', updateError);
+            console.error('[assign-client-driver] Error updating client:', updateError);
             return NextResponse.json(
-                { error: `Failed to update stops: ${updateError.message}` },
+                { error: `Failed to update client: ${updateError.message}` },
                 { status: 500 }
             );
         }
 
+        // Now update all existing stops for this client to match the client's driver assignment
+        // Build query to find stops for this client
+        let stopsQuery = supabase
+            .from('stops')
+            .select('id')
+            .eq('client_id', clientId);
+
+        // Filter by day if provided
+        if (day && day !== 'all') {
+            stopsQuery = stopsQuery.eq('day', day);
+        }
+
+        // Filter by delivery_date if provided
+        if (delivery_date) {
+            stopsQuery = stopsQuery.eq('delivery_date', delivery_date);
+        }
+
+        const { data: stops, error: stopsError } = await stopsQuery;
+
+        if (stopsError) {
+            console.warn('[assign-client-driver] Error fetching stops (non-critical):', stopsError);
+        }
+
+        // Update all stops to match the client's driver assignment
+        let stopsUpdated = 0;
+        if (stops && stops.length > 0) {
+            const stopIds = stops.map(s => s.id);
+            const stopUpdatePayload: any = {};
+
+            if (driverId) {
+                stopUpdatePayload.assigned_driver_id = driverId;
+            } else {
+                stopUpdatePayload.assigned_driver_id = null;
+            }
+
+            const { error: stopUpdateError } = await supabase
+                .from('stops')
+                .update(stopUpdatePayload)
+                .in('id', stopIds);
+
+            if (stopUpdateError) {
+                console.warn('[assign-client-driver] Error updating stops (non-critical):', stopUpdateError);
+            } else {
+                stopsUpdated = stopIds.length;
+            }
+        }
+
         return NextResponse.json({
             success: true,
-            stopsUpdated: stopIds.length,
-            message: `Updated ${stopIds.length} stop(s) for client ${clientId}`
+            stopsUpdated: stopsUpdated,
+            message: `Updated client assignment${stopsUpdated > 0 ? ` and ${stopsUpdated} existing stop(s)` : ''}`
         });
     } catch (error: any) {
         console.error('[assign-client-driver] Error:', error);

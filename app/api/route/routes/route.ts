@@ -85,7 +85,7 @@ export async function GET(req: Request) {
         const { data: clients } = clientIds.length > 0
             ? await supabase
                 .from('clients')
-                .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery')
+                .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id')
                 .in('id', clientIds)
             : { data: [] };
 
@@ -93,7 +93,8 @@ export async function GET(req: Request) {
             ...c,
             first: c.first_name,
             last: c.last_name,
-            phone: c.phone_number
+            phone: c.phone_number,
+            assigned_driver_id: c.assigned_driver_id
         }]));
 
         // 4) Sort drivers so Driver 0,1,2… are in that order
@@ -264,10 +265,7 @@ export async function GET(req: Request) {
 
         // 9) Check clients without stops, create missing stops, and log reasons
         // NEW APPROACH: Use orders to determine which clients need stops, not schedules
-        const { data: allClients } = await supabase
-            .from('clients')
-            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
-            .order('id', { ascending: true });
+        // Note: allClientsWithDriver is already fetched above, so we don't need to fetch again
 
         // Check which clients have stops for delivery dates
         // We need to check by delivery_date, not just day
@@ -285,6 +283,18 @@ export async function GET(req: Request) {
                 }
                 clientStopsByDate.get(clientId)!.add(s.delivery_date);
             }
+        }
+
+        // Fetch all clients with their assigned_driver_id for stop creation
+        const { data: allClientsWithDriver } = await supabase
+            .from('clients')
+            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
+            .order('id', { ascending: true });
+        
+        // Create a map of client_id -> assigned_driver_id for quick lookup
+        const clientDriverMap = new Map<string, string | null>();
+        for (const c of (allClientsWithDriver || [])) {
+            clientDriverMap.set(String(c.id), c.assigned_driver_id || null);
         }
 
         // Get active orders to determine which clients need stops
@@ -461,9 +471,13 @@ export async function GET(req: Request) {
             phone: string | null;
             lat: number | null;
             lng: number | null;
+            assigned_driver_id: string | null;
         }> = [];
 
-        for (const client of allClients || []) {
+        // Use allClientsWithDriver instead of allClients to have access to assigned_driver_id
+        const allClients = allClientsWithDriver || [];
+
+        for (const client of allClients) {
             const clientId = String(client.id);
             
             const reasons: string[] = [];
@@ -536,6 +550,9 @@ export async function GET(req: Request) {
                         continue;
                     }
                     
+                    // Get client's assigned driver (if any) to automatically assign to stop
+                    const assignedDriverId = client.assigned_driver_id || null;
+
                     stopsToCreate.push({
                         id: uuidv4(),
                         day: dateInfo.dayOfWeek, // Keep day for backward compatibility
@@ -551,6 +568,7 @@ export async function GET(req: Request) {
                         phone: client.phone_number ? s(client.phone_number) : null,
                         lat: n(client.lat),
                         lng: n(client.lng),
+                        assigned_driver_id: assignedDriverId, // Automatically set from client
                     });
                 }
             } else {
@@ -592,6 +610,7 @@ export async function GET(req: Request) {
                                 phone: stopData.phone,
                                 lat: stopData.lat,
                                 lng: stopData.lng,
+                                assigned_driver_id: stopData.assigned_driver_id, // Set from client
                             }, { onConflict: 'id' });
                         if (insertError) throw insertError;
                     } catch (createError: any) {
