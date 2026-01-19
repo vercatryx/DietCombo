@@ -15,6 +15,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import MapLoadingOverlay from "./MapLoadingOverlay";
+import StopPreviewDialog from "./StopPreviewDialog";
 
 /* ==================== Config / constants ==================== */
 
@@ -188,39 +189,47 @@ function isPausedStop(s) {
     return false;
 }
 
-/** Get color for stop based on status (completed or order status)
- * Only applies status colors for specific statuses; otherwise uses driver color
+/** Get color for stop based on order status (replaces driver color coding)
+ * Status colors take priority over driver colors for all statuses
  */
 function getStopColor(stop, defaultColor) {
-    // Priority 1: Order status (only override driver color for specific statuses)
-    const orderStatus = stop?.orderStatus?.toLowerCase();
-    if (orderStatus) {
+    // Priority 1: Order status - map all statuses to appropriate colors
+    // Handle multiple possible field names and normalize the status value
+    const orderStatusRaw = stop?.orderStatus || stop?.order?.status || stop?.status || null;
+    const orderStatus = orderStatusRaw ? String(orderStatusRaw).trim().toLowerCase() : null;
+    
+    if (orderStatus && orderStatus.length > 0) {
         switch (orderStatus) {
             case "cancelled":
-                return "#ef4444"; // Red for cancelled orders
+            case "canceled":
+                return "#dc2626"; // Red (#ef4444 variant, darker for better visibility)
             case "waiting_for_proof":
-                return "#f59e0b"; // Orange/Amber for waiting for proof
+            case "waiting for proof":
+                return "#7c3aed"; // Purple/Indigo for waiting for proof
             case "billing_pending":
-                return "#8b5cf6"; // Purple for billing pending
+            case "billing pending":
+                return "#d97706"; // Orange/Amber for billing pending
             case "completed":
-                // Completed orders still use driver color to maintain route visibility
-                return defaultColor;
+                return "#16a34a"; // Green for completed orders
+            case "confirmed":
+                return "#facc15"; // Yellow for confirmed orders
             case "pending":
             case "scheduled":
-            case "confirmed":
+                return "#f59e0b"; // Orange/Amber for pending/scheduled orders
             default:
-                return defaultColor; // Use driver color for active orders
+                // Unknown status - use gray instead of driver color
+                return "#6b7280"; // Gray for unknown statuses
         }
     }
     
     // Priority 2: Stop completed status (only if no order status)
-    // If stop is completed but no order status, still use driver color
+    // If stop is completed but no order status, use green
     if (stop?.completed === true && !orderStatus) {
-        return defaultColor; // Use driver color even for completed stops
+        return "#16a34a"; // Green for completed stops without order status
     }
     
-    // Default: use driver color
-    return defaultColor;
+    // Default: use gray instead of driver color when no status is available
+    return "#6b7280"; // Gray for stops without order status
 }
 
 /* ==================== Icons (anchor-fixed) ==================== */
@@ -532,6 +541,10 @@ export default function DriversMapLeaflet({
     const [bulkDriverId, setBulkDriverId] = useState("");
     const [bulkBusy, setBulkBusy] = useState(false);
     const selectedCount = selectedIds.size;
+    
+    /* ------- preview dialog ------- */
+    const [previewStop, setPreviewStop] = useState(null);
+    const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
 
     const [selectedHalo, setSelectedHalo] = useState({
         lat: null,
@@ -850,11 +863,18 @@ export default function DriversMapLeaflet({
                 ev?.stopPropagation?.();
                 return;
             }
+            
+            // Show preview popup when clicking a stop
+            if (stop) {
+                setPreviewStop(stop);
+                setPreviewDialogOpen(true);
+            }
+            
             // Disable assign driver feature for stops - driver assignment is now done directly to clients
             // map?.closePopup();
             // openAssignForStop(stop, baseColor);
         },
-        [clickPickMode, openAssignForStop, toggleId, readonly]
+        [clickPickMode, toggleId, readonly]
     );
 
     /* ------- driver editing ------- */
@@ -1987,6 +2007,16 @@ export default function DriversMapLeaflet({
                 {/* Loading overlay (separate component) */}
                 <MapLoadingOverlay show={showOverlay} logoSrc={logoSrc || "/logo.png"} />
             </div>
+
+            {/* Stop Preview Dialog */}
+            <StopPreviewDialog
+                open={previewDialogOpen}
+                onClose={() => {
+                    setPreviewDialogOpen(false);
+                    setPreviewStop(null);
+                }}
+                stop={previewStop}
+            />
         </div>
     );
 }

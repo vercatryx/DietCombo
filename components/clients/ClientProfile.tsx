@@ -1096,10 +1096,23 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     for (const day of Object.keys(upcomingOrderData)) {
                         const dayOrder = (upcomingOrderData as any)[day];
                         if (dayOrder && (dayOrder.serviceType || dayOrder.id)) {
-                            extractedOrders.push({
+                            const extractedOrder: any = {
                                 ...dayOrder,
                                 deliveryDay: day
-                            });
+                            };
+                            // For Boxes orders, ensure items are preserved
+                            if (dayOrder.serviceType === 'Boxes') {
+                                if (dayOrder.items && !extractedOrder.items) {
+                                    extractedOrder.items = dayOrder.items;
+                                }
+                                if (dayOrder.boxOrders && !extractedOrder.boxOrders) {
+                                    extractedOrder.boxOrders = dayOrder.boxOrders;
+                                }
+                                if (dayOrder.vendorId && !extractedOrder.vendorId) {
+                                    extractedOrder.vendorId = dayOrder.vendorId;
+                                }
+                            }
+                            extractedOrders.push(extractedOrder);
                         }
                     }
                 } else if (upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
@@ -1117,8 +1130,24 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         }
                     }
                 } else if (upcomingOrderData.serviceType) {
-                    // Single order format
-                    extractedOrders.push(upcomingOrderData);
+                    // Single order format - ensure items are preserved for Boxes orders
+                    const extractedOrder = { ...upcomingOrderData };
+                    // For Boxes orders, ensure items are included if they exist
+                    if (upcomingOrderData.serviceType === 'Boxes') {
+                        // Preserve items from the order
+                        if (upcomingOrderData.items && !extractedOrder.items) {
+                            extractedOrder.items = upcomingOrderData.items;
+                        }
+                        // Preserve boxOrders if they exist
+                        if (upcomingOrderData.boxOrders && !extractedOrder.boxOrders) {
+                            extractedOrder.boxOrders = upcomingOrderData.boxOrders;
+                        }
+                        // Preserve vendorId if it exists
+                        if (upcomingOrderData.vendorId && !extractedOrder.vendorId) {
+                            extractedOrder.vendorId = upcomingOrderData.vendorId;
+                        }
+                    }
+                    extractedOrders.push(extractedOrder);
                 }
             }
             setAllUpcomingOrders(extractedOrders);
@@ -1216,9 +1245,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         totalQuantity += quantity;
                     }
                 }
-            } else if (order.serviceType === 'Boxes' && order.vendorId === vendorId && order.items) {
+            } else if (order.serviceType === 'Boxes' && order.vendorId === vendorId) {
                 // For boxes, check if the vendor matches and sum items
-                if (typeof order.items === 'object' && !Array.isArray(order.items)) {
+                // Handle new format: boxOrders array
+                if (order.boxOrders && Array.isArray(order.boxOrders)) {
+                    for (const box of order.boxOrders) {
+                        if (box.vendorId === vendorId && box.items && typeof box.items === 'object' && !Array.isArray(box.items)) {
+                            const quantity = Number(box.items[itemId] || 0);
+                            totalQuantity += quantity;
+                        }
+                    }
+                }
+                // Handle legacy format: items directly on order
+                else if (order.items && typeof order.items === 'object' && !Array.isArray(order.items)) {
                     const quantity = Number(order.items[itemId] || 0);
                     totalQuantity += quantity;
                 }
@@ -1241,10 +1280,27 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
 
         for (const order of allUpcomingOrders) {
-            if (order.serviceType === 'Boxes' && order.items) {
-                // If boxVendorId is provided, only count items from orders with matching vendorId
-                // Otherwise, count items from all Boxes orders
-                if (!boxVendorId || order.vendorId === boxVendorId) {
+            if (order.serviceType === 'Boxes') {
+                // Check if boxVendorId filter matches (if provided)
+                const orderVendorId = order.vendorId;
+                if (boxVendorId && orderVendorId !== boxVendorId) {
+                    continue; // Skip if vendor doesn't match
+                }
+
+                // Handle new format: boxOrders array
+                if (order.boxOrders && Array.isArray(order.boxOrders)) {
+                    for (const box of order.boxOrders) {
+                        // If boxVendorId is provided, only count items from boxes with matching vendorId
+                        if (!boxVendorId || box.vendorId === boxVendorId) {
+                            if (box.items && typeof box.items === 'object' && !Array.isArray(box.items)) {
+                                const quantity = Number(box.items[itemId] || 0);
+                                totalQuantity += quantity;
+                            }
+                        }
+                    }
+                }
+                // Handle legacy format: items directly on order
+                else if (order.items) {
                     if (typeof order.items === 'object' && !Array.isArray(order.items)) {
                         const quantity = Number(order.items[itemId] || 0);
                         totalQuantity += quantity;
@@ -3914,17 +3970,21 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             const items: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; orderId?: string }> = [];
                                                             
                                                             if (order.serviceType === 'Boxes') {
-                                                                // Handle boxOrders array structure (new format)
-                                                                if (order.boxOrders && Array.isArray(order.boxOrders)) {
+                                                                // Handle boxOrders array structure (new format) - prioritize this
+                                                                if (order.boxOrders && Array.isArray(order.boxOrders) && order.boxOrders.length > 0) {
                                                                     order.boxOrders.forEach((box: any) => {
-                                                                        const vendor = vendors.find(v => v.id === box.vendorId || box.vendorId);
+                                                                        const boxVendorId = box.vendorId || order.vendorId;
+                                                                        const vendor = vendors.find(v => v.id === boxVendorId);
                                                                         const vendorName = vendor?.name || 'Unknown Vendor';
                                                                         
                                                                         if (box.items && typeof box.items === 'object' && !Array.isArray(box.items)) {
                                                                             Object.entries(box.items).forEach(([itemId, qty]: [string, any]) => {
                                                                                 const menuItem = menuItems.find(mi => mi.id === itemId);
                                                                                 const itemName = menuItem?.name || 'Unknown Item';
-                                                                                const quantity = Number(qty) || 0;
+                                                                                // Handle both number and object with quantity property
+                                                                                const quantity = typeof qty === 'number' 
+                                                                                    ? Number(qty) 
+                                                                                    : (typeof qty === 'object' && qty && 'quantity' in qty ? Number((qty as any).quantity) : 0);
                                                                                 
                                                                                 if (quantity > 0) {
                                                                                     items.push({
@@ -3939,16 +3999,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                         }
                                                                     });
                                                                 }
-                                                                // Handle legacy items structure (flat format)
+                                                                // Handle legacy items structure (flat format on order object)
                                                                 else if (order.items) {
-                                                                    const vendor = vendors.find(v => v.id === order.vendorId);
+                                                                    const orderVendorId = order.vendorId;
+                                                                    const vendor = vendors.find(v => v.id === orderVendorId);
                                                                     const vendorName = vendor?.name || 'Unknown Vendor';
                                                                     
                                                                     if (typeof order.items === 'object' && !Array.isArray(order.items)) {
                                                                         Object.entries(order.items).forEach(([itemId, qty]: [string, any]) => {
                                                                             const menuItem = menuItems.find(mi => mi.id === itemId);
                                                                             const itemName = menuItem?.name || 'Unknown Item';
-                                                                            const quantity = Number(qty) || 0;
+                                                                            // Handle both number and object with quantity property
+                                                                            const quantity = typeof qty === 'number' 
+                                                                                ? Number(qty) 
+                                                                                : (typeof qty === 'object' && qty && 'quantity' in qty ? Number((qty as any).quantity) : 0);
                                                                             
                                                                             if (quantity > 0) {
                                                                                 items.push({
@@ -4901,6 +4965,18 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                     {isBoxes && (order.boxTypeId || (order.boxOrders && order.boxOrders.length > 0)) && (
                                                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                                                             {(() => {
+                                                                                // Debug logging
+                                                                                if (order.serviceType === 'Boxes') {
+                                                                                    console.log('[ClientProfile] Box order data:', {
+                                                                                        hasBoxOrders: !!(order.boxOrders && order.boxOrders.length > 0),
+                                                                                        boxOrdersLength: order.boxOrders?.length || 0,
+                                                                                        boxOrders: order.boxOrders,
+                                                                                        hasBoxTypeId: !!order.boxTypeId,
+                                                                                        hasItems: !!order.items,
+                                                                                        itemsKeys: order.items ? Object.keys(order.items) : []
+                                                                                    });
+                                                                                }
+                                                                                
                                                                                 const boxesToDisplay = (order.boxOrders && order.boxOrders.length > 0)
                                                                                     ? order.boxOrders
                                                                                     : [{
@@ -4916,7 +4992,32 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                     const vendor = boxVendorId ? vendors.find(v => v.id === boxVendorId) : null;
                                                                                     const vendorName = vendor?.name || 'Unassigned';
                                                                                     const boxName = box?.name || 'Unknown Box';
-                                                                                    const items = boxData.items || {};
+                                                                                    
+                                                                                    // Handle items - ensure it's an object
+                                                                                    let items: any = {};
+                                                                                    if (boxData.items) {
+                                                                                        if (typeof boxData.items === 'object' && !Array.isArray(boxData.items)) {
+                                                                                            items = boxData.items;
+                                                                                        } else if (typeof boxData.items === 'string') {
+                                                                                            try {
+                                                                                                items = JSON.parse(boxData.items);
+                                                                                            } catch (e) {
+                                                                                                console.error('[ClientProfile] Error parsing box items string:', e);
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                    
+                                                                                    // Debug logging for this specific box
+                                                                                    console.log('[ClientProfile] Box display data:', {
+                                                                                        boxIndex: bIdx,
+                                                                                        boxTypeId: boxData.boxTypeId,
+                                                                                        vendorId: boxData.vendorId,
+                                                                                        quantity: boxData.quantity,
+                                                                                        itemsType: typeof items,
+                                                                                        itemsKeys: Object.keys(items),
+                                                                                        itemsCount: Object.keys(items).length,
+                                                                                        items: items
+                                                                                    });
 
                                                                                     return (
                                                                                         <div key={bIdx} style={{ padding: 'var(--spacing-md)', backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
@@ -4929,17 +5030,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                                 {boxName} × {boxData.quantity || 1}
                                                                                             </div>
                                                                                             {/* Items List */}
-                                                                                            {Object.keys(items).length > 0 ? (
+                                                                                            {items && typeof items === 'object' && Object.keys(items).length > 0 ? (
                                                                                                 <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                                                                                                    {Object.entries(items).map(([itemId, qty]: [string, any]) => {
-                                                                                                        const item = menuItems.find(i => i.id === itemId);
-                                                                                                        return item ? (
-                                                                                                            <div key={itemId} style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
-                                                                                                                <span>{item.name}</span>
-                                                                                                                <span style={{ color: 'var(--text-secondary)' }}>× {qty}</span>
-                                                                                                            </div>
-                                                                                                        ) : null;
-                                                                                                    })}
+                                                                                                    {Object.entries(items)
+                                                                                                        .filter(([_, qty]) => qty && Number(qty) > 0) // Filter out zero quantities
+                                                                                                        .map(([itemId, qty]: [string, any]) => {
+                                                                                                            const item = menuItems.find(i => i.id === itemId);
+                                                                                                            return item ? (
+                                                                                                                <div key={itemId} style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                                                                                                                    <span>{item.name}</span>
+                                                                                                                    <span style={{ color: 'var(--text-secondary)' }}>× {qty}</span>
+                                                                                                                </div>
+                                                                                                            ) : null;
+                                                                                                        })}
                                                                                                 </div>
                                                                                             ) : (
                                                                                                 <div style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
