@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Typography, TextField, Select, MenuItem, FormControl, InputLabel, CircularProgress, InputAdornment, Checkbox, Button } from '@mui/material';
 import { Search } from 'lucide-react';
+import StopPreviewDialog from './StopPreviewDialog';
 
 interface Client {
     id: string;
@@ -45,6 +46,8 @@ export default function ClientDriverAssignment({
     const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
     const [bulkDriverId, setBulkDriverId] = useState<string>('');
     const [isBulkSaving, setIsBulkSaving] = useState(false);
+    const [previewStop, setPreviewStop] = useState<any | null>(null);
+    const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
 
     // Extract drivers from routes
     const drivers = useMemo(() => {
@@ -69,16 +72,21 @@ export default function ClientDriverAssignment({
             const usersData = await res.json();
             
             // Map users to clients format
-            const clientsList: Client[] = (usersData || []).map((user: any) => ({
-                id: user.id,
-                fullName: `${user.first || ''} ${user.last || ''}`.trim() || user.name || 'Unnamed',
-                firstName: user.first || null,
-                lastName: user.last || null,
-                address: user.address || '',
-                city: user.city || '',
-                state: user.state || '',
-                phoneNumber: user.phone || ''
-            }));
+            const clientsList: Client[] = (usersData || []).map((user: any) => {
+                // Build full name: prefer first+last, fallback to full_name, then 'Unnamed'
+                const fullName = `${user.first || ''} ${user.last || ''}`.trim() || user.name || user.full_name || 'Unnamed';
+                
+                return {
+                    id: user.id,
+                    fullName: fullName,
+                    firstName: user.first || null,
+                    lastName: user.last || null,
+                    address: user.address || '',
+                    city: user.city || '',
+                    state: user.state || '',
+                    phoneNumber: user.phone || ''
+                };
+            });
 
             setClients(clientsList);
 
@@ -456,6 +464,38 @@ export default function ClientDriverAssignment({
                             const isSaving = savingClientId === client.id;
                             const isSelected = selectedClientIds.has(client.id);
 
+                            const handleStopClick = () => {
+                                if (stopInfo) {
+                                    // Merge client info with stop info for complete preview
+                                    const stopWithClientInfo = {
+                                        ...stopInfo,
+                                        name: stopInfo.name || client.fullName,
+                                        address: stopInfo.address || client.address,
+                                        city: stopInfo.city || client.city,
+                                        state: stopInfo.state || client.state,
+                                        zip: stopInfo.zip || '',
+                                        phone: stopInfo.phone || client.phoneNumber,
+                                        userId: stopInfo.userId || client.id,
+                                        clientId: stopInfo.clientId || client.id
+                                    };
+                                    setPreviewStop(stopWithClientInfo);
+                                    setPreviewDialogOpen(true);
+                                } else {
+                                    // Show basic client info if no stop info available
+                                    setPreviewStop({
+                                        name: client.fullName,
+                                        address: client.address,
+                                        city: client.city,
+                                        state: client.state,
+                                        zip: '',
+                                        phone: client.phoneNumber,
+                                        userId: client.id,
+                                        clientId: client.id
+                                    });
+                                    setPreviewDialogOpen(true);
+                                }
+                            };
+
                             return (
                                 <Box
                                     key={client.id}
@@ -473,19 +513,27 @@ export default function ClientDriverAssignment({
                                             : isSaving 
                                                 ? '#f9fafb' 
                                                 : 'white',
+                                        cursor: 'pointer',
                                         '&:hover': {
-                                            backgroundColor: isSelected ? '#e3f2fd' : '#f9fafb'
-                                        }
+                                            backgroundColor: isSelected ? '#e3f2fd' : '#f9fafb',
+                                            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                        },
+                                        transition: 'all 0.2s'
                                     }}
+                                    onClick={handleStopClick}
                                 >
                                     <Checkbox
                                         checked={isSelected}
-                                        onChange={(e) => handleSelectClient(client.id, e.target.checked)}
+                                        onChange={(e) => {
+                                            e.stopPropagation();
+                                            handleSelectClient(client.id, e.target.checked);
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
                                         disabled={readOnly}
                                         size="small"
                                     />
                                     
-                                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                                    <Box sx={{ flex: 1, minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
                                         <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
                                             {client.fullName}
                                         </Typography>
@@ -501,7 +549,11 @@ export default function ClientDriverAssignment({
                                         )}
                                     </Box>
 
-                                    <FormControl size="small" sx={{ minWidth: 200 }}>
+                                    <FormControl 
+                                        size="small" 
+                                        sx={{ minWidth: 200 }}
+                                        onClick={(e) => e.stopPropagation()}
+                                    >
                                         <InputLabel>Driver</InputLabel>
                                         <Select
                                             value={currentDriverId}
@@ -529,6 +581,16 @@ export default function ClientDriverAssignment({
                     </Box>
                 )}
             </Box>
+
+            {/* Stop Preview Dialog */}
+            <StopPreviewDialog
+                open={previewDialogOpen}
+                onClose={() => {
+                    setPreviewDialogOpen(false);
+                    setPreviewStop(null);
+                }}
+                stop={previewStop}
+            />
         </Box>
     );
 }

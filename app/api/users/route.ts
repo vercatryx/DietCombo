@@ -11,7 +11,7 @@ export async function GET(req: Request) {
     try {
         const { data: clients, error: clientsError } = await supabase
             .from('clients')
-            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex, assigned_driver_id')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex, assigned_driver_id')
             .order('id', { ascending: true });
 
         if (clientsError) {
@@ -41,6 +41,7 @@ export async function GET(req: Request) {
             id: client.id,
             first: client.first_name || "",
             last: client.last_name || "",
+            name: client.full_name || "",
             address: client.address || "",
             apt: client.apt || null,
             city: client.city || "",

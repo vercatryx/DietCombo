@@ -1023,7 +1023,47 @@ export async function getClient(id: string) {
     try {
         const { data, error } = await supabase.from('clients').select('*').eq('id', id).single();
         if (error || !data) return undefined;
-        return mapClientFromDB(data);
+        const client = mapClientFromDB(data);
+        
+        // Load box orders from client_box_orders table if service type is Boxes
+        if (client.serviceType === 'Boxes') {
+            try {
+                const boxOrdersFromDb = await getClientBoxOrder(id);
+                if (boxOrdersFromDb && boxOrdersFromDb.length > 0) {
+                    // Convert ClientBoxOrder[] to boxOrders format
+                    const boxOrders = boxOrdersFromDb.map(bo => ({
+                        boxTypeId: bo.boxTypeId,
+                        vendorId: bo.vendorId,
+                        quantity: bo.quantity || 1,
+                        items: bo.items || {},
+                        itemNotes: bo.itemNotes || {},
+                        caseId: bo.caseId
+                    }));
+                    
+                    // Merge into client.activeOrder.boxOrders
+                    if (!client.activeOrder) {
+                        client.activeOrder = { serviceType: 'Boxes' } as any;
+                    }
+                    const activeOrderAny = client.activeOrder as any;
+                    if (!activeOrderAny.boxOrders || activeOrderAny.boxOrders.length === 0) {
+                        activeOrderAny.boxOrders = boxOrders;
+                    } else {
+                        // Merge: use DB as source of truth, but preserve any additional fields from activeOrder
+                        activeOrderAny.boxOrders = boxOrders;
+                    }
+                    
+                    console.log('[getClient] Loaded box orders from client_box_orders:', {
+                        clientId: id,
+                        boxOrdersCount: boxOrders.length
+                    });
+                }
+            } catch (boxOrderError) {
+                console.error('[getClient] Error loading box orders:', boxOrderError);
+                // Don't fail the whole request if box orders fail to load
+            }
+        }
+        
+        return client;
     } catch (error) {
         console.error('Error fetching client:', error);
         return undefined;
@@ -4177,9 +4217,10 @@ export async function getActiveOrderForClient(clientId: string) {
                         console.error('Error fetching box items from items table:', boxItemsError);
                     }
 
+                    let itemsMap: any = {};
+                    const itemPricesMap: any = {};
+                    
                     if (boxItems && boxItems.length > 0) {
-                        const itemsMap: any = {};
-                        const itemPricesMap: any = {};
                         for (const item of boxItems) {
                             if (item.menu_item_id) {
                                 itemsMap[item.menu_item_id] = item.quantity;
@@ -4189,33 +4230,57 @@ export async function getActiveOrderForClient(clientId: string) {
                                 }
                             }
                         }
-                        orderConfig.items = itemsMap;
-                        if (Object.keys(itemPricesMap).length > 0) {
-                            orderConfig.itemPrices = itemPricesMap;
-                        }
                     }
 
                     // PRIORITY 2: Fallback to boxSelection.items (JSONB) if no items found in items table
                     // This handles legacy data or cases where items weren't saved to the items table
-                    if ((!orderConfig.items || Object.keys(orderConfig.items).length === 0) && boxSelection.items && Object.keys(boxSelection.items).length > 0) {
+                    if (Object.keys(itemsMap).length === 0 && boxSelection.items) {
                         console.log('[getActiveOrderForClient] Loading box items from JSON field (fallback)');
-                        const itemsMap: any = {};
-                        const itemPricesMap: any = {};
-                        for (const [itemId, val] of Object.entries(boxSelection.items)) {
-                            if (val && typeof val === 'object' && 'quantity' in val) {
-                                itemsMap[itemId] = (val as any).quantity;
-                                if ('price' in val && (val as any).price !== undefined && (val as any).price !== null) {
-                                    itemPricesMap[itemId] = (val as any).price;
-                                }
-                            } else {
-                                itemsMap[itemId] = val;
+                        
+                        let jsonItems: any = boxSelection.items;
+                        // Handle string JSON
+                        if (typeof jsonItems === 'string') {
+                            try {
+                                jsonItems = JSON.parse(jsonItems);
+                            } catch (e) {
+                                console.error('[getActiveOrderForClient] Error parsing JSON string:', e);
+                                jsonItems = {};
                             }
                         }
-                        orderConfig.items = itemsMap;
-                        if (Object.keys(itemPricesMap).length > 0) {
-                            orderConfig.itemPrices = itemPricesMap;
+                        
+                        // Handle different JSON formats
+                        if (jsonItems && typeof jsonItems === 'object' && !Array.isArray(jsonItems)) {
+                            for (const [itemId, val] of Object.entries(jsonItems)) {
+                                if (val && typeof val === 'object' && 'quantity' in val) {
+                                    itemsMap[itemId] = (val as any).quantity;
+                                    if ('price' in val && (val as any).price !== undefined && (val as any).price !== null) {
+                                        itemPricesMap[itemId] = (val as any).price;
+                                    }
+                                } else if (typeof val === 'number') {
+                                    itemsMap[itemId] = val;
+                                } else {
+                                    itemsMap[itemId] = val;
+                                }
+                            }
                         }
+                        
+                        console.log('[getActiveOrderForClient] Loaded', Object.keys(itemsMap).length, 'items from JSON field');
                     }
+
+                    // Set items and prices
+                    orderConfig.items = itemsMap;
+                    if (Object.keys(itemPricesMap).length > 0) {
+                        orderConfig.itemPrices = itemPricesMap;
+                    }
+
+                    // Also set boxOrders array for consistency with display code
+                    orderConfig.boxOrders = [{
+                        boxTypeId: boxSelection.box_type_id,
+                        vendorId: boxSelection.vendor_id,
+                        quantity: boxSelection.quantity,
+                        items: itemsMap,
+                        itemNotes: boxSelection.item_notes || {}
+                    }];
                 }
             } else if (orderData.service_type === 'Equipment') {
                 // Parse equipment details from notes
@@ -4363,18 +4428,75 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
                 .eq('order_id', orderData.id);
 
             if (boxSelections && boxSelections.length > 0) {
+                // PRIORITY 1: Load items from order_items table (same as getActiveOrderForClient)
+                // This is the primary source for box items now
+                const { data: boxItems, error: boxItemsError } = await supabase
+                    .from(itemsTable)
+                    .select('*')
+                    .eq('order_id', orderData.id)
+                    .is('vendor_selection_id', null); // Box items don't have vendor selections
+
+                if (boxItemsError) {
+                    console.error('Error fetching box items from items table:', boxItemsError);
+                }
+
+                // Build items map from order_items table
+                let itemsFromTable: any = {};
+                const itemPricesMap: any = {};
+                if (boxItems && boxItems.length > 0) {
+                    for (const item of boxItems) {
+                        if (item.menu_item_id) {
+                            itemsFromTable[item.menu_item_id] = item.quantity;
+                            // Store price if available (from custom_price or calculated)
+                            if (item.custom_price) {
+                                itemPricesMap[item.menu_item_id] = parseFloat(item.custom_price.toString());
+                            }
+                        }
+                    }
+                }
+
                 // Map to boxOrders format
                 orderConfig.boxOrders = boxSelections.map((box: any) => {
-                    // Parse items from JSON if available (similar to getOrderHistory)
+                    // PRIORITY 1: Use items from order_items table if available
                     let items: any = {};
-                    try {
-                        if (box.items && typeof box.items === 'string') {
-                            items = JSON.parse(box.items);
-                        } else if (box.items && typeof box.items === 'object') {
-                            items = box.items;
+                    if (Object.keys(itemsFromTable).length > 0) {
+                        items = itemsFromTable;
+                        console.log('[getRecentOrdersForClient] Using items from order_items table:', Object.keys(items).length, 'items');
+                    } else {
+                        // PRIORITY 2: Fallback to JSON field if no items found in items table
+                        // Parse items from JSON if available (similar to getOrderHistory)
+                        try {
+                            if (box.items) {
+                                if (typeof box.items === 'string') {
+                                    items = JSON.parse(box.items);
+                                } else if (typeof box.items === 'object') {
+                                    items = box.items;
+                                }
+                                
+                                // Handle different JSON formats
+                                // Format 1: { itemId: quantity }
+                                // Format 2: { itemId: { quantity: number, price: number } }
+                                if (items && typeof items === 'object' && !Array.isArray(items)) {
+                                    const normalizedItems: any = {};
+                                    for (const [itemId, val] of Object.entries(items)) {
+                                        if (val && typeof val === 'object' && 'quantity' in val) {
+                                            normalizedItems[itemId] = (val as any).quantity;
+                                        } else if (typeof val === 'number') {
+                                            normalizedItems[itemId] = val;
+                                        } else {
+                                            normalizedItems[itemId] = val;
+                                        }
+                                    }
+                                    items = normalizedItems;
+                                }
+                                console.log('[getRecentOrdersForClient] Using items from JSON field:', Object.keys(items).length, 'items');
+                            } else {
+                                console.log('[getRecentOrdersForClient] No items found in box selection');
+                            }
+                        } catch (e) {
+                            console.error('[getRecentOrdersForClient] Error parsing box items:', e, { boxItems: box.items });
+                            items = {};
                         }
-                    } catch (e) {
-                        console.error('Error parsing box items:', e);
                     }
 
                     return {
@@ -4390,18 +4512,26 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
                     orderConfig.boxTypeId = boxSelections[0].box_type_id;
                     orderConfig.vendorId = boxSelections[0].vendor_id;
                     orderConfig.boxQuantity = boxSelections[0].quantity;
-                    // Parse items for top-level as well
+                    // Use items from table if available, otherwise fallback to JSON
                     let topLevelItems: any = {};
-                    try {
-                        if (boxSelections[0].items && typeof boxSelections[0].items === 'string') {
-                            topLevelItems = JSON.parse(boxSelections[0].items);
-                        } else if (boxSelections[0].items && typeof boxSelections[0].items === 'object') {
-                            topLevelItems = boxSelections[0].items;
+                    if (Object.keys(itemsFromTable).length > 0) {
+                        topLevelItems = itemsFromTable;
+                    } else {
+                        // Parse items for top-level as well
+                        try {
+                            if (boxSelections[0].items && typeof boxSelections[0].items === 'string') {
+                                topLevelItems = JSON.parse(boxSelections[0].items);
+                            } else if (boxSelections[0].items && typeof boxSelections[0].items === 'object') {
+                                topLevelItems = boxSelections[0].items;
+                            }
+                        } catch (e) {
+                            console.error('Error parsing top-level box items:', e);
                         }
-                    } catch (e) {
-                        console.error('Error parsing top-level box items:', e);
                     }
                     orderConfig.items = topLevelItems;
+                    if (Object.keys(itemPricesMap).length > 0) {
+                        orderConfig.itemPrices = itemPricesMap;
+                    }
                 }
             }
 
@@ -4755,6 +4885,44 @@ export async function getClientFullDetails(clientId: string) {
         ]);
 
         if (!client) return null;
+
+        // Load box orders from client_box_orders table if service type is Boxes
+        // Note: getClient() already loads box orders, but we also merge into activeOrder
+        if (client.serviceType === 'Boxes') {
+            try {
+                const boxOrdersFromDb = await getClientBoxOrder(clientId);
+                if (boxOrdersFromDb && boxOrdersFromDb.length > 0) {
+                    // Convert ClientBoxOrder[] to boxOrders format
+                    const boxOrders = boxOrdersFromDb.map(bo => ({
+                        boxTypeId: bo.boxTypeId,
+                        vendorId: bo.vendorId,
+                        quantity: bo.quantity || 1,
+                        items: bo.items || {},
+                        itemNotes: bo.itemNotes || {},
+                        caseId: bo.caseId
+                    }));
+                    
+                    // Merge into activeOrder.boxOrders if activeOrder exists
+                    if (activeOrder) {
+                        const activeOrderAny = activeOrder as any;
+                        if (!activeOrderAny.boxOrders || activeOrderAny.boxOrders.length === 0) {
+                            activeOrderAny.boxOrders = boxOrders;
+                        } else {
+                            // Merge: use DB as source of truth
+                            activeOrderAny.boxOrders = boxOrders;
+                        }
+                    }
+                    
+                    console.log('[getClientFullDetails] Loaded box orders from client_box_orders:', {
+                        clientId,
+                        boxOrdersCount: boxOrders.length
+                    });
+                }
+            } catch (boxOrderError) {
+                console.error('[getClientFullDetails] Error loading box orders:', boxOrderError);
+                // Don't fail the whole request if box orders fail to load
+            }
+        }
 
         return {
             client,

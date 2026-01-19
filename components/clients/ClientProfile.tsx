@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getEquipment, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -1060,6 +1060,55 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         items: { ...configToSet.items },
                         itemNotes: configToSet.itemNotes || {}
                     }];
+                }
+            }
+
+            // Fallback: Load box orders from client_box_orders table if no box orders found
+            if (c.serviceType === 'Boxes' && (!configToSet.boxOrders || configToSet.boxOrders.length === 0 || 
+                (configToSet.boxOrders.length > 0 && !configToSet.boxOrders[0].boxTypeId && !configToSet.boxOrders[0].vendorId && 
+                 (!configToSet.boxOrders[0].items || Object.keys(configToSet.boxOrders[0].items).length === 0)))) {
+                try {
+                    const boxOrdersFromDb = await getClientBoxOrder(clientId);
+                    if (boxOrdersFromDb && boxOrdersFromDb.length > 0) {
+                        console.log('[ClientProfile] loadData - Loading box orders from client_box_orders table (fallback)', {
+                            boxOrdersCount: boxOrdersFromDb.length
+                        });
+                        
+                        // Convert ClientBoxOrder[] to boxOrders format
+                        const boxOrders = boxOrdersFromDb.map(bo => ({
+                            boxTypeId: bo.boxTypeId || '',
+                            vendorId: bo.vendorId || '',
+                            quantity: bo.quantity || 1,
+                            items: bo.items || {},
+                            itemNotes: bo.itemNotes || {},
+                            caseId: bo.caseId
+                        }));
+                        
+                        // Merge into configToSet
+                        configToSet.boxOrders = boxOrders;
+                        
+                        // Also sync to legacy fields for backward compat
+                        if (boxOrders.length > 0) {
+                            const firstBox = boxOrders[0];
+                            if (firstBox.vendorId) configToSet.vendorId = firstBox.vendorId;
+                            if (firstBox.boxTypeId) configToSet.boxTypeId = firstBox.boxTypeId;
+                            if (firstBox.quantity) configToSet.boxQuantity = firstBox.quantity;
+                            if (firstBox.items && Object.keys(firstBox.items).length > 0) {
+                                configToSet.items = firstBox.items;
+                            }
+                            if (firstBox.caseId && !configToSet.caseId) {
+                                configToSet.caseId = firstBox.caseId;
+                            }
+                        }
+                        
+                        console.log('[ClientProfile] loadData - Successfully loaded box orders from database', {
+                            boxOrdersCount: boxOrders.length,
+                            firstBox: boxOrders[0]
+                        });
+                    }
+                } catch (boxOrderError) {
+                    console.error('[ClientProfile] loadData - Error loading box orders from database (fallback):', boxOrderError);
+                    // Don't fail the whole load if box orders fail to load
                 }
             }
 
@@ -3019,9 +3068,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         return items;
                                                     };
 
-                                                    // Collect all items from all upcoming orders
+                                                    // Filter orders by selected profile (caseId) if present
+                                                    const currentCaseId = orderConfig?.caseId;
+                                                    const filteredOrders = currentCaseId 
+                                                        ? allUpcomingOrders.filter((order: any) => order.caseId === currentCaseId)
+                                                        : allUpcomingOrders;
+
+                                                    // Collect all items from filtered upcoming orders
                                                     const allItems: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; deliveryDay?: string; orderId?: string }> = [];
-                                                    allUpcomingOrders.forEach((order) => {
+                                                    filteredOrders.forEach((order) => {
                                                         const orderItems = extractItemsFromOrder(order);
                                                         orderItems.forEach(item => {
                                                             allItems.push({
@@ -4031,9 +4086,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             return items;
                                                         };
 
-                                                        // Collect all items from all upcoming Boxes orders
+                                                        // Filter orders by selected profile (caseId) if present
+                                                        const currentCaseId = orderConfig?.caseId;
+                                                        const filteredOrders = currentCaseId 
+                                                            ? allUpcomingOrders.filter((order: any) => order.caseId === currentCaseId)
+                                                            : allUpcomingOrders;
+
+                                                        // Collect all items from filtered upcoming Boxes orders
                                                         const allBoxItems: Array<{ itemId: string; itemName: string; quantity: number; vendorName: string; orderId?: string }> = [];
-                                                        allUpcomingOrders.forEach((order) => {
+                                                        filteredOrders.forEach((order) => {
                                                             if (order.serviceType === 'Boxes') {
                                                                 const orderItems = extractItemsFromBoxOrder(order);
                                                                 orderItems.forEach(item => {
