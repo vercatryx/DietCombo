@@ -169,7 +169,7 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                                     Order ID:
                                 </Typography>
                                 <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                    {stop.orderId ? stop.orderId.substring(0, 8) + '...' : 'N/A'}
+                                    {stop.orderId || 'N/A'}
                                 </Typography>
                             </Box>
                             {stop.orderNumber && (
@@ -182,14 +182,6 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                                     </Typography>
                                 </Box>
                             )}
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                    Order Date:
-                                </Typography>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                    {formatDate(stop.orderDate)}
-                                </Typography>
-                            </Box>
                             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                                 <Typography variant="body2" sx={{ color: '#6b7280' }}>
                                     Delivery Date:

@@ -85,7 +85,7 @@ export async function GET(req: Request) {
         const { data: clients } = clientIds.length > 0
             ? await supabase
                 .from('clients')
-                .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id')
                 .in('id', clientIds)
             : { data: [] };
 
@@ -93,6 +93,8 @@ export async function GET(req: Request) {
             ...c,
             first: c.first_name,
             last: c.last_name,
+            fullName: c.full_name,
+            full_name: c.full_name,
             phone: c.phone_number,
             assigned_driver_id: c.assigned_driver_id
         }]));
@@ -170,8 +172,11 @@ export async function GET(req: Request) {
 
         for (const s of (allStops || [])) {
             const c = s.client_id ? clientById.get(s.client_id) : undefined;
+            // Priority: Use full_name from client record, fallback to constructed name
             const name =
-                c ? `${c.first || ""} ${c.last || ""}`.trim() : "(Unnamed)";
+                c?.full_name?.trim() || 
+                (c ? `${c.first || ""} ${c.last || ""}`.trim() : null) ||
+                "(Unnamed)";
 
             // prefer live client value; fall back to stop's denorm
             const dislikes = c?.dislikes ?? s.dislikes ?? "";
@@ -208,6 +213,15 @@ export async function GET(req: Request) {
                 id: s.id,
                 userId: s.client_id ?? null,
                 name,
+
+                // Preserve first and last name fields for proper client name reconstruction
+                first: c?.first || null,
+                last: c?.last || null,
+                first_name: c?.first || null,
+                last_name: c?.last || null,
+                // Include full_name from client record
+                fullName: c?.full_name || null,
+                full_name: c?.full_name || null,
 
                 // prefer live client fields; fallback to stop's denorm copies
                 address: (c?.address ?? s.address ?? "") as string,

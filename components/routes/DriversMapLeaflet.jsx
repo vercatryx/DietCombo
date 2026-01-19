@@ -346,10 +346,35 @@ const formatDate = (dateStr) => {
 };
 
 /** Preview popup showing stop details */
-function openPreviewPopup({ map, stop, color }) {
+async function openPreviewPopup({ map, stop, color }) {
     if (!map || !stop) return;
     const ll = getLL(stop);
     if (!ll) return;
+
+    // Fetch client name if we have userId and name is missing/Unnamed
+    let clientName = null;
+    const userId = stop.userId || stop.clientId || stop.id;
+    const currentName = stop.name;
+    
+    // If name is missing, "(Unnamed)", or "Unnamed", fetch from API
+    if (userId && (!currentName || currentName === "(Unnamed)" || currentName === "Unnamed" || currentName.trim() === "")) {
+        try {
+            const res = await fetch(`/api/users/${userId}`, { cache: 'no-store' });
+            if (res.ok) {
+                const client = await res.json();
+                // Build name from first/last or use full_name/name
+                if (client.first || client.last) {
+                    clientName = `${client.first || ''} ${client.last || ''}`.trim();
+                } else if (client.full_name) {
+                    clientName = client.full_name;
+                } else if (client.name) {
+                    clientName = client.name;
+                }
+            }
+        } catch (err) {
+            console.error('[StopPreview] Failed to fetch client:', err);
+        }
+    }
 
     const container = document.createElement("div");
     container.style.minWidth = "280px";
@@ -362,8 +387,7 @@ function openPreviewPopup({ map, stop, color }) {
     container.style.fontFamily = "system-ui, -apple-system, sans-serif";
     container.style.fontSize = "13px";
     
-    const orderIdDisplay = stop.orderId ? stop.orderId.substring(0, 8) + "..." : "N/A";
-    const orderDateDisplay = formatDate(stop.orderDate) || "N/A";
+    const orderIdDisplay = stop.orderId || "N/A";
     const deliveryDateDisplay = formatDate(stop.deliveryDate) || "N/A";
     const orderStatus = stop.orderStatus || stop.order?.status || stop.status || null;
     
@@ -394,26 +418,42 @@ function openPreviewPopup({ map, stop, color }) {
         return /\d+\s+\w+\s+(street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|circle|cir|place|pl|parkway|pkwy)\b/i.test(s);
     };
     
-    // Get client's full name - match ClientDriverAssignment logic exactly
-    // Priority: first+last combination > name > full_name > other fields
+    // Get client's full name - Priority: full_name from client record > constructed name > other fields
     const getClientFullName = () => {
-        // Debug: Log stop object to see what fields are available
-        // console.log('[StopPreview] Stop object:', {
-        //     id: stop.id,
-        //     name: stop.name,
-        //     first: stop.first,
-        //     last: stop.last,
-        //     firstName: stop.firstName,
-        //     lastName: stop.lastName,
-        //     first_name: stop.first_name,
-        //     last_name: stop.last_name,
-        //     fullName: stop.fullName,
-        //     userId: stop.userId,
-        //     address: stop.address
-        // });
+        // Priority 1: Use full_name from client record (directly from database)
+        if (stop.full_name && stop.full_name.trim() && !looksLikeAddress(stop.full_name)) {
+            return stop.full_name.trim();
+        }
+        if (stop.fullName && stop.fullName.trim() && !looksLikeAddress(stop.fullName)) {
+            return stop.fullName.trim();
+        }
         
-        // Priority 1: Construct from first/last name directly on stop
-        // Check all possible field name variations (case-insensitive check in object keys)
+        // Check nested objects for full_name
+        if (stop.user?.fullName && stop.user.fullName.trim() && !looksLikeAddress(stop.user.fullName)) {
+            return stop.user.fullName.trim();
+        }
+        if (stop.user?.full_name && stop.user.full_name.trim() && !looksLikeAddress(stop.user.full_name)) {
+            return stop.user.full_name.trim();
+        }
+        if (stop.client?.fullName && stop.client.fullName.trim() && !looksLikeAddress(stop.client.fullName)) {
+            return stop.client.fullName.trim();
+        }
+        if (stop.client?.full_name && stop.client.full_name.trim() && !looksLikeAddress(stop.client.full_name)) {
+            return stop.client.full_name.trim();
+        }
+        
+        // Priority 2: Use stop.name (API sets this to full_name or constructed name)
+        if (stop.name && stop.name.trim() !== "" && stop.name !== "(Unnamed)") {
+            const stopNameLower = stop.name.toLowerCase().trim();
+            const stopAddr = `${stop.address || ""} ${stop.apt || ""}`.trim().toLowerCase();
+            
+            // If name doesn't exactly match address, use it
+            if (stopNameLower !== stopAddr && stopNameLower !== "(unnamed)") {
+                return stop.name.trim();
+            }
+        }
+        
+        // Priority 3: Construct from first/last name directly on stop
         const getField = (obj, ...keys) => {
             for (const key of keys) {
                 if (obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
@@ -427,8 +467,6 @@ function openPreviewPopup({ map, stop, color }) {
         const last = getField(stop, 'last', 'lastName', 'last_name');
         const firstLastCombined = `${first} ${last}`.trim();
         
-        // If we have a valid first/last combination, use it
-        // Also accept if we have just first or just last (single name)
         if (firstLastCombined) {
             return firstLastCombined;
         }
@@ -439,7 +477,7 @@ function openPreviewPopup({ map, stop, color }) {
             return last;
         }
         
-        // Priority 2: Check nested user/client objects for first/last
+        // Priority 4: Check nested user/client objects for first/last
         const getFirstLast = (obj) => {
             if (!obj) return null;
             const f = obj?.first || obj?.firstName || obj?.first_name || "";
@@ -454,56 +492,37 @@ function openPreviewPopup({ map, stop, color }) {
         const clientFirstLast = getFirstLast(stop.client);
         if (clientFirstLast) return clientFirstLast;
         
-        // Priority 3: Direct full name fields
-        if (stop.fullName && stop.fullName.trim() && !looksLikeAddress(stop.fullName)) {
-            return stop.fullName;
-        }
-        if (stop.full_name && stop.full_name.trim() && !looksLikeAddress(stop.full_name)) {
-            return stop.full_name;
-        }
-        
-        // Check nested objects
-        if (stop.user?.fullName && stop.user.fullName.trim() && !looksLikeAddress(stop.user.fullName)) {
-            return stop.user.fullName;
-        }
-        if (stop.client?.fullName && stop.client.fullName.trim() && !looksLikeAddress(stop.client.fullName)) {
-            return stop.client.fullName;
-        }
-        
-        // Priority 4: stop.name field - The API sets this from first+last, so it should be correct
-        // Only reject it if it clearly matches the address exactly (not just looks like address pattern)
-        if (stop.name && stop.name.trim() !== "") {
-            const stopNameLower = stop.name.toLowerCase().trim();
-            const stopAddr = `${stop.address || ""} ${stop.apt || ""}`.trim().toLowerCase();
-            
-            // If name doesn't exactly match address, use it
-            // This handles cases where business names might have address-like patterns
-            if (stopNameLower !== stopAddr && stopNameLower !== "(unnamed)") {
-                return stop.name;
-            }
-        }
-        
         // Priority 5: Name from nested objects
         if (stop.user?.name && stop.user.name.trim() && !looksLikeAddress(stop.user.name)) {
-            return stop.user.name;
+            return stop.user.name.trim();
         }
         if (stop.client?.name && stop.client.name.trim() && !looksLikeAddress(stop.client.name)) {
-            return stop.client.name;
-        }
-        
-        // Priority 6: If we have at least first OR last (but not both), try constructing
-        if (first && !last) {
-            return first; // Single name
-        }
-        if (last && !first) {
-            return last; // Single name
+            return stop.client.name.trim();
         }
         
         // Last resort: return "Unnamed"
         return "Unnamed";
     };
     
-    const clientFullName = getClientFullName();
+    let clientFullName = getClientFullName();
+    
+    // If we fetched a client name from API, use it (it's more reliable)
+    if (clientName && clientName.trim()) {
+        clientFullName = clientName;
+    }
+    
+    // If still "Unnamed" or empty, try one more time with current stop.name if it exists
+    if ((!clientFullName || clientFullName === "Unnamed" || clientFullName === "(Unnamed)") && stop.name && stop.name.trim() && stop.name !== "(Unnamed)" && stop.name !== "Unnamed") {
+        const stopAddr = `${stop.address || ""} ${stop.apt || ""}`.trim().toLowerCase();
+        if (stop.name.toLowerCase().trim() !== stopAddr) {
+            clientFullName = stop.name;
+        }
+    }
+    
+    // Final fallback
+    if (!clientFullName || clientFullName === "Unnamed" || clientFullName === "(Unnamed)") {
+        clientFullName = "Unnamed";
+    }
     
     // Leaflet automatically wraps content in .leaflet-popup-content
     // The first bold element should be the client's full name
@@ -526,10 +545,6 @@ function openPreviewPopup({ map, stop, color }) {
                 <span style="font-weight:500">${stop.orderNumber}</span>
             </div>
             ` : ""}
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-                <span style="color:#6b7280"><strong>Order Date:</strong></span>
-                <span style="font-weight:500">${orderDateDisplay}</span>
-            </div>
             <div style="display:flex;justify-content:space-between;margin-bottom:4px">
                 <span style="color:#6b7280"><strong>Delivery Date:</strong></span>
                 <span style="font-weight:500">${deliveryDateDisplay}</span>
@@ -642,8 +657,7 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     container.style.padding = "6px";
     container.style.boxShadow = "0 6px 24px rgba(0,0,0,0.15)";
     
-    const orderIdDisplay = stop.orderId ? stop.orderId.substring(0, 8) + "..." : "N/A";
-    const orderDateDisplay = formatDate(stop.orderDate) || "N/A";
+    const orderIdDisplay = stop.orderId || "N/A";
     const deliveryDateDisplay = formatDate(stop.deliveryDate) || "N/A";
     
     container.innerHTML = `
@@ -653,7 +667,6 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     ${stop.phone ? `<div style="margin-top:4px">${stop.phone}</div>` : ""}
     <div style="margin-top:8px;padding:6px;background:#f3f4f6;border-radius:6px;font-size:11px;line-height:1.4">
       <div><strong>Order ID:</strong> ${orderIdDisplay}</div>
-      <div><strong>Order Date:</strong> ${orderDateDisplay}</div>
       <div><strong>Delivery Date:</strong> ${deliveryDateDisplay}</div>
     </div>
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
@@ -1115,7 +1128,7 @@ export default function DriversMapLeaflet({
     }, []);
 
     const handleMarkerClick = useCallback(
-        (id, stop, baseColor, e) => {
+        async (id, stop, baseColor, e) => {
             if (readonly) return; // Disable all interactions in readonly mode
             
             const map = mapRef.current;
@@ -1131,9 +1144,9 @@ export default function DriversMapLeaflet({
                 return;
             }
             
-            // Show preview popup when clicking a stop
+            // Show preview popup when clicking a stop (async to fetch client name if needed)
             if (stop && map) {
-                openPreviewPopup({ map, stop, color: baseColor });
+                await openPreviewPopup({ map, stop, color: baseColor });
             }
             
             // Disable assign driver feature for stops - driver assignment is now done directly to clients
