@@ -15,7 +15,6 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import MapLoadingOverlay from "./MapLoadingOverlay";
-import StopPreviewDialog from "./StopPreviewDialog";
 
 /* ==================== Config / constants ==================== */
 
@@ -335,6 +334,228 @@ function MapBridge({ onReady }) {
 }
 
 /* ==================== Programmatic popup ==================== */
+/** Format dates for display */
+const formatDate = (dateStr) => {
+    if (!dateStr) return null;
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString();
+    } catch {
+        return null;
+    }
+};
+
+/** Preview popup showing stop details */
+function openPreviewPopup({ map, stop, color }) {
+    if (!map || !stop) return;
+    const ll = getLL(stop);
+    if (!ll) return;
+
+    const container = document.createElement("div");
+    container.style.minWidth = "280px";
+    container.style.maxWidth = "400px";
+    container.style.border = `3px solid ${color}`;
+    container.style.borderRadius = "10px";
+    container.style.padding = "10px";
+    container.style.boxShadow = "0 6px 24px rgba(0,0,0,0.15)";
+    container.style.backgroundColor = "white";
+    container.style.fontFamily = "system-ui, -apple-system, sans-serif";
+    container.style.fontSize = "13px";
+    
+    const orderIdDisplay = stop.orderId ? stop.orderId.substring(0, 8) + "..." : "N/A";
+    const orderDateDisplay = formatDate(stop.orderDate) || "N/A";
+    const deliveryDateDisplay = formatDate(stop.deliveryDate) || "N/A";
+    const orderStatus = stop.orderStatus || stop.order?.status || stop.status || null;
+    
+    const getStatusColor = (status) => {
+        if (!status) return "#6b7280";
+        const s = status.toLowerCase();
+        if (s === "cancelled") return "#ef4444";
+        if (s === "waiting_for_proof") return "#f59e0b";
+        if (s === "billing_pending") return "#8b5cf6";
+        if (s === "completed") return "#16a34a";
+        return "#3b82f6";
+    };
+    
+    const statusColor = orderStatus ? getStatusColor(orderStatus) : null;
+    const statusDisplay = orderStatus ? orderStatus.replace(/_/g, " ") : null;
+    
+    // Helper to check if a string looks like an address (contains numbers and street indicators)
+    const looksLikeAddress = (str) => {
+        if (!str) return false;
+        const s = str.toLowerCase().trim();
+        // Check for common address patterns: numbers followed by street words
+        // Also check if it matches the stop's address (to catch cases where name was set to address)
+        const stopAddr = `${stop.address || ""} ${stop.apt || ""}`.toLowerCase().trim();
+        return s === stopAddr ||
+               /^\d+/.test(s) || 
+               /\b(street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|circle|cir|place|pl)\b/.test(s) ||
+               /^\d+\s+\w+\s+(st|street|ave|avenue|rd|road|dr|drive)/i.test(s);
+    };
+    
+    // Get client's full name - comprehensive extraction from all possible sources
+    // The stop.name field may have been overwritten by nameOf() which can fallback to address
+    // So we need to prioritize actual name fields and exclude addresses
+    const getClientFullName = () => {
+        // Priority 1: Direct full name fields from user/client objects
+        if (stop.user?.fullName && !looksLikeAddress(stop.user.fullName)) return stop.user.fullName;
+        if (stop.user?.full_name && !looksLikeAddress(stop.user.full_name)) return stop.user.full_name;
+        if (stop.client?.fullName && !looksLikeAddress(stop.client.fullName)) return stop.client.fullName;
+        if (stop.client?.full_name && !looksLikeAddress(stop.client.full_name)) return stop.client.full_name;
+        if (stop.fullName && !looksLikeAddress(stop.fullName)) return stop.fullName;
+        if (stop.full_name && !looksLikeAddress(stop.full_name)) return stop.full_name;
+        
+        // Priority 2: Name field from user/client objects (already formatted)
+        if (stop.user?.name && !looksLikeAddress(stop.user.name)) return stop.user.name;
+        if (stop.client?.name && !looksLikeAddress(stop.client.name)) return stop.client.name;
+        
+        // Priority 3: Construct from first/last name (most reliable for full name)
+        const getFirstLast = (obj) => {
+            if (!obj) return null;
+            const first = obj?.first || obj?.firstName || obj?.first_name || "";
+            const last = obj?.last || obj?.lastName || obj?.last_name || "";
+            const combined = `${first} ${last}`.trim();
+            return combined || null;
+        };
+        
+        const userFirstLast = getFirstLast(stop.user);
+        if (userFirstLast) return userFirstLast;
+        
+        const clientFirstLast = getFirstLast(stop.client);
+        if (clientFirstLast) return clientFirstLast;
+        
+        const stopFirstLast = getFirstLast(stop);
+        if (stopFirstLast) return stopFirstLast;
+        
+        // Priority 4: Check stop.name but exclude if it looks like an address
+        // stop.name might be set by nameOf() which can fallback to address
+        // The API sets name from first/last, but DriversDialog may override it
+        if (stop.name && !looksLikeAddress(stop.name)) {
+            return stop.name;
+        }
+        
+        // Priority 5: Any other name field (excluding address-like values)
+        if (stop.userName && !looksLikeAddress(stop.userName)) {
+            return stop.userName;
+        }
+        
+        // If stop.name looks like address, use "Unnamed" since we don't have the actual name
+        return "Unnamed";
+    };
+    
+    const clientFullName = getClientFullName();
+    
+    // Leaflet automatically wraps content in .leaflet-popup-content
+    // The first bold element should be the client's full name
+    let html = `
+        <div style="font-weight:700;font-size:15px;margin-bottom:8px;color:#111827;font-weight:bold;line-height:1.4">
+            ${clientFullName}
+        </div>
+        <div style="color:#6b7280;margin-bottom:2px">${stop.address || ""}${stop.apt ? " " + stop.apt : ""}</div>
+        <div style="color:#6b7280;margin-bottom:4px">${stop.city || ""} ${stop.state || ""} ${stop.zip || ""}</div>
+        ${stop.phone ? `<div style="color:#6b7280;margin-bottom:8px">📞 ${stop.phone}</div>` : ""}
+        
+        <div style="margin-top:10px;padding:8px;background:#f9fafb;border-radius:6px;font-size:12px;line-height:1.6;border:1px solid #e5e7eb">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="color:#6b7280"><strong>Order ID:</strong></span>
+                <span style="font-weight:500">${orderIdDisplay}</span>
+            </div>
+            ${stop.orderNumber ? `
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="color:#6b7280"><strong>Order #:</strong></span>
+                <span style="font-weight:500">${stop.orderNumber}</span>
+            </div>
+            ` : ""}
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="color:#6b7280"><strong>Order Date:</strong></span>
+                <span style="font-weight:500">${orderDateDisplay}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="color:#6b7280"><strong>Delivery Date:</strong></span>
+                <span style="font-weight:500">${deliveryDateDisplay}</span>
+            </div>
+            ${orderStatus ? `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+                <span style="color:#6b7280"><strong>Status:</strong></span>
+                <span style="padding:2px 8px;border-radius:4px;background-color:${statusColor}20;color:${statusColor};font-weight:500;text-transform:capitalize;font-size:11px">
+                    ${statusDisplay}
+                </span>
+            </div>
+            ` : ""}
+        </div>
+    `;
+    
+    if (stop.__driverName) {
+        html += `
+            <div style="margin-top:8px;padding:6px;background:#f0f9ff;border-radius:6px;font-size:12px;border:1px solid #bfdbfe">
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:#1e40af"><strong>Driver:</strong></span>
+                    <span style="font-weight:500;color:#1e40af">${stop.__driverName}</span>
+                </div>
+                ${stop.__stopIndex !== undefined ? `
+                <div style="display:flex;justify-content:space-between;margin-top:4px">
+                    <span style="color:#1e40af"><strong>Stop #:</strong></span>
+                    <span style="font-weight:500;color:#1e40af">${stop.__stopIndex + 1}</span>
+                </div>
+                ` : ""}
+            </div>
+        `;
+    }
+    
+    // Stop Status - determine based on completed field and other factors
+    const getStopStatus = () => {
+        if (stop.completed === true) {
+            return { text: "Completed", color: "#16a34a" };
+        }
+        if (stop.completed === false) {
+            return { text: "Pending", color: "#f59e0b" };
+        }
+        // Default to pending if completed status is undefined
+        return { text: "Pending", color: "#6b7280" };
+    };
+    
+    const stopStatus = getStopStatus();
+    html += `
+        <div style="margin-top:8px;padding:6px;background:#f9fafb;border-radius:6px;font-size:12px;border:1px solid #e5e7eb">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="color:#6b7280"><strong>Stop Status:</strong></span>
+                <span style="padding:2px 8px;border-radius:4px;background-color:${stopStatus.color}20;color:${stopStatus.color};font-weight:500;text-transform:capitalize;font-size:11px">
+                    ${stopStatus.text}
+                </span>
+            </div>
+        </div>
+    `;
+    
+    if (stop.completed !== undefined) {
+        const completedColor = stop.completed ? "#16a34a" : "#6b7280";
+        html += `
+            <div style="margin-top:8px;font-size:12px">
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:#6b7280"><strong>Completed:</strong></span>
+                    <span style="font-weight:500;color:${completedColor}">${stop.completed ? "Yes" : "No"}</span>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (stop.dislikes) {
+        html += `
+            <div style="margin-top:8px;padding:6px;background:#fef3c7;border-radius:6px;font-size:11px;border:1px solid #fcd34d">
+                <div style="color:#92400e;font-weight:600;margin-bottom:4px">Notes:</div>
+                <div style="color:#78350f;white-space:pre-wrap;line-height:1.4">${stop.dislikes}</div>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+    
+    const popup = L.popup({ closeOnClick: true, autoClose: true, className: "color-popup", maxWidth: 400 })
+        .setLatLng(ll)
+        .setContent(container);
+    
+    popup.openOn(map);
+}
+
 /** Assign popup with current driver preselected (if any) */
 function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     if (!map || !stop) return;
@@ -360,16 +581,6 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     container.style.borderRadius = "10px";
     container.style.padding = "6px";
     container.style.boxShadow = "0 6px 24px rgba(0,0,0,0.15)";
-    // Format dates for display
-    const formatDate = (dateStr) => {
-        if (!dateStr) return null;
-        try {
-            const date = new Date(dateStr);
-            return date.toLocaleDateString();
-        } catch {
-            return null;
-        }
-    };
     
     const orderIdDisplay = stop.orderId ? stop.orderId.substring(0, 8) + "..." : "N/A";
     const orderDateDisplay = formatDate(stop.orderDate) || "N/A";
@@ -541,10 +752,6 @@ export default function DriversMapLeaflet({
     const [bulkDriverId, setBulkDriverId] = useState("");
     const [bulkBusy, setBulkBusy] = useState(false);
     const selectedCount = selectedIds.size;
-    
-    /* ------- preview dialog ------- */
-    const [previewStop, setPreviewStop] = useState(null);
-    const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
 
     const [selectedHalo, setSelectedHalo] = useState({
         lat: null,
@@ -865,9 +1072,8 @@ export default function DriversMapLeaflet({
             }
             
             // Show preview popup when clicking a stop
-            if (stop) {
-                setPreviewStop(stop);
-                setPreviewDialogOpen(true);
+            if (stop && map) {
+                openPreviewPopup({ map, stop, color: baseColor });
             }
             
             // Disable assign driver feature for stops - driver assignment is now done directly to clients
@@ -2007,16 +2213,6 @@ export default function DriversMapLeaflet({
                 {/* Loading overlay (separate component) */}
                 <MapLoadingOverlay show={showOverlay} logoSrc={logoSrc || "/logo.png"} />
             </div>
-
-            {/* Stop Preview Dialog */}
-            <StopPreviewDialog
-                open={previewDialogOpen}
-                onClose={() => {
-                    setPreviewDialogOpen(false);
-                    setPreviewStop(null);
-                }}
-                stop={previewStop}
-            />
         </div>
     );
 }
