@@ -476,6 +476,15 @@ export default function DriversDialog({
                     id: u.id,
                     userId: u.userId ?? u.id,
                     name: nameOf(u),
+                    // Preserve original name fields for proper client name extraction
+                    first: u.first || u.first_name || null,
+                    last: u.last || u.last_name || null,
+                    firstName: u.first || u.first_name || null,
+                    lastName: u.last || u.last_name || null,
+                    first_name: u.first || u.first_name || null,
+                    last_name: u.last || u.last_name || null,
+                    fullName: u.fullName || u.full_name || null,
+                    full_name: u.fullName || u.full_name || null,
                     address: `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
                     phone: u.phone ?? "",
                     city: u.city ?? "",
@@ -486,6 +495,13 @@ export default function DriversDialog({
                     __driverId: driverId,
                     __driverName: dname,
                     __stopIndex: idx,
+                    // Preserve other fields that might be useful
+                    orderId: u.orderId || null,
+                    orderDate: u.orderDate || null,
+                    deliveryDate: u.deliveryDate || u.delivery_date || null,
+                    orderStatus: u.orderStatus || null,
+                    completed: u.completed,
+                    dislikes: u.dislikes || "",
                 }))
                 .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
             return { id: driverId, driverId, name: dname, color, polygon: [], stops };

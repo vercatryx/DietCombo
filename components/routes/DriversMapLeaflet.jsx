@@ -381,41 +381,71 @@ function openPreviewPopup({ map, stop, color }) {
     const statusDisplay = orderStatus ? orderStatus.replace(/_/g, " ") : null;
     
     // Helper to check if a string looks like an address (contains numbers and street indicators)
+    // This should be more lenient - only flag obvious addresses, not business names that might have numbers
     const looksLikeAddress = (str) => {
         if (!str) return false;
         const s = str.toLowerCase().trim();
-        // Check for common address patterns: numbers followed by street words
-        // Also check if it matches the stop's address (to catch cases where name was set to address)
+        // Check if it exactly matches the stop's address (strongest indicator)
         const stopAddr = `${stop.address || ""} ${stop.apt || ""}`.toLowerCase().trim();
-        return s === stopAddr ||
-               /^\d+/.test(s) || 
-               /\b(street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|circle|cir|place|pl)\b/.test(s) ||
-               /^\d+\s+\w+\s+(st|street|ave|avenue|rd|road|dr|drive)/i.test(s);
+        if (s === stopAddr) return true;
+        
+        // Only flag if it's clearly an address pattern (number + street type word)
+        // Be more conservative to avoid false positives with business names
+        return /\d+\s+\w+\s+(street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|circle|cir|place|pl|parkway|pkwy)\b/i.test(s);
     };
     
-    // Get client's full name - comprehensive extraction from all possible sources
-    // The stop.name field may have been overwritten by nameOf() which can fallback to address
-    // So we need to prioritize actual name fields and exclude addresses
+    // Get client's full name - match ClientDriverAssignment logic exactly
+    // Priority: first+last combination > name > full_name > other fields
     const getClientFullName = () => {
-        // Priority 1: Direct full name fields from user/client objects
-        if (stop.user?.fullName && !looksLikeAddress(stop.user.fullName)) return stop.user.fullName;
-        if (stop.user?.full_name && !looksLikeAddress(stop.user.full_name)) return stop.user.full_name;
-        if (stop.client?.fullName && !looksLikeAddress(stop.client.fullName)) return stop.client.fullName;
-        if (stop.client?.full_name && !looksLikeAddress(stop.client.full_name)) return stop.client.full_name;
-        if (stop.fullName && !looksLikeAddress(stop.fullName)) return stop.fullName;
-        if (stop.full_name && !looksLikeAddress(stop.full_name)) return stop.full_name;
+        // Debug: Log stop object to see what fields are available
+        // console.log('[StopPreview] Stop object:', {
+        //     id: stop.id,
+        //     name: stop.name,
+        //     first: stop.first,
+        //     last: stop.last,
+        //     firstName: stop.firstName,
+        //     lastName: stop.lastName,
+        //     first_name: stop.first_name,
+        //     last_name: stop.last_name,
+        //     fullName: stop.fullName,
+        //     userId: stop.userId,
+        //     address: stop.address
+        // });
         
-        // Priority 2: Name field from user/client objects (already formatted)
-        if (stop.user?.name && !looksLikeAddress(stop.user.name)) return stop.user.name;
-        if (stop.client?.name && !looksLikeAddress(stop.client.name)) return stop.client.name;
+        // Priority 1: Construct from first/last name directly on stop
+        // Check all possible field name variations (case-insensitive check in object keys)
+        const getField = (obj, ...keys) => {
+            for (const key of keys) {
+                if (obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
+                    return String(obj[key]).trim();
+                }
+            }
+            return "";
+        };
         
-        // Priority 3: Construct from first/last name (most reliable for full name)
+        const first = getField(stop, 'first', 'firstName', 'first_name');
+        const last = getField(stop, 'last', 'lastName', 'last_name');
+        const firstLastCombined = `${first} ${last}`.trim();
+        
+        // If we have a valid first/last combination, use it
+        // Also accept if we have just first or just last (single name)
+        if (firstLastCombined) {
+            return firstLastCombined;
+        }
+        if (first) {
+            return first;
+        }
+        if (last) {
+            return last;
+        }
+        
+        // Priority 2: Check nested user/client objects for first/last
         const getFirstLast = (obj) => {
             if (!obj) return null;
-            const first = obj?.first || obj?.firstName || obj?.first_name || "";
-            const last = obj?.last || obj?.lastName || obj?.last_name || "";
-            const combined = `${first} ${last}`.trim();
-            return combined || null;
+            const f = obj?.first || obj?.firstName || obj?.first_name || "";
+            const l = obj?.last || obj?.lastName || obj?.last_name || "";
+            const combined = `${f} ${l}`.trim();
+            return (combined && combined !== f && combined !== l) ? combined : null;
         };
         
         const userFirstLast = getFirstLast(stop.user);
@@ -424,22 +454,52 @@ function openPreviewPopup({ map, stop, color }) {
         const clientFirstLast = getFirstLast(stop.client);
         if (clientFirstLast) return clientFirstLast;
         
-        const stopFirstLast = getFirstLast(stop);
-        if (stopFirstLast) return stopFirstLast;
-        
-        // Priority 4: Check stop.name but exclude if it looks like an address
-        // stop.name might be set by nameOf() which can fallback to address
-        // The API sets name from first/last, but DriversDialog may override it
-        if (stop.name && !looksLikeAddress(stop.name)) {
-            return stop.name;
+        // Priority 3: Direct full name fields
+        if (stop.fullName && stop.fullName.trim() && !looksLikeAddress(stop.fullName)) {
+            return stop.fullName;
+        }
+        if (stop.full_name && stop.full_name.trim() && !looksLikeAddress(stop.full_name)) {
+            return stop.full_name;
         }
         
-        // Priority 5: Any other name field (excluding address-like values)
-        if (stop.userName && !looksLikeAddress(stop.userName)) {
-            return stop.userName;
+        // Check nested objects
+        if (stop.user?.fullName && stop.user.fullName.trim() && !looksLikeAddress(stop.user.fullName)) {
+            return stop.user.fullName;
+        }
+        if (stop.client?.fullName && stop.client.fullName.trim() && !looksLikeAddress(stop.client.fullName)) {
+            return stop.client.fullName;
         }
         
-        // If stop.name looks like address, use "Unnamed" since we don't have the actual name
+        // Priority 4: stop.name field - The API sets this from first+last, so it should be correct
+        // Only reject it if it clearly matches the address exactly (not just looks like address pattern)
+        if (stop.name && stop.name.trim() !== "") {
+            const stopNameLower = stop.name.toLowerCase().trim();
+            const stopAddr = `${stop.address || ""} ${stop.apt || ""}`.trim().toLowerCase();
+            
+            // If name doesn't exactly match address, use it
+            // This handles cases where business names might have address-like patterns
+            if (stopNameLower !== stopAddr && stopNameLower !== "(unnamed)") {
+                return stop.name;
+            }
+        }
+        
+        // Priority 5: Name from nested objects
+        if (stop.user?.name && stop.user.name.trim() && !looksLikeAddress(stop.user.name)) {
+            return stop.user.name;
+        }
+        if (stop.client?.name && stop.client.name.trim() && !looksLikeAddress(stop.client.name)) {
+            return stop.client.name;
+        }
+        
+        // Priority 6: If we have at least first OR last (but not both), try constructing
+        if (first && !last) {
+            return first; // Single name
+        }
+        if (last && !first) {
+            return last; // Single name
+        }
+        
+        // Last resort: return "Unnamed"
         return "Unnamed";
     };
     
