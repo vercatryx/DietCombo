@@ -5,7 +5,7 @@
       "id": "f97cdc16-1084-455f-846c-a4de2c66eb57",
       "client_id": "client666-6666-6666-6666-66666666666",
       "service_type": "Boxes",
-      "case_id": "87987",
+      "case_id": "",
       "status": "scheduled",
       "scheduled_delivery_date": "2099-12-31",
       "take_effect_date": "2099-12-31",
@@ -17,7 +17,7 @@
       "order_number": null,
       "processed_order_id": null,
       "processed_at": null,
-      "last_updated": "2026-01-18T19:47:55.501",
+      "last_updated": "2026-01-19T13:08:53.68",
       "updated_by": "System Administrator",
       "created_at": "2026-01-18T18:31:32.171439",
       "meal_type": "Lunch"
@@ -101,9 +101,51 @@
       "order_number": null,
       "processed_order_id": null,
       "processed_at": null,
-      "last_updated": "2026-01-18T20:22:44.564",
+      "last_updated": "2026-01-19T13:09:21.725",
       "updated_by": "System Administrator",
       "created_at": "2026-01-18T20:22:47.057937",
+      "meal_type": "Lunch"
+    },
+    {
+      "id": "e0b7e0dc-2290-4f31-94fe-68976331d26d",
+      "client_id": "5357cf5a-9049-44d7-8db0-b69ddc1cd301",
+      "service_type": "Boxes",
+      "case_id": "213123",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2099-12-31",
+      "take_effect_date": "2099-12-31",
+      "delivery_day": null,
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 1,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-19T12:57:19.043",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-18T20:22:55.20162",
+      "meal_type": "Lunch"
+    },
+    {
+      "id": "6e7299eb-784d-429f-b522-ad19454133b7",
+      "client_id": "client222-2222-2222-2222-22222222222",
+      "service_type": "Boxes",
+      "case_id": "CASE-002",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2026-01-26",
+      "take_effect_date": "2026-01-24",
+      "delivery_day": "Tuesday",
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 1,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-19T13:09:52.89",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-19T13:09:54.520213",
       "meal_type": "Lunch"
     }
   ],
@@ -178,6 +220,16 @@
       "notes": null
     }
   ],
-  "upcomingOrderBoxSelections": [],
-  "lastSynced": "2026-01-18T20:22:53.719Z"
+  "upcomingOrderBoxSelections": [
+    {
+      "id": "80cfa1c8-2982-47b1-8a2c-0fd712229165",
+      "upcoming_order_id": "6e7299eb-784d-429f-b522-ad19454133b7",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "box_type_id": "box11111-1111-1111-1111-111111111111",
+      "quantity": 1,
+      "items": {},
+      "created_at": "2026-01-19T13:10:00.708349"
+    }
+  ],
+  "lastSynced": "2026-01-19T13:46:43.675Z"
 }

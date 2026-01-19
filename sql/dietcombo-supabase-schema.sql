@@ -178,9 +178,11 @@ CREATE TABLE IF NOT EXISTS clients (
     authorized_amount NUMERIC(10,2) NULL,
     expiration_date DATE NULL,
     active_order JSONB NULL,
+    assigned_driver_id VARCHAR(36) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_by VARCHAR(255) NULL
+    updated_by VARCHAR(255) NULL,
+    FOREIGN KEY (assigned_driver_id) REFERENCES drivers(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_clients_client_id_external ON clients(client_id_external);
@@ -189,6 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_clients_sign_token ON clients(sign_token);
 CREATE INDEX IF NOT EXISTS idx_clients_navigator_id ON clients(navigator_id);
 CREATE INDEX IF NOT EXISTS idx_clients_status_id ON clients(status_id);
 CREATE INDEX IF NOT EXISTS idx_clients_parent_client_id ON clients(parent_client_id);
+CREATE INDEX IF NOT EXISTS idx_clients_assigned_driver_id ON clients(assigned_driver_id);
 
 CREATE TRIGGER update_clients_updated_at BEFORE UPDATE ON clients
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

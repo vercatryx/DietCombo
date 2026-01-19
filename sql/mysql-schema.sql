@@ -188,12 +188,15 @@ CREATE TABLE IF NOT EXISTS clients (
     authorized_amount DECIMAL(10, 2) NULL,
     expiration_date DATE NULL,
     active_order JSON NULL,
+    assigned_driver_id VARCHAR(36) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (navigator_id) REFERENCES navigators(id) ON DELETE SET NULL,
     FOREIGN KEY (status_id) REFERENCES client_statuses(id) ON DELETE SET NULL,
     FOREIGN KEY (parent_client_id) REFERENCES clients(id) ON DELETE SET NULL,
+    FOREIGN KEY (assigned_driver_id) REFERENCES drivers(id) ON DELETE SET NULL,
     INDEX idx_clients_client_id_external (client_id_external),
+    INDEX idx_clients_assigned_driver_id (assigned_driver_id),
     INDEX idx_clients_case_id_external (case_id_external),
     INDEX idx_clients_sign_token (sign_token)
 );

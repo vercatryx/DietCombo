@@ -140,10 +140,12 @@ model Client {
   authorizedAmount     Decimal?            @map("authorized_amount") @db.Decimal(10, 2)
   expirationDate       DateTime?           @map("expiration_date") @db.Date
   activeOrder          Json?               @map("active_order")
+  assignedDriverId     String?             @map("assigned_driver_id") @db.VarChar(36)
   createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt            DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
   updatedBy            String?             @map("updated_by") @db.VarChar(255)
   client_box_orders    client_box_orders[]
+  assignedDriver       Driver?             @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
 
   @@index([clientIdExternal], map: "idx_clients_client_id_external")
   @@index([caseIdExternal], map: "idx_clients_case_id_external")
@@ -151,6 +153,7 @@ model Client {
   @@index([navigatorId], map: "idx_clients_navigator_id")
   @@index([statusId], map: "idx_clients_status_id")
   @@index([parentClientId], map: "idx_clients_parent_client_id")
+  @@index([assignedDriverId], map: "idx_clients_assigned_driver_id")
   @@map("clients")
 }
 
@@ -170,13 +173,14 @@ model DeliveryHistory {
 }
 
 model Driver {
-  id        String   @id @default(uuid()) @db.VarChar(36)
-  day       String   @db.VarChar(20)
-  name      String   @db.VarChar(255)
-  color     String?  @db.VarChar(7)
-  stopIds   Json?    @map("stop_ids")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  day       String    @db.VarChar(20)
+  name      String    @db.VarChar(255)
+  color     String?   @db.VarChar(7)
+  stopIds   Json?     @map("stop_ids")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  assignedClients Client[]
 
   @@index([day], map: "idx_drivers_day")
   @@index([name], map: "idx_drivers_name")
