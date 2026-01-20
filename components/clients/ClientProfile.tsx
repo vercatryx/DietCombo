@@ -1730,8 +1730,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (!deliveryDate) return null;
 
         return {
-            dayOfWeek: deliveryDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }),
-            date: deliveryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+            dayOfWeek: deliveryDate.toLocaleDateString('en-US', { weekday: 'long' }),
+            date: deliveryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
         };
     }
 
@@ -5157,7 +5157,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                         {isMultiple && !order.orderNumber && ` of ${ordersToDisplay.length}`}
                                                                         {order.scheduledDeliveryDate && (
                                                                             <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400, color: 'var(--text-secondary)' }}>
-                                                                                • Scheduled: {new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                                                                                • Scheduled: {(() => {
+                                                                                    // Parse YYYY-MM-DD as local date to avoid timezone issues
+                                                                                    const [year, month, day] = order.scheduledDeliveryDate.split('-').map(Number);
+                                                                                    const date = new Date(year, month - 1, day);
+                                                                                    return date.toLocaleDateString('en-US');
+                                                                                })()}
                                                                             </span>
                                                                         )}
                                                                     </div>
@@ -6426,9 +6431,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const takeEffectDate = getEarliestTakeEffectDateForOrder();
 
                 if (cutoffPassed && takeEffectDate) {
-                    confirmationMessage = `Order saved. The weekly cutoff has passed, so this order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })} (earliest effective date is always a Sunday). View Recent Orders section to see what will be delivered this week.`;
+                    confirmationMessage = `Order saved. The weekly cutoff has passed, so this order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} (earliest effective date is always a Sunday). View Recent Orders section to see what will be delivered this week.`;
                 } else if (takeEffectDate) {
-                    confirmationMessage = `Order saved successfully. This order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })}.`;
+                    confirmationMessage = `Order saved successfully. This order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.`;
                 }
             }
 

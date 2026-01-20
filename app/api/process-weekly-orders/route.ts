@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getMenuItems, getVendors, getBoxTypes, getSettings, getClient } from '@/lib/actions';
 import { randomUUID } from 'crypto';
-import { getNextDeliveryDate, getTakeEffectDateLegacy, getNextOccurrence } from '@/lib/order-dates';
+import { getNextDeliveryDate, getTakeEffectDateLegacy, getNextOccurrence, formatDateToYYYYMMDD } from '@/lib/order-dates';
 import { getCurrentTime } from '@/lib/time';
 
 /**
@@ -283,7 +283,7 @@ async function precheckAndTransferUpcomingOrders() {
                                     const checkDate = new Date(today);
                                     checkDate.setDate(today.getDate() + i);
                                     if (checkDate.getDay() === targetDayNumber) {
-                                        scheduledDeliveryDate = checkDate.toISOString().split('T')[0];
+                                        scheduledDeliveryDate = formatDateToYYYYMMDD(checkDate);
                                         break;
                                     }
                                 }
@@ -1063,7 +1063,7 @@ export async function GET(request: NextRequest) {
                                 status: 'scheduled',
                                 last_updated: (await getCurrentTime()).toISOString(),
                                 updated_by: order.updated_by || 'System',
-                                take_effect_date: takeEffectDate.toISOString().split('T')[0],
+                                take_effect_date: formatDateToYYYYMMDD(takeEffectDate),
                                 total_value: vendorDetail.totalValue || 0,
                                 total_items: vendorDetail.totalQuantity || 0,
                                 notes: order.notes || null,
@@ -1156,8 +1156,8 @@ export async function GET(request: NextRequest) {
                                 status: 'scheduled',
                                 last_updated: (await getCurrentTime()).toISOString(),
                                 updated_by: order.updated_by || 'System',
-                                scheduled_delivery_date: scheduledDeliveryDate ? scheduledDeliveryDate.toISOString().split('T')[0] : null,
-                                take_effect_date: takeEffectDate.toISOString().split('T')[0],
+                                scheduled_delivery_date: scheduledDeliveryDate ? formatDateToYYYYMMDD(scheduledDeliveryDate) : null,
+                                take_effect_date: formatDateToYYYYMMDD(takeEffectDate),
                                 total_value: totalValue,
                                 total_items: boxQuantity,
                                 notes: order.notes || null,

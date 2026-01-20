@@ -10,7 +10,8 @@ import {
     getNextDeliveryDateForDay,
     getTakeEffectDate as getTakeEffectDateFromUtils,
     getAllDeliveryDatesForOrder as getAllDeliveryDatesFromUtils,
-    getNextOccurrence
+    getNextOccurrence,
+    formatDateToYYYYMMDD
 } from './order-dates';
 import { supabase } from './supabase';
 import { createClient } from '@supabase/supabase-js';
@@ -589,7 +590,7 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
         status: 'pending',
         last_updated: (await getCurrentTime()).toISOString(),
         updated_by: currentUserName,
-        scheduled_delivery_date: scheduledDeliveryDate ? scheduledDeliveryDate.toISOString().split('T')[0] : null,
+        scheduled_delivery_date: scheduledDeliveryDate ? formatDateToYYYYMMDD(scheduledDeliveryDate) : null,
         total_value: equipmentItem.price,
         total_items: 1,
         notes: JSON.stringify(equipmentSelection)
@@ -2938,8 +2939,8 @@ async function syncSingleOrderForDeliveryDay(
         last_updated: orderConfig.lastUpdated || currentTime.toISOString(),
         updated_by: updatedBy,
         // For Boxes orders, dates are optional (can be null)
-        scheduled_delivery_date: scheduledDeliveryDate ? scheduledDeliveryDate.toISOString().split('T')[0] : null,
-        take_effect_date: takeEffectDate ? takeEffectDate.toISOString().split('T')[0] : null,
+        scheduled_delivery_date: scheduledDeliveryDate ? formatDateToYYYYMMDD(scheduledDeliveryDate) : null,
+        take_effect_date: takeEffectDate ? formatDateToYYYYMMDD(takeEffectDate) : null,
         total_value: totalValue,
         total_items: totalItems,
         notes: null,
@@ -4217,7 +4218,7 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
 export async function processUpcomingOrders() {
     const today = await getCurrentTime();
     today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = formatDateToYYYYMMDD(today);
 
     // Find all upcoming orders where take_effect_date <= today and status is 'scheduled'
     let upcomingOrders;
@@ -4260,7 +4261,7 @@ export async function processUpcomingOrders() {
                     currentTime
                 );
                 if (calculatedDate) {
-                    scheduledDeliveryDate = calculatedDate.toISOString().split('T')[0];
+                    scheduledDeliveryDate = formatDateToYYYYMMDD(calculatedDate);
                 }
             }
 
@@ -4446,8 +4447,8 @@ export async function getActiveOrderForClient(clientId: string) {
         endOfWeek.setDate(startOfWeek.getDate() + 6);
         endOfWeek.setHours(23, 59, 59, 999);
 
-        const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
-        const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
+        const startOfWeekStr = formatDateToYYYYMMDD(startOfWeek);
+        const endOfWeekStr = formatDateToYYYYMMDD(endOfWeek);
         const startOfWeekISO = startOfWeek.toISOString();
         const endOfWeekISO = endOfWeek.toISOString();
 
@@ -5792,7 +5793,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                             currentTime
                         );
                         if (calculatedDate) {
-                            scheduledDeliveryDate = calculatedDate.toISOString().split('T')[0];
+                            scheduledDeliveryDate = formatDateToYYYYMMDD(calculatedDate);
                         }
                     }
 

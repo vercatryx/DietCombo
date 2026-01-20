@@ -2104,12 +2104,22 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                     {order.orderNumber ? `Order #${order.orderNumber}` : `Order ${orderIdx + 1}`}
                                                     {order.scheduledDeliveryDate && (
                                                         <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400 }}>
-                                                            • Scheduled: {new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                                                            • Scheduled: {(() => {
+                                                                // Parse YYYY-MM-DD as local date to avoid timezone issues
+                                                                const [year, month, day] = order.scheduledDeliveryDate.split('-').map(Number);
+                                                                const date = new Date(year, month - 1, day);
+                                                                return date.toLocaleDateString('en-US');
+                                                            })()}
                                                         </span>
                                                     )}
                                                     {order.actualDeliveryDate && (
                                                         <span style={{ marginLeft: 'var(--spacing-sm)', fontSize: '0.85rem', fontWeight: 400 }}>
-                                                            • Delivered: {new Date(order.actualDeliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                                                            • Delivered: {(() => {
+                                                                // Parse YYYY-MM-DD as local date to avoid timezone issues
+                                                                const [year, month, day] = order.actualDeliveryDate.split('-').map(Number);
+                                                                const date = new Date(year, month - 1, day);
+                                                                return date.toLocaleDateString('en-US');
+                                                            })()}
                                                         </span>
                                                     )}
                                                 </div>

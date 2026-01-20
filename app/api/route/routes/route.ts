@@ -356,7 +356,7 @@ export async function GET(req: Request) {
         console.log(`[route/routes] Found ${uniqueUpcomingOrders.length} upcoming orders (${upcomingOrders?.length || 0} general, ${upcomingOrdersByDate.length} matching delivery_date=${deliveryDate || 'none'})`);
 
         // Import getNextOccurrence for calculating delivery dates from delivery_day
-        const { getNextOccurrence } = await import('@/lib/order-dates');
+        const { getNextOccurrence, formatDateToYYYYMMDD } = await import('@/lib/order-dates');
         const currentTime = new Date();
 
         // Build map of client_id -> Map of delivery_date -> order info
@@ -413,7 +413,7 @@ export async function GET(req: Request) {
                 // Calculate next occurrence of delivery_day
                 const nextDate = getNextOccurrence(order.delivery_day, currentTime);
                 if (nextDate) {
-                    deliveryDateStr = nextDate.toISOString().split('T')[0];
+                    deliveryDateStr = formatDateToYYYYMMDD(nextDate);
                     dayOfWeek = getDayOfWeek(deliveryDateStr);
                 }
             }

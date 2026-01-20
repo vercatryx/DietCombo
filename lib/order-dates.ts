@@ -435,6 +435,20 @@ export function formatDeliveryDateShort(date: Date): string {
 }
 
 /**
+ * Format a Date object as YYYY-MM-DD string using LOCAL time components.
+ * This prevents timezone issues where toISOString() converts to UTC and can shift the date by one day.
+ * 
+ * @param date - The date to format
+ * @returns Date string in YYYY-MM-DD format (e.g., "2024-01-15")
+ */
+export function formatDateToYYYYMMDD(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+/**
  * Get the date for a specific day in the NEXT week (the week following the current one).
  * Week starts on Sunday.
  * 

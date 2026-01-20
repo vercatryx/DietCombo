@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { supabase } from './supabase';
 import { getMenuItems, getVendors, getBoxTypes } from './actions';
+import { formatDateToYYYYMMDD } from './order-dates';
 
 interface LocalOrdersDB {
     orders: any[];
@@ -361,8 +362,8 @@ export async function getActiveOrderForClientLocal(clientId: string) {
         endOfWeek.setDate(startOfWeek.getDate() + 6);
         endOfWeek.setHours(23, 59, 59, 999);
 
-        const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
-        const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
+        const startOfWeekStr = formatDateToYYYYMMDD(startOfWeek);
+        const endOfWeekStr = formatDateToYYYYMMDD(endOfWeek);
         const startOfWeekISO = startOfWeek.toISOString();
         const endOfWeekISO = endOfWeek.toISOString();
 

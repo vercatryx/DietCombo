@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { getCurrentTime } from '@/lib/time';
 import { getMenuItems, getSettings, getVendors, getStatuses } from '@/lib/actions';
 // import { isDeliveryDateLocked, getLockedWeekDescription, getEarliestEffectiveDate } from '@/lib/weekly-lock';
-import { getNextDeliveryDateForDay } from '@/lib/order-dates';
+import { getNextDeliveryDateForDay, formatDateToYYYYMMDD } from '@/lib/order-dates';
 import { randomUUID } from 'crypto';
 
 /**
@@ -272,7 +272,7 @@ export async function POST(request: NextRequest) {
                 continue;
             }
 
-            const deliveryDateStr = nextDeliveryDate.toISOString().split('T')[0];
+            const deliveryDateStr = formatDateToYYYYMMDD(nextDeliveryDate);
             const deliveryDateLog = nextDeliveryDate.toDateString();
 
             // 2. JIT Cutoff Check
