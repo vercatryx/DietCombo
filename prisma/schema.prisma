@@ -612,6 +612,7 @@ model Vendor {
   deliveryDays      Json?               @map("delivery_days")
   deliveryFrequency String?             @default("Once") @map("delivery_frequency") @db.VarChar(50)
   isActive          Boolean?            @default(true) @map("is_active")
+  isDefault         Boolean?            @default(false) @map("is_default")
   minimumMeals      Int?                @default(0) @map("minimum_meals")
   cutoffHours       Int?                @default(0) @map("cutoff_hours")
   createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamp(6)

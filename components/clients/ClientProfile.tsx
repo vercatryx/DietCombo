@@ -188,6 +188,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
     const [validationError, setValidationError] = useState<{ show: boolean, messages: string[] }>({ show: false, messages: [] });
+    const [errorModal, setErrorModal] = useState<{ show: boolean, message: string }>({ show: false, message: '' });
 
     const [loading, setLoading] = useState(true);
     const [loadingOrderDetails, setLoadingOrderDetails] = useState(true);
@@ -1742,6 +1743,33 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (formData.serviceType === 'Boxes') {
             const messages: string[] = [];
 
+            // Validate each box has a vendorId
+            if (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0) {
+                orderConfig.boxOrders.forEach((box: any, index: number) => {
+                    const boxVendorId = box.vendorId;
+                    const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
+                    const computedVendorId = boxVendorId || boxType?.vendorId;
+
+                    if (!computedVendorId || computedVendorId.trim() === '') {
+                        messages.push(`Box #${index + 1}: Vendor is required. Please select a vendor for this box.`);
+                    }
+                });
+            } else if (orderConfig.vendorId) {
+                // Legacy format: validate top-level vendorId
+                if (!orderConfig.vendorId || orderConfig.vendorId.trim() === '') {
+                    const boxType = boxTypes.find(bt => bt.id === orderConfig.boxTypeId);
+                    if (!boxType?.vendorId) {
+                        messages.push('Vendor is required. Please select a vendor for the box order.');
+                    }
+                }
+            } else {
+                // No boxOrders and no vendorId - check if boxType has vendorId
+                const boxType = boxTypes.find(bt => bt.id === orderConfig.boxTypeId);
+                if (!boxType?.vendorId) {
+                    messages.push('Vendor is required. Please select a vendor for the box order.');
+                }
+            }
+
             // Get items from either boxOrders array or legacy items field
             // Priority: boxOrders (new format) > items (legacy format)
             let itemsToValidate: { [itemId: string]: number } = {};
@@ -1834,6 +1862,26 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             return { isValid: true, messages: [] };
         }
 
+        if (formData.serviceType === 'Boxes') {
+            const messages: string[] = [];
+            const boxOrders = orderConfig.boxOrders || [];
+
+            // Validate each box has a vendorId
+            boxOrders.forEach((box: any, index: number) => {
+                const boxVendorId = box.vendorId;
+                const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
+                const computedVendorId = boxVendorId || boxType?.vendorId;
+
+                if (!computedVendorId || computedVendorId.trim() === '') {
+                    messages.push(`Box #${index + 1}: Vendor is required. Please select a vendor for this box.`);
+                }
+            });
+
+            if (messages.length > 0) {
+                return { isValid: false, messages };
+            }
+        }
+
         if (formData.serviceType === 'Custom') {
             const messages: string[] = [];
 
@@ -1879,17 +1927,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (limit && currentBoxes.length >= limit) return;
 
         const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+        const newBox = {
+            boxTypeId: firstActiveBoxType?.id || '',
+            vendorId: firstActiveBoxType?.vendorId || '',
+            quantity: 1,
+            items: {}
+        };
+        const updatedBoxes = [...currentBoxes, newBox];
+        // CRITICAL FIX: Always sync top-level vendorId from the first box's vendorId
+        // If this is the first box, use its vendorId; otherwise keep existing first box's vendorId
+        const updatedVendorId = currentBoxes.length === 0 ? newBox.vendorId : (currentBoxes[0]?.vendorId || orderConfig.vendorId);
         setOrderConfig({
             ...orderConfig,
-            boxOrders: [
-                ...currentBoxes,
-                {
-                    boxTypeId: firstActiveBoxType?.id || '',
-                    vendorId: firstActiveBoxType?.vendorId || '',
-                    quantity: 1,
-                    items: {}
-                }
-            ]
+            boxOrders: updatedBoxes,
+            vendorId: updatedVendorId
         });
     }
 
@@ -1898,19 +1949,23 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (currentBoxes.length <= 1) {
             // If removing the last one, just reset it to empty/default instead of removing
             const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+            const resetBox = {
+                boxTypeId: firstActiveBoxType?.id || '',
+                vendorId: firstActiveBoxType?.vendorId || '',
+                quantity: 1,
+                items: {}
+            };
             setOrderConfig({
                 ...orderConfig,
-                boxOrders: [{
-                    boxTypeId: firstActiveBoxType?.id || '',
-                    vendorId: firstActiveBoxType?.vendorId || '',
-                    quantity: 1,
-                    items: {}
-                }]
+                boxOrders: [resetBox],
+                vendorId: resetBox.vendorId // CRITICAL FIX: Sync top-level vendorId
             });
             return;
         }
         currentBoxes.splice(index, 1);
-        setOrderConfig({ ...orderConfig, boxOrders: currentBoxes });
+        // CRITICAL FIX: Always sync top-level vendorId from the first box's vendorId
+        const updatedVendorId = currentBoxes.length > 0 && currentBoxes[0].vendorId ? currentBoxes[0].vendorId : orderConfig.vendorId;
+        setOrderConfig({ ...orderConfig, boxOrders: currentBoxes, vendorId: updatedVendorId });
     }
 
     function handleBoxUpdate(index: number, field: string, value: any) {
@@ -1925,6 +1980,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             const validBoxType = boxTypes.find(bt => bt.isActive && bt.vendorId === value);
             if (validBoxType) {
                 currentBoxes[index].boxTypeId = validBoxType.id;
+            }
+            
+            // CRITICAL FIX: Always sync top-level vendorId from the first box's vendorId
+            // This ensures vendor ID is always available for saving to upcoming_orders
+            if (currentBoxes.length > 0 && currentBoxes[0].vendorId) {
+                const updatedConfig = { ...orderConfig, boxOrders: currentBoxes, vendorId: currentBoxes[0].vendorId };
+                setOrderConfig(updatedConfig);
+                return;
             }
         }
 
@@ -4283,7 +4346,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             </div>
 
                                                             <div className={styles.formGroup}>
-                                                                <label className="label">Vendor</label>
+                                                                <label className="label">Vendor <span style={{ color: 'var(--color-danger)' }}>*</span></label>
                                                                 {/* Display selected vendor name (similar to sidebar logic) */}
                                                                 {computedVendorId && (() => {
                                                                     // Get vendor name from vendors array (similar to sidebar)
@@ -4307,6 +4370,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                     className="input"
                                                                     value={box.vendorId || ''}
                                                                     onChange={e => handleBoxUpdate(index, 'vendorId', e.target.value)}
+                                                                    required
                                                                 >
                                                                     <option value="">Select Vendor...</option>
                                                                     {vendors.filter(v => v.serviceTypes.includes('Boxes') && v.isActive).map(v => (
@@ -5396,6 +5460,27 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     </div>
                 </div>
             )}
+            {errorModal.show && (
+                <div className={styles.modalOverlay} style={{ zIndex: 200 }}>
+                    <div className={styles.modalContent} style={{ maxWidth: '500px', height: 'auto', padding: '24px' }} onClick={e => e.stopPropagation()}>
+                        <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-danger)' }}>
+                            <AlertTriangle size={24} />
+                            Error Saving Client
+                        </h2>
+                        <p style={{ marginBottom: '24px', color: 'var(--text-primary)', lineHeight: '1.5' }}>
+                            {errorModal.message}
+                        </p>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => setErrorModal({ show: false, message: '' })}
+                            >
+                                OK
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <UnitsModal
                 isOpen={showUnitsModal}
                 onClose={() => {
@@ -5993,8 +6078,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     await updateClient(newClient.id, updateData);
                 } catch (error) {
                     console.error('[ClientProfile] Error updating client with order details:', error);
+                    const errorMessage = error instanceof Error ? error.message : 'Error updating client with order details.';
+                    setErrorModal({ show: true, message: errorMessage });
                     setSaving(false);
-                    setMessage('Error updating client with order details.');
                     return false;
                 }
 
@@ -6166,7 +6252,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
 
             // CRITICAL: Execute the single update call
-            await updateClient(clientId, updateData);
+            try {
+                await updateClient(clientId, updateData);
+            } catch (error) {
+                console.error('[ClientProfile] Error updating client:', error);
+                const errorMessage = error instanceof Error ? error.message : 'An error occurred while saving the client.';
+                setErrorModal({ show: true, message: errorMessage });
+                setSaving(false);
+                return false;
+            }
 
             // Sync to new independent tables if there's order data
             // Sync to new independent tables if there's order data OR if we need to clear data
