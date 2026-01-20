@@ -473,7 +473,8 @@ export function getDateInNextWeek(
 
 /**
  * Get the immediate next occurrence of a specific day of the week.
- * This looks for the first matching day starting from today (0 to 6 days ahead).
+ * Returns the date of the selected day if today is that day or earlier in the week.
+ * If today is already past the selected day, returns the date of next week's occurrence.
  * Does NOT skip weeks or check cutoffs.
  * 
  * @param deliveryDay - Day name (e.g., "Monday")
@@ -489,17 +490,23 @@ export function getNextOccurrence(
 
     const today = new Date(referenceDate);
     today.setHours(0, 0, 0, 0);
+    const todayDayNumber = today.getDay();
 
-    // Look ahead 0-6 days to find the next match
-    for (let i = 0; i < 7; i++) {
-        const checkDate = new Date(today);
-        checkDate.setDate(today.getDate() + i);
-        if (checkDate.getDay() === targetDayNumber) {
-            return checkDate;
-        }
+    // Calculate days until the target day
+    let daysUntilTarget = targetDayNumber - todayDayNumber;
+    
+    // If the target day has already passed this week (negative), add 7 days to get next week's occurrence
+    if (daysUntilTarget < 0) {
+        daysUntilTarget += 7;
     }
+    // If daysUntilTarget is 0, we're on the target day, return today
+    // If daysUntilTarget > 0, the target day is later this week
 
-    return null;
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() + daysUntilTarget);
+    targetDate.setHours(0, 0, 0, 0);
+
+    return targetDate;
 }
 
 

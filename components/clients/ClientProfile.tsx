@@ -644,11 +644,60 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setOrderConfig(configToSet);
         }
 
-        // Fix for Boxes: If vendorId is missing but boxTypeId exists, try to find vendor from boxType
-        // This handles cases where vendorId wasn't saved/synced correctly but boxType was
+        // Fix for Boxes: Handle boxOrders array and migrate legacy fields if needed
         if (data.client.serviceType === 'Boxes') {
             setOrderConfig((prev: any) => {
                 const conf = { ...prev };
+                
+                // First, check if client.activeOrder has boxOrders and use that if conf doesn't have it
+                if (!conf.boxOrders || !Array.isArray(conf.boxOrders) || conf.boxOrders.length === 0) {
+                    if (data.client.activeOrder && data.client.activeOrder.boxOrders && Array.isArray(data.client.activeOrder.boxOrders) && data.client.activeOrder.boxOrders.length > 0) {
+                        console.log('[ClientProfile] hydrateFromInitialData - Using boxOrders from client.activeOrder', {
+                            boxOrdersCount: data.client.activeOrder.boxOrders.length
+                        });
+                        conf.boxOrders = [...data.client.activeOrder.boxOrders];
+                    }
+                }
+                
+                // If we have boxOrders, ensure legacy fields are synced
+                if (conf.boxOrders && Array.isArray(conf.boxOrders) && conf.boxOrders.length > 0) {
+                    const firstBox = conf.boxOrders[0];
+                    if (firstBox.vendorId && !conf.vendorId) {
+                        conf.vendorId = firstBox.vendorId;
+                    }
+                    if (firstBox.boxTypeId && !conf.boxTypeId) {
+                        conf.boxTypeId = firstBox.boxTypeId;
+                    }
+                    if (firstBox.quantity && !conf.boxQuantity) {
+                        conf.boxQuantity = firstBox.quantity;
+                    }
+                    if (firstBox.items && Object.keys(firstBox.items).length > 0 && (!conf.items || Object.keys(conf.items).length === 0)) {
+                        conf.items = firstBox.items;
+                    }
+                }
+                // Fallback: migrate legacy fields to boxOrders array if array is missing
+                else if (!conf.boxOrders || conf.boxOrders.length === 0) {
+                    if (conf.boxTypeId || conf.vendorId || (conf.items && Object.keys(conf.items).length > 0)) {
+                        const legacyBox = {
+                            boxTypeId: conf.boxTypeId || '',
+                            vendorId: conf.vendorId || '',
+                            quantity: conf.boxQuantity || 1,
+                            items: conf.items || {},
+                            itemNotes: conf.itemNotes || {}
+                        };
+                        conf.boxOrders = [legacyBox];
+                    } else {
+                        // Default empty box
+                        const firstActiveBoxType = boxTypes?.find((bt: any) => bt.isActive);
+                        conf.boxOrders = [{
+                            boxTypeId: firstActiveBoxType?.id || '',
+                            vendorId: firstActiveBoxType?.vendorId || '',
+                            quantity: 1,
+                            items: {}
+                        }];
+                    }
+                }
+                
                 // Use boxTypes from component state (passed as prop)
                 if (!conf.vendorId && conf.boxTypeId && boxTypes && boxTypes.length > 0) {
                     const boxType = boxTypes.find((bt: any) => bt.id === conf.boxTypeId);
@@ -658,8 +707,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             recoveredVendorId: boxType.vendorId
                         });
                         conf.vendorId = boxType.vendorId;
+                        // Also update the first box in boxOrders if it exists
+                        if (conf.boxOrders && conf.boxOrders.length > 0) {
+                            conf.boxOrders[0].vendorId = boxType.vendorId;
+                        }
                     }
                 }
+                
                 return conf;
             });
         }
@@ -895,6 +949,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Fix for Boxes: Handle boxOrders array and migrate legacy fields if needed
             if (c.serviceType === 'Boxes') {
                 // NEW: Handle boxOrders array from backend
+                // First, check if client.activeOrder has boxOrders and use that if configToSet doesn't have it
+                if (!configToSet.boxOrders || !Array.isArray(configToSet.boxOrders) || configToSet.boxOrders.length === 0) {
+                    if (c.activeOrder && c.activeOrder.boxOrders && Array.isArray(c.activeOrder.boxOrders) && c.activeOrder.boxOrders.length > 0) {
+                        console.log('[ClientProfile] loadData - Using boxOrders from client.activeOrder', {
+                            boxOrdersCount: c.activeOrder.boxOrders.length
+                        });
+                        configToSet.boxOrders = [...c.activeOrder.boxOrders];
+                    }
+                }
+                
                 // If we have boxOrders from the backend, use that
                 if (configToSet.boxOrders && Array.isArray(configToSet.boxOrders) && configToSet.boxOrders.length > 0) {
                     // Ensure vendorId and items are synced from boxOrders to legacy fields for backward compat
@@ -4308,6 +4372,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         }
                                                         return null;
                                                     })()}
+
                                                     {currentBoxes.map((box: any, index: number) => {
                                                         // Compute vendorId (similar to sidebar logic: check box.vendorId, fallback to boxType.vendorId)
                                                         const boxDef = boxTypes.find(b => b.id === box.boxTypeId);

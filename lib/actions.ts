@@ -3755,21 +3755,66 @@ async function updateClientActiveOrderFromUpcomingOrder(
                 }
             }
         } else if (serviceType === 'Boxes') {
-            // Get vendor ID from upcoming_order_box_selections
+            // Get all box selections from upcoming_order_box_selections with full data
             const { data: boxSelections } = await supabase
                 .from('upcoming_order_box_selections')
-                .select('vendor_id')
-                .eq('upcoming_order_id', upcomingOrderId)
-                .limit(1);
+                .select('vendor_id, box_type_id, quantity, items')
+                .eq('upcoming_order_id', upcomingOrderId);
 
             if (boxSelections && boxSelections.length > 0) {
-                const vendorId = boxSelections[0].vendor_id;
+                // Convert box selections to boxOrders format (similar to how Food orders save vendorSelections)
+                const boxOrders = boxSelections.map((box: any, index: number) => {
+                    // Parse items from JSON if it's a string
+                    let items: any = {};
+                    if (box.items) {
+                        if (typeof box.items === 'string') {
+                            try {
+                                items = JSON.parse(box.items);
+                            } catch (e) {
+                                console.error(`[updateClientActiveOrderFromUpcomingOrder] Error parsing box items JSON:`, e);
+                                items = {};
+                            }
+                        } else if (typeof box.items === 'object') {
+                            items = box.items;
+                        }
+                        
+                        // Handle different JSON formats
+                        // Format 1: { itemId: quantity }
+                        // Format 2: { itemId: { quantity: number, price: number } }
+                        if (items && typeof items === 'object' && !Array.isArray(items)) {
+                            const normalizedItems: any = {};
+                            for (const [itemId, val] of Object.entries(items)) {
+                                if (val && typeof val === 'object' && 'quantity' in val) {
+                                    normalizedItems[itemId] = (val as any).quantity;
+                                } else if (typeof val === 'number') {
+                                    normalizedItems[itemId] = val;
+                                } else {
+                                    normalizedItems[itemId] = val;
+                                }
+                            }
+                            items = normalizedItems;
+                        }
+                    }
+                    
+                    return {
+                        boxNumber: index + 1,
+                        boxTypeId: box.box_type_id || null,
+                        vendorId: box.vendor_id || null,
+                        quantity: box.quantity || 1,
+                        items: items
+                    };
+                });
                 
-                if (vendorId) {
-                    // Update active_order with vendor ID, preserving other fields
-                    currentActiveOrder.vendorId = vendorId;
-                    currentActiveOrder.serviceType = 'Boxes';
+                // Update active_order with boxOrders array, preserving other fields
+                currentActiveOrder.boxOrders = boxOrders;
+                currentActiveOrder.serviceType = 'Boxes';
+                
+                // Also set vendorId from first box for backward compatibility
+                if (boxOrders.length > 0 && boxOrders[0].vendorId) {
+                    currentActiveOrder.vendorId = boxOrders[0].vendorId;
                 }
+                
+                console.log(`[updateClientActiveOrderFromUpcomingOrder] Updated active_order with ${boxOrders.length} box order(s) for Boxes service type`);
             }
         }
 
@@ -3822,6 +3867,8 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         vendorSelectionsCount: (orderConfig as any)?.vendorSelections?.length || 0,
         hasDeliveryDayOrders: !!(orderConfig as any)?.deliveryDayOrders,
         deliveryDayOrdersKeys: (orderConfig as any)?.deliveryDayOrders ? Object.keys((orderConfig as any).deliveryDayOrders) : [],
+        hasBoxOrders: !!(orderConfig as any)?.boxOrders && Array.isArray((orderConfig as any).boxOrders),
+        boxOrdersCount: (orderConfig as any)?.boxOrders?.length || 0,
         hasItems: !!(orderConfig as any)?.items && Object.keys((orderConfig as any).items || {}).length > 0,
         itemsCount: (orderConfig as any)?.items ? Object.keys((orderConfig as any).items || {}).length : 0
     });
