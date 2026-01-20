@@ -1844,7 +1844,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // New format: aggregate items from all boxes in boxOrders array
                 const firstBox = orderConfig.boxOrders[0];
                 boxTypeIdToValidate = firstBox.boxTypeId;
-                boxQuantityToValidate = firstBox.quantity || 1;
+                // Calculate total number of boxes by summing quantities from all boxes
+                boxQuantityToValidate = orderConfig.boxOrders.reduce((total: number, box: any) => {
+                    return total + (box.quantity || 1);
+                }, 0);
                 
                 // Merge items from all boxes
                 orderConfig.boxOrders.forEach((box: any) => {
@@ -1892,6 +1895,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
 
             // Validate category set values - categories with setValue must have exactly that quota value
+            // For Boxes serviceType, setValue must be multiplied by the number of boxes
             if (Object.keys(itemsToValidate).length > 0) {
                 // Check each category that has a setValue
                 for (const category of categories) {
@@ -1908,10 +1912,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             }
                         }
 
-                        // Check if it matches exactly the setValue
-                        if (categoryQuotaValue !== category.setValue) {
+                        // For Boxes serviceType, multiply setValue by the number of boxes
+                        // This supports multiple boxes where each box needs to meet the setValue requirement
+                        const requiredSetValue = formData.serviceType === 'Boxes' 
+                            ? category.setValue * boxQuantityToValidate 
+                            : category.setValue;
+
+                        // Check if it matches exactly the required setValue
+                        if (categoryQuotaValue !== requiredSetValue) {
                             messages.push(
-                                `You must have a total of ${category.setValue} ${category.name} points, but you have ${categoryQuotaValue}. ` +
+                                `You must have a total of ${requiredSetValue} ${category.name} points, but you have ${categoryQuotaValue}. ` +
                                 `Please adjust items in this category to match exactly.`
                             );
                         }

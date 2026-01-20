@@ -431,6 +431,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             // CRITICAL: Don't run legacy validation if we have boxes - that means items are in boxes[].items, not orderConfig.items
             if (boxes.length === 0 && orderConfig.items && (!orderConfig.boxes || (Array.isArray(orderConfig.boxes) && orderConfig.boxes.length === 0))) {
                 const selectedItems = orderConfig.items || {};
+                const boxQuantity = orderConfig.boxQuantity || 1;
 
                 for (const category of categories) {
                     if (category.setValue !== undefined && category.setValue !== null) {
@@ -444,9 +445,15 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                             }
                         }
 
-                        if (categoryQuotaValue !== category.setValue) {
+                        // For Boxes serviceType, multiply setValue by the number of boxes
+                        // This supports multiple boxes where each box needs to meet the setValue requirement
+                        const requiredSetValue = orderConfig.serviceType === 'Boxes' 
+                            ? category.setValue * boxQuantity 
+                            : category.setValue;
+
+                        if (categoryQuotaValue !== requiredSetValue) {
                             validationErrors.push(
-                                `You must have a total of ${category.setValue} ${category.name} points, but you have ${categoryQuotaValue}. ` +
+                                `You must have a total of ${requiredSetValue} ${category.name} points, but you have ${categoryQuotaValue}. ` +
                                 `Please adjust items in this category to match exactly.`
                             );
                         }
