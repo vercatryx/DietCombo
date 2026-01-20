@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getMenuItems, getVendors, getBoxTypes, getSettings, getClient } from '@/lib/actions';
 import { randomUUID } from 'crypto';
-import { getNextDeliveryDate, getTakeEffectDateLegacy } from '@/lib/order-dates';
+import { getNextDeliveryDate, getTakeEffectDateLegacy, getNextOccurrence } from '@/lib/order-dates';
 import { getCurrentTime } from '@/lib/time';
 
 /**
@@ -44,6 +44,156 @@ function calculateTakeEffectDate(vendorId: string, vendors: any[]): Date | null 
  */
 function calculateScheduledDeliveryDate(vendorId: string, vendors: any[]): Date | null {
     return getNextDeliveryDate(vendorId, vendors);
+}
+
+/**
+ * Helper function to get day of week from date string
+ */
+function getDayOfWeek(dateStr: string | null): string | null {
+    if (!dateStr) return null;
+    try {
+        const date = new Date(dateStr);
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        return dayNames[date.getDay()];
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Create or update a stop for an order
+ * This ensures stops are properly linked to orders with order_id and client name
+ */
+async function createOrUpdateStopForOrder(orderId: string, clientId: string, scheduledDeliveryDate: string | null): Promise<void> {
+    if (!scheduledDeliveryDate) {
+        console.warn(`[process-weekly-orders] Cannot create stop for order ${orderId}: no scheduled_delivery_date`);
+        return;
+    }
+
+    try {
+        // Fetch client information including full_name
+        const { data: client, error: clientError } = await supabase
+            .from('clients')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
+            .eq('id', clientId)
+            .single();
+
+        if (clientError || !client) {
+            console.error(`[process-weekly-orders] Failed to fetch client ${clientId} for stop creation:`, clientError?.message);
+            return;
+        }
+
+        // Skip if client is paused or delivery is disabled
+        if (client.paused || client.delivery === false) {
+            console.log(`[process-weekly-orders] Skipping stop creation for client ${clientId}: paused=${client.paused}, delivery=${client.delivery}`);
+            return;
+        }
+
+        // Calculate day of week from scheduled_delivery_date
+        const deliveryDateStr = scheduledDeliveryDate.split('T')[0]; // Get date part only
+        const dayOfWeek = getDayOfWeek(scheduledDeliveryDate);
+
+        if (!dayOfWeek) {
+            console.warn(`[process-weekly-orders] Cannot determine day of week for delivery date ${deliveryDateStr}`);
+            return;
+        }
+
+        // Use full_name from client record, fallback to first_name + last_name, then "Unnamed"
+        const clientName = (client.full_name?.trim() || 
+                           `${client.first_name || ""} ${client.last_name || ""}`.trim() || 
+                           "Unnamed");
+
+        // Check if stop already exists for this client + delivery_date combination
+        const { data: existingStop } = await supabase
+            .from('stops')
+            .select('id')
+            .eq('client_id', clientId)
+            .eq('delivery_date', deliveryDateStr)
+            .maybeSingle();
+
+        const stopData: any = {
+            day: dayOfWeek,
+            delivery_date: deliveryDateStr,
+            client_id: clientId,
+            order_id: orderId, // Always set order_id
+            name: clientName, // Use full_name from client
+            address: client.address || "",
+            apt: client.apt || null,
+            city: client.city || "",
+            state: client.state || "",
+            zip: client.zip || "",
+            phone: client.phone_number || null,
+            lat: client.lat || null,
+            lng: client.lng || null,
+            assigned_driver_id: client.assigned_driver_id || null,
+        };
+
+        if (existingStop) {
+            // Update existing stop with order_id and latest client information
+            const { error: updateError } = await supabase
+                .from('stops')
+                .update({
+                    order_id: orderId,
+                    name: clientName,
+                    // Update address fields in case client info changed
+                    address: stopData.address,
+                    apt: stopData.apt,
+                    city: stopData.city,
+                    state: stopData.state,
+                    zip: stopData.zip,
+                    phone: stopData.phone,
+                    lat: stopData.lat,
+                    lng: stopData.lng,
+                    assigned_driver_id: stopData.assigned_driver_id,
+                })
+                .eq('id', existingStop.id);
+
+            if (updateError) {
+                console.error(`[process-weekly-orders] Failed to update stop ${existingStop.id} for order ${orderId}:`, updateError.message);
+            } else {
+                console.log(`[process-weekly-orders] Updated stop ${existingStop.id} with order_id ${orderId} for client ${clientId}`);
+            }
+        } else {
+            // Create new stop
+            stopData.id = randomUUID();
+            const { error: insertError } = await supabase
+                .from('stops')
+                .insert(stopData);
+
+            if (insertError) {
+                // If duplicate key error, try to update instead
+                if (insertError.code === '23505' || insertError.message?.includes('duplicate')) {
+                    // Find existing stop and update it
+                    const { data: existingStop2 } = await supabase
+                        .from('stops')
+                        .select('id')
+                        .eq('client_id', clientId)
+                        .eq('delivery_date', deliveryDateStr)
+                        .maybeSingle();
+
+                    if (existingStop2) {
+                        const { error: updateError2 } = await supabase
+                            .from('stops')
+                            .update({
+                                order_id: orderId,
+                                name: clientName,
+                            })
+                            .eq('id', existingStop2.id);
+
+                        if (updateError2) {
+                            console.error(`[process-weekly-orders] Failed to update existing stop ${existingStop2.id}:`, updateError2.message);
+                        }
+                    }
+                } else {
+                    console.error(`[process-weekly-orders] Failed to create stop for order ${orderId}:`, insertError.message);
+                }
+            } else {
+                console.log(`[process-weekly-orders] Created stop ${stopData.id} with order_id ${orderId} for client ${clientId}`);
+            }
+        }
+    } catch (error: any) {
+        console.error(`[process-weekly-orders] Error creating/updating stop for order ${orderId}:`, error.message);
+    }
 }
 
 
@@ -284,6 +434,9 @@ async function precheckAndTransferUpcomingOrders() {
                             })
                             .eq('id', upcomingOrder.id);
 
+                        // Create or update stop for this order with order_id and client name
+                        await createOrUpdateStopForOrder(newOrder.id, clientId, scheduledDeliveryDate);
+
                         transferResults.transferred++;
                     } catch (error: any) {
                         transferResults.errors.push(`Error transferring upcoming order ${upcomingOrder.id} for client ${clientId}: ${error.message}`);
@@ -481,29 +634,24 @@ export async function GET(request: NextRequest) {
                 }
 
                 // Fetch order details based on service type
-                // Calculate scheduled_delivery_date from delivery_day if order is from upcoming_orders
+                // Use scheduled_delivery_date from order if available, otherwise calculate from delivery_day
                 let scheduledDeliveryDate: string | null = null;
-                if (isFromUpcomingOrders && (order as any).delivery_day) {
+                
+                // Priority 1: Use scheduled_delivery_date from the order/upcoming_order if it exists
+                if ((order as any).scheduled_delivery_date) {
+                    scheduledDeliveryDate = (order as any).scheduled_delivery_date;
+                } 
+                // Priority 2: If from upcoming_orders and has delivery_day, calculate the nearest occurrence
+                else if (isFromUpcomingOrders && (order as any).delivery_day) {
                     const deliveryDay = (order as any).delivery_day;
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
-                    const dayNameToNumber: { [key: string]: number } = {
-                        'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-                        'Thursday': 4, 'Friday': 5, 'Saturday': 6
-                    };
-                    const targetDayNumber = dayNameToNumber[deliveryDay];
-                    if (targetDayNumber !== undefined) {
-                        // Find next occurrence of this day
-                        for (let i = 1; i <= 7; i++) {
-                            const checkDate = new Date(today);
-                            checkDate.setDate(today.getDate() + i);
-                            if (checkDate.getDay() === targetDayNumber) {
-                                scheduledDeliveryDate = checkDate.toISOString().split('T')[0];
-                                break;
-                            }
-                        }
+                    const currentTime = await getCurrentTime();
+                    const nextDate = getNextOccurrence(deliveryDay, currentTime);
+                    if (nextDate) {
+                        scheduledDeliveryDate = nextDate.toISOString().split('T')[0];
                     }
-                } else if (!isFromUpcomingOrders) {
+                } 
+                // Priority 3: For orders table, use scheduled_delivery_date (already checked above, but fallback)
+                else if (!isFromUpcomingOrders) {
                     scheduledDeliveryDate = (order as any).scheduled_delivery_date || null;
                 }
 
@@ -606,29 +754,9 @@ export async function GET(request: NextRequest) {
                 // If processing from upcoming_orders, copy to orders table (don't transfer)
                 if (isFromUpcomingOrders) {
                     try {
-                        // Calculate scheduled_delivery_date from delivery_day if available
-                        let scheduledDeliveryDate: string | null = null;
-                        if ((order as any).delivery_day) {
-                            const deliveryDay = (order as any).delivery_day;
-                            const today = await getCurrentTime();
-                            today.setHours(0, 0, 0, 0);
-                            const dayNameToNumber: { [key: string]: number } = {
-                                'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-                                'Thursday': 4, 'Friday': 5, 'Saturday': 6
-                            };
-                            const targetDayNumber = dayNameToNumber[deliveryDay];
-                            if (targetDayNumber !== undefined) {
-                                // Find next occurrence of this day
-                                for (let i = 1; i <= 7; i++) {
-                                    const checkDate = new Date(today);
-                                    checkDate.setDate(today.getDate() + i);
-                                    if (checkDate.getDay() === targetDayNumber) {
-                                        scheduledDeliveryDate = checkDate.toISOString().split('T')[0];
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        // Use scheduled_delivery_date from order if available, otherwise calculate from delivery_day
+                        // Use the same scheduledDeliveryDate we calculated earlier for the order summary
+                        // This ensures consistency between order summary and the copied order
 
                         // Create order in orders table (copy, not transfer)
                         const orderData: any = {
@@ -830,10 +958,17 @@ export async function GET(request: NextRequest) {
                             // Update orderSummary with the new order ID
                             orderSummary.orderId = newOrder.id;
                             orderSummary.copiedFromUpcoming = true;
+
+                            // Create or update stop for this order with order_id and client name
+                            await createOrUpdateStopForOrder(newOrder.id, order.client_id, scheduledDeliveryDate);
                         }
                     } catch (copyError: any) {
                         errors.push(`Error copying upcoming order ${order.id} to orders table: ${copyError.message}`);
                     }
+                } else if (!isFromUpcomingOrders) {
+                    // For orders from the orders table (not upcoming_orders), also create/update stops
+                    // This ensures stops are created for all active orders
+                    await createOrUpdateStopForOrder(order.id, order.client_id, scheduledDeliveryDate);
                 }
 
                 // Create billing record for this order
@@ -931,7 +1066,8 @@ export async function GET(request: NextRequest) {
                                 take_effect_date: takeEffectDate.toISOString().split('T')[0],
                                 total_value: vendorDetail.totalValue || 0,
                                 total_items: vendorDetail.totalQuantity || 0,
-                                notes: order.notes || null
+                                notes: order.notes || null,
+                                vendor_id: vendorDetail.vendorId
                             };
 
                             // Add delivery_day if we can determine it from the vendor
@@ -1024,7 +1160,8 @@ export async function GET(request: NextRequest) {
                                 take_effect_date: takeEffectDate.toISOString().split('T')[0],
                                 total_value: totalValue,
                                 total_items: boxQuantity,
-                                notes: order.notes || null
+                                notes: order.notes || null,
+                                vendor_id: vendorId
                             };
 
                             // Add delivery_day if we can determine it from the vendor

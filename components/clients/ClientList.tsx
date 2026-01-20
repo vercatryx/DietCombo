@@ -841,141 +841,99 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     vendorSummary = Array.from(uniqueVendors).join(', ');
                 }
             } else if (st === 'Boxes') {
-                // Extract vendor names for Boxes orders - same pattern as Food
-                const uniqueVendors = new Set<string>();
-                let computedVendorId = conf.vendorId;
-
-                // Check both boxOrders (actual implementation) and boxes (type definition) array formats
+                // Simplified vendor extraction - check all possible locations
+                const vendorIdsToCheck = new Set<string>();
                 const boxesArray = conf.boxOrders || (conf as any).boxes;
                 
-                // NEW: Check boxOrders/boxes array format first (similar to vendorSelections for Food)
-                if (boxesArray && Array.isArray(boxesArray) && boxesArray.length > 0) {
+                // Strategy 1: Check top-level vendorId
+                if (conf.vendorId) {
+                    const vId = String(conf.vendorId).trim();
+                    if (vId) vendorIdsToCheck.add(vId);
+                }
+                
+                // Strategy 2: Check boxOrders array - each box's vendorId
+                if (boxesArray && Array.isArray(boxesArray)) {
                     boxesArray.forEach((box: any) => {
-                        const boxDef = box.boxTypeId ? boxTypes.find(b => b.id === box.boxTypeId) : null;
-                        const vId = box.vendorId || boxDef?.vendorId;
-                        if (vId && typeof vId === 'string' && vId.trim() !== '') {
-                            const vName = vendors.find(v => v.id === vId)?.name;
-                            if (vName) {
-                                uniqueVendors.add(vName);
-                            }
-                            // Also set computedVendorId from first box if not already set
-                            if (!computedVendorId || (typeof computedVendorId === 'string' && computedVendorId.trim() === '')) {
-                                computedVendorId = vId;
-                            }
+                        if (box.vendorId) {
+                            const vId = String(box.vendorId).trim();
+                            if (vId) vendorIdsToCheck.add(vId);
                         }
                     });
                 }
-
-                // Check conf.vendorId directly at top level (ensure it's a valid non-empty string)
-                if (computedVendorId && typeof computedVendorId === 'string' && computedVendorId.trim() !== '') {
-                    const vName = vendors.find(v => v.id === computedVendorId.trim())?.name;
-                    if (vName) {
-                        uniqueVendors.add(vName);
-                    }
-                } else if (computedVendorId && typeof computedVendorId !== 'string') {
-                    // Handle edge case where vendorId might be stored as number or other type
-                    const vName = vendors.find(v => v.id === String(computedVendorId))?.name;
-                    if (vName) {
-                        uniqueVendors.add(vName);
+                
+                // Strategy 3: Get vendor from boxTypeId (top level)
+                if (conf.boxTypeId && vendorIdsToCheck.size === 0) {
+                    const boxType = boxTypes.find(b => b.id === conf.boxTypeId);
+                    if (boxType?.vendorId) {
+                        const vId = String(boxType.vendorId).trim();
+                        if (vId) vendorIdsToCheck.add(vId);
                     }
                 }
-
-                // Legacy format: Check vendorId directly or fall back to boxType
-                if (uniqueVendors.size === 0 && !computedVendorId && !conf.boxTypeId && typeof conf === 'object') {
-                    // Check if it's nested (e.g. { "Thursday": { vendorId: ... } })
-                    const possibleDayKeys = Object.keys(conf).filter(k =>
-                        k !== 'id' && k !== 'serviceType' && k !== 'caseId' && typeof (conf as any)[k] === 'object' && (conf as any)[k]?.vendorId
-                    );
-
-                    if (possibleDayKeys.length > 0) {
-                        computedVendorId = (conf as any)[possibleDayKeys[0]].vendorId;
-                        // Also try to get boxTypeId from there if needed
-                        if (!conf.boxTypeId) {
-                            conf.boxTypeId = (conf as any)[possibleDayKeys[0]].boxTypeId;
-                        }
-                        // Try to find vendor name from nested structure
-                        if (computedVendorId) {
-                            const vName = vendors.find(v => v.id === computedVendorId)?.name;
-                            if (vName) {
-                                uniqueVendors.add(vName);
-                            }
-                        }
-                    }
-                }
-
-                // Fallback to boxType vendor if still no vendor found (check boxTypeId even if vendorId is not set)
-                if (uniqueVendors.size === 0) {
-                    let vendorIdToCheck: string | null = null;
-                    
-                    // First, check if computedVendorId is valid
-                    if (computedVendorId && typeof computedVendorId === 'string' && computedVendorId.trim() !== '') {
-                        vendorIdToCheck = computedVendorId.trim();
-                    } else if (computedVendorId && typeof computedVendorId !== 'string') {
-                        vendorIdToCheck = String(computedVendorId);
-                    }
-                    
-                    // If no valid vendorId yet, try to get vendor from boxTypeId
-                    if (!vendorIdToCheck && conf.boxTypeId) {
-                        const box = boxTypes.find(b => b.id === conf.boxTypeId);
-                        if (box?.vendorId) {
-                            vendorIdToCheck = typeof box.vendorId === 'string' ? box.vendorId.trim() : String(box.vendorId);
-                        }
-                    }
-                    
-                    // Also check boxesArray for boxTypeId if we still don't have a vendor
-                    if (!vendorIdToCheck && boxesArray && Array.isArray(boxesArray) && boxesArray.length > 0) {
-                        for (const box of boxesArray) {
-                            if (box.boxTypeId) {
-                                const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
-                                if (boxDef?.vendorId) {
-                                    vendorIdToCheck = typeof boxDef.vendorId === 'string' ? boxDef.vendorId.trim() : String(boxDef.vendorId);
-                                    break;
+                
+                // Strategy 4: Get vendor from boxOrders boxTypeId
+                if (boxesArray && Array.isArray(boxesArray) && vendorIdsToCheck.size === 0) {
+                    for (const box of boxesArray) {
+                        if (box.boxTypeId) {
+                            const boxType = boxTypes.find(b => b.id === box.boxTypeId);
+                            if (boxType?.vendorId) {
+                                const vId = String(boxType.vendorId).trim();
+                                if (vId) {
+                                    vendorIdsToCheck.add(vId);
+                                    break; // Use first found
                                 }
                             }
                         }
                     }
-                    
-                    if (vendorIdToCheck && vendorIdToCheck.trim() !== '') {
-                        const vendorName = vendors.find(v => v.id === vendorIdToCheck)?.name;
-                        if (vendorName) {
-                            uniqueVendors.add(vendorName);
-                        } else {
-                            // Only log once per client to avoid spam
-                            if (!loggedMissingVendorIds.current.has(client.id)) {
-                                loggedMissingVendorIds.current.add(client.id);
-                                console.warn('[ClientList] Vendor ID not found in vendors list for Boxes client:', {
-                                    clientId: client.id,
-                                    vendorId: vendorIdToCheck,
-                                    boxTypeId: conf.boxTypeId,
-                                    serviceType: st,
-                                    activeOrderKeys: Object.keys(conf),
-                                    confVendorId: conf.vendorId,
-                                    confBoxTypeId: conf.boxTypeId,
-                                    hasBoxOrders: !!(boxesArray && Array.isArray(boxesArray) && boxesArray.length > 0)
-                                });
-                            }
-                        }
-                    } else {
-                        // Only log once per client to avoid spam - this is a data issue with existing clients
-                        if (!loggedMissingVendorIds.current.has(client.id)) {
-                            loggedMissingVendorIds.current.add(client.id);
-                            console.warn('[ClientList] Vendor ID is missing in config for Boxes client:', {
-                                clientId: client.id,
-                                boxTypeId: conf.boxTypeId,
-                                vendorId: conf.vendorId,
-                                serviceType: st,
-                                hasBoxOrders: !!(boxesArray && Array.isArray(boxesArray) && boxesArray.length > 0),
-                                activeOrderKeys: Object.keys(conf),
-                                boxesArrayLength: boxesArray?.length || 0,
-                                note: 'This client needs vendorId or boxTypeId set in their order config'
-                            });
-                        }
+                }
+                
+                // Strategy 5: Check nested day-based structure (legacy)
+                if (vendorIdsToCheck.size === 0 && typeof conf === 'object') {
+                    const dayKeys = Object.keys(conf).filter(k =>
+                        k !== 'id' && k !== 'serviceType' && k !== 'caseId' && 
+                        typeof (conf as any)[k] === 'object' && (conf as any)[k]?.vendorId
+                    );
+                    if (dayKeys.length > 0) {
+                        const dayVendorId = String((conf as any)[dayKeys[0]].vendorId).trim();
+                        if (dayVendorId) vendorIdsToCheck.add(dayVendorId);
                     }
                 }
-
-                // Set vendor summary from unique vendors - always show vendor if found (same as Food)
-                if (uniqueVendors.size > 0) {
-                    vendorSummary = Array.from(uniqueVendors).join(', ');
+                
+                // Now find vendor names for all collected vendor IDs
+                const foundVendors: string[] = [];
+                vendorIdsToCheck.forEach(vId => {
+                    // Try multiple lookup strategies to handle ID format differences
+                    const vendor = vendors.find(v => {
+                        const vendorIdStr = String(v.id).trim();
+                        const checkIdStr = String(vId).trim();
+                        return vendorIdStr === checkIdStr || 
+                               vendorIdStr.toLowerCase() === checkIdStr.toLowerCase() ||
+                               v.id === vId;
+                    });
+                    if (vendor?.name) {
+                        foundVendors.push(vendor.name);
+                    }
+                });
+                
+                if (foundVendors.length > 0) {
+                    vendorSummary = foundVendors.join(', ');
+                } else if (vendorIdsToCheck.size > 0 && vendors.length > 0) {
+                    // Debug: We found vendor IDs but couldn't match them
+                    if (!loggedMissingVendorIds.current.has(client.id)) {
+                        loggedMissingVendorIds.current.add(client.id);
+                        console.warn('[ClientList] Found vendor IDs but could not match to vendors:', {
+                            clientId: client.id,
+                            vendorIdsFound: Array.from(vendorIdsToCheck),
+                            vendorsAvailable: vendors.map(v => ({ id: v.id, name: v.name })),
+                            activeOrderStructure: {
+                                hasVendorId: !!conf.vendorId,
+                                vendorId: conf.vendorId,
+                                hasBoxTypeId: !!conf.boxTypeId,
+                                boxTypeId: conf.boxTypeId,
+                                hasBoxOrders: !!(boxesArray && Array.isArray(boxesArray)),
+                                boxOrdersLength: boxesArray?.length || 0
+                            }
+                        });
+                    }
                 }
             }
 

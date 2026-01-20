@@ -1273,6 +1273,60 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }
 
     /**
+     * Parse and normalize box.items - handles JSON strings and object quantity formats
+     * Similar logic to SidebarActiveOrderSummary.tsx
+     */
+    function parseBoxItems(items: any): Record<string, number> {
+        if (!items) {
+            return {};
+        }
+
+        // Handle JSON string format
+        let itemsObj = items;
+        if (typeof items === 'string') {
+            try {
+                itemsObj = JSON.parse(items);
+            } catch (e) {
+                console.error('[ClientProfile] Error parsing box.items as JSON:', e);
+                return {};
+            }
+        }
+
+        // Handle array format
+        if (Array.isArray(itemsObj)) {
+            const itemsObjFromArray: Record<string, number> = {};
+            for (const item of itemsObj) {
+                if (item && typeof item === 'object' && 'menu_item_id' in item) {
+                    itemsObjFromArray[item.menu_item_id] = item.quantity || 0;
+                } else if (item && typeof item === 'object' && 'id' in item) {
+                    itemsObjFromArray[item.id] = item.quantity || item.qty || 1;
+                }
+            }
+            itemsObj = itemsObjFromArray;
+        }
+
+        // Normalize to Record<string, number> format
+        const normalized: Record<string, number> = {};
+        if (typeof itemsObj === 'object' && !Array.isArray(itemsObj)) {
+            Object.entries(itemsObj).forEach(([itemId, qtyOrObj]) => {
+                let q = 0;
+                if (typeof qtyOrObj === 'number') {
+                    q = qtyOrObj;
+                } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                    q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                } else {
+                    q = parseInt(qtyOrObj as any) || 0;
+                }
+                if (q > 0) {
+                    normalized[itemId] = q;
+                }
+            });
+        }
+
+        return normalized;
+    }
+
+    /**
      * Get the total quantity of a menu item from all upcoming orders for a specific vendor
      * This reads from the allUpcomingOrders state which contains orders from upcoming_orders table
      */
@@ -4191,7 +4245,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         }
                                                         return null;
                                                     })()}
-                                                    {currentBoxes.map((box: any, index: number) => (
+                                                    {currentBoxes.map((box: any, index: number) => {
+                                                        // Compute vendorId (similar to sidebar logic: check box.vendorId, fallback to boxType.vendorId)
+                                                        const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
+                                                        const computedVendorId = box.vendorId || boxDef?.vendorId;
+                                                        
+                                                        return (
                                                         <div key={index} style={{
                                                             marginBottom: '2rem',
                                                             padding: '1.5rem',
@@ -4225,6 +4284,25 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                                                             <div className={styles.formGroup}>
                                                                 <label className="label">Vendor</label>
+                                                                {/* Display selected vendor name (similar to sidebar logic) */}
+                                                                {computedVendorId && (() => {
+                                                                    // Get vendor name from vendors array (similar to sidebar)
+                                                                    const vendorName = vendors.find(v => v.id === computedVendorId)?.name || 'Unknown Vendor';
+                                                                    return (
+                                                                        <div style={{
+                                                                            marginBottom: '0.5rem',
+                                                                            padding: '0.5rem',
+                                                                            backgroundColor: 'var(--bg-surface-hover)',
+                                                                            borderRadius: 'var(--radius-sm)',
+                                                                            border: '1px solid var(--border-color)',
+                                                                            fontSize: '0.9rem',
+                                                                            fontWeight: 500,
+                                                                            color: 'var(--text-primary)'
+                                                                        }}>
+                                                                            Selected: <strong>{vendorName}</strong>
+                                                                        </div>
+                                                                    );
+                                                                })()}
                                                                 <select
                                                                     className="input"
                                                                     value={box.vendorId || ''}
@@ -4238,8 +4316,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             </div>
 
                                                             {/* Take Effect Date for this vendor */}
-                                                            {box.vendorId && settings && (() => {
-                                                                const nextDate = getNextDeliveryDateForVendor(box.vendorId);
+                                                            {computedVendorId && settings && (() => {
+                                                                const nextDate = getNextDeliveryDateForVendor(computedVendorId);
 
                                                                 if (nextDate) {
                                                                     const takeEffect = getTakeEffectDate(settings, new Date(nextDate));
@@ -4284,7 +4362,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                             <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
 
                                                                 {/* Check if vendor has delivery days */}
-                                                                {box.vendorId && !getNextDeliveryDateForVendor(box.vendorId) ? (
+                                                                {computedVendorId && !getNextDeliveryDateForVendor(computedVendorId) ? (
                                                                     <div style={{
                                                                         padding: '1.5rem',
                                                                         backgroundColor: 'var(--bg-surface-active)',
@@ -4317,7 +4395,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                                                                             if (availableItems.length === 0) return null;
 
-                                                                            const selectedItems = box.items || {};
+                                                                            // Parse and normalize box.items (handles JSON strings and object quantity formats)
+                                                                            // Similar logic to SidebarActiveOrderSummary.tsx
+                                                                            const parsedItems = parseBoxItems(box.items);
+                                                                            const selectedItems = parsedItems || {};
 
                                                                             // Calculate quota for THIS box/category
                                                                             let categoryQuotaValue = 0;
@@ -4367,7 +4448,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                             const qty = Number(selectedItems[item.id] || 0);
                                                                                             const note = box.itemNotes?.[item.id] || '';
                                                                                             const isSelected = qty > 0;
-                                                                                            const upcomingQty = getUpcomingOrderQuantityForBoxItem(item.id, box.vendorId);
+                                                                                            const upcomingQty = getUpcomingOrderQuantityForBoxItem(item.id, computedVendorId);
 
                                                                                             return (
                                                                                                 <div key={item.id} style={{
@@ -4463,7 +4544,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                                                                             if (uncategorizedItems.length === 0) return null;
 
-                                                                            const selectedItems = box.items || {};
+                                                                            // Parse and normalize box.items (handles JSON strings and object quantity formats)
+                                                                            // Similar logic to SidebarActiveOrderSummary.tsx
+                                                                            const parsedItems = parseBoxItems(box.items);
+                                                                            const selectedItems = parsedItems || {};
 
                                                                             return (
                                                                                 <div style={{ marginBottom: '1rem', background: 'var(--bg-surface-hover)', padding: '0.75rem', borderRadius: '6px' }}>
@@ -4476,7 +4560,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                             const qty = Number(selectedItems[item.id] || 0);
                                                                                             const note = box.itemNotes?.[item.id] || '';
                                                                                             const isSelected = qty > 0;
-                                                                                            const upcomingQty = getUpcomingOrderQuantityForBoxItem(item.id, box.vendorId);
+                                                                                            const upcomingQty = getUpcomingOrderQuantityForBoxItem(item.id, computedVendorId);
 
                                                                                             return (
                                                                                                 <div key={item.id} style={{
@@ -4565,7 +4649,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                 )}
                                                             </div>
                                                         </div>
-                                                    ))}
+                                                        );
+                                                    })}
 
                                                     {/* Add Box Button */}
                                                     {(!formData.authorizedAmount || currentBoxes.length < formData.authorizedAmount) && (
@@ -5618,11 +5703,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (cleanedOrderConfig.deliveryDayOrders) {
                     // Multi-day format: Clean and preserve vendor selections for each day
                     for (const day of Object.keys(cleanedOrderConfig.deliveryDayOrders)) {
+                        // Ensure deliveryDay is attached to the day order
+                        if (!cleanedOrderConfig.deliveryDayOrders[day].deliveryDay) {
+                            cleanedOrderConfig.deliveryDayOrders[day].deliveryDay = day;
+                        }
                         cleanedOrderConfig.deliveryDayOrders[day].vendorSelections = (cleanedOrderConfig.deliveryDayOrders[day].vendorSelections || [])
                             .filter((s: any) => s.vendorId) // Only keep selections with a vendor
                             .map((s: any) => ({
                                 vendorId: s.vendorId, // Preserve vendor ID
-                                items: s.items || {} // Preserve items
+                                items: s.items || {}, // Preserve items
+                                deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
                             }));
                     }
                 } else if (cleanedOrderConfig.vendorSelections) {
@@ -5638,14 +5728,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             if (!selection.vendorId || !selection.selectedDeliveryDays || !selection.itemsByDay) continue;
 
                             for (const day of selection.selectedDeliveryDays) {
-                                if (!deliveryDayOrders[day]) deliveryDayOrders[day] = { vendorSelections: [] };
+                                if (!deliveryDayOrders[day]) {
+                                    deliveryDayOrders[day] = { 
+                                        vendorSelections: [],
+                                        deliveryDay: day  // Explicitly attach the delivery day to the order
+                                    };
+                                }
                                 const dayItems = selection.itemsByDay[day] || {};
                                 const hasItems = Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
                                 if (hasItems) {
-                                    // Preserve vendorId and items for this day
+                                    // Preserve vendorId, items, and deliveryDay for this day
                                     deliveryDayOrders[day].vendorSelections.push({
                                         vendorId: selection.vendorId,
-                                        items: dayItems
+                                        items: dayItems,
+                                        deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
                                     });
                                 }
                             }

@@ -5,6 +5,8 @@
   - You are about to alter the column `id` on the `admins` table. The data in that column could be lost. The data in that column will be cast from `Text` to `VarChar(36)`.
 
 */
+-- CreateExtension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- DropForeignKey
 ALTER TABLE "billing_records" DROP CONSTRAINT "billing_records_client_id_fkey";
 

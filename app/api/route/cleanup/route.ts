@@ -42,7 +42,7 @@ export async function POST(req: Request) {
         // Get all clients
         const { data: allClients } = await supabase
             .from('clients')
-            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
             .order('id', { ascending: true });
 
         // Check which clients have stops for delivery dates
@@ -244,15 +244,19 @@ export async function POST(req: Request) {
                     continue;
                 }
                 
+                // Use full_name from client record, fallback to first_name + last_name, then "Unnamed"
+                const name = (client.full_name?.trim() || 
+                             `${client.first_name || ""} ${client.last_name || ""}`.trim() || 
+                             "Unnamed");
+                
                 // Client should have a stop for this delivery date - create it
-                const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
                 stopsToCreate.push({
                     id: uuidv4(),
                     day: dateInfo.dayOfWeek, // Keep day for backward compatibility
                     delivery_date: deliveryDateStr,
                     client_id: clientId,
-                    order_id: dateInfo.orderId,
-                    name: name || "(Unnamed)",
+                    order_id: dateInfo.orderId, // Ensure order_id is set from the order
+                    name: name,
                     address: s(client.address),
                     apt: client.apt ? s(client.apt) : null,
                     city: s(client.city),

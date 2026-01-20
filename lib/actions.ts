@@ -9,7 +9,8 @@ import {
     getNextDeliveryDate,
     getNextDeliveryDateForDay,
     getTakeEffectDate as getTakeEffectDateFromUtils,
-    getAllDeliveryDatesForOrder as getAllDeliveryDatesFromUtils
+    getAllDeliveryDatesForOrder as getAllDeliveryDatesFromUtils,
+    getNextOccurrence
 } from './order-dates';
 import { supabase } from './supabase';
 import { createClient } from '@supabase/supabase-js';
@@ -2570,19 +2571,33 @@ async function syncSingleOrderForDeliveryDay(
         }
 
         if (deliveryDay) {
-            // Calculate scheduled delivery date for the specific day
+            // For client-selected delivery day, get the nearest occurrence of that day
+            // First validate that vendor can deliver on that day
+            const vendor = vendors.find(v => v.id === vendorIds[0]);
+            if (vendor) {
+                const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+                if (!deliveryDays || !deliveryDays.includes(deliveryDay)) {
+                    const vendorName = vendor?.name || vendorIds[0];
+                    const errorMsg = `Cannot save Food order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day or vendor.`;
+                    console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                        serviceType: orderConfig.serviceType,
+                        deliveryDay,
+                        vendorId: vendorIds[0],
+                        vendorName
+                    });
+                    throw new Error(errorMsg);
+                }
+            }
+            
+            // Get the nearest occurrence of the client-selected delivery day
             const currentTime = await getCurrentTime();
-            scheduledDeliveryDate = getNextDeliveryDateForDay(deliveryDay, vendors, vendorIds[0], currentTime, currentTime);
+            scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
             
             if (!scheduledDeliveryDate) {
-                const vendor = vendors.find(v => v.id === vendorIds[0]);
-                const vendorName = vendor?.name || vendorIds[0];
-                const errorMsg = `Cannot save Food order: Vendor "${vendorName}" does not deliver on ${deliveryDay}, or the delivery date is past the cutoff. Please select a different delivery day or vendor.`;
+                const errorMsg = `Cannot save Food order: Could not calculate delivery date for ${deliveryDay}.`;
                 console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                     serviceType: orderConfig.serviceType,
-                    deliveryDay,
-                    vendorId: vendorIds[0],
-                    vendorName
+                    deliveryDay
                 });
                 throw new Error(errorMsg);
             }
@@ -2655,9 +2670,36 @@ async function syncSingleOrderForDeliveryDay(
 
         if (boxVendorId) {
             if (deliveryDay) {
-                // Calculate scheduled delivery date for the specific day
+                // For client-selected delivery day, get the nearest occurrence of that day
+                // First validate that vendor can deliver on that day
+                const vendor = vendors.find(v => v.id === boxVendorId);
+                if (vendor) {
+                    const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+                    if (!deliveryDays || !deliveryDays.includes(deliveryDay)) {
+                        const vendorName = vendor?.name || boxVendorId;
+                        const errorMsg = `Cannot save Boxes order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day or vendor.`;
+                        console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                            serviceType: orderConfig.serviceType,
+                            deliveryDay,
+                            vendorId: boxVendorId,
+                            vendorName
+                        });
+                        throw new Error(errorMsg);
+                    }
+                }
+                
+                // Get the nearest occurrence of the client-selected delivery day
                 const currentTime = await getCurrentTime();
-                scheduledDeliveryDate = getNextDeliveryDateForDay(deliveryDay, vendors, boxVendorId, currentTime, currentTime);
+                scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
+                
+                if (!scheduledDeliveryDate) {
+                    const errorMsg = `Cannot save Boxes order: Could not calculate delivery date for ${deliveryDay}.`;
+                    console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                        serviceType: orderConfig.serviceType,
+                        deliveryDay
+                    });
+                    throw new Error(errorMsg);
+                }
             } else {
                 // Fallback: find the first delivery date
                 const vendor = vendors.find(v => v.id === boxVendorId);
@@ -2840,6 +2882,37 @@ async function syncSingleOrderForDeliveryDay(
         }
     }
     
+    // Extract vendor_id based on service type
+    let vendorId: string | null = null;
+    if (orderConfig.serviceType === 'Food' && orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) {
+        // For Food orders, use the first vendor selection's vendorId
+        const firstVendorSelection = orderConfig.vendorSelections.find((vs: any) => vs.vendorId && vs.items && Object.keys(vs.items).length > 0);
+        if (firstVendorSelection) {
+            vendorId = firstVendorSelection.vendorId;
+            console.log(`[syncSingleOrderForDeliveryDay] Extracted vendor_id for Food order: ${vendorId}`);
+        }
+    } else if (orderConfig.serviceType === 'Boxes') {
+        // For Box orders, determine vendor ID (similar to how we do it later for box selections)
+        vendorId = (orderConfig.vendorId && orderConfig.vendorId.trim() !== '') ? orderConfig.vendorId : null;
+        if (!vendorId && orderConfig.boxTypeId) {
+            const boxType = boxTypes.find(bt => bt.id === orderConfig.boxTypeId);
+            vendorId = boxType?.vendorId || null;
+        }
+        if (!vendorId) {
+            const items = (orderConfig as any).items || {};
+            if (Object.keys(items).length > 0) {
+                const firstItemId = Object.keys(items)[0];
+                const firstItem = menuItems.find(i => i.id === firstItemId);
+                if (firstItem?.vendorId) {
+                    vendorId = firstItem.vendorId;
+                }
+            }
+        }
+        if (vendorId) {
+            console.log(`[syncSingleOrderForDeliveryDay] Extracted vendor_id for Boxes order: ${vendorId}`);
+        }
+    }
+    
     const upcomingOrderData: any = {
         client_id: clientId,
         service_type: serviceType,
@@ -2852,7 +2925,8 @@ async function syncSingleOrderForDeliveryDay(
         take_effect_date: takeEffectDate ? takeEffectDate.toISOString().split('T')[0] : null,
         total_value: totalValue,
         total_items: totalItems,
-        notes: null
+        notes: null,
+        vendor_id: vendorId
     };
 
     // Add delivery_day if provided

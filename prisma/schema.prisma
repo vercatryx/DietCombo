@@ -546,11 +546,13 @@ model UpcomingOrder {
   updatedBy             String?   @map("updated_by") @db.VarChar(255)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   meal_type             String?   @default("Lunch")
+  vendorId              String?   @map("vendor_id") @db.VarChar(36)
 
   @@index([orderNumber], map: "idx_upcoming_orders_order_number")
   @@index([processedOrderId], map: "idx_upcoming_orders_processed_order_id")
   @@index([clientId], map: "idx_upcoming_orders_client_id")
   @@index([status], map: "idx_upcoming_orders_status")
+  @@index([vendorId], map: "idx_upcoming_orders_vendor_id")
   @@map("upcoming_orders")
 }
 

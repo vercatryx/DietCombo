@@ -302,7 +302,7 @@ export async function GET(req: Request) {
         // Fetch all clients with their assigned_driver_id for stop creation
         const { data: allClientsWithDriver } = await supabase
             .from('clients')
-            .select('id, first_name, last_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
             .order('id', { ascending: true });
         
         // Create a map of client_id -> assigned_driver_id for quick lookup
@@ -543,7 +543,10 @@ export async function GET(req: Request) {
                 reasons.push(`no active order for ${day}${deliveryDate ? ` on ${deliveryDate}` : ''}`);
             }
             
-            const name = `${client.first_name || ""} ${client.last_name || ""}`.trim() || "Unnamed";
+            // Use full_name from client record, fallback to first_name + last_name, then "Unnamed"
+            const name = (client.full_name?.trim() || 
+                         `${client.first_name || ""} ${client.last_name || ""}`.trim() || 
+                         "Unnamed");
             
             // If client should have stops (no valid reasons), create stops for each delivery date
             if (reasons.length === 0) {
@@ -572,8 +575,8 @@ export async function GET(req: Request) {
                         day: dateInfo.dayOfWeek, // Keep day for backward compatibility
                         delivery_date: deliveryDateStr,
                         client_id: clientId,
-                        order_id: dateInfo.orderId,
-                        name: name || "(Unnamed)",
+                        order_id: dateInfo.orderId, // Ensure order_id is set from the order
+                        name: name,
                         address: s(client.address),
                         apt: client.apt ? s(client.apt) : null,
                         city: s(client.city),
