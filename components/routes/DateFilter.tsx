@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Calendar, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import styles from './DateFilter.module.css';
 
@@ -15,6 +15,8 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
     const [inputValue, setInputValue] = useState(selectedDate || ''); // Text input value
     const [datesWithStops, setDatesWithStops] = useState<Map<string, number>>(new Map());
     const [loadingDates, setLoadingDates] = useState(false);
+    const [calendarPosition, setCalendarPosition] = useState<{ top: number; left: number } | null>(null);
+    const wrapperRef = useRef<HTMLDivElement>(null);
     const [currentMonth, setCurrentMonth] = useState(() => {
         // Set to month of selected date, or current month if no date selected
         if (selectedDate) {
@@ -145,11 +147,25 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
         }
     };
 
+    const updateCalendarPosition = () => {
+        if (wrapperRef.current) {
+            const rect = wrapperRef.current.getBoundingClientRect();
+            setCalendarPosition({
+                top: rect.bottom + window.scrollY + 0.5 * 16, // 0.5rem in pixels
+                left: rect.left + window.scrollX
+            });
+        }
+    };
+
     const handleInputFocus = () => {
+        updateCalendarPosition();
         setShowCalendar(true);
     };
 
     const handleCalendarIconClick = () => {
+        if (!showCalendar) {
+            updateCalendarPosition();
+        }
         setShowCalendar(!showCalendar);
     };
 
@@ -158,6 +174,23 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
         onClear();
         setShowCalendar(false);
     };
+
+    // Update calendar position on scroll/resize when visible
+    useEffect(() => {
+        if (!showCalendar) return;
+
+        const updatePosition = () => {
+            updateCalendarPosition();
+        };
+
+        window.addEventListener('scroll', updatePosition, true);
+        window.addEventListener('resize', updatePosition);
+
+        return () => {
+            window.removeEventListener('scroll', updatePosition, true);
+            window.removeEventListener('resize', updatePosition);
+        };
+    }, [showCalendar]);
 
     // Close calendar when clicking outside
     useEffect(() => {
@@ -172,7 +205,9 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
                 calendarElement &&
                 !calendarElement.contains(target) &&
                 !inputElement?.contains(target) &&
-                !iconElement?.contains(target)
+                !iconElement?.contains(target) &&
+                wrapperRef.current &&
+                !wrapperRef.current.contains(target)
             ) {
                 setShowCalendar(false);
             }
@@ -211,7 +246,7 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
 
     return (
         <div className={styles.dateFilterContainer}>
-            <div className={styles.dateFilterWrapper}>
+            <div className={styles.dateFilterWrapper} ref={wrapperRef}>
                 <Calendar 
                     size={18} 
                     className={styles.calendarIcon}
@@ -239,8 +274,14 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
                 )}
 
                 {/* Calendar View - Floating below input */}
-                {showCalendar && (
-                    <div className={styles.calendarView}>
+                {showCalendar && calendarPosition && (
+                    <div 
+                        className={styles.calendarView}
+                        style={{
+                            top: `${calendarPosition.top}px`,
+                            left: `${calendarPosition.left}px`
+                        }}
+                    >
                     <div className={styles.calendarHeader}>
                         <button
                             className={styles.calendarNavButton}

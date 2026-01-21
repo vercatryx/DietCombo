@@ -879,7 +879,7 @@ export default function RoutesPage() {
                             display: 'flex', 
                             alignItems: 'center',
                             backgroundColor: 'white',
-                            zIndex: 10
+                            position: 'relative'
                         }}>
                             <DateFilter
                                 selectedDate={selectedDeliveryDate}
@@ -918,7 +918,7 @@ export default function RoutesPage() {
                             gap: 'var(--spacing-xs)', 
                             alignItems: 'center',
                             backgroundColor: 'white',
-                            zIndex: 10,
+                            position: 'relative',
                             flexWrap: 'wrap'
                         }}>
                             <Button

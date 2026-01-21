@@ -445,7 +445,7 @@ export default function ClientDriverAssignment({
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-            <Box sx={{ p: 2, borderBottom: '1px solid #e5e7eb', backgroundColor: 'white', zIndex: 10 }}>
+            <Box sx={{ p: 2, borderBottom: '1px solid #e5e7eb', backgroundColor: 'white', position: 'relative' }}>
                 <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
                     Client Driver Assignment
                 </Typography>
