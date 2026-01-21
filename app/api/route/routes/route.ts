@@ -426,7 +426,7 @@ export async function GET(req: Request) {
         // When filtering by delivery_date, also fetch upcoming orders with matching scheduled_delivery_date
         let upcomingOrdersQuery = supabase
             .from('upcoming_orders')
-            .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
+            .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id, service_type')
             .eq('status', 'scheduled')
             .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null');
         
@@ -438,7 +438,7 @@ export async function GET(req: Request) {
         if (deliveryDate) {
             const { data: upcomingOrdersMatchingDate } = await supabase
                 .from('upcoming_orders')
-                .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
+                .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id, service_type')
                 .eq('status', 'scheduled')
                 .eq('scheduled_delivery_date', deliveryDate);
             
@@ -457,7 +457,11 @@ export async function GET(req: Request) {
 
         // Import getNextOccurrence for calculating delivery dates from delivery_day
         const { getNextOccurrence, formatDateToYYYYMMDD } = await import('@/lib/order-dates');
+        const { getVendors } = await import('@/lib/actions');
         const currentTime = new Date();
+
+        // Fetch vendors to get delivery days for boxes
+        const vendors = await getVendors();
 
         // Build map of client_id -> Map of delivery_date -> order info
         // This allows multiple stops per client for different delivery dates
@@ -473,6 +477,12 @@ export async function GET(req: Request) {
             } catch {
                 return null;
             }
+        };
+        
+        // Helper to capitalize day name (e.g., "monday" -> "Monday")
+        const capitalizeDayName = (day: string): string => {
+            if (!day) return day;
+            return day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
         };
 
         // Process active orders - use scheduled_delivery_date directly
@@ -500,15 +510,49 @@ export async function GET(req: Request) {
         // Note: upcoming_orders don't have order_id in orders table yet, so we'll set order_id to null
         // The order will be created later and we can update the stop then
         // IMPORTANT: Always include upcoming orders with scheduled_delivery_date, especially when filtering by delivery_date
+        // For boxes orders, use the vendor's first delivery day and get the nearest date
         for (const order of uniqueUpcomingOrders) {
             const clientId = String(order.client_id);
             let deliveryDateStr: string | null = null;
             let dayOfWeek: string | null = null;
             
+            // Check if this is a boxes order and needs vendor-based delivery day calculation
+            const isBoxesOrder = order.service_type === 'Boxes';
+            
             if (order.scheduled_delivery_date) {
                 // Use scheduled_delivery_date if available (prioritize this)
                 deliveryDateStr = order.scheduled_delivery_date.split('T')[0];
                 dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
+            } else if (isBoxesOrder && !order.delivery_day) {
+                // For boxes orders without delivery_day, get vendor from box selections
+                // and use the vendor's first delivery day
+                const { data: boxSelections } = await supabase
+                    .from('upcoming_order_box_selections')
+                    .select('vendor_id')
+                    .eq('upcoming_order_id', order.id)
+                    .limit(1)
+                    .maybeSingle();
+                
+                if (boxSelections?.vendor_id) {
+                    const vendor = vendors.find(v => v.id === boxSelections.vendor_id);
+                    if (vendor && vendor.deliveryDays && vendor.deliveryDays.length > 0) {
+                        // Use the first delivery day from the vendor
+                        // Ensure it's properly capitalized for getNextOccurrence
+                        const firstDeliveryDay = capitalizeDayName(vendor.deliveryDays[0]);
+                        // Calculate the nearest date for this day
+                        const nextDate = getNextOccurrence(firstDeliveryDay, currentTime);
+                        if (nextDate) {
+                            deliveryDateStr = formatDateToYYYYMMDD(nextDate);
+                            dayOfWeek = getDayOfWeek(deliveryDateStr);
+                            
+                            // Update the upcoming_order with the calculated delivery_day for future reference
+                            await supabase
+                                .from('upcoming_orders')
+                                .update({ delivery_day: firstDeliveryDay })
+                                .eq('id', order.id);
+                        }
+                    }
+                }
             } else if (order.delivery_day) {
                 // Calculate next occurrence of delivery_day
                 const nextDate = getNextOccurrence(order.delivery_day, currentTime);
