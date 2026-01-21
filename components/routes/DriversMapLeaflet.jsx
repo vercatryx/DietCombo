@@ -1846,8 +1846,7 @@ export default function DriversMapLeaflet({
                             {selectedCount} selected
                             {hoverIds.size ? ` (+${hoverIds.size} preview)` : ""}
                         </div>
-                        {/* Disabled: Assign driver feature for stops - driver assignment is now done directly to clients */}
-                        {/* <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <label style={{ fontSize: 12 }}>Assign to:</label>
                             <select
                                 value={bulkDriverId}
@@ -1890,7 +1889,7 @@ export default function DriversMapLeaflet({
                             >
                                 {bulkBusy ? "Assigning…" : `Assign ${selectedCount}`}
                             </button>
-                        </div> */}
+                        </div>
                         <div style={{ display: "flex", gap: 8 }}>
                             <button
                                 onClick={clearSelection}

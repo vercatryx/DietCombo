@@ -9,7 +9,11 @@ import {
     Button,
     Box,
     Typography,
-    Divider
+    Divider,
+    FormControl,
+    InputLabel,
+    Select,
+    MenuItem
 } from '@mui/material';
 import { X } from 'lucide-react';
 import { getBoxTypes, getMenuItems } from '@/lib/cached-data';
@@ -20,15 +24,18 @@ interface StopPreviewDialogProps {
     stop: any | null;
     boxTypes?: any[];
     menuItems?: any[];
+    drivers?: Array<{ id: string; name: string }>;
+    onDriverChange?: (stop: any, driverId: string) => Promise<void>;
 }
 
-export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propBoxTypes, menuItems: propMenuItems }: StopPreviewDialogProps) {
+export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propBoxTypes, menuItems: propMenuItems, drivers, onDriverChange }: StopPreviewDialogProps) {
     const [boxTypes, setBoxTypes] = useState<any[]>(propBoxTypes || []);
     const [menuItems, setMenuItems] = useState<any[]>(propMenuItems || []);
     const [driverDetails, setDriverDetails] = useState<any | null>(null);
     const [loadingDriver, setLoadingDriver] = useState(false);
     const [orderDetails, setOrderDetails] = useState<any | null>(null);
     const [loadingOrder, setLoadingOrder] = useState(false);
+    const [changingDriver, setChangingDriver] = useState(false);
 
     // Load box types and menu items if not provided as props
     useEffect(() => {
@@ -373,23 +380,56 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                     <Divider />
 
                     {/* Assigned Driver Preview */}
-                    {(stop.__driverId || stop.__driverName || stop.assignedDriverId || stop.assigned_driver_id || driverDetails || loadingDriver) && (
-                        <>
-                            <Divider />
-                            <Box>
-                                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: '#374151' }}>
-                                    Assigned Driver
+                    <Divider />
+                    <Box>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: '#374151' }}>
+                            Assigned Driver
+                        </Typography>
+                        {loadingDriver ? (
+                            <Box sx={{ pl: 1, py: 2, textAlign: 'center' }}>
+                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                    Loading driver details...
                                 </Typography>
-                                {loadingDriver ? (
-                                    <Box sx={{ pl: 1, py: 2, textAlign: 'center' }}>
-                                        <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                            Loading driver details...
-                                        </Typography>
-                                    </Box>
+                            </Box>
+                        ) : (
+                            <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                                {drivers && onDriverChange ? (
+                                    <FormControl fullWidth size="small">
+                                        <InputLabel>Assign Driver</InputLabel>
+                                        <Select
+                                            value={stop?.__driverId || stop?.assignedDriverId || stop?.assigned_driver_id || ''}
+                                            label="Assign Driver"
+                                            onChange={async (e) => {
+                                                const driverId = e.target.value;
+                                                if (stop && onDriverChange) {
+                                                    setChangingDriver(true);
+                                                    try {
+                                                        await onDriverChange(stop, driverId);
+                                                        // Close dialog after assignment
+                                                        onClose();
+                                                    } catch (error) {
+                                                        console.error('Failed to assign driver:', error);
+                                                        alert('Failed to assign driver. Please try again.');
+                                                    } finally {
+                                                        setChangingDriver(false);
+                                                    }
+                                                }
+                                            }}
+                                            disabled={changingDriver}
+                                        >
+                                            <MenuItem value="">
+                                                <em>None</em>
+                                            </MenuItem>
+                                            {drivers.map((driver) => (
+                                                <MenuItem key={driver.id} value={driver.id}>
+                                                    {driver.name}
+                                                </MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
                                 ) : driverDetails ? (
                                     <Box
                                         sx={{
-                                            pl: 1,
                                             p: 2,
                                             backgroundColor: '#f9fafb',
                                             borderRadius: 1,
@@ -459,20 +499,18 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                                         </Box>
                                     </Box>
                                 ) : (
-                                    <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                            <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                                Assigned Driver:
-                                            </Typography>
-                                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                                {stop.__driverName || 'Unknown'}
-                                            </Typography>
-                                        </Box>
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                            Assigned Driver:
+                                        </Typography>
+                                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                            {stop?.__driverName || 'None'}
+                                        </Typography>
                                     </Box>
                                 )}
                             </Box>
-                        </>
-                    )}
+                        )}
+                    </Box>
 
                     {/* Delivery Information */}
                     <Box>

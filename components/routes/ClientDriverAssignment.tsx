@@ -4,6 +4,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Typography, TextField, Select, MenuItem, FormControl, InputLabel, CircularProgress, InputAdornment, Checkbox, Button } from '@mui/material';
 import { Search } from 'lucide-react';
 import StopPreviewDialog from './StopPreviewDialog';
+import dynamic from 'next/dynamic';
+const DriversMapLeaflet = dynamic(() => import('./DriversMapLeaflet'), { ssr: false });
 
 interface Client {
     id: string;
@@ -14,6 +16,8 @@ interface Client {
     city?: string;
     state?: string;
     phoneNumber?: string;
+    lat?: number | null;
+    lng?: number | null;
 }
 
 interface Driver {
@@ -84,7 +88,9 @@ export default function ClientDriverAssignment({
                     address: user.address || '',
                     city: user.city || '',
                     state: user.state || '',
-                    phoneNumber: user.phone || ''
+                    phoneNumber: user.phone || '',
+                    lat: user.lat != null ? Number(user.lat) : null,
+                    lng: user.lng != null ? Number(user.lng) : null
                 };
             });
 
@@ -335,6 +341,87 @@ export default function ClientDriverAssignment({
         return null;
     }
 
+    // Convert clients to stops format for the map
+    // NOTE: All hooks must be called before any conditional returns
+    const mapStops = useMemo(() => {
+        return filteredClients
+            .filter(client => {
+                // Only include clients with geolocation from client table
+                const lat = client.lat;
+                const lng = client.lng;
+                return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+            })
+            .map(client => {
+                const stopInfo = clientStopMap.get(client.id);
+                const currentDriverId = clientDriverMap.get(client.id) || null;
+                
+                // Find which driver this client is assigned to
+                const assignedDriver = currentDriverId 
+                    ? routes.find(r => String(r.driverId || r.id) === String(currentDriverId))
+                    : null;
+                
+                return {
+                    id: client.id,
+                    userId: client.id,
+                    clientId: client.id,
+                    name: client.fullName,
+                    first: client.firstName,
+                    last: client.lastName,
+                    firstName: client.firstName,
+                    lastName: client.lastName,
+                    fullName: client.fullName,
+                    full_name: client.fullName,
+                    address: stopInfo?.address || client.address || '',
+                    apt: stopInfo?.apt || '',
+                    city: stopInfo?.city || client.city || '',
+                    state: stopInfo?.state || client.state || '',
+                    zip: stopInfo?.zip || '',
+                    phone: stopInfo?.phone || client.phoneNumber || '',
+                    lat: client.lat, // Use lat from client table
+                    lng: client.lng, // Use lng from client table
+                    __driverId: currentDriverId,
+                    __driverName: assignedDriver?.driverName || assignedDriver?.name || null,
+                    __driverColor: assignedDriver?.color || null,
+                    orderId: stopInfo?.orderId || stopInfo?.order_id || null,
+                    orderStatus: stopInfo?.orderStatus || stopInfo?.order?.status || null,
+                    completed: stopInfo?.completed || false,
+                    dislikes: stopInfo?.dislikes || null,
+                };
+            });
+    }, [filteredClients, clientStopMap, clientDriverMap, routes]);
+
+    // Convert routes to map drivers format
+    const mapDrivers = useMemo(() => {
+        const palette = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
+            "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
+        ];
+        
+        return routes.map((route, i) => {
+            const driverId = String(route.driverId || route.id);
+            const color = route.color || palette[i % palette.length];
+            const driverName = route.driverName || route.name || `Driver ${i}`;
+            
+            // Get stops assigned to this driver from our map stops
+            const driverStops = mapStops.filter(s => String(s.__driverId) === String(driverId));
+            
+            return {
+                id: driverId,
+                driverId: driverId,
+                name: driverName,
+                color: color,
+                polygon: [],
+                stops: driverStops
+            };
+        });
+    }, [routes, mapStops]);
+
+    // Unrouted stops (clients without driver assignment)
+    const unroutedStops = useMemo(() => {
+        return mapStops.filter(s => !s.__driverId);
+    }, [mapStops]);
+
     if (isLoading) {
         return (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', p: 4 }}>
@@ -344,242 +431,46 @@ export default function ClientDriverAssignment({
         );
     }
 
+    // Handle reassign from map
+    const handleMapReassign = async (stop: any, toDriverId: string) => {
+        const clientId = stop.userId || stop.clientId || stop.id;
+        if (!clientId) {
+            console.error('No client ID found in stop:', stop);
+            return;
+        }
+        await handleDriverChange(clientId, toDriverId || '');
+    };
+
+    const clientsWithoutGeo = filteredClients.length - mapStops.length;
+
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <Box sx={{ p: 2, borderBottom: '1px solid #e5e7eb' }}>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+            <Box sx={{ p: 2, borderBottom: '1px solid #e5e7eb', backgroundColor: 'white', zIndex: 10 }}>
+                <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
                     Client Driver Assignment
                 </Typography>
-                <TextField
-                    fullWidth
-                    size="small"
-                    placeholder="Search clients by name, address, city, or phone..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    InputProps={{
-                        startAdornment: (
-                            <InputAdornment position="start">
-                                <Search size={18} style={{ color: '#6b7280' }} />
-                            </InputAdornment>
-                        )
-                    }}
-                    sx={{ mb: 2 }}
-                />
-                
-                {/* Bulk Assignment Controls */}
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 1, flexWrap: 'wrap' }}>
-                    <FormControl size="small" sx={{ minWidth: 200 }}>
-                        <InputLabel>Assign Driver to Selected</InputLabel>
-                        <Select
-                            value={bulkDriverId}
-                            label="Assign Driver to Selected"
-                            onChange={(e) => setBulkDriverId(e.target.value)}
-                            disabled={readOnly || isBulkSaving || drivers.length === 0 || selectedClientIds.size === 0}
-                        >
-                            <MenuItem value="">
-                                <em>Select Driver</em>
-                            </MenuItem>
-                            {drivers.map((driver) => (
-                                <MenuItem key={driver.id} value={driver.id}>
-                                    {driver.name}
-                                </MenuItem>
-                            ))}
-                        </Select>
-                    </FormControl>
-                    <Button
-                        variant="contained"
-                        size="small"
-                        onClick={handleBulkDriverAssignment}
-                        disabled={readOnly || isBulkSaving || selectedClientIds.size === 0 || !bulkDriverId}
-                        sx={{ minWidth: 120 }}
-                    >
-                        {isBulkSaving ? (
-                            <>
-                                <CircularProgress size={16} sx={{ mr: 1 }} />
-                                Assigning...
-                            </>
-                        ) : (
-                            `Apply to ${selectedClientIds.size}`
-                        )}
-                    </Button>
-                    {selectedClientIds.size > 0 && (
-                        <Button
-                            variant="outlined"
-                            size="small"
-                            onClick={() => setSelectedClientIds(new Set())}
-                            disabled={readOnly || isBulkSaving}
-                        >
-                            Clear Selection
-                        </Button>
-                    )}
-                </Box>
-                
-                <Typography variant="body2" sx={{ color: '#6b7280', mt: 1 }}>
-                    Showing {filteredClients.length} of {clients.length} clients
+                <Typography variant="body2" sx={{ color: '#6b7280', mb: 1 }}>
+                    Showing {mapStops.length} of {filteredClients.length} clients with geolocation
                     {selectedClientIds.size > 0 && ` • ${selectedClientIds.size} selected`}
                 </Typography>
+                {clientsWithoutGeo > 0 && (
+                    <Typography variant="caption" sx={{ color: '#f59e0b', display: 'block', mb: 1 }}>
+                        ⚠️ {clientsWithoutGeo} client{clientsWithoutGeo !== 1 ? 's' : ''} without geolocation {clientsWithoutGeo !== 1 ? 'are' : 'is'} not shown on map
+                    </Typography>
+                )}
             </Box>
 
-            <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
-                {filteredClients.length === 0 ? (
-                    <Box sx={{ textAlign: 'center', py: 4 }}>
-                        <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                            {searchTerm ? 'No clients found matching your search.' : 'No clients available.'}
-                        </Typography>
-                    </Box>
-                ) : (
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                        {/* Select All Checkbox */}
-                        <Box
-                            sx={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 1,
-                                p: 1,
-                                border: '1px solid #e5e7eb',
-                                borderRadius: 1,
-                                backgroundColor: '#f9fafb',
-                                position: 'sticky',
-                                top: 0,
-                                zIndex: 1
-                            }}
-                        >
-                            <Checkbox
-                                checked={allSelected}
-                                indeterminate={someSelected && !allSelected}
-                                onChange={(e) => handleSelectAll(e.target.checked)}
-                                disabled={readOnly}
-                                size="small"
-                            />
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                Select All ({filteredClients.length} clients)
-                            </Typography>
-                        </Box>
-
-                        {/* Client List */}
-                        {filteredClients.map((client) => {
-                            const currentDriverId = clientDriverMap.get(client.id) || '';
-                            const stopInfo = clientStopMap.get(client.id);
-                            const statusColor = getStopStatusColor(stopInfo);
-                            const isSaving = savingClientId === client.id;
-                            const isSelected = selectedClientIds.has(client.id);
-
-                            const handleStopClick = () => {
-                                if (stopInfo) {
-                                    // Merge client info with stop info for complete preview
-                                    const stopWithClientInfo = {
-                                        ...stopInfo,
-                                        name: stopInfo.name || client.fullName,
-                                        address: stopInfo.address || client.address,
-                                        city: stopInfo.city || client.city,
-                                        state: stopInfo.state || client.state,
-                                        zip: stopInfo.zip || '',
-                                        phone: stopInfo.phone || client.phoneNumber,
-                                        userId: stopInfo.userId || client.id,
-                                        clientId: stopInfo.clientId || client.id
-                                    };
-                                    setPreviewStop(stopWithClientInfo);
-                                    setPreviewDialogOpen(true);
-                                } else {
-                                    // Show basic client info if no stop info available
-                                    setPreviewStop({
-                                        name: client.fullName,
-                                        address: client.address,
-                                        city: client.city,
-                                        state: client.state,
-                                        zip: '',
-                                        phone: client.phoneNumber,
-                                        userId: client.id,
-                                        clientId: client.id
-                                    });
-                                    setPreviewDialogOpen(true);
-                                }
-                            };
-
-                            return (
-                                <Box
-                                    key={client.id}
-                                    sx={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 2,
-                                        p: 1.5,
-                                        border: statusColor 
-                                            ? `2px solid ${statusColor}` 
-                                            : '1px solid #e5e7eb',
-                                        borderRadius: 1,
-                                        backgroundColor: isSelected 
-                                            ? '#e3f2fd' 
-                                            : isSaving 
-                                                ? '#f9fafb' 
-                                                : 'white',
-                                        cursor: 'pointer',
-                                        '&:hover': {
-                                            backgroundColor: isSelected ? '#e3f2fd' : '#f9fafb',
-                                            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                                        },
-                                        transition: 'all 0.2s'
-                                    }}
-                                    onClick={handleStopClick}
-                                >
-                                    <Checkbox
-                                        checked={isSelected}
-                                        onChange={(e) => {
-                                            e.stopPropagation();
-                                            handleSelectClient(client.id, e.target.checked);
-                                        }}
-                                        onClick={(e) => e.stopPropagation()}
-                                        disabled={readOnly}
-                                        size="small"
-                                    />
-                                    
-                                    <Box sx={{ flex: 1, minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
-                                        <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
-                                            {client.fullName}
-                                        </Typography>
-                                        {(client.address || client.city) && (
-                                            <Typography variant="caption" sx={{ color: '#6b7280', display: 'block' }}>
-                                                {[client.address, client.city, client.state].filter(Boolean).join(', ')}
-                                            </Typography>
-                                        )}
-                                        {client.phoneNumber && (
-                                            <Typography variant="caption" sx={{ color: '#6b7280', display: 'block' }}>
-                                                {client.phoneNumber}
-                                            </Typography>
-                                        )}
-                                    </Box>
-
-                                    <FormControl 
-                                        size="small" 
-                                        sx={{ minWidth: 200 }}
-                                        onClick={(e) => e.stopPropagation()}
-                                    >
-                                        <InputLabel>Driver</InputLabel>
-                                        <Select
-                                            value={currentDriverId}
-                                            label="Driver"
-                                            onChange={(e) => handleDriverChange(client.id, e.target.value)}
-                                            disabled={readOnly || isSaving || drivers.length === 0}
-                                        >
-                                            <MenuItem value="">
-                                                <em>None</em>
-                                            </MenuItem>
-                                            {drivers.map((driver) => (
-                                                <MenuItem key={driver.id} value={driver.id}>
-                                                    {driver.name}
-                                                </MenuItem>
-                                            ))}
-                                        </Select>
-                                    </FormControl>
-
-                                    {isSaving && (
-                                        <CircularProgress size={16} sx={{ ml: 1 }} />
-                                    )}
-                                </Box>
-                            );
-                        })}
-                    </Box>
-                )}
+            {/* Map View */}
+            <Box sx={{ flex: 1, position: 'relative', minHeight: 0 }}>
+                <DriversMapLeaflet
+                    drivers={mapDrivers}
+                    unrouted={unroutedStops}
+                    onReassign={readOnly ? undefined : handleMapReassign}
+                    busy={isBulkSaving}
+                    readonly={readOnly}
+                    initialCenter={[40.7128, -74.006]}
+                    initialZoom={10}
+                />
             </Box>
 
             {/* Stop Preview Dialog */}
@@ -590,6 +481,13 @@ export default function ClientDriverAssignment({
                     setPreviewStop(null);
                 }}
                 stop={previewStop}
+                drivers={drivers}
+                onDriverChange={async (stop: any, driverId: string) => {
+                    const clientId = stop.userId || stop.clientId || stop.id;
+                    if (clientId) {
+                        await handleDriverChange(clientId, driverId);
+                    }
+                }}
             />
         </Box>
     );
