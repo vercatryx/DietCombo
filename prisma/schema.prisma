@@ -335,7 +335,7 @@ model Order {
   lastUpdated           DateTime  @default(now()) @updatedAt @map("last_updated") @db.Timestamp(6)
   updatedBy             String?   @map("updated_by") @db.VarChar(255)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
-  stops                 Stop[]    @relation("StopOrder")
+  // stops relation removed - orderId in stops can now reference either orders.id or upcoming_orders.id
 
   @@index([orderNumber], map: "idx_orders_order_number")
   @@index([clientId], map: "idx_orders_client_id")
@@ -516,7 +516,8 @@ model Stop {
   updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
   orderId          String?   @map("order_id") @db.VarChar(36)
   deliveryDate     DateTime? @map("delivery_date") @db.Date
-  relatedOrder     Order?    @relation("StopOrder", fields: [orderId], references: [id], onUpdate: NoAction, map: "fk_stops_order_id")
+  // Note: orderId can reference either orders.id or upcoming_orders.id
+  // Foreign key constraint removed to allow both table references
 
   @@index([day], map: "idx_stops_day")
   @@index([deliveryDate], map: "idx_stops_delivery_date")

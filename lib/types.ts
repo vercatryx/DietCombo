@@ -194,6 +194,7 @@ export interface Vendor {
   email?: string | null;
   password?: string | null; // Hashed password, optional and typically not returned in queries
   isActive: boolean;
+  isDefault?: boolean; // Whether this vendor is the default vendor for the app
   deliveryDays: string[]; // e.g. ["Monday", "Thursday"]
   allowsMultipleDeliveries: boolean;
   serviceTypes: ServiceType[]; // Vendor can support multiple service types

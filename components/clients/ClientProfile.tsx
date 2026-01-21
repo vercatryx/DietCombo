@@ -145,6 +145,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     // Track if we just created a new client to prevent useEffect from overwriting orderConfig
     const justCreatedClientRef = useRef<boolean>(false);
+    // Track if we've already set defaults to prevent infinite loops
+    const defaultsSetRef = useRef<{ [key: string]: boolean; lastKey?: string }>({});
 
     const [client, setClient] = useState<ClientProfile | null>(null);
     const [statuses, setStatuses] = useState<ClientStatus[]>(initialStatuses || []);
@@ -417,6 +419,151 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setBoxQuotas([]);
         }
     }, [formData.serviceType, orderConfig.boxOrders, boxTypes]);
+
+    // Helper: Get default vendor for a service type
+    // Prioritizes vendors with isDefault: true, then falls back to first active vendor
+    function getDefaultVendor(serviceType: string): string | null {
+        if (!vendors || vendors.length === 0) return null;
+        
+        // First, try to find a vendor with isDefault: true that matches the service type
+        const defaultVendors = vendors.filter(v => {
+            if (!v.isActive) return false;
+            if (v.isDefault !== true) return false;
+            
+            if (serviceType === 'Food') {
+                return v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
+            } else if (serviceType === 'Boxes') {
+                return v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Boxes');
+            }
+            return false;
+        });
+        
+        if (defaultVendors.length > 0) {
+            return defaultVendors[0].id;
+        }
+        
+        // Fallback: find first active vendor that matches the service type
+        const filteredVendors = vendors.filter(v => {
+            if (!v.isActive) return false;
+            
+            if (serviceType === 'Food') {
+                return v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food');
+            } else if (serviceType === 'Boxes') {
+                return v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Boxes');
+            }
+            return false;
+        });
+        
+        if (filteredVendors.length > 0) {
+            return filteredVendors[0].id;
+        }
+        
+        // Final fallback: use first active vendor (regardless of service type)
+        const activeVendors = vendors.filter(v => v.isActive !== undefined ? v.isActive : true);
+        return activeVendors.length > 0 ? activeVendors[0].id : null;
+    }
+
+    // Helper: Ensure vendor selections have default vendors set
+    function ensureDefaultVendors(selections: any[], serviceType: string): any[] {
+        const defaultVendorId = getDefaultVendor(serviceType);
+        if (!defaultVendorId) return selections;
+
+        return selections.map((sel: any) => {
+            if (!sel.vendorId || sel.vendorId.trim() === '') {
+                return { ...sel, vendorId: defaultVendorId };
+            }
+            return sel;
+        });
+    }
+
+    // Effect: Auto-set default vendor when caseId is set and vendor selections are empty
+    useEffect(() => {
+        if (!orderConfig.caseId || vendors.length === 0) {
+            defaultsSetRef.current = {};
+            return;
+        }
+
+        const configKey = `${formData.serviceType}-${orderConfig.caseId}`;
+        // Reset ref if caseId or serviceType changed (new config)
+        const lastConfigKey = defaultsSetRef.current.lastKey;
+        if (lastConfigKey && lastConfigKey !== configKey) {
+            defaultsSetRef.current = {};
+        }
+        defaultsSetRef.current.lastKey = configKey;
+        
+        // Skip if we've already set defaults for this config
+        if (defaultsSetRef.current[configKey]) return;
+
+        const defaultVendorId = formData.serviceType === 'Food' 
+            ? getDefaultVendor('Food') 
+            : formData.serviceType === 'Boxes' 
+                ? getDefaultVendor('Boxes') 
+                : null;
+
+        if (!defaultVendorId) return;
+
+        let needsUpdate = false;
+        const newConfig = { ...orderConfig };
+
+        if (formData.serviceType === 'Food') {
+            // Check multi-day format
+            if (newConfig.deliveryDayOrders) {
+                const deliveryDayOrders = { ...newConfig.deliveryDayOrders };
+                Object.keys(deliveryDayOrders).forEach(day => {
+                    const daySelections = deliveryDayOrders[day].vendorSelections || [];
+                    const hasEmpty = daySelections.some((sel: any) => !sel.vendorId || sel.vendorId.trim() === '');
+                    if (hasEmpty || daySelections.length === 0) {
+                        const updated = ensureDefaultVendors(
+                            daySelections.length === 0 ? [{ vendorId: '', items: {} }] : daySelections,
+                            'Food'
+                        );
+                        deliveryDayOrders[day] = { vendorSelections: updated };
+                        needsUpdate = true;
+                    }
+                });
+                if (needsUpdate) {
+                    newConfig.deliveryDayOrders = deliveryDayOrders;
+                }
+            }
+            // Check single-day format
+            else {
+                const vendorSelections = newConfig.vendorSelections || [];
+                const hasEmpty = vendorSelections.length === 0 || vendorSelections.some((sel: any) => !sel.vendorId || sel.vendorId.trim() === '');
+                if (hasEmpty) {
+                    const updated = ensureDefaultVendors(
+                        vendorSelections.length === 0 ? [{ vendorId: '', items: {} }] : vendorSelections,
+                        'Food'
+                    );
+                    newConfig.vendorSelections = updated;
+                    needsUpdate = true;
+                }
+            }
+        } else if (formData.serviceType === 'Boxes') {
+            const boxOrders = newConfig.boxOrders || [];
+            const hasEmpty = boxOrders.length === 0 || boxOrders.some((box: any) => !box.vendorId || box.vendorId.trim() === '');
+            if (hasEmpty) {
+                const updated = boxOrders.length === 0
+                    ? [{ vendorId: defaultVendorId, boxTypeId: '', quantity: 1, items: {}, itemNotes: {} }]
+                    : ensureDefaultVendors(boxOrders, 'Boxes').map((box: any) => ({
+                        ...box,
+                        vendorId: !box.vendorId || box.vendorId.trim() === '' ? defaultVendorId : box.vendorId
+                    }));
+                newConfig.boxOrders = updated;
+                if (updated.length > 0 && updated[0].vendorId) {
+                    newConfig.vendorId = updated[0].vendorId;
+                }
+                needsUpdate = true;
+            }
+        }
+
+        if (needsUpdate) {
+            defaultsSetRef.current[configKey] = true;
+            setOrderConfig(newConfig);
+        } else {
+            // Mark as checked even if no update needed
+            defaultsSetRef.current[configKey] = true;
+        }
+    }, [orderConfig.caseId, vendors.length, formData.serviceType]);
 
     // Don't show anything until all data is loaded
     if (loading || loadingOrderDetails || !client) {
@@ -2001,16 +2148,18 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (limit && currentBoxes.length >= limit) return;
 
         const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+        // Get default vendor for Boxes service if boxType doesn't have one
+        const defaultVendorId = getDefaultVendor('Boxes');
         const newBox = {
             boxTypeId: firstActiveBoxType?.id || '',
-            vendorId: firstActiveBoxType?.vendorId || '',
+            vendorId: firstActiveBoxType?.vendorId || defaultVendorId || '',
             quantity: 1,
             items: {}
         };
         const updatedBoxes = [...currentBoxes, newBox];
         // CRITICAL FIX: Always sync top-level vendorId from the first box's vendorId
         // If this is the first box, use its vendorId; otherwise keep existing first box's vendorId
-        const updatedVendorId = currentBoxes.length === 0 ? newBox.vendorId : (currentBoxes[0]?.vendorId || orderConfig.vendorId);
+        const updatedVendorId = currentBoxes.length === 0 ? newBox.vendorId : (currentBoxes[0]?.vendorId || orderConfig.vendorId || defaultVendorId || '');
         setOrderConfig({
             ...orderConfig,
             boxOrders: updatedBoxes,
@@ -2023,9 +2172,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (currentBoxes.length <= 1) {
             // If removing the last one, just reset it to empty/default instead of removing
             const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+            // Get default vendor for Boxes service if boxType doesn't have one
+            const defaultVendorId = getDefaultVendor('Boxes');
             const resetBox = {
                 boxTypeId: firstActiveBoxType?.id || '',
-                vendorId: firstActiveBoxType?.vendorId || '',
+                vendorId: firstActiveBoxType?.vendorId || defaultVendorId || '',
                 quantity: 1,
                 items: {}
             };
@@ -2045,6 +2196,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     function handleBoxUpdate(index: number, field: string, value: any) {
         const currentBoxes = [...(orderConfig.boxOrders || [])];
         if (!currentBoxes[index]) return;
+
+        // If updating vendorId and value is empty, set default vendor
+        if (field === 'vendorId') {
+            if (!value || value.trim() === '') {
+                const defaultVendorId = getDefaultVendor('Boxes');
+                if (defaultVendorId) {
+                    value = defaultVendorId;
+                }
+            }
+        }
 
         currentBoxes[index] = { ...currentBoxes[index], [field]: value };
 
@@ -2171,7 +2332,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         // Reset order config for new type completely, ensuring caseId is reset too
         // The user must enter a NEW case ID for the new service type.
         if (type === 'Food') {
-            setOrderConfig({ serviceType: type, vendorSelections: [{ vendorId: '', items: {} }] });
+            const defaultVendorId = getDefaultVendor('Food');
+            setOrderConfig({ serviceType: type, vendorSelections: [{ vendorId: defaultVendorId || '', items: {} }] });
         } else if (type === 'Custom') {
             setOrderConfig({ serviceType: type, vendorId: '', customItems: [] });
         } else {
@@ -2221,12 +2383,21 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     // Helper: Update vendor selections for a specific delivery day
     function setVendorSelectionsForDay(day: string | null, vendorSelections: any[]) {
+        // Ensure empty vendor selections get default vendor set
+        const defaultVendorId = getDefaultVendor('Food');
+        const ensuredSelections = vendorSelections.map(sel => {
+            if (!sel.vendorId || sel.vendorId.trim() === '') {
+                return { ...sel, vendorId: defaultVendorId || '' };
+            }
+            return sel;
+        });
+
         // Check if we're already in multi-day format
         if (orderConfig.deliveryDayOrders) {
             // Multi-day format - update specific day
             const deliveryDayOrders = { ...orderConfig.deliveryDayOrders };
             if (day) {
-                deliveryDayOrders[day] = { vendorSelections };
+                deliveryDayOrders[day] = { vendorSelections: ensuredSelections };
             } else {
                 // Updating consolidated view (null day)
                 // Reconstruct deliveryDayOrders from the consolidated list
@@ -2235,7 +2406,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 allDays.forEach(d => deliveryDayOrders[d] = { vendorSelections: [] });
 
                 // Distribute consolidated selections back to days
-                vendorSelections.forEach(vSel => {
+                ensuredSelections.forEach(vSel => {
                     const daysToPopulate = (vSel.selectedDeliveryDays && vSel.selectedDeliveryDays.length > 0)
                         ? vSel.selectedDeliveryDays
                         : (allDays.length > 0 ? [allDays[0]] : []);
@@ -2253,13 +2424,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 });
             }
             setOrderConfig({ ...orderConfig, deliveryDayOrders });
-        } else if (day && needsMultiDayFormat(vendorSelections)) {
+        } else if (day && needsMultiDayFormat(ensuredSelections)) {
             // Need to switch to multi-day format
-            const allDays = getAllDeliveryDaysFromVendors(vendorSelections);
+            const allDays = getAllDeliveryDaysFromVendors(ensuredSelections);
             const deliveryDayOrders: any = {};
             for (const deliveryDay of allDays) {
                 deliveryDayOrders[deliveryDay] = {
-                    vendorSelections: vendorSelections
+                    vendorSelections: ensuredSelections
                         .filter(sel => {
                             if (!sel.vendorId) return true; // Keep empty slots
                             const vendor = vendors.find(v => v.id === sel.vendorId);
@@ -2271,7 +2442,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setOrderConfig({ ...orderConfig, deliveryDayOrders, vendorSelections: undefined });
         } else {
             // Single day format
-            setOrderConfig({ ...orderConfig, vendorSelections });
+            setOrderConfig({ ...orderConfig, vendorSelections: ensuredSelections });
         }
     }
 
@@ -2295,6 +2466,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }
 
     function addVendorBlock(day: string | null = null) {
+        // Get default vendor for Food service
+        const defaultVendorId = formData.serviceType === 'Food' ? getDefaultVendor('Food') : null;
+        
         // Handling for multi-day format when adding to "consolidated" list (day is null)
         if (day === null && orderConfig.deliveryDayOrders) {
             const days = Object.keys(orderConfig.deliveryDayOrders).sort();
@@ -2305,7 +2479,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // Only add if there isn't already a blank one (to prevent duplicates in consolidated view)
                 const hasBlank = currentDaySelections.some((s: any) => !s.vendorId);
                 if (!hasBlank) {
-                    const newDaySelections = [...currentDaySelections, { vendorId: '', items: {} }];
+                    const newVendorSelection = defaultVendorId 
+                        ? { vendorId: defaultVendorId, items: {} }
+                        : { vendorId: '', items: {} };
+                    const newDaySelections = [...currentDaySelections, newVendorSelection];
                     setVendorSelectionsForDay(firstDay, newDaySelections);
                 }
                 return;
@@ -2313,7 +2490,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
 
         const currentSelections = getVendorSelectionsForDay(day);
-        const newSelections = [...currentSelections, { vendorId: '', items: {} }];
+        const newVendorSelection = defaultVendorId 
+            ? { vendorId: defaultVendorId, items: {} }
+            : { vendorId: '', items: {} };
+        const newSelections = [...currentSelections, newVendorSelection];
         setVendorSelectionsForDay(day, newSelections);
     }
 
@@ -2325,15 +2505,22 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     function updateVendorSelection(index: number, field: string, value: any, day: string | null = null) {
         const current = [...getVendorSelectionsForDay(day)];
-        current[index] = { ...current[index], [field]: value };
-
-        // If changing vendor, clear items for that vendor
+        
+        // If changing vendor and value is empty, set default vendor
         if (field === 'vendorId') {
-            current[index].items = {};
+            if (!value || value.trim() === '') {
+                const defaultVendorId = getDefaultVendor('Food');
+                if (defaultVendorId) {
+                    value = defaultVendorId;
+                }
+            }
+            current[index] = { ...current[index], [field]: value, items: {} };
 
             // If we're in single-day format and the vendor has multiple delivery days,
             // we'll show the selection UI (handled in render), but don't auto-switch format
             // The user will select which days they want, then we'll create orders for those days
+        } else {
+            current[index] = { ...current[index], [field]: value };
         }
 
         // Normal update

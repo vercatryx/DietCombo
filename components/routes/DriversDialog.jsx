@@ -836,8 +836,41 @@ export default function DriversDialog({
                         }}
                     >
                         {/* LEFT: Title */}
-                        <Box sx={{ justifySelf: "start", fontWeight: 600 }}>
+                        <Box sx={{ justifySelf: "start", fontWeight: 600, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
                             <span>Routes Map</span>
+                            {/* Date Filter moved to title bar */}
+                            <Box 
+                                sx={{ 
+                                    display: "flex", 
+                                    alignItems: "center",
+                                    '& > div': {
+                                        marginBottom: '0 !important',
+                                        padding: '4px 8px !important',
+                                        backgroundColor: 'transparent !important',
+                                        border: 'none !important',
+                                    },
+                                    '& input': {
+                                        padding: '4px 8px !important',
+                                        fontSize: '0.875rem !important',
+                                        width: '120px !important',
+                                    },
+                                    '& .MuiBox-root + div': {
+                                        display: 'none !important',
+                                    }
+                                }}
+                            >
+                                <DateFilter
+                                    selectedDate={selectedDeliveryDate}
+                                    onDateChange={(date) => setSelectedDeliveryDate(date)}
+                                    onClear={() => {
+                                        const today = new Date();
+                                        const year = today.getFullYear();
+                                        const month = String(today.getMonth() + 1).padStart(2, '0');
+                                        const day = String(today.getDate()).padStart(2, '0');
+                                        setSelectedDeliveryDate(`${year}-${month}-${day}`);
+                                    }}
+                                />
+                            </Box>
                         </Box>
 
                         {/* CENTER: Generate + Driver Management */}
@@ -914,20 +947,6 @@ export default function DriversDialog({
                 </DialogTitle>
 
                 <DialogContent dividers sx={{ position: "relative", p: 0, display: "flex", flexDirection: "column" }}>
-                    {/* Date Filter */}
-                    <Box sx={{ p: 2, borderBottom: "1px solid #e5e7eb" }}>
-                        <DateFilter
-                            selectedDate={selectedDeliveryDate}
-                            onDateChange={(date) => setSelectedDeliveryDate(date)}
-                            onClear={() => {
-                                const today = new Date();
-                                const year = today.getFullYear();
-                                const month = String(today.getMonth() + 1).padStart(2, '0');
-                                const day = String(today.getDate()).padStart(2, '0');
-                                setSelectedDeliveryDate(`${year}-${month}-${day}`);
-                            }}
-                        />
-                    </Box>
 
                     {/* Tabs */}
                     <Box sx={{ borderBottom: "1px solid #e5e7eb", display: "flex", gap: 0 }}>

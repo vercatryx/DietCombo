@@ -213,6 +213,7 @@ export async function getVendors() {
                     deliveryDays,
                     allowsMultipleDeliveries: v.delivery_frequency === 'Multiple',
                     isActive: v.is_active !== undefined ? Boolean(v.is_active) : true,
+                    isDefault: v.is_default !== undefined ? Boolean(v.is_default) : false,
                     minimumMeals: v.minimum_meals ?? 0,
                     cutoffHours: v.cutoff_hours ?? 0
                 };
@@ -244,6 +245,7 @@ export async function getVendor(id: string) {
             deliveryDays: typeof v.delivery_days === 'string' ? JSON.parse(v.delivery_days) : (v.delivery_days || []),
             allowsMultipleDeliveries: v.delivery_frequency === 'Multiple',
             isActive: v.is_active,
+            isDefault: v.is_default !== undefined ? Boolean(v.is_default) : false,
             minimumMeals: v.minimum_meals ?? 0,
             cutoffHours: v.cutoff_hours ?? 0
         };

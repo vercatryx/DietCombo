@@ -61,6 +61,30 @@ function getDayOfWeek(dateStr: string | null): string | null {
 }
 
 /**
+ * Helper function to get the assigned driver ID for a client
+ * Fetches the client record and returns their assigned_driver_id
+ */
+async function getClientAssignedDriverId(clientId: string): Promise<string | null> {
+    try {
+        const { data: client, error: clientError } = await supabase
+            .from('clients')
+            .select('assigned_driver_id')
+            .eq('id', clientId)
+            .single();
+
+        if (clientError || !client) {
+            console.warn(`[process-weekly-orders] Failed to fetch client ${clientId} for driver assignment:`, clientError?.message);
+            return null;
+        }
+
+        return client.assigned_driver_id || null;
+    } catch (error: any) {
+        console.error(`[process-weekly-orders] Error getting assigned driver for client ${clientId}:`, error.message);
+        return null;
+    }
+}
+
+/**
  * Create or update a stop for an order
  * This ensures stops are properly linked to orders with order_id and client name
  */
@@ -82,6 +106,9 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
             console.error(`[process-weekly-orders] Failed to fetch client ${clientId} for stop creation:`, clientError?.message);
             return;
         }
+
+        // Get the client's assigned driver ID (already fetched in client query above)
+        const assignedDriverId = client.assigned_driver_id || null;
 
         // Skip if client is paused or delivery is disabled
         if (client.paused || client.delivery === false) {
@@ -111,11 +138,74 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
             .eq('delivery_date', deliveryDateStr)
             .maybeSingle();
 
+        // Automatically look up the related upcoming_order record for this client and delivery date
+        // This ensures stops are always linked to their source upcoming order
+        let upcomingOrderId: string | null = null;
+        
+        if (orderId) {
+            // First check if the provided orderId is already an upcoming order ID
+            const { data: existingUpcomingOrder } = await supabase
+                .from('upcoming_orders')
+                .select('id')
+                .eq('id', orderId)
+                .eq('client_id', clientId)
+                .maybeSingle();
+            
+            if (existingUpcomingOrder) {
+                upcomingOrderId = orderId;
+                console.log(`[process-weekly-orders] Using provided upcoming order ID: ${upcomingOrderId}`);
+            }
+        }
+        
+        // If no upcoming order found yet, look up by client_id and delivery date
+        if (!upcomingOrderId) {
+            // Try to match by scheduled_delivery_date
+            const { data: upcomingOrderByDate } = await supabase
+                .from('upcoming_orders')
+                .select('id')
+                .eq('client_id', clientId)
+                .eq('scheduled_delivery_date', deliveryDateStr)
+                .neq('status', 'processed')
+                .order('created_at', { ascending: true })
+                .limit(1)
+                .maybeSingle();
+            
+            if (upcomingOrderByDate) {
+                upcomingOrderId = upcomingOrderByDate.id;
+                console.log(`[process-weekly-orders] Found upcoming order by scheduled_delivery_date: ${upcomingOrderId}`);
+            } else {
+                // Try to match by delivery_day (calculate the day of week from deliveryDateStr)
+                const dayName = dayOfWeek.charAt(0).toUpperCase() + dayOfWeek.slice(1).toLowerCase();
+                const { data: upcomingOrderByDay } = await supabase
+                    .from('upcoming_orders')
+                    .select('id')
+                    .eq('client_id', clientId)
+                    .eq('delivery_day', dayName)
+                    .neq('status', 'processed')
+                    .order('created_at', { ascending: true })
+                    .limit(1)
+                    .maybeSingle();
+                
+                if (upcomingOrderByDay) {
+                    upcomingOrderId = upcomingOrderByDay.id;
+                    console.log(`[process-weekly-orders] Found upcoming order by delivery_day: ${upcomingOrderId}`);
+                }
+            }
+        }
+        
+        // Use the upcoming order ID if found, otherwise fall back to the provided orderId
+        const finalOrderId = upcomingOrderId || orderId;
+        
+        if (!finalOrderId) {
+            console.error(`[process-weekly-orders] Cannot create stop: No upcoming order found for client ${clientId} on delivery date ${deliveryDateStr}`);
+            return;
+        }
+
         const stopData: any = {
             day: dayOfWeek,
             delivery_date: deliveryDateStr,
             client_id: clientId,
-            order_id: orderId, // Always set order_id
+            order_id: finalOrderId, // Set order_id to the upcoming order ID (automatically looked up)
             name: clientName, // Use full_name from client
             address: client.address || "",
             apt: client.apt || null,
@@ -125,15 +215,17 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
             phone: client.phone_number || null,
             lat: client.lat || null,
             lng: client.lng || null,
-            assigned_driver_id: client.assigned_driver_id || null,
+            assigned_driver_id: assignedDriverId, // Use the helper function result
         };
 
+        console.log(`[process-weekly-orders] Creating/updating stop with order_id=${finalOrderId} (upcoming order) for client ${clientId}, delivery_date=${deliveryDateStr}`);
+
         if (existingStop) {
-            // Update existing stop with order_id and latest client information
+            // Update existing stop with order_id (upcoming order ID) and latest client information
             const { error: updateError } = await supabase
                 .from('stops')
                 .update({
-                    order_id: orderId,
+                    order_id: finalOrderId, // Update with upcoming order ID
                     name: clientName,
                     // Update address fields in case client info changed
                     address: stopData.address,
@@ -149,9 +241,9 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                 .eq('id', existingStop.id);
 
             if (updateError) {
-                console.error(`[process-weekly-orders] Failed to update stop ${existingStop.id} for order ${orderId}:`, updateError.message);
+                console.error(`[process-weekly-orders] Failed to update stop ${existingStop.id} for order ${finalOrderId}:`, updateError.message);
             } else {
-                console.log(`[process-weekly-orders] Updated stop ${existingStop.id} with order_id ${orderId} for client ${clientId}`);
+                console.log(`[process-weekly-orders] Updated stop ${existingStop.id} with order_id ${finalOrderId} (upcoming order) for client ${clientId}`);
             }
         } else {
             // Create new stop
@@ -175,24 +267,36 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                         const { error: updateError2 } = await supabase
                             .from('stops')
                             .update({
-                                order_id: orderId,
+                                order_id: finalOrderId, // Ensure order_id (upcoming order ID) is set even when updating due to duplicate
                                 name: clientName,
+                                // Also update other fields in case they changed
+                                address: stopData.address,
+                                apt: stopData.apt,
+                                city: stopData.city,
+                                state: stopData.state,
+                                zip: stopData.zip,
+                                phone: stopData.phone,
+                                lat: stopData.lat,
+                                lng: stopData.lng,
+                                assigned_driver_id: stopData.assigned_driver_id,
                             })
                             .eq('id', existingStop2.id);
 
                         if (updateError2) {
                             console.error(`[process-weekly-orders] Failed to update existing stop ${existingStop2.id}:`, updateError2.message);
+                        } else {
+                            console.log(`[process-weekly-orders] Updated duplicate stop ${existingStop2.id} with order_id ${finalOrderId} (upcoming order) for client ${clientId}`);
                         }
                     }
                 } else {
-                    console.error(`[process-weekly-orders] Failed to create stop for order ${orderId}:`, insertError.message);
+                    console.error(`[process-weekly-orders] Failed to create stop for order ${finalOrderId}:`, insertError.message);
                 }
             } else {
-                console.log(`[process-weekly-orders] Created stop ${stopData.id} with order_id ${orderId} for client ${clientId}`);
+                console.log(`[process-weekly-orders] Created stop ${stopData.id} with order_id ${finalOrderId} (upcoming order) for client ${clientId}`);
             }
         }
     } catch (error: any) {
-        console.error(`[process-weekly-orders] Error creating/updating stop for order ${orderId}:`, error.message);
+        console.error(`[process-weekly-orders] Error creating/updating stop for client ${clientId}:`, error.message);
     }
 }
 
@@ -312,8 +416,8 @@ async function precheckAndTransferUpcomingOrders() {
                             .select()
                             .single();
 
-                        if (orderError || !newOrder) {
-                            transferResults.errors.push(`Failed to create order for client ${clientId}: ${orderError?.message}`);
+                        if (orderError || !newOrder || !newOrder.id) {
+                            transferResults.errors.push(`Failed to create order for client ${clientId}: ${orderError?.message || 'Order creation returned no data'}`);
                             continue;
                         }
 
@@ -434,8 +538,11 @@ async function precheckAndTransferUpcomingOrders() {
                             })
                             .eq('id', upcomingOrder.id);
 
-                        // Create or update stop for this order with order_id and client name
-                        await createOrUpdateStopForOrder(newOrder.id, clientId, scheduledDeliveryDate);
+                        // Create or update stop for this order with order_id set to the upcoming order ID
+                        // NOTE: This requires the foreign key constraint on stops.order_id to be modified to allow upcoming_order IDs
+                        // or the constraint must be removed/changed to reference both orders and upcoming_orders tables
+                        console.log(`[process-weekly-orders] Creating stop for upcoming order ${upcomingOrder.id} with order_id=${upcomingOrder.id}`);
+                        await createOrUpdateStopForOrder(upcomingOrder.id, clientId, scheduledDeliveryDate);
 
                         transferResults.transferred++;
                     } catch (error: any) {
@@ -780,9 +887,14 @@ export async function GET(request: NextRequest) {
                             .select()
                             .single();
 
-                        if (orderError || !newOrder) {
-                            errors.push(`Failed to copy upcoming order ${order.id} to orders table: ${orderError?.message}`);
+                        if (orderError || !newOrder || !newOrder.id) {
+                            errors.push(`Failed to copy upcoming order ${order.id} to orders table: ${orderError?.message || 'Order creation returned no data'}`);
                         } else {
+                            // Verify we have a valid order ID before proceeding
+                            if (!newOrder.id) {
+                                errors.push(`Failed to copy upcoming order ${order.id}: Created order has no ID`);
+                                continue;
+                            }
                             let copyErrors: string[] = [];
                             let itemsCopied = 0;
                             let vendorSelectionsCopied = 0;
@@ -959,8 +1071,11 @@ export async function GET(request: NextRequest) {
                             orderSummary.orderId = newOrder.id;
                             orderSummary.copiedFromUpcoming = true;
 
-                            // Create or update stop for this order with order_id and client name
-                            await createOrUpdateStopForOrder(newOrder.id, order.client_id, scheduledDeliveryDate);
+                            // Create or update stop for this order with order_id set to the upcoming order ID
+                            // NOTE: This requires the foreign key constraint on stops.order_id to be modified to allow upcoming_order IDs
+                            // or the constraint must be removed/changed to reference both orders and upcoming_orders tables
+                            console.log(`[process-weekly-orders] Creating stop for upcoming order ${order.id} with order_id=${order.id}`);
+                            await createOrUpdateStopForOrder(order.id, order.client_id, scheduledDeliveryDate);
                         }
                     } catch (copyError: any) {
                         errors.push(`Error copying upcoming order ${order.id} to orders table: ${copyError.message}`);

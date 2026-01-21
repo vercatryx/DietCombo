@@ -39,10 +39,10 @@ export async function POST(req: Request) {
             }
         }
 
-        // Get all clients
+        // Get all clients including assigned_driver_id
         const { data: allClients } = await supabase
             .from('clients')
-            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
             .order('id', { ascending: true });
 
         // Check which clients have stops for delivery dates
@@ -156,10 +156,10 @@ export async function POST(req: Request) {
             }
             const datesMap = clientDeliveryDates.get(clientId)!;
             
-            // Store delivery date info (upcoming orders don't have order_id in orders table yet, set to null)
-            // Note: order_id FK constraint only allows references to orders table, not upcoming_orders
+            // Store delivery date info with upcoming order ID
+            // order_id will reference the upcoming_order.id (FK constraint has been removed to allow this)
             if (!datesMap.has(deliveryDateStr)) {
-                datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: null, caseId: order.case_id || null });
+                datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: order.id, caseId: order.case_id || null });
             }
         }
 
@@ -205,6 +205,7 @@ export async function POST(req: Request) {
             phone: string | null;
             lat: number | null;
             lng: number | null;
+            assigned_driver_id: string | null;
         }> = [];
 
         for (const client of allClients || []) {
@@ -249,6 +250,9 @@ export async function POST(req: Request) {
                              `${client.first_name || ""} ${client.last_name || ""}`.trim() || 
                              "Unnamed");
                 
+                // Get client's assigned driver (if any) to automatically assign to stop
+                const assignedDriverId = client.assigned_driver_id || null;
+                
                 // Client should have a stop for this delivery date - create it
                 stopsToCreate.push({
                     id: uuidv4(),
@@ -265,6 +269,7 @@ export async function POST(req: Request) {
                     phone: client.phone_number ? s(client.phone_number) : null,
                     lat: n(client.lat),
                     lng: n(client.lng),
+                    assigned_driver_id: assignedDriverId, // Automatically set from client
                 });
             }
         }
@@ -293,6 +298,7 @@ export async function POST(req: Request) {
                                 phone: stopData.phone,
                                 lat: stopData.lat,
                                 lng: stopData.lng,
+                                assigned_driver_id: stopData.assigned_driver_id, // Set from client
                             }, { onConflict: 'id' });
                         if (insertError) throw insertError;
                         stopsCreated++;

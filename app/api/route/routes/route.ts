@@ -65,21 +65,56 @@ export async function GET(req: Request) {
         }
 
         // 2) All stops - filter by delivery_date if provided
+        // Normalize delivery_date to YYYY-MM-DD format for proper comparison
+        const normalizedDeliveryDate = deliveryDate ? deliveryDate.split('T')[0].split(' ')[0] : null;
+        
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed')
+            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day')
             .order('id', { ascending: true });
         
         // Filter by delivery_date if provided
-        if (deliveryDate) {
-            stopsQuery = stopsQuery.eq('delivery_date', deliveryDate);
+        // Also include stops that match the day of week if delivery_date is NULL
+        // This ensures we get all stops for the selected date, including legacy stops
+        if (normalizedDeliveryDate) {
+            if (day !== "all") {
+                // Query stops that match delivery_date OR (delivery_date is NULL AND day matches)
+                // Use PostgREST filter syntax for OR conditions
+                stopsQuery = stopsQuery.or(`delivery_date.eq.${normalizedDeliveryDate},and(delivery_date.is.null,day.eq.${day})`);
+            } else {
+                // When day is "all", filter by delivery_date only
+                stopsQuery = stopsQuery.eq('delivery_date', normalizedDeliveryDate);
+            }
+        } else if (day !== "all") {
+            // If no delivery_date but day is specified, filter by day
+            stopsQuery = stopsQuery.eq('day', day);
         }
         
         const { data: allStops } = await stopsQuery;
+        
+        // If filtering by delivery_date, also fetch stops with NULL delivery_date that match the day
+        // This handles legacy stops or stops where delivery_date wasn't set correctly
+        let additionalStops: any[] = [];
+        if (normalizedDeliveryDate && day !== "all") {
+            const { data: nullDateStops } = await supabase
+                .from('stops')
+                .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day')
+                .is('delivery_date', null)
+                .eq('day', day);
+            
+            if (nullDateStops) {
+                // Filter out duplicates (stops that were already included in allStops)
+                const existingStopIds = new Set((allStops || []).map(s => s.id));
+                additionalStops = (nullDateStops || []).filter(s => !existingStopIds.has(s.id));
+            }
+        }
+        
+        // Combine stops from both queries
+        const allStopsCombined = [...(allStops || []), ...additionalStops];
 
         // 3) Fetch all Clients for the clientIds we saw in stops
         const clientIdSet = new Set<string>();
-        for (const s of (allStops || [])) if (s.client_id) clientIdSet.add(String(s.client_id));
+        for (const s of allStopsCombined) if (s.client_id) clientIdSet.add(String(s.client_id));
         const clientIds = Array.from(clientIdSet);
 
         const { data: clients } = clientIds.length > 0
@@ -170,7 +205,7 @@ export async function GET(req: Request) {
         // 6) Hydrate each stop, preferring live Client fields when available
         const stopById = new Map<string, any>();
 
-        for (const s of (allStops || [])) {
+        for (const s of allStopsCombined) {
             const c = s.client_id ? clientById.get(s.client_id) : undefined;
             // Priority: Use full_name from client record, fallback to constructed name
             const name =
@@ -431,11 +466,10 @@ export async function GET(req: Request) {
             }
             const datesMap = clientDeliveryDates.get(clientId)!;
             
-            // Store delivery date info (upcoming orders don't have order_id in orders table yet, set to null)
-            // Note: order_id FK constraint only allows references to orders table, not upcoming_orders
-            // Use upcoming order id as a reference (we'll store it in a way that doesn't violate FK)
+            // Store delivery date info with upcoming order ID
+            // order_id will reference the upcoming_order.id (FK constraint has been removed to allow this)
             if (!datesMap.has(deliveryDateStr)) {
-                datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: null, caseId: order.case_id || null });
+                datesMap.set(deliveryDateStr, { deliveryDate: deliveryDateStr, dayOfWeek, orderId: order.id, caseId: order.case_id || null });
             }
         }
 
