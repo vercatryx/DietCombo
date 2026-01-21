@@ -188,47 +188,22 @@ function isPausedStop(s) {
     return false;
 }
 
-/** Get color for stop based on order status (replaces driver color coding)
- * Status colors take priority over driver colors for all statuses
+/** Get color for stop based on driver color
+ * Uses driver color from stop's __driverColor property or the defaultColor (driver color)
  */
 function getStopColor(stop, defaultColor) {
-    // Priority 1: Order status - map all statuses to appropriate colors
-    // Handle multiple possible field names and normalize the status value
-    const orderStatusRaw = stop?.orderStatus || stop?.order?.status || stop?.status || null;
-    const orderStatus = orderStatusRaw ? String(orderStatusRaw).trim().toLowerCase() : null;
-    
-    if (orderStatus && orderStatus.length > 0) {
-        switch (orderStatus) {
-            case "cancelled":
-            case "canceled":
-                return "#dc2626"; // Red (#ef4444 variant, darker for better visibility)
-            case "waiting_for_proof":
-            case "waiting for proof":
-                return "#7c3aed"; // Purple/Indigo for waiting for proof
-            case "billing_pending":
-            case "billing pending":
-                return "#d97706"; // Orange/Amber for billing pending
-            case "completed":
-                return "#16a34a"; // Green for completed orders
-            case "confirmed":
-                return "#facc15"; // Yellow for confirmed orders
-            case "pending":
-            case "scheduled":
-                return "#f59e0b"; // Orange/Amber for pending/scheduled orders
-            default:
-                // Unknown status - use gray instead of driver color
-                return "#6b7280"; // Gray for unknown statuses
-        }
+    // Priority 1: Use driver color from stop's __driverColor property
+    if (stop?.__driverColor) {
+        return stop.__driverColor;
     }
     
-    // Priority 2: Stop completed status (only if no order status)
-    // If stop is completed but no order status, use green
-    if (stop?.completed === true && !orderStatus) {
-        return "#16a34a"; // Green for completed stops without order status
+    // Priority 2: Use the defaultColor parameter (which is the driver's color)
+    if (defaultColor) {
+        return defaultColor;
     }
     
-    // Default: use gray instead of driver color when no status is available
-    return "#6b7280"; // Gray for stops without order status
+    // Default: use gray for stops without driver assignment
+    return "#666";
 }
 
 /* ==================== Icons (anchor-fixed) ==================== */
