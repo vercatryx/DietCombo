@@ -948,74 +948,331 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
 
         // Full Details for ClientInfoShelf (forceDetails=true)
-        const itemsList: { name: string; quantity: number }[] = [];
-        let vendorName = '';
+        // Group by day of week for both Food and Boxes
+        const dayOrderArray = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
         if (st === 'Food') {
-            // Collect all items from all vendors/days
             const isMultiDay = conf.deliveryDayOrders && typeof conf.deliveryDayOrders === 'object';
 
-            // Helper to process selections
-            const processSelections = (selections: any[]) => {
-                selections.forEach(sel => {
-                    const vName = vendors.find(v => v.id === sel.vendorId)?.name;
-                    if (vName && !vendorName.includes(vName)) {
-                        vendorName = vendorName ? `${vendorName}, ${vName}` : vName;
-                    }
-                    if (sel.items) {
-                        Object.entries(sel.items).forEach(([itemId, qty]) => {
-                            const q = Number(qty);
-                            if (q > 0) {
-                                const item = menuItems.find(i => i.id === itemId);
-                                if (item) {
-                                    // Check if already in list (aggregate?) - Usually we want row per item per vendor, but here simple list
-                                    const existing = itemsList.find(i => i.name === item.name);
-                                    if (existing) existing.quantity += q;
-                                    else itemsList.push({ name: item.name, quantity: q });
-                                }
-                            }
-                        });
-                    }
-                });
-            };
-
             if (isMultiDay) {
-                Object.values(conf.deliveryDayOrders || {}).forEach((dayOrder: any) => {
-                    if (dayOrder?.vendorSelections) processSelections(dayOrder.vendorSelections);
-                });
-            } else if (conf.vendorSelections) {
-                processSelections(conf.vendorSelections);
-            }
+                // Group by day of week
+                const dayOrderMap = new Map<string, { vendors: Set<string>, items: Map<string, number> }>();
 
-            // Add Meal Items
-            const mealSelections = client.mealOrder?.mealSelections || client.activeOrder?.mealSelections;
-            if (mealSelections) {
-                Object.keys(mealSelections).forEach(type => {
-                    const sel = mealSelections[type];
-                    if (sel.items) {
-                        Object.entries(sel.items).forEach(([itemId, qty]) => {
-                            const q = Number(qty);
-                            if (q > 0) {
-                                // Try to find in menu items or meal items (though meal items usually separate)
-                                const item = menuItems.find(i => i.id === itemId);
-                                if (item) {
-                                    const existing = itemsList.find(i => i.name === item.name);
-                                    if (existing) existing.quantity += q;
-                                    else itemsList.push({ name: item.name, quantity: q });
-                                } else {
-                                    // Fallback for ID if not found
-                                    itemsList.push({ name: `Item #${itemId.slice(0, 5)}`, quantity: q });
+                Object.entries(conf.deliveryDayOrders || {}).forEach(([day, dayOrderData]: [string, any]) => {
+                    if (!dayOrderData?.vendorSelections || dayOrderData.vendorSelections.length === 0) {
+                        return;
+                    }
+
+                    const dayVendors = new Set<string>();
+                    const dayItems = new Map<string, number>();
+
+                    dayOrderData.vendorSelections.forEach((v: any) => {
+                        const vName = vendors.find(ven => ven.id === v.vendorId)?.name;
+                        if (vName) {
+                            dayVendors.add(vName);
+                        }
+
+                        // Collect items for this day
+                        if (v.items) {
+                            Object.entries(v.items).forEach(([itemId, qty]: [string, any]) => {
+                                const quantity = typeof qty === 'number' ? qty : (typeof qty === 'object' && 'quantity' in qty ? Number(qty.quantity) : Number(qty) || 0);
+                                if (quantity > 0) {
+                                    const item = menuItems.find(i => i.id === itemId);
+                                    if (item) {
+                                        const currentQty = dayItems.get(item.name) || 0;
+                                        dayItems.set(item.name, currentQty + quantity);
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
+                    });
+
+                    if (dayVendors.size > 0 || dayItems.size > 0) {
+                        dayOrderMap.set(day, { vendors: dayVendors, items: dayItems });
                     }
                 });
+
+                // Sort days
+                const sortedDays = Array.from(dayOrderMap.keys()).sort((a, b) => {
+                    const aIndex = dayOrderArray.indexOf(a);
+                    const bIndex = dayOrderArray.indexOf(b);
+                    if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+                    if (aIndex === -1) return 1;
+                    if (bIndex === -1) return -1;
+                    return aIndex - bIndex;
+                });
+
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '4px' }}>
+                            {st}
+                        </div>
+                        {sortedDays.map(day => {
+                            const dayData = dayOrderMap.get(day)!;
+                            const vendorList = Array.from(dayData.vendors).join(', ') || 'Not Set';
+                            const itemsList = Array.from(dayData.items.entries())
+                                .map(([itemName, qty]) => ({ name: itemName, quantity: qty }));
+
+                            return (
+                                <div key={day} style={{
+                                    padding: '12px',
+                                    backgroundColor: 'var(--bg-surface)',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--border-color)'
+                                }}>
+                                    <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-primary)', marginBottom: '6px' }}>
+                                        {day}
+                                    </div>
+                                    <div style={{ fontSize: '0.85rem', marginBottom: '4px' }}>
+                                        <strong>Vendor:</strong> {vendorList}
+                                    </div>
+                                    {itemsList.length > 0 ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                                            {itemsList.map((item, idx) => (
+                                                <div key={idx} style={{ fontSize: '0.85rem', lineHeight: '1.4', paddingLeft: '8px', borderLeft: '2px solid var(--border-color)' }}>
+                                                    <span style={{ fontWeight: 600 }}>{item.quantity}</span> × {item.name}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div style={{ fontStyle: 'italic', color: 'var(--text-tertiary)', fontSize: '0.8rem', marginTop: '4px' }}>No items</div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                );
+            } else {
+                // Legacy single-day format
+                const itemsList: { name: string; quantity: number }[] = [];
+                let vendorName = '';
+
+                if (conf.vendorSelections) {
+                    conf.vendorSelections.forEach(sel => {
+                        const vName = vendors.find(v => v.id === sel.vendorId)?.name;
+                        if (vName && !vendorName.includes(vName)) {
+                            vendorName = vendorName ? `${vendorName}, ${vName}` : vName;
+                        }
+                        if (sel.items) {
+                            Object.entries(sel.items).forEach(([itemId, qty]) => {
+                                const q = Number(qty);
+                                if (q > 0) {
+                                    const item = menuItems.find(i => i.id === itemId);
+                                    if (item) {
+                                        const existing = itemsList.find(i => i.name === item.name);
+                                        if (existing) existing.quantity += q;
+                                        else itemsList.push({ name: item.name, quantity: q });
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                            {st} - <span style={{ fontWeight: 500 }}>{vendorName || 'Vendor Not Set'}</span>
+                        </div>
+                        {itemsList.length > 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {itemsList.map((item, idx) => (
+                                    <div key={idx} style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+                                        <span style={{ fontWeight: 600 }}>{item.quantity}</span> * {item.name}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div style={{ fontStyle: 'italic', color: 'var(--text-tertiary)' }}>No items selected</div>
+                        )}
+                    </div>
+                );
             }
 
         } else if (st === 'Boxes') {
+            const confAny = conf as any;
+            const isMultiDayBoxes = confAny.deliveryDayOrders && typeof confAny.deliveryDayOrders === 'object';
+
+            if (isMultiDayBoxes) {
+                // Group boxes by day of week
+                const dayOrderMap = new Map<string, { vendors: Set<string>, boxes: Array<{ boxTypeName: string, items: Map<string, number> }> }>();
+
+                Object.entries(confAny.deliveryDayOrders || {}).forEach(([day, dayOrderData]: [string, any]) => {
+                    if (!dayOrderData) return;
+
+                    const dayVendors = new Set<string>();
+                    const dayBoxes: Array<{ boxTypeName: string, items: Map<string, number> }> = [];
+
+                    // Check if this day has boxOrders
+                    if (dayOrderData.boxOrders && Array.isArray(dayOrderData.boxOrders) && dayOrderData.boxOrders.length > 0) {
+                        dayOrderData.boxOrders.forEach((box: any) => {
+                            const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
+                            const vId = box.vendorId || boxDef?.vendorId;
+                            if (vId) {
+                                const vName = vendors.find(v => v.id === vId)?.name;
+                                if (vName) dayVendors.add(vName);
+                            }
+
+                            // Collect items for this box
+                            const boxItems = new Map<string, number>();
+                            if (box.items) {
+                                let itemsObj = box.items;
+                                if (typeof box.items === 'string') {
+                                    try {
+                                        itemsObj = JSON.parse(box.items);
+                                    } catch (e) {
+                                        console.error('Error parsing box.items:', e);
+                                        itemsObj = {};
+                                    }
+                                }
+
+                                Object.entries(itemsObj).forEach(([itemId, qtyOrObj]: [string, any]) => {
+                                    let q = 0;
+                                    if (typeof qtyOrObj === 'number') {
+                                        q = qtyOrObj;
+                                    } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                                        const qtyObj = qtyOrObj as { quantity: number | string };
+                                        q = typeof qtyObj.quantity === 'number' ? qtyObj.quantity : parseInt(String(qtyObj.quantity)) || 0;
+                                    } else {
+                                        q = parseInt(String(qtyOrObj)) || 0;
+                                    }
+
+                                    if (q > 0) {
+                                        const item = menuItems.find(i => i.id === itemId);
+                                        if (item) {
+                                            const currentQty = boxItems.get(item.name) || 0;
+                                            boxItems.set(item.name, currentQty + q);
+                                        }
+                                    }
+                                });
+                            }
+
+                            const boxTypeName = boxDef?.name || 'Unknown Box';
+                            dayBoxes.push({ boxTypeName, items: boxItems });
+                        });
+                    }
+
+                    // Also check legacy format for this day
+                    if (dayBoxes.length === 0 && dayOrderData.items) {
+                        const boxDef = boxTypes.find(b => b.id === dayOrderData.boxTypeId);
+                        const vId = dayOrderData.vendorId || boxDef?.vendorId;
+                        if (vId) {
+                            const vName = vendors.find(v => v.id === vId)?.name;
+                            if (vName) dayVendors.add(vName);
+                        }
+
+                        const boxItems = new Map<string, number>();
+                        let itemsObj: any = dayOrderData.items;
+                        if (typeof dayOrderData.items === 'string') {
+                            try {
+                                itemsObj = JSON.parse(dayOrderData.items);
+                            } catch (e) {
+                                console.error('Error parsing dayOrderData.items:', e);
+                                itemsObj = {};
+                            }
+                        }
+
+                        Object.entries(itemsObj).forEach(([itemId, qtyOrObj]: [string, any]) => {
+                            let q = 0;
+                            if (typeof qtyOrObj === 'number') {
+                                q = qtyOrObj;
+                            } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                                const qtyObj = qtyOrObj as { quantity: number | string };
+                                q = typeof qtyObj.quantity === 'number' ? qtyObj.quantity : parseInt(String(qtyObj.quantity)) || 0;
+                            } else {
+                                q = parseInt(String(qtyOrObj)) || 0;
+                            }
+
+                            if (q > 0) {
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item) {
+                                    const currentQty = boxItems.get(item.name) || 0;
+                                    boxItems.set(item.name, currentQty + q);
+                                }
+                            }
+                        });
+
+                        const boxTypeName = boxDef?.name || 'Unknown Box';
+                        dayBoxes.push({ boxTypeName, items: boxItems });
+                    }
+
+                    if (dayVendors.size > 0 || dayBoxes.length > 0) {
+                        dayOrderMap.set(day, { vendors: dayVendors, boxes: dayBoxes });
+                    }
+                });
+
+                // Sort days
+                const sortedDays = Array.from(dayOrderMap.keys()).sort((a, b) => {
+                    const aIndex = dayOrderArray.indexOf(a);
+                    const bIndex = dayOrderArray.indexOf(b);
+                    if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+                    if (aIndex === -1) return 1;
+                    if (bIndex === -1) return -1;
+                    return aIndex - bIndex;
+                });
+
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '4px' }}>
+                            {st}
+                        </div>
+                        {sortedDays.map(day => {
+                            const dayData = dayOrderMap.get(day)!;
+                            const vendorList = Array.from(dayData.vendors).join(', ') || 'Not Set';
+
+                            return (
+                                <div key={day} style={{
+                                    padding: '12px',
+                                    backgroundColor: 'var(--bg-surface)',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--border-color)'
+                                }}>
+                                    <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-primary)', marginBottom: '6px' }}>
+                                        {day}
+                                    </div>
+                                    <div style={{ fontSize: '0.85rem', marginBottom: '8px' }}>
+                                        <strong>Vendor:</strong> {vendorList}
+                                    </div>
+                                    {dayData.boxes.map((box, idx) => {
+                                        const itemsList = Array.from(box.items.entries())
+                                            .map(([itemName, qty]) => ({ name: itemName, quantity: qty }));
+
+                                        return (
+                                            <div key={idx} style={{
+                                                marginTop: idx > 0 ? '8px' : '0',
+                                                padding: '8px',
+                                                backgroundColor: 'var(--bg-panel)',
+                                                borderRadius: '6px'
+                                            }}>
+                                                <div style={{ fontWeight: 600, fontSize: '0.8rem', marginBottom: '4px' }}>
+                                                    {box.boxTypeName}
+                                                </div>
+                                                {itemsList.length > 0 ? (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+                                                        {itemsList.map((item, itemIdx) => (
+                                                            <div key={itemIdx} style={{ fontSize: '0.8rem', lineHeight: '1.4', paddingLeft: '8px', borderLeft: '2px solid var(--border-color)' }}>
+                                                                <span style={{ fontWeight: 600 }}>{item.quantity}</span> × {item.name}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ fontStyle: 'italic', color: 'var(--text-tertiary)', fontSize: '0.75rem', marginTop: '4px' }}>No items</div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })}
+                    </div>
+                );
+            } else {
+                // Legacy single-day format
             // Boxes Logic
             const boxOrders = conf.boxOrders || [];
             const uniqueVendors = new Set<string>();
+            const itemsList: { name: string; quantity: number }[] = [];
+            let vendorName: string;
 
             if (boxOrders.length > 0) {
                 boxOrders.forEach((box: any) => {
@@ -1061,8 +1318,28 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     }
                 });
                 vendorName = Array.from(uniqueVendors).join(', ') || 'No Vendor';
+
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                            {st} - <span style={{ fontWeight: 500 }}>{vendorName || 'Vendor Not Set'}</span>
+                        </div>
+                        {itemsList.length > 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {itemsList.map((item, idx) => (
+                                    <div key={idx} style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+                                        <span style={{ fontWeight: 600 }}>{item.quantity}</span> * {item.name}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div style={{ fontStyle: 'italic', color: 'var(--text-tertiary)' }}>No items selected</div>
+                        )}
+                    </div>
+                );
             } else {
                 // Legacy Fallback
+                const itemsList: { name: string; quantity: number }[] = [];
                 let computedVendorId = conf.vendorId;
                 if (!computedVendorId && !conf.boxTypeId && typeof conf === 'object') {
                     const possibleDayKeys = Object.keys(conf).filter(k => k !== 'id' && k !== 'serviceType' && k !== 'caseId' && typeof (conf as any)[k] === 'object' && (conf as any)[k]?.vendorId);
@@ -1070,11 +1347,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 }
                 const box = boxTypes.find(b => b.id === conf.boxTypeId);
                 const vId = computedVendorId || box?.vendorId;
-                vendorName = vendors.find(v => v.id === vId)?.name || 'No Vendor';
+                const vendorName = vendors.find(v => v.id === vId)?.name || 'No Vendor';
 
                 if (conf.items) {
                     // Handle items that might be stored as JSON string
-                    let itemsObj = conf.items;
+                    let itemsObj: any = conf.items;
                     if (typeof conf.items === 'string') {
                         try {
                             itemsObj = JSON.parse(conf.items);
@@ -1084,15 +1361,15 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         }
                     }
                     
-                    Object.entries(itemsObj).forEach(([itemId, qtyOrObj]) => {
+                    Object.entries(itemsObj).forEach(([itemId, qtyOrObj]: [string, any]) => {
                         // Handle both formats: { itemId: number } or { itemId: { quantity: number, price: number } }
                         let q = 0;
                         if (typeof qtyOrObj === 'number') {
                             q = qtyOrObj;
                         } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
-                            q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                            q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(String(qtyOrObj.quantity)) || 0;
                         } else {
-                            q = parseInt(qtyOrObj as any) || 0;
+                            q = parseInt(String(qtyOrObj)) || 0;
                         }
                         
                         if (q > 0) {
@@ -1101,6 +1378,26 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         }
                     });
                 }
+
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                            {st} - <span style={{ fontWeight: 500 }}>{vendorName || 'Vendor Not Set'}</span>
+                        </div>
+                        {itemsList.length > 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {itemsList.map((item, idx) => (
+                                    <div key={idx} style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+                                        <span style={{ fontWeight: 600 }}>{item.quantity}</span> * {item.name}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div style={{ fontStyle: 'italic', color: 'var(--text-tertiary)' }}>No items selected</div>
+                        )}
+                    </div>
+                );
+            }
             }
         } else if (st === 'Custom') {
             // Custom Order Logic

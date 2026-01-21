@@ -100,6 +100,18 @@ function getOrderSummary(
     const st = client.serviceType;
     const conf = client.activeOrder;
 
+    // Debug logging
+    if (process.env.NODE_ENV === 'development') {
+        console.log('[SidebarActiveOrderSummary] Processing order:', {
+            serviceType: st,
+            hasActiveOrder: !!conf,
+            hasDeliveryDayOrders: !!(conf as any)?.deliveryDayOrders,
+            deliveryDayOrdersKeys: (conf as any)?.deliveryDayOrders ? Object.keys((conf as any).deliveryDayOrders) : [],
+            hasBoxOrders: !!(conf as any)?.boxOrders,
+            boxOrdersLength: Array.isArray((conf as any)?.boxOrders) ? (conf as any).boxOrders.length : 0
+        });
+    }
+
     if (st === 'Food') {
         // Check if it's multi-day format
         const isMultiDay = conf.deliveryDayOrders && typeof conf.deliveryDayOrders === 'object';
@@ -109,17 +121,17 @@ function getOrderSummary(
             const dayOrderMap = new Map<string, { vendors: Set<string>, items: Map<string, number> }>();
             
             // Day order for sorting (Monday first)
-            const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+            const dayOrderArray = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
             
-            Object.entries(conf.deliveryDayOrders || {}).forEach(([day, dayOrder]: [string, any]) => {
-                if (!dayOrder?.vendorSelections || dayOrder.vendorSelections.length === 0) {
+            Object.entries(conf.deliveryDayOrders || {}).forEach(([day, dayOrderData]: [string, any]) => {
+                if (!dayOrderData?.vendorSelections || dayOrderData.vendorSelections.length === 0) {
                     return;
                 }
 
                 const dayVendors = new Set<string>();
                 const dayItems = new Map<string, number>();
 
-                dayOrder.vendorSelections.forEach((v: any) => {
+                dayOrderData.vendorSelections.forEach((v: any) => {
                     const vName = vendors.find(ven => ven.id === v.vendorId)?.name;
                     if (vName) {
                         dayVendors.add(vName);
@@ -154,10 +166,10 @@ function getOrderSummary(
                 );
             }
 
-            // Sort days by dayOrder array
+            // Sort days by dayOrderArray
             const sortedDays = Array.from(dayOrderMap.keys()).sort((a, b) => {
-                const aIndex = dayOrder.indexOf(a);
-                const bIndex = dayOrder.indexOf(b);
+                const aIndex = dayOrderArray.indexOf(a);
+                const bIndex = dayOrderArray.indexOf(b);
                 if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
                 if (aIndex === -1) return 1;
                 if (bIndex === -1) return -1;
@@ -281,13 +293,192 @@ function getOrderSummary(
             );
         }
     } else if (st === 'Boxes') {
-        // Check vendorId from order config first, then fall back to boxType
+        const confAny = conf as any;
+        
+        // Check if boxes are organized by delivery day (multi-day format)
+        const isMultiDayBoxes = confAny.deliveryDayOrders && typeof confAny.deliveryDayOrders === 'object';
+        
+        if (isMultiDayBoxes) {
+            // Group boxes by day of week
+            const dayOrderMap = new Map<string, { vendors: Set<string>, boxes: Array<{ boxTypeName: string, items: Map<string, number> }> }>();
+            
+            // Day order for sorting (Monday first)
+            const dayOrderArray = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+            
+            Object.entries(confAny.deliveryDayOrders || {}).forEach(([day, dayOrderData]: [string, any]) => {
+                if (!dayOrderData) return;
+                
+                const dayVendors = new Set<string>();
+                const dayBoxes: Array<{ boxTypeName: string, items: Map<string, number> }> = [];
+                
+                // Check if this day has boxOrders
+                if (dayOrderData.boxOrders && Array.isArray(dayOrderData.boxOrders) && dayOrderData.boxOrders.length > 0) {
+                    dayOrderData.boxOrders.forEach((box: any) => {
+                        const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
+                        const vId = box.vendorId || boxDef?.vendorId;
+                        if (vId) {
+                            const vName = vendors.find(v => v.id === vId)?.name;
+                            if (vName) dayVendors.add(vName);
+                        }
+                        
+                        // Collect items for this box
+                        const boxItems = new Map<string, number>();
+                        if (box.items) {
+                            let itemsObj = box.items;
+                            if (typeof box.items === 'string') {
+                                try {
+                                    itemsObj = JSON.parse(box.items);
+                                } catch (e) {
+                                    console.error('Error parsing box.items:', e);
+                                    itemsObj = {};
+                                }
+                            }
+                            
+                            Object.entries(itemsObj).forEach(([itemId, qtyOrObj]: [string, any]) => {
+                                let q = 0;
+                                if (typeof qtyOrObj === 'number') {
+                                    q = qtyOrObj;
+                                } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                                    const qtyObj = qtyOrObj as { quantity: number | string };
+                                    q = typeof qtyObj.quantity === 'number' ? qtyObj.quantity : parseInt(String(qtyObj.quantity)) || 0;
+                                } else {
+                                    q = parseInt(String(qtyOrObj)) || 0;
+                                }
+                                
+                                if (q > 0) {
+                                    const item = menuItems.find(i => i.id === itemId);
+                                    if (item) {
+                                        const currentQty = boxItems.get(item.name) || 0;
+                                        boxItems.set(item.name, currentQty + q);
+                                    }
+                                }
+                            });
+                        }
+                        
+                        const boxTypeName = boxDef?.name || 'Unknown Box';
+                        dayBoxes.push({ boxTypeName, items: boxItems });
+                    });
+                }
+                
+                // Also check legacy format for this day (items, vendorId, boxTypeId)
+                if (dayBoxes.length === 0 && dayOrderData.items) {
+                    const boxDef = boxTypes.find(b => b.id === dayOrderData.boxTypeId);
+                    const vId = dayOrderData.vendorId || boxDef?.vendorId;
+                    if (vId) {
+                        const vName = vendors.find(v => v.id === vId)?.name;
+                        if (vName) dayVendors.add(vName);
+                    }
+                    
+                    const boxItems = new Map<string, number>();
+                    let itemsObj: any = dayOrderData.items;
+                    if (typeof dayOrderData.items === 'string') {
+                        try {
+                            itemsObj = JSON.parse(dayOrderData.items);
+                        } catch (e) {
+                            console.error('Error parsing dayOrderData.items:', e);
+                            itemsObj = {};
+                        }
+                    }
+                    
+                    Object.entries(itemsObj).forEach(([itemId, qtyOrObj]: [string, any]) => {
+                        let q = 0;
+                        if (typeof qtyOrObj === 'number') {
+                            q = qtyOrObj;
+                        } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
+                            const qtyObj = qtyOrObj as { quantity: number | string };
+                            q = typeof qtyObj.quantity === 'number' ? qtyObj.quantity : parseInt(String(qtyObj.quantity)) || 0;
+                        } else {
+                            q = parseInt(String(qtyOrObj)) || 0;
+                        }
+                        
+                        if (q > 0) {
+                            const item = menuItems.find(i => i.id === itemId);
+                            if (item) {
+                                const currentQty = boxItems.get(item.name) || 0;
+                                boxItems.set(item.name, currentQty + q);
+                            }
+                        }
+                    });
+                    
+                    const boxTypeName = boxDef?.name || 'Unknown Box';
+                    dayBoxes.push({ boxTypeName, items: boxItems });
+                }
+                
+                if (dayVendors.size > 0 || dayBoxes.length > 0) {
+                    dayOrderMap.set(day, { vendors: dayVendors, boxes: dayBoxes });
+                }
+            });
+            
+            if (dayOrderMap.size === 0) {
+                return (
+                    <div className={styles.orderSummaryEmpty}>
+                        <Package size={14} />
+                        <span>Boxes - No boxes configured</span>
+                    </div>
+                );
+            }
+            
+            // Sort days by dayOrderArray
+            const sortedDays = Array.from(dayOrderMap.keys()).sort((a, b) => {
+                const aIndex = dayOrderArray.indexOf(a);
+                const bIndex = dayOrderArray.indexOf(b);
+                if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+                if (aIndex === -1) return 1;
+                if (bIndex === -1) return -1;
+                return aIndex - bIndex;
+            });
+            
+            return (
+                <div className={styles.orderSummaryBoxes}>
+                    <div className={styles.orderSummaryServiceType}>
+                        <Package size={14} />
+                        <strong>Boxes</strong>
+                    </div>
+                    <div className={styles.orderSummaryDays}>
+                        {sortedDays.map(day => {
+                            const dayData = dayOrderMap.get(day)!;
+                            const vendorList = Array.from(dayData.vendors).join(', ') || 'Not Set';
+                            
+                            return (
+                                <div key={day} className={styles.orderSummaryDay}>
+                                    <div className={styles.orderSummaryDayHeader}>
+                                        <strong>{day}</strong>
+                                    </div>
+                                    <div className={styles.orderSummaryDayVendors}>
+                                        {vendorList}
+                                    </div>
+                                    {dayData.boxes.map((box, idx) => {
+                                        const itemsList = Array.from(box.items.entries())
+                                            .map(([itemName, qty]) => `${itemName} x${qty}`)
+                                            .join(', ');
+                                        
+                                        return (
+                                            <div key={idx} className={styles.orderSummaryDayBox}>
+                                                <div className={styles.orderSummaryDayBoxType}>
+                                                    {box.boxTypeName}
+                                                </div>
+                                                {itemsList && (
+                                                    <div className={styles.orderSummaryDayItems}>
+                                                        {itemsList}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+        
+        // Legacy single-day format: Handle flat boxOrders array
         let computedVendorId = conf.vendorId;
         const uniqueVendors = new Set<string>();
         const itemDetails: string[] = [];
 
         // NEW: Handle boxOrders array format first (legacy format, may exist in JSON)
-        const confAny = conf as any;
         if (confAny.boxOrders && Array.isArray(confAny.boxOrders) && confAny.boxOrders.length > 0) {
             confAny.boxOrders.forEach((box: any) => {
                 const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
