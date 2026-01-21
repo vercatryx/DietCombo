@@ -26,7 +26,11 @@ export function LayoutShell({ children, userName, userRole, userId }: { children
     const isVerifyOrder = pathname.startsWith('/verify-order');
     const isDelivery = pathname.startsWith('/delivery');
     const isDrivers = pathname.startsWith('/drivers');
+    const isRoutes = pathname === '/routes' || pathname.startsWith('/routes/');
     const showSidebar = !isVendorPortal && !isClientPortal && !isVerifyOrder && !isDelivery && !isDrivers;
+
+    // Adjust padding for routes page: remove top and right padding
+    const mainPadding = isRoutes ? '0 0 0 20px' : '2rem 20px 0 20px';
 
     return (
         <DataCacheProvider>
@@ -44,7 +48,7 @@ export function LayoutShell({ children, userName, userRole, userId }: { children
                 <main style={{
                     flex: 1,
                     marginLeft: `${showSidebar ? currentSidebarWidth : 0}px`,
-                    padding: '2rem 20px 0 20px',
+                    padding: mainPadding,
                     backgroundColor: 'var(--bg-app)',
                     transition: 'margin-left 0.3s ease',
                     // Fix horizontal scroll: ensure main container clips overflow

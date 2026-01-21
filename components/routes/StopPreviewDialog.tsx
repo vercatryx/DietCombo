@@ -282,7 +282,7 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                     borderBottom: '1px solid #e5e7eb'
                 }}
             >
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                <Typography component="span" variant="h6" sx={{ fontWeight: 600 }}>
                     Stop Preview
                 </Typography>
                 <Button
@@ -334,14 +334,6 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                             </Box>
                         ) : (
                             <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                        Order ID:
-                                    </Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 500, fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                                        {finalOrderId ? `${String(finalOrderId).slice(0, 8)}...` : 'N/A'}
-                                    </Typography>
-                                </Box>
                                 {orderNumber && (
                                     <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                                         <Typography variant="body2" sx={{ color: '#6b7280' }}>
@@ -546,20 +538,6 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                                 >
                                     {stop.completed === true ? 'Completed' : stop.completed === false ? 'Pending' : 'Pending'}
                                 </Box>
-                            </Box>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                    Completed:
-                                </Typography>
-                                <Typography
-                                    variant="body2"
-                                    sx={{
-                                        fontWeight: 500,
-                                        color: stop.completed ? '#16a34a' : '#6b7280'
-                                    }}
-                                >
-                                    {stop.completed ? 'Yes' : 'No'}
-                                </Typography>
                             </Box>
                             {stop.lat && stop.lng && (
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>

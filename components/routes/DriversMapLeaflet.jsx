@@ -321,7 +321,7 @@ const formatDate = (dateStr) => {
 };
 
 /** Preview popup showing stop details */
-async function openPreviewPopup({ map, stop, color }) {
+async function openPreviewPopup({ map, stop, color, drivers, onDriverChange }) {
     if (!map || !stop) return;
     const ll = getLL(stop);
     if (!ll) return;
@@ -396,7 +396,6 @@ async function openPreviewPopup({ map, stop, color }) {
     container.style.fontFamily = "system-ui, -apple-system, sans-serif";
     container.style.fontSize = "13px";
     
-    const orderIdDisplay = stop.orderId || "N/A";
     const orderStatus = stop.orderStatus || stop.order?.status || stop.status || null;
     
     const getStatusColor = (status) => {
@@ -542,11 +541,8 @@ async function openPreviewPopup({ map, stop, color }) {
         <div style="color:#6b7280;margin-bottom:4px">${stop.city || ""} ${stop.state || ""} ${stop.zip || ""}</div>
         ${stop.phone ? `<div style="color:#6b7280;margin-bottom:8px">📞 ${stop.phone}</div>` : ""}
         
+        ${(stop.orderNumber || orderStatus) ? `
         <div style="margin-top:10px;padding:8px;background:#f9fafb;border-radius:6px;font-size:12px;line-height:1.6;border:1px solid #e5e7eb">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-                <span style="color:#6b7280"><strong>Order ID:</strong></span>
-                <span style="font-weight:500">${orderIdDisplay}</span>
-            </div>
             ${stop.orderNumber ? `
             <div style="display:flex;justify-content:space-between;margin-bottom:4px">
                 <span style="color:#6b7280"><strong>Order #:</strong></span>
@@ -562,10 +558,28 @@ async function openPreviewPopup({ map, stop, color }) {
             </div>
             ` : ""}
         </div>
+        ` : ""}
     `;
     
-    // Always show driver name if we have one
-    if (driverName) {
+    // Driver assignment section - show dropdown if drivers and onDriverChange are provided
+    const currentDriverId = stop?.__driverId || stop?.assignedDriverId || stop?.assigned_driver_id || '';
+    const stopId = stop?.id || 'unknown';
+    const selectId = `driver-select-${stopId}`;
+    
+    if (drivers && drivers.length > 0 && onDriverChange) {
+        html += `
+            <div style="margin-top:8px;padding:8px;background:#f0f9ff;border-radius:6px;font-size:12px;border:1px solid #bfdbfe">
+                <div style="margin-bottom:6px;color:#1e40af;font-weight:600">Assign Driver:</div>
+                <select id="${selectId}" style="width:100%;padding:6px 8px;border-radius:4px;border:1px solid #bfdbfe;background:white;font-size:12px;cursor:pointer">
+                    <option value="">None</option>
+                    ${drivers.map(driver => `
+                        <option value="${driver.id}" ${String(driver.id) === String(currentDriverId) ? 'selected' : ''}>${driver.name || 'Unknown Driver'}</option>
+                    `).join('')}
+                </select>
+            </div>
+        `;
+    } else if (driverName) {
+        // Show read-only driver name if no assignment functionality
         html += `
             <div style="margin-top:8px;padding:6px;background:#f0f9ff;border-radius:6px;font-size:12px;border:1px solid #bfdbfe">
                 <div style="display:flex;justify-content:space-between">
@@ -606,18 +620,6 @@ async function openPreviewPopup({ map, stop, color }) {
         </div>
     `;
     
-    if (stop.completed !== undefined) {
-        const completedColor = stop.completed ? "#16a34a" : "#6b7280";
-        html += `
-            <div style="margin-top:8px;font-size:12px">
-                <div style="display:flex;justify-content:space-between">
-                    <span style="color:#6b7280"><strong>Completed:</strong></span>
-                    <span style="font-weight:500;color:${completedColor}">${stop.completed ? "Yes" : "No"}</span>
-                </div>
-            </div>
-        `;
-    }
-    
     if (stop.dislikes) {
         html += `
             <div style="margin-top:8px;padding:6px;background:#fef3c7;border-radius:6px;font-size:11px;border:1px solid #fcd34d">
@@ -628,6 +630,27 @@ async function openPreviewPopup({ map, stop, color }) {
     }
     
     container.innerHTML = html;
+    
+    // Attach event listener for driver dropdown if present
+    if (drivers && drivers.length > 0 && onDriverChange) {
+        // Use setTimeout to ensure DOM is ready
+        setTimeout(() => {
+            const selectEl = container.querySelector(`#${selectId}`);
+            if (selectEl) {
+                selectEl.addEventListener('change', async (e) => {
+                    const selectedDriverId = e.target.value;
+                    try {
+                        await onDriverChange(stop, selectedDriverId);
+                        // Close the popup after successful assignment
+                        map.closePopup();
+                    } catch (error) {
+                        console.error('Failed to assign driver:', error);
+                        alert('Failed to assign driver. Please try again.');
+                    }
+                });
+            }
+        }, 0);
+    }
     
     const popup = L.popup({ closeOnClick: true, autoClose: true, className: "color-popup", maxWidth: 400 })
         .setLatLng(ll)
@@ -770,6 +793,9 @@ export default function DriversMapLeaflet({
                                               unrouted = [],
                                               onReassign, // (stop, driverId)
                                               onRenameDriver, // optional: (driverId, newNumber) => Promise
+                                              onStopClick, // optional: (stop) => void - called when stop is clicked
+                                              driversForAssignment, // optional: array of {id, name} for driver dropdown
+                                              onDriverChange, // optional: (stop, driverId) => Promise<void> - called when driver is changed in popup
                                               onExpose, // optional
                                               initialCenter = [40.7128, -74.006],
                                               initialZoom = 10,
@@ -1147,16 +1173,22 @@ export default function DriversMapLeaflet({
                 return;
             }
             
+            // If onStopClick callback is provided, call it instead of showing Leaflet popup
+            if (onStopClick && stop) {
+                onStopClick(stop);
+                return;
+            }
+            
             // Show preview popup when clicking a stop (async to fetch client name if needed)
             if (stop && map) {
-                await openPreviewPopup({ map, stop, color: baseColor });
+                await openPreviewPopup({ map, stop, color: baseColor, drivers: driversForAssignment, onDriverChange });
             }
             
             // Disable assign driver feature for stops - driver assignment is now done directly to clients
             // map?.closePopup();
             // openAssignForStop(stop, baseColor);
         },
-        [clickPickMode, toggleId, readonly]
+        [clickPickMode, toggleId, readonly, onStopClick, driversForAssignment, onDriverChange]
     );
 
     /* ------- driver editing ------- */

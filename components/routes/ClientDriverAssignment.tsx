@@ -466,6 +466,13 @@ export default function ClientDriverAssignment({
                     drivers={mapDrivers}
                     unrouted={unroutedStops}
                     onReassign={readOnly ? undefined : handleMapReassign}
+                    driversForAssignment={drivers}
+                    onDriverChange={async (stop, driverId) => {
+                        const clientId = stop.userId || stop.clientId || stop.id;
+                        if (clientId) {
+                            await handleDriverChange(clientId, driverId);
+                        }
+                    }}
                     busy={isBulkSaving}
                     readonly={readOnly}
                     initialCenter={[40.7128, -74.006]}
