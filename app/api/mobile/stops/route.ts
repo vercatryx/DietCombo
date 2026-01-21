@@ -62,7 +62,7 @@ export async function GET(req: Request) {
         // Get those stops (optionally constrained by day)
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date')
+            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
             .in('id', orderedIds);
         
         if (day !== "all") {
@@ -76,8 +76,57 @@ export async function GET(req: Request) {
         const ordered = orderedIds.map((id) => byId.get(id)).filter(Boolean);
 
         // Fetch order information for all stops
+        // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table
+        // Fallback: Match by client_id for stops without order_id
+        const orderMapById = new Map<string, any>(); // key: order_id (direct lookup)
+        const orderMapByClient = new Map<string, any>(); // key: client_id (fallback)
+        
+        // Collect all unique order_ids from stops
+        const orderIds = new Set<string>();
+        for (const s of ordered) {
+            if (s.order_id) {
+                orderIds.add(String(s.order_id));
+            }
+        }
+        
+        // Fetch orders by order_id - check upcoming_orders first, then orders
+        if (orderIds.size > 0) {
+            const orderIdsArray = Array.from(orderIds);
+            
+            // First check upcoming_orders table
+            const { data: upcomingOrdersById } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                .in('id', orderIdsArray);
+            
+            if (upcomingOrdersById) {
+                for (const order of upcomingOrdersById) {
+                    orderMapById.set(String(order.id), order);
+                }
+            }
+            
+            // Then check orders table for any order_ids not found in upcoming_orders
+            const foundOrderIds = new Set(upcomingOrdersById?.map(o => String(o.id)) || []);
+            const missingOrderIds = orderIdsArray.filter(id => !foundOrderIds.has(id));
+            
+            if (missingOrderIds.length > 0) {
+                const { data: ordersById } = await supabase
+                    .from('orders')
+                    .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                    .in('id', missingOrderIds);
+                
+                if (ordersById) {
+                    for (const order of ordersById) {
+                        orderMapById.set(String(order.id), order);
+                    }
+                }
+            }
+            
+            console.log(`[/api/mobile/stops] Found ${orderMapById.size} orders by order_id (${upcomingOrdersById?.length || 0} from upcoming_orders, ${missingOrderIds.length > 0 ? orderMapById.size - (upcomingOrdersById?.length || 0) : 0} from orders)`);
+        }
+        
+        // Also fetch orders by client_id for fallback matching (for stops without order_id)
         const clientIds = [...new Set(ordered.map((s: any) => s.client_id).filter(Boolean))];
-        const orderMap = new Map<string, any>();
         
         if (clientIds.length > 0) {
             // Get the most recent order for each client - expand status filter to include more statuses
@@ -97,7 +146,7 @@ export async function GET(req: Request) {
                 .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
             
-            console.log(`[/api/mobile/stops] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients`);
+            console.log(`[/api/mobile/stops] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients (for fallback matching)`);
             
             // Combine both order sources, prioritizing regular orders
             const allOrders = [...(orders || []), ...(upcomingOrders || [])];
@@ -106,11 +155,11 @@ export async function GET(req: Request) {
                 // Group orders by client_id and pick the most recent one for each client
                 for (const order of allOrders) {
                     const cid = String(order.client_id);
-                    if (!orderMap.has(cid)) {
-                        orderMap.set(cid, order);
+                    if (!orderMapByClient.has(cid)) {
+                        orderMapByClient.set(cid, order);
                     }
                 }
-                console.log(`[/api/mobile/stops] Mapped ${orderMap.size} orders to clients`);
+                console.log(`[/api/mobile/stops] Mapped ${orderMapByClient.size} orders to clients (for fallback)`);
             } else {
                 console.warn(`[/api/mobile/stops] No orders found for any of the ${clientIds.length} clients`);
             }
@@ -118,10 +167,21 @@ export async function GET(req: Request) {
 
         // Map to expected format (keep id as string if it's a UUID, or convert if it's numeric)
         const mapped = ordered.map((s: any) => {
-            const order = orderMap.get(String(s.client_id));
-            if (!order && s.client_id) {
-                console.log(`[/api/mobile/stops] No order found for stop ${s.id} with client_id ${s.client_id}`);
+            // Priority: Use stop.order_id to look up order directly
+            // Fallback: Match by client_id if no order_id or direct lookup fails
+            let order = null;
+            
+            if (s.order_id) {
+                order = orderMapById.get(String(s.order_id)) || null;
             }
+            
+            if (!order && s.client_id) {
+                order = orderMapByClient.get(String(s.client_id)) || null;
+                if (!order) {
+                    console.log(`[/api/mobile/stops] No order found for stop ${s.id} with client_id ${s.client_id}`);
+                }
+            }
+            
             return {
                 id: String(s.id), // Keep as string for UUID compatibility
                 userId: s.client_id,
@@ -140,7 +200,7 @@ export async function GET(req: Request) {
                 // Include stop's delivery_date field (primary source)
                 delivery_date: s.delivery_date || null,
                 // Also include order tracking fields as fallback
-                orderId: order?.id || null,
+                orderId: order?.id || s.order_id || null,
                 orderDate: order?.created_at || null,
                 deliveryDate: s.delivery_date || order?.actual_delivery_date || order?.scheduled_delivery_date || null,
             };
@@ -153,7 +213,7 @@ export async function GET(req: Request) {
     // No driverId → return ALL stops for the day (flat array), ordered for stable UI
     let allQuery = supabase
         .from('stops')
-        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date')
+        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
         .order('assigned_driver_id', { ascending: true })
         .order('order', { ascending: true })
         .order('id', { ascending: true });
@@ -169,8 +229,57 @@ export async function GET(req: Request) {
         }
 
         // Fetch order information for all stops
+        // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table
+        // Fallback: Match by client_id for stops without order_id
+        const orderMapById = new Map<string, any>(); // key: order_id (direct lookup)
+        const orderMapByClient = new Map<string, any>(); // key: client_id (fallback)
+        
+        // Collect all unique order_ids from stops
+        const orderIds = new Set<string>();
+        for (const s of (all || [])) {
+            if (s.order_id) {
+                orderIds.add(String(s.order_id));
+            }
+        }
+        
+        // Fetch orders by order_id - check upcoming_orders first, then orders
+        if (orderIds.size > 0) {
+            const orderIdsArray = Array.from(orderIds);
+            
+            // First check upcoming_orders table
+            const { data: upcomingOrdersById } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                .in('id', orderIdsArray);
+            
+            if (upcomingOrdersById) {
+                for (const order of upcomingOrdersById) {
+                    orderMapById.set(String(order.id), order);
+                }
+            }
+            
+            // Then check orders table for any order_ids not found in upcoming_orders
+            const foundOrderIds = new Set(upcomingOrdersById?.map(o => String(o.id)) || []);
+            const missingOrderIds = orderIdsArray.filter(id => !foundOrderIds.has(id));
+            
+            if (missingOrderIds.length > 0) {
+                const { data: ordersById } = await supabase
+                    .from('orders')
+                    .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status')
+                    .in('id', missingOrderIds);
+                
+                if (ordersById) {
+                    for (const order of ordersById) {
+                        orderMapById.set(String(order.id), order);
+                    }
+                }
+            }
+            
+            console.log(`[/api/mobile/stops] Found ${orderMapById.size} orders by order_id (${upcomingOrdersById?.length || 0} from upcoming_orders, ${missingOrderIds.length > 0 ? orderMapById.size - (upcomingOrdersById?.length || 0) : 0} from orders)`);
+        }
+        
+        // Also fetch orders by client_id for fallback matching (for stops without order_id)
         const clientIds = [...new Set((all || []).map((s: any) => s.client_id).filter(Boolean))];
-        const orderMap = new Map<string, any>();
         
         if (clientIds.length > 0) {
             // Get the most recent order for each client - expand status filter to include more statuses
@@ -190,7 +299,7 @@ export async function GET(req: Request) {
                 .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
             
-            console.log(`[/api/mobile/stops] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients`);
+            console.log(`[/api/mobile/stops] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients (for fallback matching)`);
             
             // Combine both order sources, prioritizing regular orders
             const allOrders = [...(orders || []), ...(upcomingOrders || [])];
@@ -199,11 +308,11 @@ export async function GET(req: Request) {
                 // Group orders by client_id and pick the most recent one for each client
                 for (const order of allOrders) {
                     const cid = String(order.client_id);
-                    if (!orderMap.has(cid)) {
-                        orderMap.set(cid, order);
+                    if (!orderMapByClient.has(cid)) {
+                        orderMapByClient.set(cid, order);
                     }
                 }
-                console.log(`[/api/mobile/stops] Mapped ${orderMap.size} orders to clients`);
+                console.log(`[/api/mobile/stops] Mapped ${orderMapByClient.size} orders to clients (for fallback)`);
             } else {
                 console.warn(`[/api/mobile/stops] No orders found for any of the ${clientIds.length} clients`);
             }
@@ -211,7 +320,18 @@ export async function GET(req: Request) {
 
     // Map to expected format (keep id as string for UUID compatibility)
     const mapped = (all || []).map((s: any) => {
-        const order = orderMap.get(String(s.client_id));
+        // Priority: Use stop.order_id to look up order directly
+        // Fallback: Match by client_id if no order_id or direct lookup fails
+        let order = null;
+        
+        if (s.order_id) {
+            order = orderMapById.get(String(s.order_id)) || null;
+        }
+        
+        if (!order && s.client_id) {
+            order = orderMapByClient.get(String(s.client_id)) || null;
+        }
+        
         return {
             id: String(s.id), // Keep as string for UUID compatibility
             userId: s.client_id,
@@ -230,7 +350,7 @@ export async function GET(req: Request) {
             // Include stop's delivery_date field (primary source)
             delivery_date: s.delivery_date || null,
             // Also include order tracking fields as fallback
-            orderId: order?.id || null,
+            orderId: order?.id || s.order_id || null,
             orderDate: order?.created_at || null,
             deliveryDate: s.delivery_date || order?.actual_delivery_date || order?.scheduled_delivery_date || null,
         };

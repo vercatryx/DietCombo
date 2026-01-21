@@ -70,7 +70,7 @@ export async function GET(req: Request) {
         
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id')
+            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
             .order('id', { ascending: true });
         
         // Filter by delivery_date if provided
@@ -98,7 +98,7 @@ export async function GET(req: Request) {
         if (normalizedDeliveryDate && day !== "all") {
             const { data: nullDateStops } = await supabase
                 .from('stops')
-                .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id')
+                .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
                 .is('delivery_date', null)
                 .eq('day', day);
             
@@ -142,16 +142,63 @@ export async function GET(req: Request) {
         console.log(`[route/routes] After sorting: ${drivers.length} drivers (${driversRaw.length} from drivers table, ${routesRaw.length} from routes table)`);
 
         // 5) Fetch order information for all stops
-        // Create a map keyed by "client_id|delivery_date" for exact matches, and "client_id" for fallback
+        // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table
+        // Fallback: Create maps keyed by "client_id|delivery_date" and "client_id" for stops without order_id
+        const orderMapById = new Map<string, any>(); // key: order_id (direct lookup)
         const orderMapByClientAndDate = new Map<string, any>(); // key: "client_id|delivery_date"
         const orderMapByClient = new Map<string, any>(); // key: "client_id" (fallback to most recent)
         
+        // Collect all unique order_ids from stops
+        const orderIds = new Set<string>();
+        for (const s of allStopsCombined) {
+            if (s.order_id) {
+                orderIds.add(String(s.order_id));
+            }
+        }
+        
+        // Fetch orders by order_id - check upcoming_orders first, then orders
+        if (orderIds.size > 0) {
+            const orderIdsArray = Array.from(orderIds);
+            
+            // First check upcoming_orders table
+            const { data: upcomingOrdersById } = await supabase
+                .from('upcoming_orders')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
+                .in('id', orderIdsArray);
+            
+            if (upcomingOrdersById) {
+                for (const order of upcomingOrdersById) {
+                    orderMapById.set(String(order.id), order);
+                }
+            }
+            
+            // Then check orders table for any order_ids not found in upcoming_orders
+            const foundOrderIds = new Set(upcomingOrdersById?.map(o => String(o.id)) || []);
+            const missingOrderIds = orderIdsArray.filter(id => !foundOrderIds.has(id));
+            
+            if (missingOrderIds.length > 0) {
+                const { data: ordersById } = await supabase
+                    .from('orders')
+                    .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
+                    .in('id', missingOrderIds);
+                
+                if (ordersById) {
+                    for (const order of ordersById) {
+                        orderMapById.set(String(order.id), order);
+                    }
+                }
+            }
+            
+            console.log(`[route/routes] Found ${orderMapById.size} orders by order_id (${upcomingOrdersById?.length || 0} from upcoming_orders, ${missingOrderIds.length > 0 ? orderMapById.size - (upcomingOrdersById?.length || 0) : 0} from orders)`);
+        }
+        
+        // Also fetch orders by client_id for fallback matching (for stops without order_id)
         if (clientIds.length > 0) {
             // Get all orders - expand status filter to include more statuses
             // Also check upcoming_orders table
             const { data: orders } = await supabase
                 .from('orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
                 .in('client_id', clientIds)
                 .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
@@ -159,12 +206,12 @@ export async function GET(req: Request) {
             // Also check upcoming_orders
             const { data: upcomingOrders } = await supabase
                 .from('upcoming_orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
                 .in('client_id', clientIds)
                 .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
             
-            console.log(`[route/routes] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients`);
+            console.log(`[route/routes] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients (for fallback matching)`);
             
             // Combine both order sources, prioritizing regular orders
             const allOrders = [...(orders || []), ...(upcomingOrders || [])];
@@ -196,7 +243,7 @@ export async function GET(req: Request) {
                         }
                     }
                 }
-                console.log(`[route/routes] Mapped ${orderMapByClientAndDate.size} orders by date and ${orderMapByClient.size} orders by client`);
+                console.log(`[route/routes] Mapped ${orderMapByClientAndDate.size} orders by date and ${orderMapByClient.size} orders by client (for fallback)`);
             } else {
                 console.warn(`[route/routes] No orders found for any of the ${clientIds.length} clients`);
             }
@@ -217,9 +264,20 @@ export async function GET(req: Request) {
             const dislikes = c?.dislikes ?? s.dislikes ?? "";
             
             // Get order information for this stop
-            // Try to match by client_id + delivery_date first, then fall back to client_id only
+            // Priority: Use stop.order_id to look up order directly from upcoming_orders or orders table
+            // Fallback: Try to match by client_id + delivery_date, then fall back to client_id only
             let order = null;
-            if (s.client_id) {
+            
+            // First priority: Check if stop has order_id and look it up directly
+            if (s.order_id) {
+                order = orderMapById.get(String(s.order_id)) || null;
+                if (order) {
+                    console.log(`[route/routes] Found order ${order.id} for stop ${s.id} via order_id`);
+                }
+            }
+            
+            // Fallback: Match by client_id + delivery_date if no direct order_id match
+            if (!order && s.client_id) {
                 const cid = String(s.client_id);
                 
                 // Helper to normalize date strings (handle both DATE and TIMESTAMP formats)
@@ -281,8 +339,12 @@ export async function GET(req: Request) {
                 // Add assigned_driver_id from stop (prefer stop's assigned_driver_id over client's)
                 assigned_driver_id: s.assigned_driver_id || c?.assigned_driver_id || null,
                 
+                // Add order_id from stops table (source of truth for order relationship)
+                order_id: s.order_id || null,
+                
                 // Add order tracking fields including status
-                orderId: order?.id || null,
+                // Note: orderId is the resolved order's ID from the lookup, order_id is the FK from stops table
+                orderId: order?.id || s.order_id || null,
                 orderDate: order?.created_at || null,
                 deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
                 orderStatus: order?.status || null,

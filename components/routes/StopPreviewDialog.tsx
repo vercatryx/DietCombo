@@ -27,6 +27,8 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
     const [menuItems, setMenuItems] = useState<any[]>(propMenuItems || []);
     const [driverDetails, setDriverDetails] = useState<any | null>(null);
     const [loadingDriver, setLoadingDriver] = useState(false);
+    const [orderDetails, setOrderDetails] = useState<any | null>(null);
+    const [loadingOrder, setLoadingOrder] = useState(false);
 
     // Load box types and menu items if not provided as props
     useEffect(() => {
@@ -135,6 +137,61 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
             });
     }, [open, stop]);
 
+    // Load order details when stop has an order_id
+    // Priority: Use stop.order_id to look up order directly from upcoming_orders first, then orders table
+    useEffect(() => {
+        if (!open || !stop) {
+            setOrderDetails(null);
+            return;
+        }
+
+        // Check stop.order_id first (direct field from stops table), then stop.orderId (from routes API)
+        const orderId = stop.order_id || stop.orderId;
+        
+        // Debug: Log what we're getting from the stop object
+        if (!orderId) {
+            console.log('[StopPreview] No order_id found in stop object:', {
+                'stop.order_id': stop.order_id,
+                'stop.orderId': stop.orderId,
+                'stop keys': Object.keys(stop)
+            });
+            setOrderDetails(null);
+            return;
+        }
+        
+        console.log('[StopPreview] Fetching order details for order_id:', orderId);
+
+        // Fetch order details: API endpoint checks upcoming_orders first, then orders
+        const fetchOrderDetails = async () => {
+            setLoadingOrder(true);
+            try {
+                const res = await fetch(`/api/stops/order/${orderId}`, { 
+                    cache: 'no-store',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (res.ok) {
+                    const order = await res.json();
+                    if (order && !order.error) {
+                        setOrderDetails(order);
+                    } else {
+                        setOrderDetails(null);
+                    }
+                } else {
+                    // Order not found in either table
+                    setOrderDetails(null);
+                }
+            } catch (error) {
+                console.error('[StopPreview] Error fetching order details:', error);
+                setOrderDetails(null);
+            } finally {
+                setLoadingOrder(false);
+            }
+        };
+
+        fetchOrderDetails();
+    }, [open, stop?.order_id, stop?.orderId]);
+
     if (!stop) return null;
 
     const formatDate = (dateStr: string | null | undefined) => {
@@ -188,7 +245,12 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
         }
     };
 
-    const orderStatus = stop.orderStatus || stop.order?.status || stop.status || null;
+    // Use order_id from stop object first (source of truth from database), then orderDetails if fetched
+    // Priority: stop.order_id (direct from stops table) > orderDetails.id (from API lookup) > stop.orderId (from routes API mapping)
+    const finalOrderId = stop.order_id || orderDetails?.id || stop.orderId || null;
+    const orderStatus = orderDetails?.status || stop.orderStatus || stop.order?.status || stop.status || null;
+    const orderNumber = orderDetails?.order_number || stop.orderNumber || null;
+    const deliveryDateFromOrder = orderDetails?.scheduled_delivery_date || orderDetails?.actual_delivery_date || null;
     const statusColor = orderStatus ? getOrderStatusColor(orderStatus) : null;
 
     return (
@@ -257,55 +319,55 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: '#374151' }}>
                             Order Information
                         </Typography>
-                        <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        {loadingOrder ? (
+                            <Box sx={{ pl: 1, py: 2, textAlign: 'center' }}>
                                 <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                    Order ID:
-                                </Typography>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                    {stop.orderId || 'N/A'}
+                                    Loading order details...
                                 </Typography>
                             </Box>
-                            {stop.orderNumber && (
+                        ) : (
+                            <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                                     <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                        Order Number:
+                                        Order ID:
                                     </Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                        {stop.orderNumber}
+                                    <Typography variant="body2" sx={{ fontWeight: 500, fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                                        {finalOrderId ? `${String(finalOrderId).slice(0, 8)}...` : 'N/A'}
                                     </Typography>
                                 </Box>
-                            )}
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                    Delivery Date:
-                                </Typography>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                    {formatDate(stop.deliveryDate)}
-                                </Typography>
-                            </Box>
-                            {orderStatus && (
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                        Status:
-                                    </Typography>
-                                    <Box
-                                        sx={{
-                                            px: 1.5,
-                                            py: 0.5,
-                                            borderRadius: 1,
-                                            backgroundColor: statusColor + '20',
-                                            color: statusColor,
-                                            fontWeight: 500,
-                                            fontSize: '0.75rem',
-                                            textTransform: 'capitalize'
-                                        }}
-                                    >
-                                        {orderStatus.replace(/_/g, ' ')}
+                                {orderNumber && (
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                            Order Number:
+                                        </Typography>
+                                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                            {orderNumber}
+                                        </Typography>
                                     </Box>
-                                </Box>
-                            )}
-                        </Box>
+                                )}
+                                {orderStatus && (
+                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                            Status:
+                                        </Typography>
+                                        <Box
+                                            sx={{
+                                                px: 1.5,
+                                                py: 0.5,
+                                                borderRadius: 1,
+                                                backgroundColor: statusColor + '20',
+                                                color: statusColor,
+                                                fontWeight: 500,
+                                                fontSize: '0.75rem',
+                                                textTransform: 'capitalize'
+                                            }}
+                                        >
+                                            {orderStatus.replace(/_/g, ' ')}
+                                        </Box>
+                                    </Box>
+                                )}
+                            </Box>
+                        )}
                     </Box>
 
                     <Divider />

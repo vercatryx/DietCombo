@@ -422,7 +422,6 @@ async function openPreviewPopup({ map, stop, color }) {
     container.style.fontSize = "13px";
     
     const orderIdDisplay = stop.orderId || "N/A";
-    const deliveryDateDisplay = formatDate(stop.deliveryDate) || "N/A";
     const orderStatus = stop.orderStatus || stop.order?.status || stop.status || null;
     
     const getStatusColor = (status) => {
@@ -579,10 +578,6 @@ async function openPreviewPopup({ map, stop, color }) {
                 <span style="font-weight:500">${stop.orderNumber}</span>
             </div>
             ` : ""}
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-                <span style="color:#6b7280"><strong>Delivery Date:</strong></span>
-                <span style="font-weight:500">${deliveryDateDisplay}</span>
-            </div>
             ${orderStatus ? `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
                 <span style="color:#6b7280"><strong>Status:</strong></span>
@@ -693,7 +688,6 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     container.style.boxShadow = "0 6px 24px rgba(0,0,0,0.15)";
     
     const orderIdDisplay = stop.orderId || "N/A";
-    const deliveryDateDisplay = formatDate(stop.deliveryDate) || "N/A";
     
     container.innerHTML = `
     <div style="font-weight:700">${stop.name || "Unnamed"}</div>
@@ -702,7 +696,6 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     ${stop.phone ? `<div style="margin-top:4px">${stop.phone}</div>` : ""}
     <div style="margin-top:8px;padding:6px;background:#f3f4f6;border-radius:6px;font-size:11px;line-height:1.4">
       <div><strong>Order ID:</strong> ${orderIdDisplay}</div>
-      <div><strong>Delivery Date:</strong> ${deliveryDateDisplay}</div>
     </div>
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
       <label style="font-size:12px">Assign to:</label>
