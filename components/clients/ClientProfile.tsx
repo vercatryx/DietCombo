@@ -6222,68 +6222,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     return false;
                 }
 
-                // STRATEGY: Create client first WITHOUT order details, then update it with order details
-                // This avoids issues with saving order data during creation and uses the proven edit path
-                const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
-                const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
-
-                // Create client WITHOUT activeOrder first
-                const clientDataWithoutOrder: Omit<ClientProfile, 'id' | 'createdAt' | 'updatedAt'> = {
-                    fullName: formData.fullName ?? '',
-                    email: formData.email ?? '',
-                    address: formData.address ?? '',
-                    phoneNumber: formData.phoneNumber ?? '',
-                    secondaryPhoneNumber: formData.secondaryPhoneNumber ?? null,
-                    navigatorId: formData.navigatorId ?? defaultNavigatorId,
-                    endDate: formData.endDate ?? '',
-                    screeningTookPlace: formData.screeningTookPlace ?? false,
-                    screeningSigned: formData.screeningSigned ?? false,
-                    notes: formData.notes ?? '',
-                    statusId: formData.statusId ?? initialStatusId,
-                    serviceType: formData.serviceType ?? 'Food',
-                    approvedMealsPerWeek: formData.approvedMealsPerWeek ?? 21,
-                    authorizedAmount: formData.authorizedAmount ?? null,
-                    expirationDate: formData.expirationDate ?? null,
-                    // New fields from dietfantasy
-                    firstName: formData.firstName ?? null,
-                    lastName: formData.lastName ?? null,
-                    apt: formData.apt ?? null,
-                    city: formData.city ?? null,
-                    state: formData.state ?? null,
-                    zip: formData.zip ?? null,
-                    county: formData.county ?? null,
-                    clientIdExternal: formData.clientIdExternal ?? null,
-                    caseIdExternal: formData.caseIdExternal ?? null,
-                    medicaid: formData.medicaid ?? false,
-                    paused: formData.paused ?? false,
-                    complex: formData.complex ?? false,
-                    bill: formData.bill ?? true,
-                    delivery: formData.delivery ?? true,
-                    dislikes: formData.dislikes ?? null,
-                    latitude: formData.latitude ?? null,
-                    longitude: formData.longitude ?? null,
-                    lat: formData.lat ?? null,
-                    lng: formData.lng ?? null,
-                    geocodedAt: formData.geocodedAt ?? null,
-                    billings: formData.billings ?? null,
-                    visits: formData.visits ?? null,
-                    signToken: formData.signToken ?? null,
-                    activeOrder: undefined // Create without order first
-                };
-
-
-                const newClient = await addClient(clientDataWithoutOrder);
-
-                if (!newClient) {
-                    setSaving(false);
-                    return false;
-                }
-
-
-
-
-                // Now update the client with order details (same as editing an existing client)
-                // Determine if orderConfig has meaningful data to save
+                // Determine if orderConfig has meaningful data to save (before creating client)
                 const hasCaseId = orderConfig?.caseId && orderConfig.caseId.trim() !== '';
                 const hasVendorSelections = orderConfig?.vendorSelections &&
                     Array.isArray(orderConfig.vendorSelections) &&
@@ -6295,8 +6234,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     (orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0);
                 const hasOrderData = hasCaseId || hasVendorSelections || hasDeliveryDayOrders || hasBoxConfig;
 
-                // Prepare update data with order details
-                const updateData: Partial<ClientProfile> = {
+                // Prepare active order data before creating client
+                const preparedActiveOrder = hasOrderData ? prepareActiveOrder() : undefined;
+
+                const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
+                const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
+
+                // Create client WITH activeOrder included during creation
+                const clientData: Omit<ClientProfile, 'id' | 'createdAt' | 'updatedAt'> = {
                     fullName: formData.fullName ?? '',
                     email: formData.email ?? '',
                     address: formData.address ?? '',
@@ -6336,23 +6281,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     billings: formData.billings ?? null,
                     visits: formData.visits ?? null,
                     signToken: formData.signToken ?? null,
-                    activeOrder: hasOrderData ? prepareActiveOrder() : undefined
+                    activeOrder: preparedActiveOrder // Include order details during creation
                 };
 
+                const newClient = await addClient(clientData);
 
-                try {
-                    // updateClient doesn't return a value, so we call it and then fetch the updated client
-                    await updateClient(newClient.id, updateData);
-                } catch (error) {
-                    console.error('[ClientProfile] Error updating client with order details:', error);
-                    const errorMessage = error instanceof Error ? error.message : 'Error updating client with order details.';
-                    setErrorModal({ show: true, message: errorMessage });
+                if (!newClient) {
                     setSaving(false);
                     return false;
                 }
 
-                // Fetch the updated client after update
-
+                // Fetch the created client (it already has activeOrder in the database)
                 const updatedClient = await getClient(newClient.id);
 
                 if (!updatedClient) {

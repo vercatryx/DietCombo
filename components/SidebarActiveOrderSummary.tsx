@@ -26,6 +26,8 @@ export function SidebarActiveOrderSummary() {
         }
 
         async function loadData() {
+            if (!clientId) return;
+            
             setLoading(true);
             try {
                 const [clientData, vendorsData, menuItemsData, boxTypesData] = await Promise.all([
@@ -99,27 +101,115 @@ function getOrderSummary(
     const conf = client.activeOrder;
 
     if (st === 'Food') {
-        const uniqueVendors = new Set<string>();
-        const vendorItemCounts = new Map<string, number>();
-
         // Check if it's multi-day format
         const isMultiDay = conf.deliveryDayOrders && typeof conf.deliveryDayOrders === 'object';
 
         if (isMultiDay) {
-            Object.values(conf.deliveryDayOrders || {}).forEach((dayOrder: any) => {
-                if (dayOrder?.vendorSelections) {
-                    dayOrder.vendorSelections.forEach((v: any) => {
-                        const vName = vendors.find(ven => ven.id === v.vendorId)?.name;
-                        if (vName) {
-                            uniqueVendors.add(vName);
-                            const itemCount = Object.values(v.items || {}).reduce((a: number, b: any) => a + Number(b), 0);
-                            const currentCount = vendorItemCounts.get(vName) || 0;
-                            vendorItemCounts.set(vName, currentCount + itemCount);
-                        }
-                    });
+            // Group by day of week
+            const dayOrderMap = new Map<string, { vendors: Set<string>, items: Map<string, number> }>();
+            
+            // Day order for sorting (Monday first)
+            const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+            
+            Object.entries(conf.deliveryDayOrders || {}).forEach(([day, dayOrder]: [string, any]) => {
+                if (!dayOrder?.vendorSelections || dayOrder.vendorSelections.length === 0) {
+                    return;
+                }
+
+                const dayVendors = new Set<string>();
+                const dayItems = new Map<string, number>();
+
+                dayOrder.vendorSelections.forEach((v: any) => {
+                    const vName = vendors.find(ven => ven.id === v.vendorId)?.name;
+                    if (vName) {
+                        dayVendors.add(vName);
+                    }
+
+                    // Collect items for this day
+                    if (v.items) {
+                        Object.entries(v.items).forEach(([itemId, qty]: [string, any]) => {
+                            const quantity = typeof qty === 'number' ? qty : (typeof qty === 'object' && 'quantity' in qty ? Number(qty.quantity) : Number(qty) || 0);
+                            if (quantity > 0) {
+                                const item = menuItems.find(i => i.id === itemId);
+                                if (item) {
+                                    const currentQty = dayItems.get(item.name) || 0;
+                                    dayItems.set(item.name, currentQty + quantity);
+                                }
+                            }
+                        });
+                    }
+                });
+
+                if (dayVendors.size > 0 || dayItems.size > 0) {
+                    dayOrderMap.set(day, { vendors: dayVendors, items: dayItems });
                 }
             });
+
+            if (dayOrderMap.size === 0) {
+                return (
+                    <div className={styles.orderSummaryEmpty}>
+                        <Utensils size={14} />
+                        <span>Food - Vendor: Not Set</span>
+                    </div>
+                );
+            }
+
+            // Sort days by dayOrder array
+            const sortedDays = Array.from(dayOrderMap.keys()).sort((a, b) => {
+                const aIndex = dayOrder.indexOf(a);
+                const bIndex = dayOrder.indexOf(b);
+                if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+                if (aIndex === -1) return 1;
+                if (bIndex === -1) return -1;
+                return aIndex - bIndex;
+            });
+
+            const limit = client.approvedMealsPerWeek || 0;
+
+            return (
+                <div className={styles.orderSummaryFood}>
+                    <div className={styles.orderSummaryServiceType}>
+                        <Utensils size={14} />
+                        <strong>Food</strong>
+                    </div>
+                    <div className={styles.orderSummaryDays}>
+                        {sortedDays.map(day => {
+                            const dayData = dayOrderMap.get(day)!;
+                            const vendorList = Array.from(dayData.vendors).join(', ') || 'Not Set';
+                            const itemsList = Array.from(dayData.items.entries())
+                                .map(([itemName, qty]) => `${itemName} x${qty}`)
+                                .join(', ');
+
+                            return (
+                                <div key={day} className={styles.orderSummaryDay}>
+                                    <div className={styles.orderSummaryDayHeader}>
+                                        <strong>{day}</strong>
+                                    </div>
+                                    <div className={styles.orderSummaryDayVendors}>
+                                        {vendorList}
+                                    </div>
+                                    {itemsList && (
+                                        <div className={styles.orderSummaryDayItems}>
+                                            {itemsList}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {limit > 0 && (
+                        <div className={styles.orderSummaryLimit}>
+                            Max {limit} meals/week
+                        </div>
+                    )}
+                </div>
+            );
         } else if (conf.vendorSelections) {
+            // Legacy single-day format
+            const uniqueVendors = new Set<string>();
+            const vendorItemCounts = new Map<string, number>();
+            const itemDetails = new Map<string, number>();
+
             conf.vendorSelections.forEach(v => {
                 const vName = vendors.find(ven => ven.id === v.vendorId)?.name;
                 if (vName) {
@@ -127,10 +217,62 @@ function getOrderSummary(
                     const itemCount = Object.values(v.items || {}).reduce((a: number, b: any) => a + Number(b), 0);
                     vendorItemCounts.set(vName, itemCount);
                 }
-            });
-        }
 
-        if (uniqueVendors.size === 0) {
+                // Collect items
+                if (v.items) {
+                    Object.entries(v.items).forEach(([itemId, qty]: [string, any]) => {
+                        const quantity = typeof qty === 'number' ? qty : (typeof qty === 'object' && 'quantity' in qty ? Number(qty.quantity) : Number(qty) || 0);
+                        if (quantity > 0) {
+                            const item = menuItems.find(i => i.id === itemId);
+                            if (item) {
+                                const currentQty = itemDetails.get(item.name) || 0;
+                                itemDetails.set(item.name, currentQty + quantity);
+                            }
+                        }
+                    });
+                }
+            });
+
+            if (uniqueVendors.size === 0) {
+                return (
+                    <div className={styles.orderSummaryEmpty}>
+                        <Utensils size={14} />
+                        <span>Food - Vendor: Not Set</span>
+                    </div>
+                );
+            }
+
+            const limit = client.approvedMealsPerWeek || 0;
+            const vendorList = Array.from(uniqueVendors).map(vName => {
+                const count = vendorItemCounts.get(vName) || 0;
+                return `${vName} (${count})`;
+            }).join(', ');
+            const itemsList = Array.from(itemDetails.entries())
+                .map(([itemName, qty]) => `${itemName} x${qty}`)
+                .join(', ');
+
+            return (
+                <div className={styles.orderSummaryFood}>
+                    <div className={styles.orderSummaryServiceType}>
+                        <Utensils size={14} />
+                        <strong>Food</strong>
+                    </div>
+                    <div className={styles.orderSummaryDetails}>
+                        {vendorList}
+                    </div>
+                    {itemsList && (
+                        <div className={styles.orderSummaryItems}>
+                            {itemsList}
+                        </div>
+                    )}
+                    {limit > 0 && (
+                        <div className={styles.orderSummaryLimit}>
+                            Max {limit} meals/week
+                        </div>
+                    )}
+                </div>
+            );
+        } else {
             return (
                 <div className={styles.orderSummaryEmpty}>
                     <Utensils size={14} />
@@ -138,38 +280,16 @@ function getOrderSummary(
                 </div>
             );
         }
-
-        const limit = client.approvedMealsPerWeek || 0;
-        const vendorList = Array.from(uniqueVendors).map(vName => {
-            const count = vendorItemCounts.get(vName) || 0;
-            return `${vName} (${count})`;
-        }).join(', ');
-
-        return (
-            <div className={styles.orderSummaryFood}>
-                <div className={styles.orderSummaryServiceType}>
-                    <Utensils size={14} />
-                    <strong>Food</strong>
-                </div>
-                <div className={styles.orderSummaryDetails}>
-                    {vendorList}
-                </div>
-                {limit > 0 && (
-                    <div className={styles.orderSummaryLimit}>
-                        Max {limit} meals/week
-                    </div>
-                )}
-            </div>
-        );
     } else if (st === 'Boxes') {
         // Check vendorId from order config first, then fall back to boxType
         let computedVendorId = conf.vendorId;
         const uniqueVendors = new Set<string>();
         const itemDetails: string[] = [];
 
-        // NEW: Handle boxOrders array format first
-        if (conf.boxOrders && Array.isArray(conf.boxOrders) && conf.boxOrders.length > 0) {
-            conf.boxOrders.forEach((box: any) => {
+        // NEW: Handle boxOrders array format first (legacy format, may exist in JSON)
+        const confAny = conf as any;
+        if (confAny.boxOrders && Array.isArray(confAny.boxOrders) && confAny.boxOrders.length > 0) {
+            confAny.boxOrders.forEach((box: any) => {
                 const boxDef = boxTypes.find(b => b.id === box.boxTypeId);
                 const vId = box.vendorId || boxDef?.vendorId;
                 if (vId) {
@@ -200,9 +320,10 @@ function getOrderSummary(
                         if (typeof qtyOrObj === 'number') {
                             q = qtyOrObj;
                         } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
-                            q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                            const qtyObj = qtyOrObj as { quantity: number | string };
+                            q = typeof qtyObj.quantity === 'number' ? qtyObj.quantity : parseInt(String(qtyObj.quantity)) || 0;
                         } else {
-                            q = parseInt(qtyOrObj as any) || 0;
+                            q = parseInt(String(qtyOrObj)) || 0;
                         }
                         
                         if (q > 0) {
@@ -255,7 +376,7 @@ function getOrderSummary(
         // LEGACY: Also check conf.items if itemDetails is still empty
         if (itemDetails.length === 0 && conf.items) {
             // Handle items that might be stored as JSON string
-            let itemsObj = conf.items;
+            let itemsObj: any = conf.items;
             if (typeof conf.items === 'string') {
                 try {
                     itemsObj = JSON.parse(conf.items);
@@ -265,15 +386,16 @@ function getOrderSummary(
                 }
             }
             
-            Object.entries(itemsObj).forEach(([id, qtyOrObj]) => {
+            Object.entries(itemsObj).forEach(([id, qtyOrObj]: [string, any]) => {
                 // Handle both formats: { itemId: number } or { itemId: { quantity: number, price: number } }
                 let q = 0;
                 if (typeof qtyOrObj === 'number') {
                     q = qtyOrObj;
                 } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
-                    q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                    const qtyObj = qtyOrObj as { quantity: number | string };
+                    q = typeof qtyObj.quantity === 'number' ? qtyObj.quantity : parseInt(String(qtyObj.quantity)) || 0;
                 } else {
-                    q = parseInt(qtyOrObj as any) || 0;
+                    q = parseInt(String(qtyOrObj)) || 0;
                 }
                 
                 if (q > 0) {
