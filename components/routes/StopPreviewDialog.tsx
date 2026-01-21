@@ -25,6 +25,8 @@ interface StopPreviewDialogProps {
 export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propBoxTypes, menuItems: propMenuItems }: StopPreviewDialogProps) {
     const [boxTypes, setBoxTypes] = useState<any[]>(propBoxTypes || []);
     const [menuItems, setMenuItems] = useState<any[]>(propMenuItems || []);
+    const [driverDetails, setDriverDetails] = useState<any | null>(null);
+    const [loadingDriver, setLoadingDriver] = useState(false);
 
     // Load box types and menu items if not provided as props
     useEffect(() => {
@@ -40,6 +42,98 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
             });
         }
     }, [open, propBoxTypes, propMenuItems]);
+
+    // Load driver details when stop has a driver assigned
+    useEffect(() => {
+        if (!open || !stop) {
+            setDriverDetails(null);
+            return;
+        }
+
+        // Check multiple possible field names for driver ID
+        const driverId = stop.__driverId || stop.assignedDriverId || stop.assigned_driver_id || stop.assignedDriver_id;
+        
+        // Also check if stop belongs to a route (driver assignment)
+        // If stop is in a route, we can determine the driver from the routes API
+        if (!driverId) {
+            setDriverDetails(null);
+            // Still try to find driver by checking which route this stop belongs to
+            setLoadingDriver(true);
+            fetch('/api/route/routes?day=all')
+                .then(res => res.json())
+                .then(data => {
+                    const routes = data.routes || [];
+                    // Find which route contains this stop
+                    const routeWithStop = routes.find((r: any) => {
+                        return r.stops?.some((s: any) => String(s.id) === String(stop.id) || String(s.userId || s.clientId) === String(stop.userId || stop.clientId));
+                    });
+                    if (routeWithStop) {
+                        setDriverDetails({
+                            id: routeWithStop.driverId || routeWithStop.id,
+                            name: routeWithStop.driverName || routeWithStop.name || 'Unknown Driver',
+                            color: routeWithStop.color,
+                            day: routeWithStop.day || 'all',
+                            totalStops: routeWithStop.stops?.length || 0,
+                            completedStops: routeWithStop.stops?.filter((s: any) => s.completed === true).length || 0
+                        });
+                    } else {
+                        setDriverDetails(null);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading driver details:', error);
+                    setDriverDetails(null);
+                })
+                .finally(() => {
+                    setLoadingDriver(false);
+                });
+            return;
+        }
+
+        setLoadingDriver(true);
+        // Try to fetch driver details from routes API
+        fetch('/api/route/routes?day=all')
+            .then(res => res.json())
+            .then(data => {
+                const routes = data.routes || [];
+                const driver = routes.find((r: any) => String(r.driverId || r.id) === String(driverId));
+                if (driver) {
+                    setDriverDetails({
+                        id: driver.driverId || driver.id,
+                        name: driver.driverName || driver.name || stop.__driverName,
+                        color: driver.color,
+                        day: driver.day || 'all',
+                        totalStops: driver.stops?.length || 0,
+                        completedStops: driver.stops?.filter((s: any) => s.completed === true).length || 0
+                    });
+                } else {
+                    // If not found in routes, use available stop data
+                    setDriverDetails({
+                        id: driverId,
+                        name: stop.__driverName || 'Unknown Driver',
+                        color: stop.__driverColor || null,
+                        day: stop.day || null,
+                        totalStops: null,
+                        completedStops: null
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error loading driver details:', error);
+                // Fallback to available stop data
+                setDriverDetails({
+                    id: driverId,
+                    name: stop.__driverName || 'Unknown Driver',
+                    color: stop.__driverColor || null,
+                    day: stop.day || null,
+                    totalStops: null,
+                    completedStops: null
+                });
+            })
+            .finally(() => {
+                setLoadingDriver(false);
+            });
+    }, [open, stop]);
 
     if (!stop) return null;
 
@@ -216,22 +310,114 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
 
                     <Divider />
 
+                    {/* Assigned Driver Preview */}
+                    {(stop.__driverId || stop.__driverName || stop.assignedDriverId || stop.assigned_driver_id || driverDetails || loadingDriver) && (
+                        <>
+                            <Divider />
+                            <Box>
+                                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: '#374151' }}>
+                                    Assigned Driver
+                                </Typography>
+                                {loadingDriver ? (
+                                    <Box sx={{ pl: 1, py: 2, textAlign: 'center' }}>
+                                        <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                            Loading driver details...
+                                        </Typography>
+                                    </Box>
+                                ) : driverDetails ? (
+                                    <Box
+                                        sx={{
+                                            pl: 1,
+                                            p: 2,
+                                            backgroundColor: '#f9fafb',
+                                            borderRadius: 1,
+                                            border: '1px solid #e5e7eb',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: 1.5
+                                        }}
+                                    >
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.5 }}>
+                                            {driverDetails.color && (
+                                                <Box
+                                                    sx={{
+                                                        width: 24,
+                                                        height: 24,
+                                                        borderRadius: '50%',
+                                                        backgroundColor: driverDetails.color,
+                                                        border: '2px solid #fff',
+                                                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                                                        flexShrink: 0
+                                                    }}
+                                                />
+                                            )}
+                                            <Typography variant="body1" sx={{ fontWeight: 600, color: '#374151' }}>
+                                                {driverDetails.name}
+                                            </Typography>
+                                        </Box>
+                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, pl: driverDetails.color ? 3.5 : 0 }}>
+                                            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                                    Driver ID:
+                                                </Typography>
+                                                <Typography variant="body2" sx={{ fontWeight: 500, fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                                                    {driverDetails.id?.slice(0, 8)}...
+                                                </Typography>
+                                            </Box>
+                                            {driverDetails.day && (
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                                        Day:
+                                                    </Typography>
+                                                    <Typography variant="body2" sx={{ fontWeight: 500, textTransform: 'capitalize' }}>
+                                                        {driverDetails.day}
+                                                    </Typography>
+                                                </Box>
+                                            )}
+                                            {driverDetails.totalStops !== null && (
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                                        Total Stops:
+                                                    </Typography>
+                                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                                        {driverDetails.totalStops}
+                                                    </Typography>
+                                                </Box>
+                                            )}
+                                            {driverDetails.completedStops !== null && driverDetails.totalStops !== null && (
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                                        Completed:
+                                                    </Typography>
+                                                    <Typography variant="body2" sx={{ fontWeight: 500, color: '#16a34a' }}>
+                                                        {driverDetails.completedStops} / {driverDetails.totalStops}
+                                                    </Typography>
+                                                </Box>
+                                            )}
+                                        </Box>
+                                    </Box>
+                                ) : (
+                                    <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                            <Typography variant="body2" sx={{ color: '#6b7280' }}>
+                                                Assigned Driver:
+                                            </Typography>
+                                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                                                {stop.__driverName || 'Unknown'}
+                                            </Typography>
+                                        </Box>
+                                    </Box>
+                                )}
+                            </Box>
+                        </>
+                    )}
+
                     {/* Delivery Information */}
                     <Box>
                         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: '#374151' }}>
                             Delivery Information
                         </Typography>
                         <Box sx={{ pl: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                            {stop.__driverName && (
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                        Assigned Driver:
-                                    </Typography>
-                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                        {stop.__driverName}
-                                    </Typography>
-                                </Box>
-                            )}
                             {stop.__stopIndex !== undefined && (
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                                     <Typography variant="body2" sx={{ color: '#6b7280' }}>

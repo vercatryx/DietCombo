@@ -70,7 +70,7 @@ export async function GET(req: Request) {
         
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day')
+            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id')
             .order('id', { ascending: true });
         
         // Filter by delivery_date if provided
@@ -98,7 +98,7 @@ export async function GET(req: Request) {
         if (normalizedDeliveryDate && day !== "all") {
             const { data: nullDateStops } = await supabase
                 .from('stops')
-                .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day')
+                .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id')
                 .is('delivery_date', null)
                 .eq('day', day);
             
@@ -277,6 +277,9 @@ export async function GET(req: Request) {
                 
                 // Add delivery_date from stop
                 delivery_date: s.delivery_date || null,
+                
+                // Add assigned_driver_id from stop (prefer stop's assigned_driver_id over client's)
+                assigned_driver_id: s.assigned_driver_id || c?.assigned_driver_id || null,
                 
                 // Add order tracking fields including status
                 orderId: order?.id || null,

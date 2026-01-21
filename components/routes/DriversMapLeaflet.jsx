@@ -375,6 +375,40 @@ async function openPreviewPopup({ map, stop, color }) {
             console.error('[StopPreview] Failed to fetch client:', err);
         }
     }
+    
+    // Get driver information - check multiple possible field names
+    // Priority: Use assigned_driver_id from stop to fetch driver from drivers table
+    let driverName = stop.__driverName || stop.driverName || null;
+    const driverId = stop.__driverId || stop.assignedDriverId || stop.assigned_driver_id || stop.assignedDriver_id || null;
+    
+    // If we have a driver ID but no name, fetch it directly from drivers table using assigned_driver_id
+    if (!driverName && driverId) {
+        try {
+            const res = await fetch(`/api/drivers/${driverId}`, { cache: 'no-store' });
+            if (res.ok) {
+                const driver = await res.json();
+                if (driver && driver.name) {
+                    driverName = driver.name;
+                }
+            }
+        } catch (err) {
+            console.error('[StopPreview] Failed to fetch driver name from drivers table:', err);
+            // Fallback: try routes API if drivers table lookup fails
+            try {
+                const res = await fetch('/api/route/routes?day=all', { cache: 'no-store' });
+                if (res.ok) {
+                    const data = await res.json();
+                    const routes = data.routes || [];
+                    const route = routes.find((r) => String(r.driverId || r.id) === String(driverId));
+                    if (route) {
+                        driverName = route.driverName || route.name || 'Unknown Driver';
+                    }
+                }
+            } catch (fallbackErr) {
+                console.error('[StopPreview] Failed to fetch driver name from routes API:', fallbackErr);
+            }
+        }
+    }
 
     const container = document.createElement("div");
     container.style.minWidth = "280px";
@@ -560,12 +594,13 @@ async function openPreviewPopup({ map, stop, color }) {
         </div>
     `;
     
-    if (stop.__driverName) {
+    // Always show driver name if we have one
+    if (driverName) {
         html += `
             <div style="margin-top:8px;padding:6px;background:#f0f9ff;border-radius:6px;font-size:12px;border:1px solid #bfdbfe">
                 <div style="display:flex;justify-content:space-between">
                     <span style="color:#1e40af"><strong>Driver:</strong></span>
-                    <span style="font-weight:500;color:#1e40af">${stop.__driverName}</span>
+                    <span style="font-weight:500;color:#1e40af">${driverName}</span>
                 </div>
                 ${stop.__stopIndex !== undefined ? `
                 <div style="display:flex;justify-content:space-between;margin-top:4px">
