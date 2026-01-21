@@ -42,7 +42,7 @@ export async function POST(req: Request) {
         // Get all clients including assigned_driver_id
         const { data: allClients } = await supabase
             .from('clients')
-            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
             .order('id', { ascending: true });
 
         // Check which clients have stops for delivery dates
@@ -203,6 +203,7 @@ export async function POST(req: Request) {
             state: string;
             zip: string;
             phone: string | null;
+            dislikes: string | null;
             lat: number | null;
             lng: number | null;
             assigned_driver_id: string | null;
@@ -267,6 +268,7 @@ export async function POST(req: Request) {
                     state: s(client.state),
                     zip: s(client.zip),
                     phone: client.phone_number ? s(client.phone_number) : null,
+                    dislikes: client.dislikes || null,
                     lat: n(client.lat),
                     lng: n(client.lng),
                     assigned_driver_id: assignedDriverId, // Automatically set from client
@@ -296,6 +298,7 @@ export async function POST(req: Request) {
                                 state: stopData.state,
                                 zip: stopData.zip,
                                 phone: stopData.phone,
+                                dislikes: stopData.dislikes,
                                 lat: stopData.lat,
                                 lng: stopData.lng,
                                 assigned_driver_id: stopData.assigned_driver_id, // Set from client

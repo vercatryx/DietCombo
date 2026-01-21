@@ -484,6 +484,7 @@ export default function RoutesPage() {
                     lng: Number(u.lng),
                     __driverId: driverId,
                     __driverName: dname,
+                    __driverColor: color,
                     __stopIndex: idx,
                     // Preserve other fields that might be useful
                     orderId: u.orderId || null,

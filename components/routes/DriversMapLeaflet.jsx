@@ -966,7 +966,11 @@ export default function DriversMapLeaflet({
     const idBaseColor = useMemo(() => {
         const m = new Map();
         for (const d of sortedDrivers)
-            for (const s of d.stops || []) m.set(sid(s.id), d.color || "#1f77b4");
+            for (const s of d.stops || []) {
+                // Use stop's __driverColor if available, otherwise use driver's color
+                const stopColor = s.__driverColor || d.color || "#1f77b4";
+                m.set(sid(s.id), stopColor);
+            }
         for (const s of localUnrouted) m.set(sid(s.id), "#666");
         return m;
     }, [sortedDrivers, localUnrouted]);
@@ -986,11 +990,21 @@ export default function DriversMapLeaflet({
         const dSnap = localDriversRef.current;
         const uSnap = localUnroutedRef.current;
 
+        // Find the target driver's name and color from the existing drivers first
+        const targetDriver = dSnap.find((d) => String(d.driverId) === String(toId));
+        const driverName = targetDriver?.name || `Driver ${toId}`;
+        const driverColor = targetDriver?.color || "#1f77b4";
+
         const movingStops = [];
         for (const id of idKeys) {
             const { stop } = findStopByIdLocal(id, dSnap, uSnap);
             if (stop) {
-                movingStops.push({ ...stop, __driverId: toId });
+                movingStops.push({ 
+                    ...stop, 
+                    __driverId: toId,
+                    __driverName: driverName,
+                    __driverColor: driverColor
+                });
             }
         }
 
@@ -1009,11 +1023,6 @@ export default function DriversMapLeaflet({
             }
             return d;
         });
-
-        // Find the target driver's name and color from the existing drivers
-        const targetDriver = dSnap.find((d) => String(d.driverId) === String(toId));
-        const driverName = targetDriver?.name || `Driver ${toId}`;
-        const driverColor = targetDriver?.color || "#1f77b4";
 
         const finalDrivers = injected
             ? nextDrivers
@@ -1458,8 +1467,14 @@ export default function DriversMapLeaflet({
                 assignedMarkerRefs.current.get(id) ||
                 unroutedMarkerRefs.current.get(id);
             if (!m) return;
-            const base = idBaseColor.get(id) || "#666";
-            m.setIcon(makePinIcon(base, !!on));
+            // Get the stop to check for __driverColor
+            const { stop, color: driverColor } = findStopByIdLocal(
+                id,
+                localDriversRef.current,
+                localUnroutedRef.current
+            );
+            const stopColor = getStopColor(stop, driverColor || idBaseColor.get(id) || "#666");
+            m.setIcon(makePinIcon(stopColor, !!on));
         },
         [idBaseColor]
     );

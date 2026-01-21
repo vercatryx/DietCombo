@@ -1350,7 +1350,7 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
     if (data.phoneNumber !== undefined) payload.phone_number = data.phoneNumber;
     if (data.secondaryPhoneNumber !== undefined) payload.secondary_phone_number = data.secondaryPhoneNumber || null;
     if (data.navigatorId !== undefined) payload.navigator_id = data.navigatorId || null;
-    if (data.endDate !== undefined) payload.end_date = data.endDate;
+    if (data.endDate !== undefined) payload.end_date = data.endDate || null;
     if (data.screeningTookPlace !== undefined) payload.screening_took_place = data.screeningTookPlace;
     if (data.screeningSigned !== undefined) payload.screening_signed = data.screeningSigned;
     if (data.notes !== undefined) payload.notes = data.notes;
@@ -1402,10 +1402,11 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
     }
     
     if (Object.keys(dbPayload).length > 0) {
-        await supabase
+        const { error } = await supabase
             .from('clients')
             .update(dbPayload)
             .eq('id', id);
+        handleError(error, 'updateClient');
     }
 
     // If activeOrder was updated, sync to upcoming_orders

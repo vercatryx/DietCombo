@@ -98,7 +98,7 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
         // Fetch client information including full_name
         const { data: client, error: clientError } = await supabase
             .from('clients')
-            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id')
+            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
             .eq('id', clientId)
             .single();
 
@@ -213,6 +213,7 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
             state: client.state || "",
             zip: client.zip || "",
             phone: client.phone_number || null,
+            dislikes: client.dislikes || null,
             lat: client.lat || null,
             lng: client.lng || null,
             assigned_driver_id: assignedDriverId, // Use the helper function result
@@ -234,6 +235,7 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                     state: stopData.state,
                     zip: stopData.zip,
                     phone: stopData.phone,
+                    dislikes: stopData.dislikes,
                     lat: stopData.lat,
                     lng: stopData.lng,
                     assigned_driver_id: stopData.assigned_driver_id,
@@ -276,6 +278,7 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                                 state: stopData.state,
                                 zip: stopData.zip,
                                 phone: stopData.phone,
+                                dislikes: stopData.dislikes,
                                 lat: stopData.lat,
                                 lng: stopData.lng,
                                 assigned_driver_id: stopData.assigned_driver_id,
