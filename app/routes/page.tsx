@@ -8,8 +8,6 @@ import {
     Button,
     Box,
     Typography,
-    Switch,
-    FormControlLabel,
 } from "@mui/material";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -177,7 +175,6 @@ export default function RoutesPage() {
     const [users, setUsers] = React.useState([]);
 
     const [busy, setBusy] = React.useState(false);
-    const [isReadOnlyMode, setIsReadOnlyMode] = React.useState(false);
     const [activeTab, setActiveTab] = React.useState("map"); // "map" or "clients"
 
 
@@ -814,7 +811,7 @@ export default function RoutesPage() {
 
             {/* Header */}
             <div style={{ 
-                padding: 'var(--spacing-lg)', 
+                padding: 'var(--spacing-md)', 
                 borderBottom: '1px solid var(--border-color)',
                 display: 'grid',
                 gridTemplateColumns: '1fr auto 1fr',
@@ -824,84 +821,10 @@ export default function RoutesPage() {
                 {/* LEFT: Title */}
                 <div style={{ justifySelf: 'start', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '1.5rem' }}>Routes Map</span>
-                    {/* Date Filter moved to title bar */}
-                    <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center',
-                    }}>
-                        <DateFilter
-                            selectedDate={selectedDeliveryDate}
-                            onDateChange={(date) => setSelectedDeliveryDate(date)}
-                            onClear={() => {
-                                const today = new Date();
-                                const year = today.getFullYear();
-                                const month = String(today.getMonth() + 1).padStart(2, '0');
-                                const day = String(today.getDate()).padStart(2, '0');
-                                setSelectedDeliveryDate(`${year}-${month}-${day}`);
-                            }}
-                        />
-                    </div>
                 </div>
 
-                {/* CENTER: Generate + Driver Management */}
-                <div style={{ justifySelf: 'center', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-xs)', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', gap: 'var(--spacing-xs)', flexWrap: 'wrap' }}>
-                        <Button
-                            onClick={regenerateRoutes}
-                            variant="contained"
-                            color="error"
-                            disabled={busy || isReadOnlyMode}
-                            sx={{ fontWeight: 700, borderRadius: 2 }}
-                        >
-                            Generate New Route
-                        </Button>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 'var(--spacing-xs)', alignItems: 'center' }}>
-                        <Button
-                            onClick={handleAddDriver}
-                            variant="outlined"
-                            size="small"
-                            disabled={busy || isReadOnlyMode}
-                            sx={{ borderRadius: 2 }}
-                        >
-                            ➕ Add Driver
-                        </Button>
-                        <Button
-                            onClick={handleRemoveDriver}
-                            variant="outlined"
-                            size="small"
-                            disabled={busy || isReadOnlyMode || routes.length <= 1}
-                            sx={{ borderRadius: 2 }}
-                        >
-                            ➖ Remove Driver
-                        </Button>
-                        <div style={{ fontSize: 13, color: "#6b7280", marginLeft: 'var(--spacing-xs)' }}>
-                            Drivers: {routes.filter(r => {
-                                const driverName = r.driverName || r.name || "";
-                                return !/driver\s+0/i.test(driverName);
-                            }).length}
-                        </div>
-                    </div>
-                </div>
-
-                {/* RIGHT: Mode switch + link */}
+                {/* RIGHT: Link */}
                 <div style={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
-                    <FormControlLabel
-                        control={
-                            <Switch
-                                checked={!isReadOnlyMode}
-                                onChange={(e) => setIsReadOnlyMode(!e.target.checked)}
-                                size="small"
-                            />
-                        }
-                        label={
-                            <Typography variant="body2" sx={{ fontSize: 12 }}>
-                                {isReadOnlyMode ? "Readonly" : "Admin Edit"}
-                            </Typography>
-                        }
-                        sx={{ m: 0 }}
-                    />
                     <Link
                         href="/drivers"
                         target="_blank"
@@ -946,34 +869,104 @@ export default function RoutesPage() {
             </div>
 
             {/* Tab Content */}
-            <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+            <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 {activeTab === "map" ? (
-                    <div style={{ height: "100%", width: "100%", position: "relative" }}>
-                        <DriversMapLeaflet
-                            drivers={mapDrivers}
-                            unrouted={unrouted}
-                            onReassign={isReadOnlyMode ? undefined : handleReassign}
-                            onRenameDriver={isReadOnlyMode ? undefined : handleRenameDriver}
-                            busy={busy}
-                            readonly={isReadOnlyMode}
-                            onExpose={(api) => { mapApiRef.current = api || null; }}
-                            onComputedStats={(s) => setStats(s)}
-                            initialCenter={[40.7128, -74.006]}
-                            initialZoom={5}
-                        />
+                    <div style={{ height: "100%", width: "100%", position: "relative", display: 'flex', flexDirection: 'column' }}>
+                        {/* Date Filter inside Map View tab */}
+                        <div style={{ 
+                            padding: 'var(--spacing-md)', 
+                            borderBottom: '1px solid var(--border-color)',
+                            display: 'flex', 
+                            alignItems: 'center',
+                            backgroundColor: 'white',
+                            zIndex: 10
+                        }}>
+                            <DateFilter
+                                selectedDate={selectedDeliveryDate}
+                                onDateChange={(date) => setSelectedDeliveryDate(date)}
+                                onClear={() => {
+                                    const today = new Date();
+                                    const year = today.getFullYear();
+                                    const month = String(today.getMonth() + 1).padStart(2, '0');
+                                    const day = String(today.getDate()).padStart(2, '0');
+                                    setSelectedDeliveryDate(`${year}-${month}-${day}`);
+                                }}
+                            />
+                        </div>
+                        <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+                            <DriversMapLeaflet
+                                drivers={mapDrivers}
+                                unrouted={unrouted}
+                                onReassign={handleReassign}
+                                onRenameDriver={handleRenameDriver}
+                                busy={busy}
+                                readonly={false}
+                                onExpose={(api) => { mapApiRef.current = api || null; }}
+                                onComputedStats={(s) => setStats(s)}
+                                initialCenter={[40.7128, -74.006]}
+                                initialZoom={5}
+                            />
+                        </div>
                     </div>
                 ) : (
-                    <div style={{ height: "100%", width: "100%", position: "relative", minHeight: 0, overflow: 'auto' }}>
-                        <ClientDriverAssignment
-                            routes={routes}
-                            selectedDay={selectedDay}
-                            selectedDeliveryDate={selectedDeliveryDate}
-                            readOnly={isReadOnlyMode}
-                            onDriverAssigned={() => {
-                                loadRoutes();
-                                saveCurrentRun(true);
-                            }}
-                        />
+                    <div style={{ height: "100%", width: "100%", position: "relative", minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+                        {/* Generate Route + Driver Management buttons inside Client Assignment tab */}
+                        <div style={{ 
+                            padding: 'var(--spacing-md)', 
+                            borderBottom: '1px solid var(--border-color)',
+                            display: 'flex', 
+                            gap: 'var(--spacing-xs)', 
+                            alignItems: 'center',
+                            backgroundColor: 'white',
+                            zIndex: 10,
+                            flexWrap: 'wrap'
+                        }}>
+                            <Button
+                                onClick={regenerateRoutes}
+                                variant="contained"
+                                color="error"
+                                disabled={busy}
+                                sx={{ fontWeight: 700, borderRadius: 2 }}
+                            >
+                                Generate New Route
+                            </Button>
+                            <Button
+                                onClick={handleAddDriver}
+                                variant="outlined"
+                                size="small"
+                                disabled={busy}
+                                sx={{ borderRadius: 2 }}
+                            >
+                                ➕ Add Driver
+                            </Button>
+                            <Button
+                                onClick={handleRemoveDriver}
+                                variant="outlined"
+                                size="small"
+                                disabled={busy || routes.length <= 1}
+                                sx={{ borderRadius: 2 }}
+                            >
+                                ➖ Remove Driver
+                            </Button>
+                            <div style={{ fontSize: 13, color: "#6b7280", marginLeft: 'var(--spacing-xs)' }}>
+                                Drivers: {routes.filter(r => {
+                                    const driverName = r.driverName || r.name || "";
+                                    return !/driver\s+0/i.test(driverName);
+                                }).length}
+                            </div>
+                        </div>
+                        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                            <ClientDriverAssignment
+                                routes={routes}
+                                selectedDay={selectedDay}
+                                selectedDeliveryDate={selectedDeliveryDate}
+                                readOnly={false}
+                                onDriverAssigned={() => {
+                                    loadRoutes();
+                                    saveCurrentRun(true);
+                                }}
+                            />
+                        </div>
                     </div>
                 )}
             </div>
@@ -990,7 +983,7 @@ export default function RoutesPage() {
                 {missingBatch.length > 0 && (
                     <Typography variant="body2" sx={{ mr: "auto", opacity: 0.8 }}>
                         {missingBatch.length} customer{missingBatch.length === 1 ? "" : "s"} are not geocoded.
-                        <Button size="small" sx={{ ml: 1 }} onClick={() => setManualOpen(true)} disabled={isReadOnlyMode}>
+                        <Button size="small" sx={{ ml: 1 }} onClick={() => setManualOpen(true)}>
                             Manual Geocoding
                         </Button>
                     </Typography>
@@ -1039,16 +1032,16 @@ export default function RoutesPage() {
                         }
                     }}
                     variant="outlined"
-                    disabled={busy || !hasRoutes || isReadOnlyMode}
+                    disabled={busy || !hasRoutes}
                 >
                     Download Labels
                 </Button>
 
-                <Button onClick={resetAllRoutes} variant="outlined" disabled={busy || !hasRoutes || isReadOnlyMode}>
+                <Button onClick={resetAllRoutes} variant="outlined" disabled={busy || !hasRoutes}>
                     Reset All Routes
                 </Button>
 
-                <Button onClick={optimizeAllRoutes} variant="outlined" disabled={busy || !hasRoutes || isReadOnlyMode}>
+                <Button onClick={optimizeAllRoutes} variant="outlined" disabled={busy || !hasRoutes}>
                     Optimize All Routes
                 </Button>
             </div>
