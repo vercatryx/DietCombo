@@ -456,13 +456,12 @@ export default function RoutesPage() {
     }, [selectedDay, loadRoutes, saveCurrentRun, selectedDeliveryDate]);
 
     // Map-facing drivers (kept in sync with page routes)
+    // Use the same pattern as ClientDriverAssignment for consistent color coding
     const mapDrivers = React.useMemo(() => {
         return (routes || []).map((r, i) => {
             const driverId = String(r.driverId ?? r.id ?? ""); // Keep as string (UUID) to match database
-            // Always assign a color - use route color, or fallback to palette based on index
-            const color = r.color && r.color !== "#666" && r.color !== "gray" && r.color !== "grey" 
-                ? r.color 
-                : palette[i % palette.length];
+            // Use the same color logic as ClientDriverAssignment: route.color || palette[i % palette.length]
+            const color = r.color || palette[i % palette.length];
             const dname = r.driverName || r.name || `Driver ${i}`;
             const stops = (r.stops || [])
                 .map((u, idx) => ({
@@ -487,7 +486,9 @@ export default function RoutesPage() {
                     lng: Number(u.lng),
                     __driverId: driverId,
                     __driverName: dname,
-                    __driverColor: color, // Always set the driver color on each stop
+                    // Use the same pattern as ClientDriverAssignment: assignedDriver?.color || null
+                    // Since we're mapping stops from the route, the assignedDriver is the route itself
+                    __driverColor: color, // Use the driver's color (same as route.color)
                     __stopIndex: idx,
                     // Preserve other fields that might be useful
                     orderId: u.orderId || null,
@@ -498,8 +499,15 @@ export default function RoutesPage() {
                     dislikes: u.dislikes || "",
                 }))
                 .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-            // Ensure driver object always has a valid color
-            return { id: driverId, driverId, name: dname, color, polygon: [], stops };
+            // Use the same structure as ClientDriverAssignment
+            return { 
+                id: driverId, 
+                driverId: driverId, 
+                name: dname, 
+                color: color, // Same pattern: route.color || palette[i % palette.length]
+                polygon: [], 
+                stops 
+            };
         });
     }, [routes]);
 
@@ -1000,28 +1008,8 @@ export default function RoutesPage() {
                         setBusy(true);
                         try {
                             const idxs = buildComplexIndex(users);
-
-                            // Debug: Check for FRADY SILBERSTEIN
-                            console.log('[Download Labels] Checking for FRADY SILBERSTEIN in complex index');
-                            const fradyInIndex = Array.from(idxs.nameSet).filter(n => n.includes('frady') && n.includes('silberstein'));
-                            console.log('[Download Labels] FRADY SILBERSTEIN names in complex index:', fradyInIndex);
-
                             const complexMarked = (routeStops || []).map((stops) =>
-                                (stops || []).map((s, si) => {
-                                    const marked = markStopComplex(s, si, idxs);
-                                    const userName = nameOf(s);
-                                    if (userName && userName.toUpperCase().includes('FRADY') && userName.toUpperCase().includes('SILBERSTEIN')) {
-                                        console.log('[Download Labels] FRADY SILBERSTEIN found:', {
-                                            id: s.id,
-                                            userId: s.userId,
-                                            name: userName,
-                                            address: s.address,
-                                            complex: marked.complex,
-                                            source: marked.__complexSource,
-                                        });
-                                    }
-                                    return marked;
-                                })
+                                (stops || []).map((s, si) => markStopComplex(s, si, idxs))
                             );
                             const { enrichedSorted, colorsSorted } = buildSortedForLabels();
                             const complexById = new Map();
@@ -1029,10 +1017,15 @@ export default function RoutesPage() {
                             const stampedWithComplex = enrichedSorted.map((route, ri) =>
                                 route.map((s, si) => {
                                     const cm = complexById.get(String(s.id));
-                                    return { ...s, complex: cm?.complex ?? false, __complexSource: cm?.__complexSource ?? 'none' };
+                                    return { ...s, complex: cm?.complex ?? false, __complexSource: cm?.__complexSource ?? "none" };
                                 })
                             );
-                            await exportRouteLabelsPDF(stampedWithComplex, colorsSorted, tsString);
+
+                            // Routes are already filtered by selected date (API). Use those stops = same as map in Orders View.
+                            const filenameFn = () =>
+                                selectedDeliveryDate ? String(selectedDeliveryDate) : tsString();
+
+                            await exportRouteLabelsPDF(stampedWithComplex, colorsSorted, filenameFn);
                         } finally {
                             setBusy(false);
                         }

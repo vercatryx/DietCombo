@@ -255,11 +255,15 @@ function makePinIcon(color = "#1f77b4", selected = false) {
 /* ==================== Data helpers ==================== */
 function findStopByIdLocal(id, drivers, unrouted) {
     const key = sid(id);
-    for (const d of drivers) for (const s of d.stops || []) {
-        if (sid(s.id) === key) {
-            // Always use driver's color, with fallback to stop's __driverColor, then default
-            const driverColor = d.color || s.__driverColor || "#1f77b4";
-            return { stop: s, color: driverColor, fromDriverId: d.driverId };
+    // Use the same pattern as ClientDriverAssignment: stop.__driverColor || driver.color
+    for (const d of drivers) {
+        for (const s of d.stops || []) {
+            if (sid(s.id) === key) {
+                // Match ClientDriverAssignment: __driverColor: assignedDriver?.color || null
+                // Priority: stop.__driverColor > driver.color > default
+                const driverColor = s.__driverColor || d.color || "#1f77b4";
+                return { stop: s, color: driverColor, fromDriverId: d.driverId };
+            }
         }
     }
     for (const s of unrouted || [])
@@ -813,21 +817,10 @@ export default function DriversMapLeaflet({
         localUnroutedRef.current = localUnrouted;
     }, [localUnrouted]);
     useEffect(() => {
+        // Use the same pattern as ClientDriverAssignment: route.color || palette[i % palette.length]
+        // Drivers should already have colors set from the routes page, so just use them as-is
         const driversArray = Array.isArray(drivers) ? drivers : [];
-        // Ensure all drivers have colors set - use palette if missing
-        const palette = [
-            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-            "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
-            "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
-        ];
-        const driversWithColors = driversArray.map((d, idx) => ({
-            ...d,
-            // Ensure color is always set and never gray for drivers
-            color: (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey") 
-                ? d.color 
-                : palette[idx % palette.length]
-        }));
-        setLocalDrivers(driversWithColors);
+        setLocalDrivers(driversArray);
     }, [drivers]);
     useEffect(() => {
         setLocalUnrouted(Array.isArray(unrouted) ? unrouted : []);
@@ -963,20 +956,15 @@ export default function DriversMapLeaflet({
 
     const idBaseColor = useMemo(() => {
         const m = new Map();
-        for (const d of sortedDrivers)
+        // Use the same pattern as ClientDriverAssignment: stop.__driverColor || driver.color
+        for (const d of sortedDrivers) {
             for (const s of d.stops || []) {
-                // Always use driver's color for stop markers - directly from driver object
-                let driverColor = d.color;
-                if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
-                    driverColor = s.__driverColor;
-                }
-                if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
-                    driverColor = "#1f77b4"; // Default blue
-                }
-                // Never use gray for assigned stops
-                const stopColor = driverColor === "#666" ? "#1f77b4" : driverColor;
+                // Match ClientDriverAssignment pattern: __driverColor: assignedDriver?.color || null
+                // Priority: stop.__driverColor > driver.color > default
+                const stopColor = s.__driverColor || d.color || "#1f77b4";
                 m.set(sid(s.id), stopColor);
             }
+        }
         for (const s of localUnrouted) m.set(sid(s.id), "#666");
         return m;
     }, [sortedDrivers, localUnrouted]);
@@ -1474,13 +1462,14 @@ export default function DriversMapLeaflet({
                 unroutedMarkerRefs.current.get(id);
             if (!m) return;
             // Get the stop to check for __driverColor
-            const { stop, color: driverColor } = findStopByIdLocal(
+            const { stop } = findStopByIdLocal(
                 id,
                 localDriversRef.current,
                 localUnroutedRef.current
             );
-            // Always use driver color for stop markers - get from idBaseColor map or driver
-            const stopColor = driverColor || idBaseColor.get(id) || "#666";
+            // Use the same pattern as ClientDriverAssignment: stop.__driverColor || driver.color
+            // Get from idBaseColor map (which uses the same logic)
+            const stopColor = idBaseColor.get(id) || "#666";
             m.setIcon(makePinIcon(stopColor, !!on));
         },
         [idBaseColor]
@@ -2310,23 +2299,17 @@ export default function DriversMapLeaflet({
                     })}
 
                     {/* ASSIGNED markers */}
+                    {/* Use the same color logic as ClientDriverAssignment: prioritize stop.__driverColor, then driver.color */}
                     {visibleDrivers.map((d, di) =>
                         (d.stops || []).map((s) => {
                             const ll = getLL(s);
                             if (!ll) return null;
                             const id = sid(s.id);
                             const pos = jitterLL(ll, id);
-                            // Always use the driver's color for the stop marker - this is the source of truth
-                            // Get color from driver object first, then fallback to stop's __driverColor, then default
-                            let driverColor = d.color;
-                            if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
-                                driverColor = s.__driverColor;
-                            }
-                            if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
-                                driverColor = "#1f77b4"; // Default blue
-                            }
-                            // Final check - never use gray for assigned stops
-                            const stopColor = driverColor === "#666" ? "#1f77b4" : driverColor;
+                            // Use the same pattern as ClientDriverAssignment:
+                            // Priority: stop.__driverColor (from assignedDriver?.color) > driver.color
+                            // This matches ClientDriverAssignment line 384: __driverColor: assignedDriver?.color || null
+                            const stopColor = s.__driverColor || d.color || "#1f77b4";
                             const z = 2100 + di; // slightly above unrouted, and stable order
                             return (
                                 <Marker

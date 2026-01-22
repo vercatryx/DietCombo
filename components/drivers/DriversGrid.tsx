@@ -163,10 +163,15 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
 
                 const color = d.color?.trim() || "#3665F3";
 
+                // Build URL with delivery_date if selectedDate is set
+                const driverUrl = selectedDate 
+                    ? `/drivers/${d.id}?delivery_date=${encodeURIComponent(selectedDate)}`
+                    : `/drivers/${d.id}`;
+                
                 return (
                     <Link
                         key={d.id}
-                        href={`/drivers/${d.id}`}
+                        href={driverUrl}
                         className="card driver-card"
                         style={{ textDecoration: "none", color: "inherit" }}
                     >

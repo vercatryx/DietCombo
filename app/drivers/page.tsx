@@ -26,15 +26,19 @@ export default function DriversHome() {
 
         try {
             // Call cleanup first to ensure data is up to date
-            await fetch("/api/route/cleanup?day=all", {
+            let cleanupUrl = "/api/route/cleanup?day=all";
+            if (selectedDate) {
+                cleanupUrl += `&delivery_date=${selectedDate}`;
+            }
+            await fetch(cleanupUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
             }).catch(() => {}); // Silently fail if cleanup errors
 
-            // Then fetch the cleaned data
+            // Then fetch the cleaned data with date filtering
             const [driversData, stopsData] = await Promise.all([
-                fetchDrivers(),
-                fetchStops()
+                fetchDrivers(selectedDate),
+                fetchStops(selectedDate)
             ]);
             setDrivers(driversData);
             setAllStops(stopsData);
@@ -49,7 +53,7 @@ export default function DriversHome() {
 
     useEffect(() => {
         loadData();
-    }, []);
+    }, [selectedDate]);
 
     if (error) {
         return (

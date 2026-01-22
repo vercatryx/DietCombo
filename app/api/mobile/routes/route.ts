@@ -27,6 +27,7 @@ export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
         const dayParam = (searchParams.get("day") ?? "all").toLowerCase();
+        const deliveryDateParam = searchParams.get("delivery_date"); // YYYY-MM-DD format
 
         // 1) Fetch drivers (include day="all" when a specific day is requested)
         let driversQuery = supabase
@@ -123,15 +124,22 @@ export async function GET(req: Request) {
         // First, get stops by stop_ids
         let stops: any[] = [];
         if (allStopIds.length > 0) {
-            const { data: stopsByIds, error: stopsByIdsError } = await supabase
+            let stopsQuery = supabase
                 .from('stops')
-                .select('id, completed, assigned_driver_id')
+                .select('id, completed, assigned_driver_id, delivery_date')
                 .in('id', allStopIds);
+            
+            // Filter by delivery_date if provided
+            if (deliveryDateParam) {
+                stopsQuery = stopsQuery.eq('delivery_date', deliveryDateParam);
+            }
+            
+            const { data: stopsByIds, error: stopsByIdsError } = await stopsQuery;
             if (stopsByIdsError) {
                 console.error("[mobile/routes] Error fetching stops by IDs:", stopsByIdsError);
             } else {
                 stops = stopsByIds || [];
-                console.log("[mobile/routes] Found", stops.length, "stops by stop_ids");
+                console.log("[mobile/routes] Found", stops.length, "stops by stop_ids", deliveryDateParam ? `for delivery_date=${deliveryDateParam}` : "");
             }
         }
         
@@ -139,10 +147,17 @@ export async function GET(req: Request) {
         // This handles cases where stops are linked to drivers via assigned_driver_id instead of stop_ids
         const driverIds = drivers.map(d => String(d.id));
         if (driverIds.length > 0) {
-            const { data: stopsByDriverId, error: stopsByDriverIdError } = await supabase
+            let stopsByDriverQuery = supabase
                 .from('stops')
-                .select('id, completed, assigned_driver_id')
+                .select('id, completed, assigned_driver_id, delivery_date')
                 .in('assigned_driver_id', driverIds);
+            
+            // Filter by delivery_date if provided
+            if (deliveryDateParam) {
+                stopsByDriverQuery = stopsByDriverQuery.eq('delivery_date', deliveryDateParam);
+            }
+            
+            const { data: stopsByDriverId, error: stopsByDriverIdError } = await stopsByDriverQuery;
             
             if (stopsByDriverIdError) {
                 console.error("[mobile/routes] Error fetching stops by driver_id:", stopsByDriverIdError);
@@ -151,20 +166,25 @@ export async function GET(req: Request) {
                 const existingStopIds = new Set(stops.map(s => String(s.id)));
                 const newStops = stopsByDriverId.filter(s => !existingStopIds.has(String(s.id)));
                 stops = [...stops, ...newStops];
-                console.log("[mobile/routes] Found", newStops.length, "additional stops via assigned_driver_id");
+                console.log("[mobile/routes] Found", newStops.length, "additional stops via assigned_driver_id", deliveryDateParam ? `for delivery_date=${deliveryDateParam}` : "");
             }
         }
         
         // If we still have no stops, try fetching all stops for the day to see if any exist
         if (stops.length === 0 && driverIds.length > 0) {
-            console.log("[mobile/routes] No stops found via stop_ids or assigned_driver_id, checking all stops for day:", dayParam);
+            console.log("[mobile/routes] No stops found via stop_ids or assigned_driver_id, checking all stops for day:", dayParam, deliveryDateParam ? `delivery_date=${deliveryDateParam}` : "");
             let allStopsQuery = supabase
                 .from('stops')
-                .select('id, completed, assigned_driver_id, day')
+                .select('id, completed, assigned_driver_id, day, delivery_date')
                 .limit(100);
             
             if (dayParam !== "all") {
                 allStopsQuery = allStopsQuery.eq('day', dayParam);
+            }
+            
+            // Filter by delivery_date if provided
+            if (deliveryDateParam) {
+                allStopsQuery = allStopsQuery.eq('delivery_date', deliveryDateParam);
             }
             
             const { data: allStops, error: allStopsError } = await allStopsQuery;
@@ -176,7 +196,8 @@ export async function GET(req: Request) {
                     console.log("[mobile/routes] Sample stop:", {
                         id: allStops[0].id,
                         assigned_driver_id: allStops[0].assigned_driver_id,
-                        day: allStops[0].day
+                        day: allStops[0].day,
+                        delivery_date: allStops[0].delivery_date
                     });
                 }
             }

@@ -352,7 +352,13 @@ export async function GET(req: Request) {
         }
 
         // 7) Build driver routes strictly from their stopIds
-        const routes = drivers.map((d) => {
+        // Color palette for fallback
+        const colorPalette = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
+            "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
+        ];
+        const routes = drivers.map((d, idx) => {
             const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === "string" ? JSON.parse(d.stop_ids) : []);
             const ids: any[] = Array.isArray(stopIds) ? stopIds : [];
             const stops: any[] = [];
@@ -360,10 +366,14 @@ export async function GET(req: Request) {
                 const hyd = stopById.get(sid(raw));
                 if (hyd) stops.push(hyd);
             }
+            // Ensure color is always set - use driver color or fallback to palette
+            const driverColor = (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey" && d.color !== null && d.color !== undefined)
+                ? d.color
+                : colorPalette[idx % colorPalette.length];
             return {
                 driverId: d.id,
                 driverName: d.name,
-                color: d.color,
+                color: driverColor, // Always return a valid color
                 stops,
             };
         });

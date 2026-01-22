@@ -9,6 +9,7 @@ import {
     CheckCircle2, MapPin, Phone, Clock, Hash, ArrowLeft, Link as LinkIcon, X, Map as MapIcon, Crosshair
 } from "lucide-react";
 import SearchStops from "../../../components/drivers/SearchStops";
+import { DateFilter } from "../../../components/routes/DateFilter";
 
 /** Lazy-load the shared Leaflet map */
 const DriversMapLeaflet = dynamic(() => import("../../../components/routes/DriversMapLeaflet"), { ssr: false });
@@ -84,6 +85,35 @@ function InlineMessageListener({ onDone }) {
 export default function DriverDetailPage() {
     const { id } = useParams(); // driver id
     const router = useRouter();
+    
+    // Get delivery_date from URL search params, default to today
+    const getInitialDate = () => {
+        if (typeof window !== 'undefined') {
+            const params = new URLSearchParams(window.location.search);
+            const dateParam = params.get('delivery_date');
+            if (dateParam) return dateParam;
+        }
+        const today = new Date();
+        return today.toISOString().split('T')[0];
+    };
+    
+    const [selectedDate, setSelectedDate] = useState<string>(getInitialDate);
+    
+    // Sync selectedDate with URL params on mount and when URL changes
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            const params = new URLSearchParams(window.location.search);
+            const dateParam = params.get('delivery_date');
+            if (dateParam && dateParam !== selectedDate) {
+                setSelectedDate(dateParam);
+            } else if (!dateParam && selectedDate) {
+                // If URL doesn't have date but state does, sync URL
+                const url = new URL(window.location.href);
+                url.searchParams.set('delivery_date', selectedDate);
+                window.history.replaceState({}, '', url.toString());
+            }
+        }
+    }, []);
 
     const [driver, setDriver] = useState(null);
     const [stops, setStops] = useState([]);       // ordered, server-truth only, with sigCollected
@@ -136,17 +166,29 @@ export default function DriverDetailPage() {
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            // 1) Driver
-            const d = await fetchDriver(id);
-            // 2) All stops
-            const every = await fetchStops();
+            // 1) Driver (with date filtering)
+            const d = await fetchDriver(id, selectedDate);
+            // 2) All stops (with date filtering)
+            const every = await fetchStops(selectedDate);
             // 3) Signature counts
             const sigRows = await fetchSignStatus().catch(() => []);
 
             // 4) Order and attach sigs
-            const orderedServer = orderByDriverStopIds(d, every);
+            // Filter stops by delivery_date if selectedDate is set
+            const filteredEvery = selectedDate 
+                ? every.filter((s: any) => {
+                    const stopDate = s.delivery_date || s.deliveryDate;
+                    if (!stopDate) return false;
+                    const stopDateStr = typeof stopDate === 'string' 
+                        ? stopDate.split('T')[0].split(' ')[0]
+                        : new Date(stopDate).toISOString().split('T')[0];
+                    return stopDateStr === selectedDate;
+                })
+                : every;
+            
+            const orderedServer = orderByDriverStopIds(d, filteredEvery);
             const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
-            const allWithSigs = mergeSigCounts(every, sigRows);
+            const allWithSigs = mergeSigCounts(filteredEvery, sigRows);
 
             setDriver(d);
             setAllStops(allWithSigs);
@@ -162,7 +204,7 @@ export default function DriverDetailPage() {
             const el = document.getElementById(hash);
             if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
         });
-    }, [id]);
+    }, [id, selectedDate]);
 
     useEffect(() => {
         let active = true;
@@ -474,6 +516,32 @@ export default function DriverDetailPage() {
                         <div className="progress sig" style={{ marginTop: 8 }}><span style={{ width: `${safePctSigs}%`, background: "#fff", display: 'block', height: '100%', borderRadius: '999px' }} /></div>
                     </div>
                 </div>
+            </div>
+
+            {/* Date Filter */}
+            <div style={{ marginBottom: 12, padding: '0 12px' }}>
+                <DateFilter
+                    selectedDate={selectedDate}
+                    onDateChange={(date) => {
+                        setSelectedDate(date);
+                        // Update URL without page reload
+                        const url = new URL(window.location.href);
+                        if (date) {
+                            url.searchParams.set('delivery_date', date);
+                        } else {
+                            url.searchParams.delete('delivery_date');
+                        }
+                        window.history.replaceState({}, '', url.toString());
+                    }}
+                    onClear={() => {
+                        const today = new Date();
+                        const todayStr = today.toISOString().split('T')[0];
+                        setSelectedDate(todayStr);
+                        const url = new URL(window.location.href);
+                        url.searchParams.set('delivery_date', todayStr);
+                        window.history.replaceState({}, '', url.toString());
+                    }}
+                />
             </div>
 
             {/* Search */}

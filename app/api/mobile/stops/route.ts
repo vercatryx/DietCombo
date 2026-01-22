@@ -17,8 +17,9 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const day = (url.searchParams.get("day") ?? "all").toLowerCase();
     const driverIdParam = url.searchParams.get("driverId");
+    const deliveryDateParam = url.searchParams.get("delivery_date"); // YYYY-MM-DD format
 
-    console.log("[/api/mobile/stops] GET", { day, driverIdParam }); // DEBUG
+    console.log("[/api/mobile/stops] GET", { day, driverIdParam, deliveryDateParam }); // DEBUG
 
     // Build base where clause
     let whereClause = "";
@@ -59,7 +60,7 @@ export async function GET(req: Request) {
             return NextResponse.json([], { headers: { "Cache-Control": "no-store" } });
         }
 
-        // Get those stops (optionally constrained by day)
+        // Get those stops (optionally constrained by day and delivery_date)
         let stopsQuery = supabase
             .from('stops')
             .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
@@ -67,6 +68,11 @@ export async function GET(req: Request) {
         
         if (day !== "all") {
             stopsQuery = stopsQuery.eq('day', day);
+        }
+        
+        // Filter by delivery_date if provided
+        if (deliveryDateParam) {
+            stopsQuery = stopsQuery.eq('delivery_date', deliveryDateParam);
         }
 
         const { data: stops } = await stopsQuery;
@@ -220,6 +226,11 @@ export async function GET(req: Request) {
     
     if (day !== "all") {
         allQuery = allQuery.eq('day', day);
+    }
+    
+    // Filter by delivery_date if provided
+    if (deliveryDateParam) {
+        allQuery = allQuery.eq('delivery_date', deliveryDateParam);
     }
 
         const { data: all, error: allError } = await allQuery;
