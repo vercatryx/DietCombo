@@ -222,7 +222,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 </div>
 
                 {order.alreadyDelivered && (
-                    <div style={{ backgroundColor: 'rgba(234, 179, 8, 0.1)', color: '#eab308', padding: '0.75rem', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
+                    <div style={{ backgroundColor: 'rgba(72, 190, 133, 0.1)', color: '#48be85', padding: '0.75rem', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
                         This order was already marked as delivered.
                     </div>
                 )}

@@ -266,9 +266,8 @@
     align-items: center;
     gap: 8px;
     font-size: 0.85rem;
-    color: #422006;
-    /* Dark brown/black for contrast on yellow */
-    background-color: rgba(253, 235, 35, 0.2);
+    color: #14532d;
+    background-color: rgba(72, 190, 133, 0.2);
     padding: 4px 10px;
     border-radius: var(--radius-sm);
     animation: fadeIn 0.3s ease-out;
@@ -316,14 +315,12 @@
 }
 
 .sortButtonActive {
-    color: #000000;
-    /* Black */
-    background-color: rgba(253, 235, 35, 0.4);
-    /* Stronger yellow tint */
+    color: #14532d;
+    background-color: rgba(72, 190, 133, 0.35);
 }
 
 .sortButtonActive:hover {
-    background-color: rgba(253, 235, 35, 0.5);
+    background-color: rgba(72, 190, 133, 0.5);
 }
 
 .filterDropdown {
@@ -350,12 +347,12 @@
 }
 
 .filterButtonActive {
-    color: #000000;
-    background-color: rgba(253, 235, 35, 0.4);
+    color: #14532d;
+    background-color: rgba(72, 190, 133, 0.35);
 }
 
 .filterButtonActive:hover {
-    background-color: rgba(253, 235, 35, 0.5);
+    background-color: rgba(72, 190, 133, 0.5);
 }
 
 .filterMenu {
@@ -394,13 +391,13 @@
 }
 
 .filterOptionActive {
-    background-color: rgba(253, 235, 35, 0.2);
-    color: #000000;
+    background-color: rgba(72, 190, 133, 0.2);
+    color: #14532d;
     font-weight: 600;
 }
 
 .filterOptionActive:hover {
-    background-color: rgba(253, 235, 35, 0.3);
+    background-color: rgba(72, 190, 133, 0.3);
 }
 
 .clearButton {

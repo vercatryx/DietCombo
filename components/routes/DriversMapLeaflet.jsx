@@ -19,7 +19,7 @@ import MapLoadingOverlay from "./MapLoadingOverlay";
 /* ==================== Config / constants ==================== */
 
 // Selection colors
-const SELECTION_PIN_COLOR = "#ebf707"; // yellow
+const SELECTION_PIN_COLOR = "#48be85";
 const SELECTION_RING_COLOR = "rgba(235,247,7,0.55)"; // halo/glow
 
 // Icon geometry
@@ -2333,7 +2333,7 @@ export default function DriversMapLeaflet({
                 </MapContainer>
 
                 {/* Loading overlay (separate component) */}
-                <MapLoadingOverlay show={showOverlay} logoSrc={logoSrc || "/logo.png"} />
+                <MapLoadingOverlay show={showOverlay} logoSrc={logoSrc || "/diet-fantasy-logo.png"} />
             </div>
         </div>
     );

@@ -9,7 +9,7 @@ import React from "react";
  * - Subtle animated sweep across logo for polish
  * - Transparent background (just faint gray map dimming)
  */
-export default function MapLoadingOverlay({ show, logoSrc = "/logo.png" }) {
+export default function MapLoadingOverlay({ show, logoSrc = "/diet-fantasy-logo.png" }) {
     if (!show) return null;
 
     return (

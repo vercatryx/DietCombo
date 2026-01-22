@@ -442,6 +442,28 @@
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"
     },
     {
+      "id": "488e69ed-5ca9-466a-ab92-568865d742f9",
+      "client_id": "client555-5555-5555-5555-55555555555",
+      "service_type": "Food",
+      "case_id": "6876",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2026-01-28",
+      "take_effect_date": "2026-01-25",
+      "delivery_day": "Wednesday",
+      "delivery_distribution": null,
+      "total_value": 11.97,
+      "total_items": 3,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-22T15:04:03.421",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-22T14:30:31.532148",
+      "meal_type": "Lunch",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    },
+    {
       "id": "5b406459-19a1-4955-aab6-d63399b845c4",
       "client_id": "c8be40b5-1f16-4395-ae65-3e2bcbeb872a",
       "service_type": "Food",
@@ -504,6 +526,28 @@
       "last_updated": "2026-01-21T19:35:23.911",
       "updated_by": "System Administrator",
       "created_at": "2026-01-21T19:03:00.329719",
+      "meal_type": "Lunch",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    },
+    {
+      "id": "3a83a792-8d6d-4aff-b4ce-51689b5a7a8b",
+      "client_id": "client555-5555-5555-5555-55555555555",
+      "service_type": "Food",
+      "case_id": "6876",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2026-01-27",
+      "take_effect_date": "2026-01-25",
+      "delivery_day": "Tuesday",
+      "delivery_distribution": null,
+      "total_value": 11.97,
+      "total_items": 3,
+      "notes": null,
+      "order_number": null,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-22T15:04:03.421",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-22T14:30:29.596371",
       "meal_type": "Lunch",
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"
     }
@@ -589,6 +633,18 @@
       "upcoming_order_id": "f4dedc6f-5021-4115-84fa-f33f948fa081",
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
       "created_at": "2026-01-21T20:07:55.743956"
+    },
+    {
+      "id": "b97cc2ad-73cd-4ae0-9b52-1c82ce2d06b5",
+      "upcoming_order_id": "488e69ed-5ca9-466a-ab92-568865d742f9",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "created_at": "2026-01-22T15:04:13.992666"
+    },
+    {
+      "id": "e15ef9aa-8f36-42dd-b1b6-3521d75ee586",
+      "upcoming_order_id": "3a83a792-8d6d-4aff-b4ce-51689b5a7a8b",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "created_at": "2026-01-22T15:04:15.628809"
     }
   ],
   "upcomingOrderItems": [
@@ -801,6 +857,19 @@
       "notes": null
     },
     {
+      "id": "7e278217-626f-4d83-afb8-9a6b85556cef",
+      "upcoming_order_id": "488e69ed-5ca9-466a-ab92-568865d742f9",
+      "vendor_selection_id": null,
+      "upcoming_vendor_selection_id": "b97cc2ad-73cd-4ae0-9b52-1c82ce2d06b5",
+      "menu_item_id": "item3333-3333-3333-3333-333333333334",
+      "quantity": 3,
+      "created_at": "2026-01-22T15:04:14.134576",
+      "custom_name": null,
+      "custom_price": null,
+      "meal_item_id": null,
+      "notes": null
+    },
+    {
       "id": "4f612c70-be4e-4947-ada6-5d9eaaf98044",
       "upcoming_order_id": "f4dedc6f-5021-4115-84fa-f33f948fa081",
       "vendor_selection_id": null,
@@ -821,6 +890,19 @@
       "menu_item_id": "item3333-3333-3333-3333-333333333334",
       "quantity": 1,
       "created_at": "2026-01-20T22:21:08.769773",
+      "custom_name": null,
+      "custom_price": null,
+      "meal_item_id": null,
+      "notes": null
+    },
+    {
+      "id": "b36d80cf-2ef2-4f60-95e7-83c2c032f4a3",
+      "upcoming_order_id": "3a83a792-8d6d-4aff-b4ce-51689b5a7a8b",
+      "vendor_selection_id": null,
+      "upcoming_vendor_selection_id": "e15ef9aa-8f36-42dd-b1b6-3521d75ee586",
+      "menu_item_id": "item3333-3333-3333-3333-333333333334",
+      "quantity": 3,
+      "created_at": "2026-01-22T15:04:15.788966",
       "custom_name": null,
       "custom_price": null,
       "meal_item_id": null,
@@ -1848,5 +1930,5 @@
       "created_at": "2026-01-21T19:35:34.169931"
     }
   ],
-  "lastSynced": "2026-01-21T20:07:59.078Z"
+  "lastSynced": "2026-01-22T15:26:15.784Z"
 }

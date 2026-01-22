@@ -204,7 +204,7 @@ function SimulationButton() {
                 onMouseEnter={(e) => {
                     if (!simulating) {
                         e.currentTarget.style.backgroundColor = 'var(--color-primary)';
-                        e.currentTarget.style.color = '#000000';
+                        e.currentTarget.style.color = '#ffffff';
                         e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.15)';
                     }
                 }}
@@ -730,7 +730,7 @@ export function Sidebar({
                 {!isCollapsed && (
                     <div className={styles.logo}>
                         <Image
-                            src="/mainLogo.jpg"
+                            src="/diet-fantasy-logo.png"
                             alt="Logo"
                             width={240}
                             height={240}
@@ -742,7 +742,7 @@ export function Sidebar({
                 {isCollapsed && (
                     <div className={styles.logoCollapsed}>
                         <Image
-                            src="/mainLogo.jpg"
+                            src="/diet-fantasy-logo.png"
                             alt="Logo"
                             width={48}
                             height={48}

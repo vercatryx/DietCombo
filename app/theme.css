@@ -1,29 +1,13 @@
 :root {
     /* 
     Brand Color Configuration 
-    Uncomment the preferred shade or add your own to experiment.
   */
-
-    /* Option 1: Original Bright Yellow (Highlighter) */
-    /* --color-brand: #fdeb23; */
-
-    /* Option 2: Slightly Darker Yellow (Current Selection - Yellow 400) */
-    --color-brand: #facc15;
-
-    /* Option 3: Rich Amber (Yellow 500 - More Golden) */
-    /* --color-brand: #eab308; */
-
-    /* Option 4: Gold (Yellow 600 - Darker) */
-    /* --color-brand: #ca8a04; */
-
-
-    /* 
-    System Colors derived from Brand Color 
-  */
+    --color-brand: #48be85;
     --color-primary: var(--color-brand);
+    --color-primary-rgb: 72, 190, 133;
 
-    /* Hover state: One shade darker than the brand color */
-    --color-primary-hover: #eab308;
+    /* Hover state: Slightly darker green */
+    --color-primary-hover: #3da873;
 
 
     /* 

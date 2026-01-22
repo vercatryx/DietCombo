@@ -616,7 +616,7 @@ export function ClientInfoShelf({
                                     color: (() => {
                                         const status = client?.screeningStatus || 'not_started';
                                         switch (status) {
-                                            case 'waiting_approval': return '#eab308';
+                                            case 'waiting_approval': return '#48be85';
                                             case 'approved': return 'var(--color-success)';
                                             case 'rejected': return 'var(--color-danger)';
                                             default: return 'var(--text-tertiary)';

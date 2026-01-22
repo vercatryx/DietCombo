@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { LayoutShell } from '@/components/LayoutShell';
+import { MuiThemeProvider } from '@/components/MuiThemeProvider';
 import { TimeProvider } from '@/lib/time-context';
 import { cookies } from 'next/headers';
 import { getSession } from '@/lib/session';
@@ -34,11 +35,13 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <TimeProvider initialFakeTime={initialFakeTime}>
-          <LayoutShell userName={userName} userRole={userRole} userId={userId}>
-            {children}
-          </LayoutShell>
-        </TimeProvider>
+        <MuiThemeProvider>
+          <TimeProvider initialFakeTime={initialFakeTime}>
+            <LayoutShell userName={userName} userRole={userRole} userId={userId}>
+              {children}
+            </LayoutShell>
+          </TimeProvider>
+        </MuiThemeProvider>
       </body>
     </html>
   );

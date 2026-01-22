@@ -341,7 +341,7 @@
 .addVendorBtn:hover {
     border-color: var(--color-primary);
     background-color: var(--color-primary);
-    color: #000000;
+    color: #ffffff;
 }
 
 .menuList {

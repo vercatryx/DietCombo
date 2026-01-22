@@ -3138,7 +3138,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                         backgroundColor: (() => {
                                             const status = client?.screeningStatus || 'not_started';
                                             switch (status) {
-                                                case 'waiting_approval': return 'rgba(234, 179, 8, 0.1)';
+                                                case 'waiting_approval': return 'rgba(72, 190, 133, 0.1)';
                                                 case 'approved': return 'rgba(34, 197, 94, 0.1)';
                                                 case 'rejected': return 'rgba(239, 68, 68, 0.1)';
                                                 default: return 'var(--bg-surface-hover)';
@@ -3147,7 +3147,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                         color: (() => {
                                             const status = client?.screeningStatus || 'not_started';
                                             switch (status) {
-                                                case 'waiting_approval': return '#eab308';
+                                                case 'waiting_approval': return '#48be85';
                                                 case 'approved': return 'var(--color-success)';
                                                 case 'rejected': return 'var(--color-danger)';
                                                 default: return 'var(--text-tertiary)';

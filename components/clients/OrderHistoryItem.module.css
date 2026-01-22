@@ -73,8 +73,7 @@
 }
 
 .summaryIcon {
-    color: #854d0e;
-    /* Darker yellow/brown for visibility */
+    color: #15803d;
     opacity: 1;
     flex-shrink: 0;
     margin-top: 2px;

@@ -1451,8 +1451,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             },
             waiting_approval: {
                 label: 'Pending',
-                color: '#eab308',
-                bgColor: 'rgba(234, 179, 8, 0.1)',
+                color: '#48be85',
+                bgColor: 'rgba(72, 190, 133, 0.1)',
                 icon: <CheckSquare size={14} />
             },
             approved: {

@@ -146,10 +146,9 @@
 }
 
 .active {
-    background-color: #fef9c3;
-    /* Yellow 100 */
+    background-color: #dcfce7;
     border-left: 4px solid var(--color-brand);
-    color: #000000;
+    color: var(--text-primary);
 }
 
 .footer {
