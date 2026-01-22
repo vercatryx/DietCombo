@@ -241,10 +241,8 @@ export async function POST(req: Request) {
                     continue;
                 }
                 
-                // If filtering by specific delivery_date, only create stops for that date
-                if (deliveryDate && deliveryDateStr !== deliveryDate) {
-                    continue;
-                }
+                // NOTE: Removed delivery_date filtering - stops are now created for all dates
+                // The delivery_date filter is only used for displaying stops in the UI
                 
                 // Use full_name from client record, fallback to first_name + last_name, then "Unnamed"
                 const name = (client.full_name?.trim() || 

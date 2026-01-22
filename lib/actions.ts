@@ -6311,19 +6311,22 @@ export async function invalidateOrderData(path?: string) {
 }
 
 export async function getOrdersPaginated(page: number, pageSize: number, filter?: 'needs-vendor') {
-    // For the Orders tab, show orders from the orders table
+    // For the Orders tab, show orders from both orders and upcoming_orders tables
     // Exclude billing_pending orders (those should only show on billing page)
-    // Only show scheduled orders (orders with scheduled_delivery_date)
-    let query = supabase
-        .from('orders')
-        .select(`
-            *,
-            clients (
-                full_name
-            )
-        `, { count: 'exact' })
-        .neq('status', 'billing_pending')
-        .not('scheduled_delivery_date', 'is', null);
+    // Show all orders regardless of scheduled_delivery_date (some may use delivery_day instead)
+    
+    try {
+        // Build base query for orders table
+        // Fetch orders first, then get client names separately to avoid nested relation issues
+        let ordersQuery = supabase
+            .from('orders')
+            .select('*')
+            .neq('status', 'billing_pending');
+
+        // Build base query for upcoming_orders table
+        let upcomingOrdersQuery = supabase
+            .from('upcoming_orders')
+            .select('*');
 
     // If filtering for orders needing vendor assignment, only get Boxes orders with null vendor_id in box_selections
     if (filter === 'needs-vendor') {
@@ -6388,36 +6391,136 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
             return { orders: [], total: 0 };
         }
 
-        // Filter to only upcoming orders that need vendor
+        // Filter orders to only those needing vendor
+        const orderIdsFromOrders = orderIdsNeedingVendor.filter(id => boxesOrderIds.includes(id));
         const orderIdsFromUpcoming = orderIdsNeedingVendor.filter(id => boxesUpcomingOrderIds.includes(id));
-        if (orderIdsFromUpcoming.length > 0) {
-            query = query.in('id', orderIdsFromUpcoming);
+
+        // Only query tables that have orders needing vendors
+        if (orderIdsFromOrders.length > 0) {
+            ordersQuery = ordersQuery.in('id', orderIdsFromOrders);
         } else {
-            // If no upcoming orders need vendor, return empty
-            return { orders: [], total: 0 };
+            // No orders from orders table need vendor, so set to return empty
+            ordersQuery = ordersQuery.eq('id', '00000000-0000-0000-0000-000000000000'); // Impossible match
+        }
+
+        if (orderIdsFromUpcoming.length > 0) {
+            upcomingOrdersQuery = upcomingOrdersQuery.in('id', orderIdsFromUpcoming);
+        } else {
+            // No orders from upcoming_orders table need vendor, so set to return empty
+            upcomingOrdersQuery = upcomingOrdersQuery.eq('id', '00000000-0000-0000-0000-000000000000'); // Impossible match
         }
     }
 
-    const { data, count, error } = await query
-        .range((page - 1) * pageSize, page * pageSize - 1)
-        .order('created_at', { ascending: false });
+    // Fetch from both tables
+    const ordersQueryFinal = ordersQuery.order('created_at', { ascending: false });
+    const upcomingOrdersQueryFinal = upcomingOrdersQuery.order('created_at', { ascending: false });
+    
+    const [ordersResult, upcomingOrdersResult] = await Promise.all([
+        ordersQueryFinal,
+        upcomingOrdersQueryFinal
+    ]);
 
-    if (error) {
-        console.error('Error fetching paginated orders:', error);
+    if (ordersResult.error) {
+        console.error('[getOrdersPaginated] Error fetching orders:', {
+            error: ordersResult.error,
+            message: ordersResult.error.message,
+            details: ordersResult.error.details,
+            hint: ordersResult.error.hint
+        });
+    }
+    if (upcomingOrdersResult.error) {
+        console.error('[getOrdersPaginated] Error fetching upcoming orders:', {
+            error: upcomingOrdersResult.error,
+            message: upcomingOrdersResult.error.message,
+            details: upcomingOrdersResult.error.details,
+            hint: upcomingOrdersResult.error.hint
+        });
+    }
+
+    const ordersData = ordersResult.data || [];
+    const upcomingOrdersData = upcomingOrdersResult.data || [];
+
+    console.log(`[getOrdersPaginated] Fetched ${ordersData.length} orders and ${upcomingOrdersData.length} upcoming orders`);
+    
+    // If both queries failed, return empty
+    if (ordersResult.error && upcomingOrdersResult.error) {
+        console.error('[getOrdersPaginated] Both queries failed, returning empty result');
         return { orders: [], total: 0 };
     }
 
-    return {
-        orders: (data || []).map((o: any) => ({
+    // Combine results from both tables
+    // If one query fails, still return results from the other table
+    const allOrders = [
+        ...(ordersData.map((o: any) => ({
             ...o,
-            clientName: o.clients?.full_name || 'Unknown',
-            // Ensure status is 'scheduled' for upcoming_orders
-            status: 'scheduled',
+            is_upcoming: false
+        }))),
+        ...(upcomingOrdersData.map((o: any) => ({
+            ...o,
+            is_upcoming: true
+        })))
+    ];
+
+    // Sort by created_at descending
+    allOrders.sort((a: any, b: any) => {
+        const dateA = new Date(a.created_at || 0).getTime();
+        const dateB = new Date(b.created_at || 0).getTime();
+        return dateB - dateA;
+    });
+
+    const total = allOrders.length;
+    const startIndex = (page - 1) * pageSize;
+    const endIndex = startIndex + pageSize;
+    const paginatedOrders = allOrders.slice(startIndex, endIndex);
+
+    console.log(`[getOrdersPaginated] Total orders: ${total}, Page: ${page}, Page size: ${pageSize}, Showing: ${paginatedOrders.length}`);
+
+    // Fetch client names for paginated orders only
+    const clientIds = [...new Set(
+        paginatedOrders.map((o: any) => o.client_id).filter(Boolean)
+    )];
+    
+    let clientsMap: Record<string, string> = {};
+    if (clientIds.length > 0) {
+        const { data: clientsData, error: clientsError } = await supabase
+            .from('clients')
+            .select('id, full_name')
+            .in('id', clientIds);
+        
+        if (!clientsError && clientsData) {
+            clientsMap = clientsData.reduce((acc: Record<string, string>, client: any) => {
+                acc[client.id] = client.full_name || 'Unknown';
+                return acc;
+            }, {});
+        } else if (clientsError) {
+            console.error('[getOrdersPaginated] Error fetching client names:', clientsError);
+        }
+    }
+
+    const mappedOrders = paginatedOrders.map((o: any) => {
+        // Get client name from the map
+        const clientName = o.client_id ? (clientsMap[o.client_id] || 'Unknown') : 'Unknown';
+        
+        return {
+            ...o,
+            clientName: clientName,
+            // Use the actual status from the order, default to 'pending' if not set
+            status: o.status || (o.is_upcoming ? 'scheduled' : 'pending'),
             // Map delivery_day to scheduled_delivery_date if needed
-            scheduled_delivery_date: o.scheduled_delivery_date || null
-        })),
-        total: count || 0
-    };
+            scheduled_delivery_date: o.scheduled_delivery_date || null,
+            // Ensure total_items is included
+            total_items: o.total_items || 0
+        };
+    });
+
+        return {
+            orders: mappedOrders,
+            total: total
+        };
+    } catch (error: any) {
+        console.error('[getOrdersPaginated] Unexpected error:', error);
+        return { orders: [], total: 0 };
+    }
 }
 
 export async function getOrderById(orderId: string) {

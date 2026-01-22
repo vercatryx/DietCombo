@@ -711,13 +711,11 @@ export async function GET(req: Request) {
                         continue;
                     }
                     
-                    // If filtering by delivery_date, only create stops for that specific date
-                    if (deliveryDate && deliveryDateStr !== deliveryDate) {
-                        continue;
-                    }
+                    // NOTE: Removed delivery_date filtering - stops are now created for all dates
+                    // The delivery_date filter is only used for displaying stops in the UI
                     
                     // If filtering by specific day (and not delivery_date), only create stops for that day
-                    if (!deliveryDate && day !== "all" && dateInfo.dayOfWeek !== day.toLowerCase()) {
+                    if (day !== "all" && dateInfo.dayOfWeek !== day.toLowerCase()) {
                         continue;
                     }
                     

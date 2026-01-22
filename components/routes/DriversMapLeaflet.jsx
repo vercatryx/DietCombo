@@ -783,6 +783,7 @@ export default function DriversMapLeaflet({
                                               onStopClick, // optional: (stop) => void - called when stop is clicked
                                               driversForAssignment, // optional: array of {id, name} for driver dropdown
                                               onDriverChange, // optional: (stop, driverId) => Promise<void> - called when driver is changed in popup
+                                              onBulkAssignComplete, // optional: () => void - called after bulk assign completes
                                               onExpose, // optional
                                               initialCenter = [40.7128, -74.006],
                                               initialZoom = 10,
@@ -1497,6 +1498,7 @@ export default function DriversMapLeaflet({
             if (!to || to.trim() === "" || ids.length === 0 || bulkBusy) return;
 
             setBulkBusy(true);
+            let successCount = 0;
             try {
                 for (const id of ids) {
                     const { stop } = findStopByIdLocal(
@@ -1507,6 +1509,11 @@ export default function DriversMapLeaflet({
                     if (!stop) continue;
                     await onReassignRef.current?.(stop, to); // persist (server)
                     moveStopsLocally([id], to); // update local UI
+                    successCount++;
+                }
+                // Call callback after all assignments complete successfully
+                if (successCount > 0 && onBulkAssignComplete) {
+                    onBulkAssignComplete();
                 }
             } catch (err) {
                 console.error("[BulkAssign(sequential)] failed:", err);
@@ -1522,7 +1529,7 @@ export default function DriversMapLeaflet({
                 setBulkBusy(false);
             }
         },
-        [selectedIds, bulkBusy, moveStopsLocally, clearHalo, setIconForId, readonly]
+        [selectedIds, bulkBusy, moveStopsLocally, clearHalo, setIconForId, readonly, onBulkAssignComplete]
     );
 
     const clearSelection = useCallback(() => {

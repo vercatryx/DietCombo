@@ -23,11 +23,15 @@ export function OrdersList() {
     async function loadData() {
         setIsLoading(true);
         try {
+            console.log('[OrdersList] Loading orders, page:', page);
             const { orders, total } = await getOrdersPaginated(page, PAGE_SIZE);
+            console.log('[OrdersList] Received orders:', orders.length, 'total:', total);
             setOrders(orders);
             setTotal(total);
         } catch (error) {
-            console.error('Failed to load orders:', error);
+            console.error('[OrdersList] Failed to load orders:', error);
+            setOrders([]);
+            setTotal(0);
         } finally {
             setIsLoading(false);
         }
@@ -48,6 +52,7 @@ export function OrdersList() {
             case 'waiting_for_proof': return styles.statusWaitProof;
             case 'billing_pending': return styles.statusBilling;
             case 'cancelled': return styles.statusCancelled;
+            case 'scheduled': return styles.statusConfirmed;
             default: return '';
         }
     };

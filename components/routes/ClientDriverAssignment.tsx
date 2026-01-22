@@ -473,6 +473,13 @@ export default function ClientDriverAssignment({
                             await handleDriverChange(clientId, driverId);
                         }
                     }}
+                    onBulkAssignComplete={async () => {
+                        // Refresh routes and client assignments after bulk area selection is saved
+                        await loadClientDriverAssignments(clients);
+                        if (onDriverAssigned) {
+                            onDriverAssigned();
+                        }
+                    }}
                     busy={isBulkSaving}
                     readonly={readOnly}
                     initialCenter={[40.7128, -74.006]}

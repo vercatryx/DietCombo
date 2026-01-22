@@ -1007,25 +1007,92 @@ export default function RoutesPage() {
                     onClick={async () => {
                         setBusy(true);
                         try {
+                            // Validate we have routes with stops
+                            if (!routes || routes.length === 0) {
+                                alert('No routes available. Please generate routes first.');
+                                return;
+                            }
+
+                            const totalStopsInRoutes = routes.reduce((sum, r) => sum + (r.stops?.length || 0), 0);
+                            if (totalStopsInRoutes === 0) {
+                                alert('No stops found in routes. Please assign stops to drivers first.');
+                                return;
+                            }
+
                             const idxs = buildComplexIndex(users);
-                            const complexMarked = (routeStops || []).map((stops) =>
-                                (stops || []).map((s, si) => markStopComplex(s, si, idxs))
-                            );
                             const { enrichedSorted, colorsSorted } = buildSortedForLabels();
+                            
+                            // Validate enrichedSorted has data
+                            if (!enrichedSorted || enrichedSorted.length === 0) {
+                                console.error('[Download Labels] enrichedSorted is empty', { routes, routeStops });
+                                alert('No stops found to export. Please check that routes have stops assigned.');
+                                return;
+                            }
+
+                            const totalEnrichedStops = enrichedSorted.reduce((sum, route) => sum + (route?.length || 0), 0);
+                            if (totalEnrichedStops === 0) {
+                                console.error('[Download Labels] No stops in enrichedSorted', { enrichedSorted, routes, routeStops });
+                                alert('No stops found to export. Please check that routes have stops assigned.');
+                                return;
+                            }
+                            
+                            // Build complex index from enrichedSorted (same order/structure as what we'll export)
                             const complexById = new Map();
-                            complexMarked.forEach(route => route.forEach(s => complexById.set(String(s.id), s)));
+                            enrichedSorted.forEach((route) => {
+                                route.forEach((s) => {
+                                    if (s && s.id) {
+                                        const marked = markStopComplex(s, 0, idxs);
+                                        complexById.set(String(s.id), marked);
+                                    }
+                                });
+                            });
+                            
                             const stampedWithComplex = enrichedSorted.map((route, ri) =>
-                                route.map((s, si) => {
+                                (route || []).map((s, si) => {
+                                    if (!s || !s.id) return null;
+                                    // Ensure stop has at least name or address for PDF rendering
+                                    const hasName = s.name || s.fullName || s.first || s.last || s.firstName || s.lastName;
+                                    const hasAddress = s.address;
+                                    if (!hasName && !hasAddress) {
+                                        console.warn('[Download Labels] Skipping stop without name or address:', s.id);
+                                        return null;
+                                    }
                                     const cm = complexById.get(String(s.id));
                                     return { ...s, complex: cm?.complex ?? false, __complexSource: cm?.__complexSource ?? "none" };
-                                })
+                                }).filter(Boolean)
                             );
+
+                            // Final validation - filter out any empty routes
+                            const filteredForExport = stampedWithComplex.filter(route => route && route.length > 0);
+                            const totalStops = filteredForExport.reduce((sum, route) => sum + (route?.length || 0), 0);
+                            
+                            console.log('[Download Labels] Exporting:', {
+                                routes: filteredForExport.length,
+                                totalStops,
+                                stopsPerRoute: filteredForExport.map(r => r?.length || 0),
+                                sampleStop: totalStops > 0 ? filteredForExport[0]?.[0] : null,
+                                selectedDate: selectedDeliveryDate,
+                            });
+
+                            if (totalStops === 0) {
+                                alert('No stops found to export after processing. Please check the console for details.');
+                                console.error('[Download Labels] Debug info:', {
+                                    routesCount: routes.length,
+                                    routeStopsCount: routeStops.length,
+                                    enrichedSortedCount: enrichedSorted.length,
+                                    enrichedSortedStops: enrichedSorted.reduce((sum, r) => sum + (r?.length || 0), 0),
+                                });
+                                return;
+                            }
 
                             // Routes are already filtered by selected date (API). Use those stops = same as map in Orders View.
                             const filenameFn = () =>
                                 selectedDeliveryDate ? String(selectedDeliveryDate) : tsString();
 
-                            await exportRouteLabelsPDF(stampedWithComplex, colorsSorted, filenameFn);
+                            await exportRouteLabelsPDF(filteredForExport, colorsSorted, filenameFn);
+                        } catch (error) {
+                            console.error('[Download Labels] Error:', error);
+                            alert('Failed to generate labels: ' + (error instanceof Error ? error.message : String(error)));
                         } finally {
                             setBusy(false);
                         }
