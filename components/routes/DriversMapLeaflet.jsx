@@ -189,17 +189,17 @@ function isPausedStop(s) {
 }
 
 /** Get color for stop based on driver color
- * Uses driver color from stop's __driverColor property or the defaultColor (driver color)
+ * Always uses the driver's color for assigned stops
  */
-function getStopColor(stop, defaultColor) {
-    // Priority 1: Use driver color from stop's __driverColor property
-    if (stop?.__driverColor) {
-        return stop.__driverColor;
+function getStopColor(stop, driverColor) {
+    // Always use the driver's color if provided (for assigned stops)
+    if (driverColor && driverColor !== "#666") {
+        return driverColor;
     }
     
-    // Priority 2: Use the defaultColor parameter (which is the driver's color)
-    if (defaultColor) {
-        return defaultColor;
+    // Fallback to stop's __driverColor property if driver color not provided
+    if (stop?.__driverColor) {
+        return stop.__driverColor;
     }
     
     // Default: use gray for stops without driver assignment
@@ -256,8 +256,11 @@ function makePinIcon(color = "#1f77b4", selected = false) {
 function findStopByIdLocal(id, drivers, unrouted) {
     const key = sid(id);
     for (const d of drivers) for (const s of d.stops || []) {
-        if (sid(s.id) === key)
-            return { stop: s, color: d.color || "#1f77b4", fromDriverId: d.driverId };
+        if (sid(s.id) === key) {
+            // Always use driver's color, with fallback to stop's __driverColor, then default
+            const driverColor = d.color || s.__driverColor || "#1f77b4";
+            return { stop: s, color: driverColor, fromDriverId: d.driverId };
+        }
     }
     for (const s of unrouted || [])
         if (sid(s.id) === key) return { stop: s, color: "#666", fromDriverId: null };
@@ -321,7 +324,7 @@ const formatDate = (dateStr) => {
 };
 
 /** Preview popup showing stop details */
-async function openPreviewPopup({ map, stop, color, drivers, onDriverChange }) {
+async function openPreviewPopup({ map, stop, color, drivers, onDriverChange, isOrdersViewTab = false }) {
     if (!map || !stop) return;
     const ll = getLL(stop);
     if (!ll) return;
@@ -541,7 +544,7 @@ async function openPreviewPopup({ map, stop, color, drivers, onDriverChange }) {
         <div style="color:#6b7280;margin-bottom:4px">${stop.city || ""} ${stop.state || ""} ${stop.zip || ""}</div>
         ${stop.phone ? `<div style="color:#6b7280;margin-bottom:8px">📞 ${stop.phone}</div>` : ""}
         
-        ${(stop.orderNumber || orderStatus) ? `
+        ${(stop.orderNumber || isOrdersViewTab) ? `
         <div style="margin-top:10px;padding:8px;background:#f9fafb;border-radius:6px;font-size:12px;line-height:1.6;border:1px solid #e5e7eb">
             ${stop.orderNumber ? `
             <div style="display:flex;justify-content:space-between;margin-bottom:4px">
@@ -549,12 +552,16 @@ async function openPreviewPopup({ map, stop, color, drivers, onDriverChange }) {
                 <span style="font-weight:500">${stop.orderNumber}</span>
             </div>
             ` : ""}
-            ${orderStatus ? `
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
-                <span style="color:#6b7280"><strong>Status:</strong></span>
+            ${isOrdersViewTab ? `
+            <div style="display:flex;justify-content:space-between;align-items:center;${stop.orderNumber ? 'margin-top:6px' : ''}">
+                <span style="color:#6b7280"><strong>Order Status:</strong></span>
+                ${orderStatus ? `
                 <span style="padding:2px 8px;border-radius:4px;background-color:${statusColor}20;color:${statusColor};font-weight:500;text-transform:capitalize;font-size:11px">
                     ${statusDisplay}
                 </span>
+                ` : `
+                <span style="color:#9ca3af;font-size:11px">N/A</span>
+                `}
             </div>
             ` : ""}
         </div>
@@ -595,30 +602,6 @@ async function openPreviewPopup({ map, stop, color, drivers, onDriverChange }) {
             </div>
         `;
     }
-    
-    // Stop Status - determine based on completed field and other factors
-    const getStopStatus = () => {
-        if (stop.completed === true) {
-            return { text: "Completed", color: "#16a34a" };
-        }
-        if (stop.completed === false) {
-            return { text: "Pending", color: "#f59e0b" };
-        }
-        // Default to pending if completed status is undefined
-        return { text: "Pending", color: "#6b7280" };
-    };
-    
-    const stopStatus = getStopStatus();
-    html += `
-        <div style="margin-top:8px;padding:6px;background:#f9fafb;border-radius:6px;font-size:12px;border:1px solid #e5e7eb">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-                <span style="color:#6b7280"><strong>Stop Status:</strong></span>
-                <span style="padding:2px 8px;border-radius:4px;background-color:${stopStatus.color}20;color:${stopStatus.color};font-weight:500;text-transform:capitalize;font-size:11px">
-                    ${stopStatus.text}
-                </span>
-            </div>
-        </div>
-    `;
     
     if (stop.dislikes) {
         html += `
@@ -804,6 +787,7 @@ export default function DriversMapLeaflet({
                                               pausedDetector, // optional override for paused detection
                                               logoSrc, // optional loading logo (path or URL)
                                               readonly = false, // disable all editing interactions
+                                              isOrdersViewTab = false, // whether we're in the Orders View tab
                                           }) {
     const mapRef = useRef(null);
     const [mapReady, setMapReady] = useState(false);
@@ -829,7 +813,21 @@ export default function DriversMapLeaflet({
         localUnroutedRef.current = localUnrouted;
     }, [localUnrouted]);
     useEffect(() => {
-        setLocalDrivers(Array.isArray(drivers) ? drivers : []);
+        const driversArray = Array.isArray(drivers) ? drivers : [];
+        // Ensure all drivers have colors set - use palette if missing
+        const palette = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
+            "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
+        ];
+        const driversWithColors = driversArray.map((d, idx) => ({
+            ...d,
+            // Ensure color is always set and never gray for drivers
+            color: (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey") 
+                ? d.color 
+                : palette[idx % palette.length]
+        }));
+        setLocalDrivers(driversWithColors);
     }, [drivers]);
     useEffect(() => {
         setLocalUnrouted(Array.isArray(unrouted) ? unrouted : []);
@@ -967,8 +965,16 @@ export default function DriversMapLeaflet({
         const m = new Map();
         for (const d of sortedDrivers)
             for (const s of d.stops || []) {
-                // Use stop's __driverColor if available, otherwise use driver's color
-                const stopColor = s.__driverColor || d.color || "#1f77b4";
+                // Always use driver's color for stop markers - directly from driver object
+                let driverColor = d.color;
+                if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
+                    driverColor = s.__driverColor;
+                }
+                if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
+                    driverColor = "#1f77b4"; // Default blue
+                }
+                // Never use gray for assigned stops
+                const stopColor = driverColor === "#666" ? "#1f77b4" : driverColor;
                 m.set(sid(s.id), stopColor);
             }
         for (const s of localUnrouted) m.set(sid(s.id), "#666");
@@ -1190,14 +1196,14 @@ export default function DriversMapLeaflet({
             
             // Show preview popup when clicking a stop (async to fetch client name if needed)
             if (stop && map) {
-                await openPreviewPopup({ map, stop, color: baseColor, drivers: driversForAssignment, onDriverChange });
+                await openPreviewPopup({ map, stop, color: baseColor, drivers: driversForAssignment, onDriverChange, isOrdersViewTab });
             }
             
             // Disable assign driver feature for stops - driver assignment is now done directly to clients
             // map?.closePopup();
             // openAssignForStop(stop, baseColor);
         },
-        [clickPickMode, toggleId, readonly, onStopClick, driversForAssignment, onDriverChange]
+        [clickPickMode, toggleId, readonly, onStopClick, driversForAssignment, onDriverChange, isOrdersViewTab]
     );
 
     /* ------- driver editing ------- */
@@ -1473,7 +1479,8 @@ export default function DriversMapLeaflet({
                 localDriversRef.current,
                 localUnroutedRef.current
             );
-            const stopColor = getStopColor(stop, driverColor || idBaseColor.get(id) || "#666");
+            // Always use driver color for stop markers - get from idBaseColor map or driver
+            const stopColor = driverColor || idBaseColor.get(id) || "#666";
             m.setIcon(makePinIcon(stopColor, !!on));
         },
         [idBaseColor]
@@ -2309,8 +2316,17 @@ export default function DriversMapLeaflet({
                             if (!ll) return null;
                             const id = sid(s.id);
                             const pos = jitterLL(ll, id);
-                            const base = d.color || "#1f77b4";
-                            const stopColor = getStopColor(s, base);
+                            // Always use the driver's color for the stop marker - this is the source of truth
+                            // Get color from driver object first, then fallback to stop's __driverColor, then default
+                            let driverColor = d.color;
+                            if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
+                                driverColor = s.__driverColor;
+                            }
+                            if (!driverColor || driverColor === "#666" || driverColor === "gray" || driverColor === "grey") {
+                                driverColor = "#1f77b4"; // Default blue
+                            }
+                            // Final check - never use gray for assigned stops
+                            const stopColor = driverColor === "#666" ? "#1f77b4" : driverColor;
                             const z = 2100 + di; // slightly above unrouted, and stable order
                             return (
                                 <Marker

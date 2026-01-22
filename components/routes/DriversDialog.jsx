@@ -961,7 +961,7 @@ export default function DriversDialog({
                                 borderColor: activeTab === "map" ? "primary.main" : "transparent",
                             }}
                         >
-                            Map View
+                            Orders View
                         </Button>
                         <Button
                             onClick={() => setActiveTab("clients")}

@@ -520,25 +520,6 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                                     </Typography>
                                 </Box>
                             )}
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="body2" sx={{ color: '#6b7280' }}>
-                                    Stop Status:
-                                </Typography>
-                                <Box
-                                    sx={{
-                                        px: 1.5,
-                                        py: 0.5,
-                                        borderRadius: 1,
-                                        backgroundColor: (stop.completed === true ? '#16a34a' : stop.completed === false ? '#f59e0b' : '#6b7280') + '20',
-                                        color: stop.completed === true ? '#16a34a' : stop.completed === false ? '#f59e0b' : '#6b7280',
-                                        fontWeight: 500,
-                                        fontSize: '0.75rem',
-                                        textTransform: 'capitalize'
-                                    }}
-                                >
-                                    {stop.completed === true ? 'Completed' : stop.completed === false ? 'Pending' : 'Pending'}
-                                </Box>
-                            </Box>
                             {stop.lat && stop.lng && (
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                                     <Typography variant="body2" sx={{ color: '#6b7280' }}>

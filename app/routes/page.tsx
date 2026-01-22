@@ -459,7 +459,10 @@ export default function RoutesPage() {
     const mapDrivers = React.useMemo(() => {
         return (routes || []).map((r, i) => {
             const driverId = String(r.driverId ?? r.id ?? ""); // Keep as string (UUID) to match database
-            const color = r.color || palette[i % palette.length];
+            // Always assign a color - use route color, or fallback to palette based on index
+            const color = r.color && r.color !== "#666" && r.color !== "gray" && r.color !== "grey" 
+                ? r.color 
+                : palette[i % palette.length];
             const dname = r.driverName || r.name || `Driver ${i}`;
             const stops = (r.stops || [])
                 .map((u, idx) => ({
@@ -484,7 +487,7 @@ export default function RoutesPage() {
                     lng: Number(u.lng),
                     __driverId: driverId,
                     __driverName: dname,
-                    __driverColor: color,
+                    __driverColor: color, // Always set the driver color on each stop
                     __stopIndex: idx,
                     // Preserve other fields that might be useful
                     orderId: u.orderId || null,
@@ -495,6 +498,7 @@ export default function RoutesPage() {
                     dislikes: u.dislikes || "",
                 }))
                 .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+            // Ensure driver object always has a valid color
             return { id: driverId, driverId, name: dname, color, polygon: [], stops };
         });
     }, [routes]);
@@ -852,7 +856,7 @@ export default function RoutesPage() {
                         borderColor: activeTab === "map" ? "primary.main" : "transparent",
                     }}
                 >
-                    Map View
+                    Orders View
                 </Button>
                 <Button
                     onClick={() => setActiveTab("clients")}
@@ -873,7 +877,7 @@ export default function RoutesPage() {
             <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 {activeTab === "map" ? (
                     <div style={{ height: "100%", width: "100%", position: "relative", display: 'flex', flexDirection: 'column' }}>
-                        {/* Date Filter inside Map View tab */}
+                        {/* Date Filter inside Orders View tab */}
                         <div style={{ 
                             padding: 'var(--spacing-md)', 
                             borderBottom: '1px solid var(--border-color)',
@@ -906,6 +910,7 @@ export default function RoutesPage() {
                                 onComputedStats={(s) => setStats(s)}
                                 initialCenter={[40.7128, -74.006]}
                                 initialZoom={5}
+                                isOrdersViewTab={activeTab === "map"}
                             />
                         </div>
                     </div>

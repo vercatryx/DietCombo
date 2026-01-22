@@ -460,7 +460,7 @@ export default function ClientDriverAssignment({
                 )}
             </Box>
 
-            {/* Map View */}
+            {/* Orders View */}
             <Box sx={{ flex: 1, position: 'relative', minHeight: 0 }}>
                 <DriversMapLeaflet
                     drivers={mapDrivers}
