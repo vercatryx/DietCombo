@@ -52,14 +52,15 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
     };
 
     const renderOrderItems = () => {
+        console.log('[OrderDetailView] Rendering items for order:', order);
         if (!order.orderDetails) return null;
 
-        if (order.orderDetails.serviceType === 'Food' && order.orderDetails.vendorSelections) {
+        if ((order.orderDetails.serviceType === 'Food' || order.orderDetails.serviceType === 'Meal' || order.orderDetails.serviceType === 'Custom') && order.orderDetails.vendorSelections) {
             return (
                 <div className={styles.orderItemsSection}>
                     <div className={styles.sectionHeader}>
                         <ShoppingCart size={20} />
-                        <h2>Order Items</h2>
+                        <h2>{order.orderDetails.serviceType === 'Custom' ? 'Custom Order Items' : 'Order Items'}</h2>
                     </div>
                     {order.orderDetails.vendorSelections.map((vs: any, idx: number) => (
                         <div key={idx} className={styles.vendorSection}>
@@ -73,6 +74,7 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                                         <th>Quantity</th>
                                         <th>Unit Value</th>
                                         <th>Total</th>
+                                        <th>Notes</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -82,6 +84,9 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                                             <td>{item.quantity}</td>
                                             <td>${item.unitValue.toFixed(2)}</td>
                                             <td>${item.totalValue.toFixed(2)}</td>
+                                            <td style={{ maxWidth: '200px', fontSize: '0.9rem', color: '#555' }}>
+                                                {item.notes || '-'}
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>

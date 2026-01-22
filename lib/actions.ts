@@ -6524,66 +6524,155 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
 }
 
 export async function getOrderById(orderId: string) {
-    if (!orderId) return null;
+    try {
+        if (!orderId) {
+            console.warn('[getOrderById] No orderId provided');
+            return null;
+        }
 
-    // Fetch the order
-    const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', orderId)
-        .single();
+        console.log('[getOrderById] Fetching order:', orderId);
 
-    if (orderError || !orderData) {
-        console.error('Error fetching order:', orderError);
-        return null;
-    }
+        // Fetch the order
+        // Use maybeSingle() instead of single() to avoid errors when order doesn't exist
+        let orderData: any = null;
+        let isUpcomingOrder = false;
+
+        const { data: orderDataFromOrders, error: orderError } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('id', orderId)
+            .maybeSingle();
+
+        if (orderError) {
+            // Log detailed error information for actual errors (not "not found" cases)
+            console.error('[getOrderById] Error fetching order:', {
+                code: orderError.code,
+                message: orderError.message,
+                details: orderError.details,
+                hint: orderError.hint,
+                orderId: orderId
+            });
+            return null;
+        }
+
+        if (orderDataFromOrders) {
+            orderData = orderDataFromOrders;
+            isUpcomingOrder = false;
+            console.log('[getOrderById] Order found in orders table:', orderData.id, 'Service type:', orderData.service_type);
+        } else {
+            // Order not found in orders table - check upcoming_orders table
+            console.log('[getOrderById] Order not found in orders table, checking upcoming_orders:', orderId);
+            
+            const { data: upcomingOrderData, error: upcomingOrderError } = await supabase
+                .from('upcoming_orders')
+                .select('*')
+                .eq('id', orderId)
+                .maybeSingle();
+
+            if (upcomingOrderError) {
+                console.error('[getOrderById] Error fetching upcoming order:', {
+                    code: upcomingOrderError.code,
+                    message: upcomingOrderError.message,
+                    details: upcomingOrderError.details,
+                    hint: upcomingOrderError.hint,
+                    orderId: orderId
+                });
+                return null;
+            }
+
+            if (!upcomingOrderData) {
+                // Order not found in either table
+                console.log('[getOrderById] Order not found in orders or upcoming_orders:', orderId);
+                return null;
+            }
+
+            // Use upcoming order data and set flag to use upcoming order tables
+            orderData = upcomingOrderData;
+            isUpcomingOrder = true;
+            console.log('[getOrderById] Order found in upcoming_orders:', orderData.id, 'Service type:', orderData.service_type);
+        }
 
     // Fetch client information (including sign_token for signature reports)
-    const { data: clientData } = await supabase
+    const { data: clientData, error: clientError } = await supabase
         .from('clients')
         .select('id, full_name, address, email, phone_number, sign_token')
         .eq('id', orderData.client_id)
-        .single();
+        .maybeSingle();
+    
+    if (clientError) {
+        console.error('[getOrderById] Error fetching client:', clientError);
+    }
 
     // Fetch reference data
-    const [menuItems, vendors, boxTypes, equipmentList, categories] = await Promise.all([
+    const [menuItems, vendors, boxTypes, equipmentList, categories, mealItems] = await Promise.all([
         getMenuItems(),
         getVendors(),
         getBoxTypes(),
         getEquipment(),
-        getCategories()
+        getCategories(),
+        getMealItems()
     ]);
 
     let orderDetails: any = undefined;
 
-    if (orderData.service_type === 'Food') {
+    if (orderData.service_type === 'Food' || orderData.service_type === 'Meal') {
         // Fetch vendor selections and items
+        const vendorSelectionsTable = isUpcomingOrder ? 'upcoming_order_vendor_selections' : 'order_vendor_selections';
+        const orderIdField = isUpcomingOrder ? 'upcoming_order_id' : 'order_id';
+        
         const { data: vendorSelections } = await supabase
-            .from('order_vendor_selections')
+            .from(vendorSelectionsTable)
             .select('*')
-            .eq('order_id', orderId);
+            .eq(orderIdField, orderId);
+
+        console.log(`[getOrderById] Order ${orderId} (${orderData.service_type}): Found ${vendorSelections?.length} vendor selections`);
 
         if (vendorSelections && vendorSelections.length > 0) {
+            const itemsTable = isUpcomingOrder ? 'upcoming_order_items' : 'order_items';
+            const vendorSelectionIdField = isUpcomingOrder ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
+            
             const vendorSelectionsWithItems = await Promise.all(
                 vendorSelections.map(async (vs: any) => {
                     const { data: items } = await supabase
-                        .from('order_items')
+                        .from(itemsTable)
                         .select('*')
-                        .eq('vendor_selection_id', vs.id);
+                        .eq(vendorSelectionIdField, vs.id);
+
+                    console.log(`[getOrderById] VS ${vs.id}: Found ${items?.length} items in DB`);
+                    if (items && items.length > 0) {
+                        console.log(`[getOrderById] First item:`, items[0]);
+                    }
 
                     const vendor = vendors.find(v => v.id === vs.vendor_id);
                     const itemsWithDetails = (items || []).map((item: any) => {
-                        const menuItem = menuItems.find(mi => mi.id === item.menu_item_id);
-                        const itemPrice = menuItem?.priceEach ?? parseFloat(item.unit_value);
+                        let menuItem: any = menuItems.find(mi => mi.id === item.menu_item_id);
+                        if (!menuItem) {
+                            menuItem = mealItems.find(mi => mi.id === item.menu_item_id);
+                        }
+
+                        if (!menuItem) {
+                            console.warn(`[getOrderById] Item not found in menu or meal items: ${item.menu_item_id}`);
+                        }
+
+                        console.log('[getOrderById] Processing Item:', {
+                            id: item.id,
+                            menuItemId: item.menu_item_id,
+                            customName: item.custom_name,
+                            customPrice: item.custom_price,
+                            unitValue: item.unit_value
+                        });
+
+                        const itemPrice = item.custom_price ? parseFloat(item.custom_price) : (menuItem?.priceEach ?? parseFloat(item.unit_value));
                         const quantity = item.quantity;
                         const itemTotal = itemPrice * quantity;
                         return {
                             id: item.id,
                             menuItemId: item.menu_item_id,
-                            menuItemName: menuItem?.name || 'Unknown Item',
+                            menuItemName: item.custom_name || menuItem?.name || 'Unknown Item',
                             quantity: quantity,
                             unitValue: itemPrice,
-                            totalValue: itemTotal
+                            totalValue: itemTotal,
+                            notes: item.notes || null
                         };
                     });
 
@@ -6602,12 +6691,63 @@ export async function getOrderById(orderId: string) {
                 totalValue: parseFloat(orderData.total_value || 0)
             };
         }
+    } else if (orderData.service_type === 'Custom') {
+        // Handle Custom orders - fetch vendor selections and items
+        const vendorSelectionsTable = isUpcomingOrder ? 'upcoming_order_vendor_selections' : 'order_vendor_selections';
+        const orderIdField = isUpcomingOrder ? 'upcoming_order_id' : 'order_id';
+        
+        const { data: vendorSelections } = await supabase
+            .from(vendorSelectionsTable)
+            .select('*')
+            .eq(orderIdField, orderId);
+
+        if (vendorSelections && vendorSelections.length > 0) {
+            const itemsTable = isUpcomingOrder ? 'upcoming_order_items' : 'order_items';
+            const vendorSelectionIdField = isUpcomingOrder ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
+            
+            const vendorSelectionsWithItems = await Promise.all(
+                vendorSelections.map(async (vs: any) => {
+                    const { data: items } = await supabase
+                        .from(itemsTable)
+                        .select('*')
+                        .eq(vendorSelectionIdField, vs.id);
+
+                    const vendor = vendors.find(v => v.id === vs.vendor_id);
+
+                    const itemsWithDetails = (items || []).map((item: any) => ({
+                        id: item.id,
+                        menuItemId: null,
+                        menuItemName: item.custom_name || 'Custom Item',
+                        quantity: item.quantity,
+                        unitValue: parseFloat(item.custom_price || 0),
+                        totalValue: parseFloat(item.custom_price || 0) * item.quantity
+                    }));
+
+                    return {
+                        vendorId: vs.vendor_id,
+                        vendorName: vendor?.name || 'Unknown Vendor',
+                        items: itemsWithDetails
+                    };
+                })
+            );
+
+            orderDetails = {
+                serviceType: 'Custom',
+                vendorSelections: vendorSelectionsWithItems,
+                totalItems: orderData.total_items,
+                totalValue: parseFloat(orderData.total_value || 0),
+                notes: orderData.notes
+            };
+        }
     } else if (orderData.service_type === 'Boxes') {
         // Fetch box selection
+        const boxSelectionsTable = isUpcomingOrder ? 'upcoming_order_box_selections' : 'order_box_selections';
+        const orderIdField = isUpcomingOrder ? 'upcoming_order_id' : 'order_id';
+        
         const { data: boxSelection } = await supabase
-            .from('order_box_selections')
+            .from(boxSelectionsTable)
             .select('*')
-            .eq('order_id', orderId)
+            .eq(orderIdField, orderId)
             .maybeSingle();
 
         if (boxSelection) {
@@ -6624,6 +6764,10 @@ export async function getOrderById(orderId: string) {
             // Group items by category
             Object.entries(boxItems).forEach(([itemId, qty]: [string, any]) => {
                 const menuItem = menuItems.find(mi => mi.id === itemId);
+
+                // Handle both object format {quantity: X} and direct number format
+                const quantity = typeof qty === 'object' && qty !== null ? (qty as any).quantity : Number(qty) || 0;
+
                 if (menuItem && menuItem.categoryId) {
                     const category = categories.find(c => c.id === menuItem.categoryId);
                     if (category) {
@@ -6633,15 +6777,43 @@ export async function getOrderById(orderId: string) {
                                 items: []
                             };
                         }
-                        // Handle both object format {quantity: X} and direct number format
-                        const quantity = typeof qty === 'object' && qty !== null ? (qty as any).quantity : qty;
+
                         itemsByCategory[category.id].items.push({
                             itemId: itemId,
                             itemName: menuItem.name,
-                            quantity: Number(quantity) || 0,
+                            quantity: quantity,
+                            quotaValue: menuItem.quotaValue || 1
+                        });
+                    } else {
+                        // Category not found but item exists
+                        if (!itemsByCategory['uncategorized']) {
+                            itemsByCategory['uncategorized'] = {
+                                categoryName: 'Uncategorized',
+                                items: []
+                            };
+                        }
+                        itemsByCategory['uncategorized'].items.push({
+                            itemId: itemId,
+                            itemName: menuItem.name,
+                            quantity: quantity,
                             quotaValue: menuItem.quotaValue || 1
                         });
                     }
+                } else {
+                    // Menu item not found - fallback
+                    if (!itemsByCategory['uncategorized']) {
+                        itemsByCategory['uncategorized'] = {
+                            categoryName: 'Uncategorized',
+                            items: []
+                        };
+                    }
+
+                    itemsByCategory['uncategorized'].items.push({
+                        itemId: itemId,
+                        itemName: menuItem?.name || 'Unknown Item (' + itemId + ')',
+                        quantity: quantity,
+                        quotaValue: 1
+                    });
                 }
             });
 
@@ -6655,6 +6827,19 @@ export async function getOrderById(orderId: string) {
                 items: boxSelection.items || {},
                 itemsByCategory: itemsByCategory,
                 totalValue: boxTotalValue
+            };
+        } else {
+            // Fallback if box selection is missing
+            orderDetails = {
+                serviceType: orderData.service_type,
+                vendorId: null,
+                vendorName: 'Unknown Vendor (Missing Selection Data)',
+                boxTypeId: null,
+                boxTypeName: 'Unknown Box Type',
+                boxQuantity: 1,
+                items: {},
+                itemsByCategory: {},
+                totalValue: parseFloat(orderData.total_value || 0)
             };
         }
     } else if (orderData.service_type === 'Equipment') {
@@ -6677,11 +6862,14 @@ export async function getOrderById(orderId: string) {
             }
         } catch (e) {
             console.error('Error parsing equipment order notes:', e);
-            // Fallback: try to get vendor from order_vendor_selections
+            // Fallback: try to get vendor from vendor selections
+            const vendorSelectionsTable = isUpcomingOrder ? 'upcoming_order_vendor_selections' : 'order_vendor_selections';
+            const orderIdField = isUpcomingOrder ? 'upcoming_order_id' : 'order_id';
+            
             const { data: vendorSelections } = await supabase
-                .from('order_vendor_selections')
+                .from(vendorSelectionsTable)
                 .select('*')
-                .eq('order_id', orderId)
+                .eq(orderIdField, orderId)
                 .limit(1)
                 .maybeSingle();
 
@@ -6697,6 +6885,7 @@ export async function getOrderById(orderId: string) {
         }
     }
 
+    console.log('[getOrderById] Successfully built order object');
     return {
         id: orderData.id,
         orderNumber: orderData.order_number,
@@ -6716,10 +6905,19 @@ export async function getOrderById(orderId: string) {
         totalItems: orderData.total_items,
         notes: orderData.notes,
         createdAt: orderData.created_at,
-        lastUpdated: orderData.updated_at,
+        lastUpdated: orderData.updated_at || orderData.last_updated,
         updatedBy: orderData.updated_by,
+        // Include upcoming order specific fields if applicable
+        takeEffectDate: isUpcomingOrder ? orderData.take_effect_date : undefined,
+        deliveryDay: isUpcomingOrder ? orderData.delivery_day : undefined,
+        deliveryDistribution: isUpcomingOrder ? orderData.delivery_distribution : undefined,
+        isUpcomingOrder: isUpcomingOrder,
         orderDetails: orderDetails
     };
+    } catch (error) {
+        console.error('[getOrderById] Unexpected error:', error);
+        return null;
+    }
 };
 
 /**
