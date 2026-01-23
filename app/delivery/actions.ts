@@ -9,18 +9,21 @@ import { roundCurrency } from '@/lib/utils';
 export async function processDeliveryProof(formData: FormData) {
     const file = formData.get('file') as File;
     const orderNumber = formData.get('orderNumber') as string;
+    const testUrl = formData.get('testUrl') as string | null; // Optional test URL to bypass R2
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    if (!file || !orderNumber) {
-        console.error('[Delivery Debug] processDeliveryProof called but missing file or orderNumber', {
+    // Allow test URL to bypass file requirement
+    if ((!file && !testUrl) || !orderNumber) {
+        console.error('[Delivery Debug] processDeliveryProof called but missing file/testUrl or orderNumber', {
             hasFile: !!file,
+            hasTestUrl: !!testUrl,
             orderNumber
         });
-        return { success: false, error: 'Missing file or order number' };
+        return { success: false, error: 'Missing file/test URL or order number' };
     }
 
     try {
@@ -83,16 +86,27 @@ export async function processDeliveryProof(formData: FormData) {
 
         const orderId = foundOrder.id;
 
-        // 2. Upload File
-        const buffer = Buffer.from(await file.arrayBuffer());
-        const timestamp = Date.now();
-        const extension = file.name.split('.').pop();
-        const key = `proof-${orderNumber}-${timestamp}.${extension}`;
+        // 2. Handle File Upload or Test URL
+        let publicUrl: string;
+        
+        if (testUrl) {
+            // Use test URL directly, skip R2 upload
+            console.log(`[Delivery Debug] Using test URL (skipping R2): ${testUrl}`);
+            publicUrl = testUrl;
+        } else if (file) {
+            // Normal flow: Upload to R2
+            const buffer = Buffer.from(await file.arrayBuffer());
+            const timestamp = Date.now();
+            const extension = file.name.split('.').pop();
+            const key = `proof-${orderNumber}-${timestamp}.${extension}`;
 
-        await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
-        const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
-        const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
-        const publicUrl = `${baseUrl}/${key}`;
+            await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
+            const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
+            const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
+            publicUrl = `${baseUrl}/${key}`;
+        } else {
+            return { success: false, error: 'No file or test URL provided' };
+        }
 
         // 3. Update Order in Supabase
         // For upcoming_orders, use saveDeliveryProofUrlAndProcessOrder to properly process the order
@@ -107,7 +121,7 @@ export async function processDeliveryProof(formData: FormData) {
 
         // For orders table, update with billing_pending status (never 'pending' or 'delivered')
         const updateData: any = {
-            delivery_proof_url: publicUrl,
+            proof_of_delivery_url: publicUrl,
             status: 'billing_pending',
             actual_delivery_date: new Date().toISOString()
         };

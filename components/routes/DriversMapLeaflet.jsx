@@ -194,16 +194,16 @@ function isPausedStop(s) {
  * IGNORES any stop.color property - only uses driver assignment colors
  */
 function getStopColor(stop, driverColor) {
-    // Priority 1: Use the driver's color if provided (for assigned stops)
-    // This is the primary source of truth for marker colors
-    if (driverColor && driverColor !== "#666") {
-        return driverColor;
+    // Priority 1: Use stop's __driverColor property if set (this is set from assigned driver's color)
+    // This is the most reliable source as it's explicitly set when stops are prepared
+    if (stop?.__driverColor && stop.__driverColor !== "#666" && stop.__driverColor !== "gray" && stop.__driverColor !== "grey") {
+        return stop.__driverColor;
     }
     
-    // Priority 2: Fallback to stop's __driverColor property if driver color not provided
-    // This is set from the assigned driver's color when stops are prepared
-    if (stop?.__driverColor) {
-        return stop.__driverColor;
+    // Priority 2: Use the driver's color if provided (for assigned stops)
+    // This is the fallback when __driverColor is not set
+    if (driverColor && driverColor !== "#666" && driverColor !== "gray" && driverColor !== "grey") {
+        return driverColor;
     }
     
     // Priority 3: Default: use gray for stops without driver assignment
@@ -971,7 +971,8 @@ export default function DriversMapLeaflet({
                 // Priority: stop.__driverColor > driver.color > default
                 // Order status is NEVER used for marker colors - only driver assignment matters
                 // IGNORE any stop.color property - only use driver assignment colors
-                const stopColor = getStopColor(s, d.color);
+                // Direct access to ensure driver color is used
+                const stopColor = s.__driverColor || d.color || "#1f77b4";
                 m.set(sid(s.id), stopColor);
             }
         }
@@ -2326,7 +2327,8 @@ export default function DriversMapLeaflet({
                             // ALWAYS use driver color: stop.__driverColor (from assignedDriver?.color) > driver.color
                             // Order status is NEVER used for marker colors - only driver assignment determines color
                             // IGNORE any stop.color property - only use driver assignment colors
-                            const stopColor = getStopColor(s, d.color);
+                            // Ensure we use the driver's color - prioritize stop.__driverColor, then driver.color
+                            const stopColor = s.__driverColor || d.color || "#1f77b4";
                             const z = 2100 + di; // slightly above unrouted, and stable order
                             return (
                                 <Marker

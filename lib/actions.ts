@@ -32,7 +32,7 @@ function handleError(error: any, context?: string) {
         
         // Check for RLS/permission errors
         if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS') || error.message?.includes('row-level security')) {
-            console.error('⚠️  RLS (Row Level Security) may be blocking this query. Consider:');
+            console.error('??????  RLS (Row Level Security) may be blocking this query. Consider:');
             console.error('   1. Setting SUPABASE_SERVICE_ROLE_KEY environment variable');
             console.error('   2. Running sql/disable-rls.sql to disable RLS');
             console.error('   3. Running sql/enable-permissive-rls.sql to add permissive policies');
@@ -40,7 +40,7 @@ function handleError(error: any, context?: string) {
         
         // Check for schema permission errors (42501)
         if (error.code === '42501' || (error.message?.includes('permission denied for schema') && error.message?.includes('public'))) {
-            console.error('⚠️  Database schema permission error (42501) detected!');
+            console.error('??????  Database schema permission error (42501) detected!');
             console.error('   This means the database roles don\'t have proper permissions on the public schema.');
             console.error('   SOLUTION: Run the SQL script sql/fix-schema-permissions.sql in your Supabase SQL Editor.');
             console.error('   This will grant the necessary permissions to anon, authenticated, and service_role roles.');
@@ -61,7 +61,7 @@ function logQueryError(error: any, table: string, operation: string = 'select') 
         
         // Check for RLS/permission errors
         if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS') || error.message?.includes('row-level security')) {
-            console.error(`⚠️  RLS may be blocking ${table} queries. Check RLS configuration.`);
+            console.error(`??????  RLS may be blocking ${table} queries. Check RLS configuration.`);
         }
     }
 }
@@ -150,7 +150,7 @@ export async function getVendors() {
         // Check if we're using service role key (important for RLS)
         const isUsingServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
         if (!isUsingServiceKey) {
-            console.warn('[getVendors] ⚠️  Not using service role key - RLS may block queries');
+            console.warn('[getVendors] ??????  Not using service role key - RLS may block queries');
         }
         
         const { data, error } = await supabase.from('vendors').select('*');
@@ -166,7 +166,7 @@ export async function getVendors() {
             
             // If RLS error, provide helpful message
             if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS')) {
-                console.error('[getVendors] ❌ RLS is blocking the query. Ensure SUPABASE_SERVICE_ROLE_KEY is set in environment variables.');
+                console.error('[getVendors] ??? RLS is blocking the query. Ensure SUPABASE_SERVICE_ROLE_KEY is set in environment variables.');
             }
             return [];
         }
@@ -179,7 +179,7 @@ export async function getVendors() {
         if (data.length === 0) {
             console.warn('[getVendors] Query succeeded but returned 0 vendors. Table may be empty or RLS is filtering all rows.');
         } else {
-            console.log(`[getVendors] ✅ Fetched ${data.length} vendors from database`);
+            console.log(`[getVendors] ??? Fetched ${data.length} vendors from database`);
         }
         
         const mapped = (data || []).map((v: any) => {
@@ -2220,22 +2220,41 @@ export async function getBillingHistory(clientId: string) {
 
 export async function getBillingOrders() {
     try {
-        // Get orders with billing_pending status
-        const { data: pendingOrders, error: pendingError } = await supabase
+        // Get orders with billing_pending status (without join to avoid PostgREST relationship issues)
+        const { data: pendingOrdersByStatus, error: statusError } = await supabase
             .from('orders')
-            .select(`
-                *,
-                clients (
-                    id,
-                    full_name
-                )
-            `)
+            .select('*')
             .eq('status', 'billing_pending')
             .order('created_at', { ascending: false });
 
-        if (pendingError) {
-            console.error('[getBillingOrders] Error fetching pending orders:', pendingError);
+        if (statusError) {
+            console.error('[getBillingOrders] Error fetching pending orders by status:', statusError);
         }
+        
+        console.log('[getBillingOrders] Found orders with billing_pending status:', pendingOrdersByStatus?.length || 0);
+
+        // Get orders that have proof_of_delivery_url (processed/delivered orders)
+        // This ensures all delivered orders show up on the billing page, even if status wasn't updated correctly
+        // Use a filter that checks for non-null and non-empty proof_of_delivery_url
+        const { data: processedOrders, error: processedError } = await supabase
+            .from('orders')
+            .select('*')
+            .not('proof_of_delivery_url', 'is', null)
+            .neq('proof_of_delivery_url', '')
+            .order('created_at', { ascending: false });
+
+        if (processedError) {
+            console.error('[getBillingOrders] Error fetching processed orders:', processedError);
+        }
+        
+        console.log('[getBillingOrders] Found processed orders:', processedOrders?.length || 0);
+
+        // Combine both sets and remove duplicates (prioritize orders with billing_pending status)
+        const pendingOrderIds = new Set((pendingOrdersByStatus || []).map((o: any) => o.id));
+        const allPendingOrders = [
+            ...(pendingOrdersByStatus || []),
+            ...((processedOrders || []).filter((o: any) => !pendingOrderIds.has(o.id)))
+        ];
 
         // Get billing records with status "success" and their associated orders
         const { data: billingRecords, error: billingError } = await supabase
@@ -2254,13 +2273,7 @@ export async function getBillingOrders() {
         if (successfulOrderIds.size > 0) {
             const { data: successfulOrdersData, error: successfulError } = await supabase
                 .from('orders')
-                .select(`
-                    *,
-                    clients (
-                        id,
-                        full_name
-                    )
-                `)
+                .select('*')
                 .in('id', Array.from(successfulOrderIds))
                 .order('created_at', { ascending: false });
             
@@ -2270,21 +2283,45 @@ export async function getBillingOrders() {
             successfulOrders = successfulOrdersData || [];
         }
 
-        // Combine and map orders
-        // Note: Supabase join returns clients as an object (not array) for one-to-many relationships
+        // Collect all unique client IDs from all orders
+        const allOrderData = [...(allPendingOrders || []), ...(successfulOrders || [])];
+        const clientIds = [...new Set(allOrderData.map((o: any) => o.client_id).filter(Boolean))];
+
+        // Fetch all clients in one query
+        let clientsMap = new Map<string, { id: string; full_name: string }>();
+        if (clientIds.length > 0) {
+            const { data: clients, error: clientsError } = await supabase
+                .from('clients')
+                .select('id, full_name')
+                .in('id', clientIds);
+
+            if (clientsError) {
+                console.error('[getBillingOrders] Error fetching clients:', clientsError);
+            } else if (clients) {
+                clientsMap = new Map(clients.map((c: any) => [c.id, c]));
+            }
+        }
+
+        // Combine and map orders with client data
         const allOrders = [
-            ...((pendingOrders || []).map((o: any) => ({
-                ...o,
-                clientName: (o.clients?.full_name) || 'Unknown',
-                amount: o.total_value || 0,
-                billingStatus: 'billing_pending' as const
-            }))),
-            ...(successfulOrders.map((o: any) => ({
-                ...o,
-                clientName: (o.clients?.full_name) || 'Unknown',
-                amount: o.total_value || 0,
-                billingStatus: 'billing_successful' as const
-            })))
+            ...(allPendingOrders.map((o: any) => {
+                const client = clientsMap.get(o.client_id);
+                return {
+                    ...o,
+                    clientName: client?.full_name || 'Unknown',
+                    amount: o.total_value || 0,
+                    billingStatus: 'billing_pending' as const
+                };
+            })),
+            ...(successfulOrders.map((o: any) => {
+                const client = clientsMap.get(o.client_id);
+                return {
+                    ...o,
+                    clientName: client?.full_name || 'Unknown',
+                    amount: o.total_value || 0,
+                    billingStatus: 'billing_successful' as const
+                };
+            }))
         ];
 
         // Remove duplicates (in case an order is both pending and has a successful record - prioritize successful)
@@ -2295,11 +2332,14 @@ export async function getBillingOrders() {
             }
         }
 
-        return Array.from(orderMap.values()).sort((a, b) => {
+        const finalOrders = Array.from(orderMap.values()).sort((a, b) => {
             const dateA = new Date(a.created_at || 0).getTime();
             const dateB = new Date(b.created_at || 0).getTime();
             return dateB - dateA;
         });
+        
+        console.log('[getBillingOrders] Total orders to return:', finalOrders.length);
+        return finalOrders;
     } catch (error) {
         console.error('Error fetching billing orders:', error);
         return [];
@@ -5861,7 +5901,9 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
                     // Create order in orders table
                     console.log(`[Process Pending Order] Creating new Order for Case ${upcomingOrder.case_id} with status 'billing_pending'`);
+                    console.log(`[Process Pending Order] Copying order_number from upcoming order: ${upcomingOrder.order_number}`);
                     const currentTime = await getCurrentTime();
+                    
                     const orderData: any = {
                         id: randomUUID(),
                         client_id: upcomingOrder.client_id,
@@ -5875,7 +5917,8 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                         total_value: upcomingOrder.total_value,
                         total_items: upcomingOrder.total_items,
                         notes: upcomingOrder.notes,
-                        actual_delivery_date: currentTime.toISOString()
+                        actual_delivery_date: currentTime.toISOString(),
+                        order_number: upcomingOrder.order_number // Copy order_number directly from upcoming_orders record
                     };
 
                     const { data: newOrder, error: orderError } = await supabase
@@ -5981,11 +6024,11 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                                     continue;
                                 }
 
-                                // Copy items
+                                // Copy items - use upcoming_vendor_selection_id to find items from upcoming orders
                                 const { data: items } = await supabase
                                     .from('upcoming_order_items')
                                     .select('*')
-                                    .eq('vendor_selection_id', vs.id);
+                                    .eq('upcoming_vendor_selection_id', vs.id);
 
                                 if (items) {
                                     for (const item of items) {
