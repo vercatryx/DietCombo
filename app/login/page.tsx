@@ -145,8 +145,8 @@ export default function LoginPage() {
                 <div className="text-center">
                     <div className={styles.logoContainer}>
                         <Image
-                            src="/mainLogo.jpg"
-                            alt="Logo"
+                            src="/diet-fantasy-logo.png"
+                            alt="Diet Fantasy Logo"
                             width={200}
                             height={200}
                             className={styles.logo}
