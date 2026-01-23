@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
-import { Camera, CheckCircle, Upload, RefreshCw, AlertCircle, MapPin, X, PenTool, ExternalLink } from 'lucide-react';
+import { Camera, CheckCircle, Upload, AlertCircle, MapPin, X, PenTool, ExternalLink } from 'lucide-react';
 import '../delivery.css';
 
 interface OrderDetails {
@@ -221,11 +221,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     <p className="text-subtitle" style={{ marginTop: '1rem' }}>Proof has been securely saved.</p>
                 </div>
 
-                {order.alreadyDelivered && (
-                    <div style={{ backgroundColor: 'rgba(72, 190, 133, 0.1)', color: '#48be85', padding: '0.75rem', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
-                        This order was already marked as delivered.
-                    </div>
-                )}
+
 
                 <div className="divider" style={{ marginTop: '1rem' }} />
 

@@ -3,32 +3,16 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Package, ArrowRight } from 'lucide-react';
-import { DeliveryFilter, DeliveryFilters } from '@/components/delivery/DeliveryFilter';
 import './delivery.css';
 
 export default function DeliveryManualEntryPage() {
     const [orderNum, setOrderNum] = useState('');
-    const [filters, setFilters] = useState<DeliveryFilters>({
-        search: '',
-        status: 'all',
-        dateFrom: '',
-        dateTo: '',
-        clientName: ''
-    });
     const router = useRouter();
 
     function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         if (orderNum.trim()) {
             router.push(`/delivery/${orderNum.trim()}`);
-        }
-    }
-
-    function handleFilterChange(newFilters: DeliveryFilters) {
-        setFilters(newFilters);
-        // If search filter is set, populate the order number input
-        if (newFilters.search && !orderNum) {
-            setOrderNum(newFilters.search);
         }
     }
 
@@ -43,8 +27,6 @@ export default function DeliveryManualEntryPage() {
                         <h1 className="text-title">Driver Delivery</h1>
                         <p className="text-subtitle" style={{ marginTop: '0.5rem' }}>Enter Order Number manually if QR code fails.</p>
                     </div>
-
-                    <DeliveryFilter onFilterChange={handleFilterChange} />
 
                     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <div>

@@ -4,6 +4,7 @@ import { uploadFile } from '@/lib/storage';
 import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
+import { roundCurrency } from '@/lib/utils';
 
 export async function processDeliveryProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -89,7 +90,9 @@ export async function processDeliveryProof(formData: FormData) {
         const key = `proof-${orderNumber}-${timestamp}.${extension}`;
 
         await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
-        const publicUrl = `${process.env.R2_PUBLIC_URL_BASE || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev'}/${key}`;
+        const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
+        const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
+        const publicUrl = `${baseUrl}/${key}`;
 
         // 3. Update Order in Supabase
         // For upcoming_orders, use saveDeliveryProofUrlAndProcessOrder to properly process the order
@@ -158,7 +161,7 @@ export async function processDeliveryProof(formData: FormData) {
                 // Treat null/undefined as 0 and allow negative result
                 const currentAmount = client.authorized_amount ?? 0;
                 const orderAmount = orderDetails.total_value || 0;
-                const newAuthorizedAmount = currentAmount - orderAmount;
+                const newAuthorizedAmount = roundCurrency(currentAmount - orderAmount);
 
                 const { error: deductionError } = await supabaseAdmin
                     .from('clients')

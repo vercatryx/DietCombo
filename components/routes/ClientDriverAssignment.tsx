@@ -313,33 +313,9 @@ export default function ClientDriverAssignment({
     const allSelected = filteredClients.length > 0 && filteredClients.every(c => selectedClientIds.has(c.id));
     const someSelected = filteredClients.some(c => selectedClientIds.has(c.id));
 
-    // Helper function to get color based on stop/order status
-    // Only returns colors for specific statuses that should override default styling
-    function getStopStatusColor(stop: any): string | null {
-        if (!stop) return null;
-        
-        // Priority: Order status (only override for specific statuses)
-        const orderStatus = stop?.orderStatus?.toLowerCase();
-        if (orderStatus) {
-            switch (orderStatus) {
-                case "cancelled":
-                    return "#ef4444"; // Red for cancelled orders
-                case "waiting_for_proof":
-                    return "#f59e0b"; // Orange/Amber for waiting for proof
-                case "billing_pending":
-                    return "#8b5cf6"; // Purple for billing pending
-                case "completed":
-                case "pending":
-                case "scheduled":
-                case "confirmed":
-                default:
-                    return null; // No special color - use default styling
-            }
-        }
-        
-        // Stop completed status without order status - no special color
-        return null;
-    }
+    // NOTE: Marker colors are ALWAYS determined by driver assignment, NEVER by order status
+    // Order status is only used for display in popups/dialogs, not for map marker colors
+    // The __driverColor property on stops is set from assignedDriver?.color and is used for all marker coloring
 
     // Convert clients to stops format for the map
     // NOTE: All hooks must be called before any conditional returns

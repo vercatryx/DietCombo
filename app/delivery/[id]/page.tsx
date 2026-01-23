@@ -19,7 +19,7 @@ export default async function OrderDeliveryPage({ params }: { params: Promise<{ 
     // Fetch order details
     let query = supabaseAdmin
         .from('orders')
-        .select('id, order_number, client_id, scheduled_delivery_date, delivery_proof_url');
+        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url');
 
     if (isUuid) {
         query = query.eq('id', id);
@@ -39,12 +39,14 @@ export default async function OrderDeliveryPage({ params }: { params: Promise<{ 
 
     let order = existingOrder;
     let isUpcoming = false;
+    let upcomingOrderError = null;
 
-    if (!order) {
+    if (!order && !orderError) {
         // Try upcoming_orders
+        // Note: upcoming_orders doesn't have a delivery_proof_url column
         let upcomingQuery = supabaseAdmin
             .from('upcoming_orders')
-            .select('id, order_number, client_id, scheduled_delivery_date, delivery_proof_url');
+            .select('id, order_number, client_id, scheduled_delivery_date');
 
         if (isUuid) {
             upcomingQuery = upcomingQuery.eq('id', id);
@@ -57,17 +59,20 @@ export default async function OrderDeliveryPage({ params }: { params: Promise<{ 
             }
         }
 
-        const { data: upcomingOrder } = await upcomingQuery.maybeSingle();
+        const { data: upcomingOrder, error: upcomingErr } = await upcomingQuery.maybeSingle();
+        upcomingOrderError = upcomingErr;
+        
         if (upcomingOrder) {
             order = {
                 ...upcomingOrder,
-                // delivery_proof_url matches column name now
+                // upcoming_orders doesn't have delivery_proof_url, so set it to null
+                proof_of_delivery_url: null
             };
             isUpcoming = true;
         }
     }
 
-    if (orderError || !order) {
+    if (orderError || upcomingOrderError || !order) {
         return (
             <main className="delivery-page">
                 <div className="delivery-container text-center">
@@ -99,7 +104,7 @@ export default async function OrderDeliveryPage({ params }: { params: Promise<{ 
         clientName: client?.full_name || 'Unknown Client',
         address: client?.address || 'Unknown Address',
         deliveryDate: order.scheduled_delivery_date,
-        alreadyDelivered: !!order.delivery_proof_url,
+        alreadyDelivered: !!(order.proof_of_delivery_url || (order as any).delivery_proof_url),
         clientSignToken: client?.sign_token || null
     };
 

@@ -489,6 +489,8 @@ export default function RoutesPage() {
                     // Use the same pattern as ClientDriverAssignment: assignedDriver?.color || null
                     // Since we're mapping stops from the route, the assignedDriver is the route itself
                     __driverColor: color, // Use the driver's color (same as route.color)
+                    // NOTE: Do NOT set a 'color' property on stops - only use __driverColor
+                    // This ensures marker colors are always determined by driver assignment, never by order status
                     __stopIndex: idx,
                     // Preserve other fields that might be useful
                     orderId: u.orderId || null,
