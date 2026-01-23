@@ -27,7 +27,7 @@ const palette = [
     "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
 ];
 
-const nameOf = (u = {}) => {
+const nameOf = (u: any = {}) => {
     const n = u.name ?? u.fullName ?? `${u.first ?? ""} ${u.last ?? ""}`.trim();
     if (n) return n;
     const addr = `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim();
@@ -35,7 +35,7 @@ const nameOf = (u = {}) => {
 };
 
 /* ========= complex detection (unchanged) ========= */
-const toBool = (v) => {
+const toBool = (v: any) => {
     if (typeof v === "boolean") return v;
     if (typeof v === "number") return v !== 0;
     if (typeof v === "string") {
@@ -44,7 +44,7 @@ const toBool = (v) => {
     }
     return false;
 };
-const displayNameLoose = (u = {}) => {
+const displayNameLoose = (u: any = {}) => {
     const cands = [
         u.name, u.fullName,
         `${u.first ?? ""} ${u.last ?? ""}`.trim(),
@@ -54,23 +54,23 @@ const displayNameLoose = (u = {}) => {
     ].filter(Boolean);
     return cands[0] || "";
 };
-const normalize = (s) =>
+const normalize = (s: any) =>
     String(s || "")
         .toLowerCase()
         .replace(/\s+/g, " ")
         .replace(/[^\p{L}\p{N}\s]/gu, "")
         .trim();
-const normalizePhone = (s) => String(s || "").replace(/\D+/g, "").replace(/^1/, "");
-const normalizeAddr = (u = {}) =>
+const normalizePhone = (s: any) => String(s || "").replace(/\D+/g, "").replace(/^1/, "");
+const normalizeAddr = (u: any = {}) =>
     normalize([u.address || u.addr || "", u.apt || u.unit || "", u.city || "", u.state || "", u.zip || ""].filter(Boolean).join(", "));
-const llKey = (u) => {
+const llKey = (u: any) => {
     const lat = typeof u.lat === "number" ? u.lat : u.latitude;
     const lng = typeof u.lng === "number" ? u.lng : u.longitude;
     const lk = Number.isFinite(lat) ? lat.toFixed(4) : "";
     const gk = Number.isFinite(lng) ? lng.toFixed(4) : "";
     return `${lk}|${gk}`;
 };
-function buildComplexIndex(users = []) {
+function buildComplexIndex(users: any[] = []) {
     const idSet = new Set();
     const nameSet = new Set();
     const phoneSet = new Set();
@@ -99,7 +99,7 @@ function buildComplexIndex(users = []) {
     }
     return { idSet, nameSet, phoneSet, addrSet, llSet };
 }
-function markStopComplex(stop, idx, idxs) {
+function markStopComplex(stop: any, idx: any, idxs: any) {
     const s = stop || {};
     const direct =
         toBool(s?.complex) ||
@@ -146,11 +146,11 @@ function markStopComplex(stop, idx, idxs) {
 }
 
 /* ===== driver numbering helpers (keep Driver 0 first) ===== */
-const parseDriverNum = (name) => {
+const parseDriverNum = (name: any) => {
     const m = /driver\s+(\d+)/i.exec(String(name || ""));
     return m ? parseInt(m[1], 10) : null;
 };
-const rankForRoute = (route, idxFallback = 0) => {
+const rankForRoute = (route: any, idxFallback = 0) => {
     const n = parseDriverNum(route?.driverName || route?.name);
     return Number.isFinite(n) ? n : idxFallback;
 };
@@ -170,9 +170,9 @@ export default function RoutesPage() {
     };
     const [selectedDeliveryDate, setSelectedDeliveryDate] = React.useState(getTodayDate());
 
-    const [routes, setRoutes] = React.useState([]);
-    const [unrouted, setUnrouted] = React.useState([]);
-    const [users, setUsers] = React.useState([]);
+    const [routes, setRoutes] = React.useState<any[]>([]);
+    const [unrouted, setUnrouted] = React.useState<any[]>([]);
+    const [users, setUsers] = React.useState<any[]>([]);
 
     const [busy, setBusy] = React.useState(false);
     const [activeTab, setActiveTab] = React.useState("map"); // "map" or "clients"
@@ -219,7 +219,7 @@ export default function RoutesPage() {
                 if (data.usersWithoutStops.length === 0) {
                     console.log(`  ✅ All users have stops for day: ${selectedDay}`);
                 } else {
-                    data.usersWithoutStops.forEach((user) => {
+                    data.usersWithoutStops.forEach((user: any) => {
                         console.log(`  ❌ User #${user.id} (${user.name}): ${user.reason}`);
                     });
                     console.log(`  📊 Total users without stops: ${data.usersWithoutStops.length}`);
@@ -242,7 +242,7 @@ export default function RoutesPage() {
                     const usersData = await usersRes.json();
                     setUsers(Array.isArray(usersData) ? usersData : []);
                     
-                    const missing = usersData.filter(u => (u.lat ?? u.latitude) == null || (u.lng ?? u.longitude) == null);
+                    const missing = usersData.filter((u: any) => (u.lat ?? u.latitude) == null || (u.lng ?? u.longitude) == null);
                     setMissingBatch(missing);
                 }
             } catch (e) {
@@ -280,7 +280,7 @@ export default function RoutesPage() {
                     if (data1.usersWithoutStops.length === 0) {
                         console.log(`  ✅ All users have stops for day: ${selectedDay}`);
                     } else {
-                        data1.usersWithoutStops.forEach((user) => {
+                        data1.usersWithoutStops.forEach((user: any) => {
                             console.log(`  ❌ User #${user.id} (${user.name}): ${user.reason}`);
                         });
                         console.log(`  📊 Total users without stops: ${data1.usersWithoutStops.length}`);
@@ -349,10 +349,10 @@ export default function RoutesPage() {
         })();
     }, [selectedDay, selectedDeliveryDate]);
 
-    async function handleManualGeocoded(updates) {
+    async function handleManualGeocoded(updates: any) {
         try {
             await Promise.all(
-                updates.map(({ id, lat, lng, ...rest }) =>
+                updates.map(({ id, lat, lng, ...rest }: any) =>
                     fetch(`/api/users/${id}`, {
                         method: "PUT",
                         headers: { "Content-Type": "application/json" },
@@ -364,7 +364,7 @@ export default function RoutesPage() {
             );
             setUsers(prev => {
                 const updated = [...prev];
-                updates.forEach(u => {
+                updates.forEach((u: any) => {
                     const idx = updated.findIndex(usr => String(usr.id) === String(u.id));
                     if (idx >= 0) {
                         updated[idx] = { ...updated[idx], ...u };
@@ -372,17 +372,17 @@ export default function RoutesPage() {
                 });
                 return updated;
             });
-            setMissingBatch((prev) => prev.filter((u) => !updates.some((x) => x.id === u.id)));
-        } catch (err) {
+            setMissingBatch((prev) => prev.filter((u: any) => !updates.some((x: any) => x.id === u.id)));
+        } catch (err: any) {
             console.error("Manual geocode save failed:", err);
-            alert("Save failed: " + (err.message || "Unknown error"));
+            alert("Save failed: " + (err?.message || "Unknown error"));
         }
     }
 
     /* ============================================================
      *  SAVE-CURRENT RUN (active run overwrite)
      * ============================================================ */
-    const saveTimerRef = React.useRef(null);
+    const saveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
     const saveCurrentRun = React.useCallback((immediate = false) => {
         const doPost = async () => {
             try {
@@ -407,7 +407,7 @@ export default function RoutesPage() {
     }, [selectedDay]);
 
     // === Single reassign used by the map for individual popup assigns ===
-    const handleReassign = React.useCallback(async (stop, toDriverId) => {
+    const handleReassign = React.useCallback(async (stop: any, toDriverId: any) => {
         const toId = String(toDriverId); // Keep as string to match API expectations
         console.log("[handleReassign] Starting reassign:", { stopId: stop.id, toDriverId: toId, stop });
         // optimistic local UI (in page routes copy)
@@ -417,7 +417,7 @@ export default function RoutesPage() {
                 const fromIdx = next.findIndex(r => String(r.driverId) === String(stop.__driverId));
                 const toIdx   = next.findIndex(r => String(r.driverId) === String(toId));
                 if (fromIdx === -1 || toIdx === -1) return prevRoutes;
-                const sIdx = next[fromIdx].stops.findIndex(s => String(s.id) === String(stop.id));
+                const sIdx = next[fromIdx].stops.findIndex((s: any) => String(s.id) === String(stop.id));
                 if (sIdx === -1) return prevRoutes;
                 const [moved] = next[fromIdx].stops.splice(sIdx, 1);
                 next[toIdx].stops.push({ ...moved, __driverId: toId });
@@ -455,63 +455,79 @@ export default function RoutesPage() {
         }
     }, [selectedDay, loadRoutes, saveCurrentRun, selectedDeliveryDate]);
 
+    // Driver id -> color map for marker coloring by assigned driver (client's assigned_driver_id)
+    const driverIdToColor = React.useMemo(() => {
+        const m = new Map<string, string>();
+        (routes || []).forEach((r, i) => {
+            const id = String(r.driverId ?? r.id ?? "");
+            if (id) m.set(id, r.color || palette[i % palette.length]);
+        });
+        return m;
+    }, [routes]);
+
     // Map-facing drivers (kept in sync with page routes)
-    // Use the same pattern as ClientDriverAssignment for consistent color coding
+    // Marker colors use the assigned driver's color (client's assigned_driver_id), not the route owner
     const mapDrivers = React.useMemo(() => {
         return (routes || []).map((r, i) => {
             const driverId = String(r.driverId ?? r.id ?? ""); // Keep as string (UUID) to match database
-            // Use the same color logic as ClientDriverAssignment: route.color || palette[i % palette.length]
             const color = r.color || palette[i % palette.length];
             const dname = r.driverName || r.name || `Driver ${i}`;
             const stops = (r.stops || [])
-                .map((u, idx) => ({
-                    id: u.id,
-                    userId: u.userId ?? u.id,
-                    name: nameOf(u),
-                    // Preserve original name fields for proper client name extraction
-                    first: u.first || u.first_name || null,
-                    last: u.last || u.last_name || null,
-                    firstName: u.first || u.first_name || null,
-                    lastName: u.last || u.last_name || null,
-                    first_name: u.first || u.first_name || null,
-                    last_name: u.last || u.last_name || null,
-                    fullName: u.fullName || u.full_name || null,
-                    full_name: u.fullName || u.full_name || null,
-                    address: `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
-                    phone: u.phone ?? "",
-                    city: u.city ?? "",
-                    state: u.state ?? "",
-                    zip: u.zip ?? "",
-                    lat: Number(u.lat),
-                    lng: Number(u.lng),
-                    __driverId: driverId,
-                    __driverName: dname,
-                    // Use the same pattern as ClientDriverAssignment: assignedDriver?.color || null
-                    // Since we're mapping stops from the route, the assignedDriver is the route itself
-                    __driverColor: color, // Use the driver's color (same as route.color)
-                    // NOTE: Do NOT set a 'color' property on stops - only use __driverColor
-                    // This ensures marker colors are always determined by driver assignment, never by order status
-                    __stopIndex: idx,
-                    // Preserve other fields that might be useful
-                    orderId: u.orderId || null,
-                    orderDate: u.orderDate || null,
-                    deliveryDate: u.deliveryDate || u.delivery_date || null,
-                    orderStatus: u.orderStatus || null,
-                    completed: u.completed,
-                    dislikes: u.dislikes || "",
-                }))
-                .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-            // Use the same structure as ClientDriverAssignment
-            return { 
-                id: driverId, 
-                driverId: driverId, 
-                name: dname, 
-                color: color, // Same pattern: route.color || palette[i % palette.length]
-                polygon: [], 
-                stops 
+                .map((u: any, idx: number) => {
+                    const assignedId = u.assigned_driver_id ?? null;
+                    const assignedColor = assignedId ? driverIdToColor.get(String(assignedId)) : null;
+                    return {
+                        id: u.id,
+                        userId: u.userId ?? u.id,
+                        name: nameOf(u),
+                        first: u.first || u.first_name || null,
+                        last: u.last || u.last_name || null,
+                        firstName: u.first || u.first_name || null,
+                        lastName: u.last || u.last_name || null,
+                        first_name: u.first || u.first_name || null,
+                        last_name: u.last || u.last_name || null,
+                        fullName: u.fullName || u.full_name || null,
+                        full_name: u.fullName || u.full_name || null,
+                        address: `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
+                        phone: u.phone ?? "",
+                        city: u.city ?? "",
+                        state: u.state ?? "",
+                        zip: u.zip ?? "",
+                        lat: Number(u.lat),
+                        lng: Number(u.lng),
+                        __driverId: driverId,
+                        __driverName: dname,
+                        assigned_driver_id: assignedId,
+                        __driverColor: assignedColor ?? "#666",
+                        __stopIndex: idx,
+                        orderId: u.orderId || null,
+                        orderDate: u.orderDate || null,
+                        deliveryDate: u.deliveryDate || u.delivery_date || null,
+                        orderStatus: u.orderStatus || null,
+                        completed: u.completed,
+                        dislikes: u.dislikes || "",
+                    };
+                })
+                .filter((s: any) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+            return {
+                id: driverId,
+                driverId: driverId,
+                name: dname,
+                color: color,
+                polygon: [],
+                stops,
             };
         });
-    }, [routes]);
+    }, [routes, driverIdToColor]);
+
+    // Enrich unrouted stops with __driverColor from client's assigned driver
+    const enrichedUnrouted = React.useMemo(() => {
+        return (unrouted || []).map((s: any) => {
+            const assignedId = s.assigned_driver_id ?? null;
+            const assignedColor = assignedId ? driverIdToColor.get(String(assignedId)) : null;
+            return { ...s, __driverColor: assignedColor ?? "#666" };
+        });
+    }, [unrouted, driverIdToColor]);
 
     const routeStops = React.useMemo(() => routes.map(r => (r.stops || [])), [routes]);
     const driverColors = React.useMemo(() => routes.map((r, i) => r.color || palette[i % palette.length]), [routes]);
@@ -545,9 +561,9 @@ export default function RoutesPage() {
             // Save the cleaned state back to the active run
             saveCurrentRun(true);
             if (!silent) alert("Cleanup completed.");
-        } catch (e) {
+        } catch (e: any) {
             console.error("Cleanup failed:", e);
-            if (!silent) alert("Cleanup failed: " + (e.message || "Unknown error"));
+            if (!silent) alert("Cleanup failed: " + (e?.message || "Unknown error"));
         } finally {
             setBusy(false);
         }
@@ -681,16 +697,16 @@ export default function RoutesPage() {
             name: r?.driverName || r?.name || `Driver ${i}`,
         }));
         meta.sort((a, b) => {
-            const aa = Number.isFinite(a.num) ? a.num : a.i;
-            const bb = Number.isFinite(b.num) ? b.num : b.i;
-            return aa - bb || a.i - b.i;
+            const aa = Number.isFinite(a.num) ? a.num : (a.i ?? 0);
+            const bb = Number.isFinite(b.num) ? b.num : (b.i ?? 0);
+            return (aa ?? 0) - (bb ?? 0) || (a.i ?? 0) - (b.i ?? 0);
         });
         const colorsSorted = meta.map((m, idx) => m.color || driverColors[m.i] || palette[idx % palette.length]);
         const enrichedSorted = meta.map((m, newIdx) => {
             const driverNum = Number.isFinite(m.num) ? m.num : newIdx;
             const driverName = `Driver ${driverNum}`;
             const arr = (routeStops[m.i] || []);
-            return arr.map((s, si) => ({
+            return arr.map((s: any, si: number) => ({
                 ...s,
                 __driverNumber: driverNum,
                 __driverName: driverName,
@@ -784,16 +800,16 @@ export default function RoutesPage() {
             await loadRoutes();
             saveCurrentRun(true);
             alert("Driver removed successfully");
-        } catch (e) {
+        } catch (e: any) {
             console.error("Remove driver failed:", e);
-            alert("Failed to remove driver: " + (e.message || "Unknown error"));
+            alert("Failed to remove driver: " + (e?.message || "Unknown error"));
         } finally {
             setBusy(false);
         }
     }
 
     // Rename a driver
-    async function handleRenameDriver(driverId, newNumber) {
+    async function handleRenameDriver(driverId: any, newNumber: any) {
         try {
             const res = await fetch("/api/route/rename-driver", {
                 method: "POST",
@@ -909,19 +925,22 @@ export default function RoutesPage() {
                             />
                         </div>
                         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
-                            <DriversMapLeaflet
-                                drivers={mapDrivers}
-                                unrouted={unrouted}
-                                onReassign={handleReassign}
-                                onRenameDriver={handleRenameDriver}
-                                busy={busy}
-                                readonly={false}
-                                onExpose={(api) => { mapApiRef.current = api || null; }}
-                                onComputedStats={(s) => setStats(s)}
-                                initialCenter={[40.7128, -74.006]}
-                                initialZoom={5}
-                                isOrdersViewTab={activeTab === "map"}
-                            />
+                            {(() => {
+                                const Component = DriversMapLeaflet as any;
+                                return <Component
+                                    drivers={mapDrivers}
+                                    unrouted={enrichedUnrouted}
+                                    onReassign={handleReassign}
+                                    onRenameDriver={handleRenameDriver}
+                                    busy={busy}
+                                    readonly={false}
+                                    onExpose={(api: any) => { mapApiRef.current = api || null; }}
+                                    onComputedStats={(s: any) => setStats(s)}
+                                    initialCenter={[40.7128, -74.006]}
+                                    initialZoom={5}
+                                    isOrdersViewTab={activeTab === "map"}
+                                />;
+                            })()}
                         </div>
                     </div>
                 ) : (
@@ -1041,7 +1060,7 @@ export default function RoutesPage() {
                             // Build complex index from enrichedSorted (same order/structure as what we'll export)
                             const complexById = new Map();
                             enrichedSorted.forEach((route) => {
-                                route.forEach((s) => {
+                                route.forEach((s: any) => {
                                     if (s && s.id) {
                                         const marked = markStopComplex(s, 0, idxs);
                                         complexById.set(String(s.id), marked);
@@ -1050,7 +1069,7 @@ export default function RoutesPage() {
                             });
                             
                             const stampedWithComplex = enrichedSorted.map((route, ri) =>
-                                (route || []).map((s, si) => {
+                                (route || []).map((s: any, si: number) => {
                                     if (!s || !s.id) return null;
                                     // Ensure stop has at least name or address for PDF rendering
                                     const hasName = s.name || s.fullName || s.first || s.last || s.firstName || s.lastName;

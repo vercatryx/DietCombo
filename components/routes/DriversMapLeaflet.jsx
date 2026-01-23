@@ -273,7 +273,7 @@ function findStopByIdLocal(id, drivers, unrouted) {
         }
     }
     for (const s of unrouted || [])
-        if (sid(s.id) === key) return { stop: s, color: "#666", fromDriverId: null };
+        if (sid(s.id) === key) return { stop: s, color: getStopColor(s, "#666"), fromDriverId: null };
     return { stop: null, color: "#666", fromDriverId: null };
 }
 
@@ -976,7 +976,7 @@ export default function DriversMapLeaflet({
                 m.set(sid(s.id), stopColor);
             }
         }
-        for (const s of localUnrouted) m.set(sid(s.id), "#666");
+        for (const s of localUnrouted) m.set(sid(s.id), getStopColor(s, "#666"));
         return m;
     }, [sortedDrivers, localUnrouted]);
 
