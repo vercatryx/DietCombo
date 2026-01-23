@@ -463,6 +463,21 @@ export async function getClientSubmissions(clientId: string) {
     }
 }
 
+export async function deleteSubmission(submissionId: string) {
+    try {
+        const { error } = await supabase
+            .from('form_submissions')
+            .delete()
+            .eq('id', submissionId);
+        
+        if (error) return { success: false, error: error.message };
+        return { success: true };
+    } catch (error: any) {
+        console.error('Error deleting submission:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 // --- EMAIL ACTIONS ---
 
 import { sendEmail } from './email';
