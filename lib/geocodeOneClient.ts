@@ -50,7 +50,9 @@ function lruSet(key: string, val: GeocodeResult) {
     if (memLRU.size > LS_MAX) {
         // evict oldest
         const firstKey = memLRU.keys().next().value;
-        memLRU.delete(firstKey);
+        if (firstKey) {
+            memLRU.delete(firstKey);
+        }
     }
 }
 

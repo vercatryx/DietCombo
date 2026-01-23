@@ -147,8 +147,9 @@ export async function getClients(): Promise<ClientProfile[]> {
         return clientsCache!.data;
     }
     const data = await serverGetClients();
-    clientsCache = { data, timestamp: Date.now() };
-    return data;
+    const filteredData = data.filter((c): c is NonNullable<typeof c> => c !== null);
+    clientsCache = { data: filteredData, timestamp: Date.now() };
+    return filteredData;
 }
 
 export async function getClient(id: string): Promise<ClientProfile | undefined> {

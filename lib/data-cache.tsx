@@ -124,9 +124,10 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
         
         // Fetch fresh data
         const data = await serverActions.getClients();
-        clientsCacheRef.current = { data, timestamp: Date.now() };
+        const filteredData = data.filter((c): c is NonNullable<typeof c> => c !== null);
+        clientsCacheRef.current = { data: filteredData, timestamp: Date.now() };
         setCacheVersion(v => v + 1);
-        return data;
+        return filteredData;
     }, []);
     
     // Single client getter

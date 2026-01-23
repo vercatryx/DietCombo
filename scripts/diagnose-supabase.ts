@@ -50,8 +50,8 @@ if (supabaseServiceKey) {
             persistSession: false
         },
         db: {
-            schema: 'public'
-        }
+            schema: 'public' as any
+        } as any
     });
 }
 
