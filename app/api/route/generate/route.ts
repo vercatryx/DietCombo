@@ -86,7 +86,7 @@ export async function POST(req: Request) {
         const drivers: Array<{ id: string; name: string; color: string }> = [];
         
         // Map existing drivers by their number for quick lookup
-        const driversByNumber = new Map<number, typeof existingDrivers[0]>();
+        const driversByNumber = new Map<number, { id: string; name: string }>();
         for (const driver of sortedExisting) {
             const num = parseDriverNum(driver.name);
             if (num !== null && !driversByNumber.has(num)) {

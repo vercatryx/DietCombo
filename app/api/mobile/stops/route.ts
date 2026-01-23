@@ -78,8 +78,11 @@ export async function GET(req: Request) {
         const { data: stops } = await stopsQuery;
 
         // Reorder to match Driver.stopIds order (keep IDs as strings for comparison)
+        if (!stops) {
+            return NextResponse.json([], { headers: { "Cache-Control": "no-store" } });
+        }
         const byId = new Map(stops.map((s) => [String(s.id), s]));
-        const ordered = orderedIds.map((id) => byId.get(id)).filter(Boolean);
+        const ordered = orderedIds.map((id) => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
         // Fetch order information for all stops
         // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table

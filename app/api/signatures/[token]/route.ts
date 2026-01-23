@@ -42,8 +42,8 @@ export async function GET(
                 first: firstName,
                 last: lastName,
             },
-            collected: sigs.length,
-            slots: sigs.map((s) => s.slot),
+            collected: sigs?.length || 0,
+            slots: (sigs || []).map((s) => s.slot),
         });
     } catch (error: any) {
         console.error("[signatures GET] error:", error);

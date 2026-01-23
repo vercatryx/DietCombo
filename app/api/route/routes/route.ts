@@ -45,13 +45,13 @@ export async function GET(req: Request) {
             .order('id', { ascending: true });
         
         // Convert routes to drivers format (add day field, default to "all" or current day)
-        const routesAsDrivers = routesRaw.map((r: any) => ({
+        const routesAsDrivers = (routesRaw || []).map((r: any) => ({
             ...r,
             day: day === "all" ? "all" : day, // Use current day or "all" if querying all
         }));
-        
+
         // Combine drivers and routes
-        const allDriversRaw = [...driversRaw, ...routesAsDrivers];
+        const allDriversRaw = [...(driversRaw || []), ...routesAsDrivers];
         
         // Debug logging
         console.log(`[route/routes] Querying drivers for day="${day}"`);
@@ -139,7 +139,7 @@ export async function GET(req: Request) {
             (a, b) => driverRankByName(a.name) - driverRankByName(b.name)
         );
         
-        console.log(`[route/routes] After sorting: ${drivers.length} drivers (${driversRaw.length} from drivers table, ${routesRaw.length} from routes table)`);
+        console.log(`[route/routes] After sorting: ${drivers.length} drivers (${driversRaw?.length || 0} from drivers table, ${routesRaw?.length || 0} from routes table)`);
 
         // 5) Fetch order information for all stops
         // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table

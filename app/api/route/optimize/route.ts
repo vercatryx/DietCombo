@@ -102,6 +102,10 @@ export async function POST(req: Request) {
             // Build a map of client_id -> list of (driverId, stopId) pairs
             const clientToStops = new Map<string, Array<{ driverId: string; stopId: string }>>();
 
+            if (!allDrivers) {
+                return NextResponse.json({ error: "Failed to fetch drivers" }, { status: 500 });
+            }
+
             for (const driver of allDrivers) {
                 const stopIds = Array.isArray(driver.stop_ids) 
                     ? driver.stop_ids 
