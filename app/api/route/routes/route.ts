@@ -351,21 +351,47 @@ export async function GET(req: Request) {
             });
         }
 
-        // 7) Build driver routes strictly from their stopIds
+        // 7) Build driver routes from both stopIds AND assigned_driver_id
+        // Since drivers are now saved to client records via assigned_driver_id, we need to include
+        // stops that have assigned_driver_id matching the driver, not just stops in driver's stop_ids array
         // Color palette for fallback
         const colorPalette = [
             "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
             "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
             "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
         ];
+        
+        // Create a map of driver ID -> route index for quick lookup
+        const driverIdToRouteIdx = new Map<string, number>();
+        
         const routes = drivers.map((d, idx) => {
+            const driverId = String(d.id);
+            driverIdToRouteIdx.set(driverId, idx);
+            
             const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === "string" ? JSON.parse(d.stop_ids) : []);
             const ids: any[] = Array.isArray(stopIds) ? stopIds : [];
             const stops: any[] = [];
+            const stopIdSet = new Set<string>(); // Track added stops to avoid duplicates
+            
+            // First, add stops from driver's stop_ids array (legacy method)
             for (const raw of ids) {
-                const hyd = stopById.get(sid(raw));
-                if (hyd) stops.push(hyd);
+                const stopId = sid(raw);
+                const hyd = stopById.get(stopId);
+                if (hyd && !stopIdSet.has(stopId)) {
+                    stops.push(hyd);
+                    stopIdSet.add(stopId);
+                }
             }
+            
+            // Then, add stops that have assigned_driver_id matching this driver (new method)
+            for (const [stopId, stop] of stopById.entries()) {
+                const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
+                if (assignedDriverId === driverId && !stopIdSet.has(stopId)) {
+                    stops.push(stop);
+                    stopIdSet.add(stopId);
+                }
+            }
+            
             // Ensure color is always set - use driver color or fallback to palette
             const driverColor = (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey" && d.color !== null && d.color !== undefined)
                 ? d.color
@@ -379,12 +405,21 @@ export async function GET(req: Request) {
         });
         
         console.log(`[route/routes] Built ${routes.length} routes with ${routes.reduce((sum, r) => sum + r.stops.length, 0)} total stops`);
+        console.log(`[route/routes] Stops per route:`, routes.map(r => ({ driver: r.driverName, stops: r.stops.length })));
 
         // 8) Unrouted = all hydrated stops not referenced by any driver's current list
+        // This includes stops that are not in any driver's stop_ids AND don't have assigned_driver_id
         const claimed = new Set(routes.flatMap((r) => r.stops.map((s) => sid(s.id))));
+        const driverIds = new Set(drivers.map(d => String(d.id)));
         const unrouted: any[] = [];
         for (const [k, v] of stopById.entries()) {
-            if (!claimed.has(k)) unrouted.push(v);
+            // A stop is unrouted if:
+            // 1. It's not in any driver's route (claimed set)
+            // 2. It doesn't have an assigned_driver_id that matches a driver
+            const hasAssignedDriver = v?.assigned_driver_id && driverIds.has(String(v.assigned_driver_id));
+            if (!claimed.has(k) && !hasAssignedDriver) {
+                unrouted.push(v);
+            }
         }
 
         // 9) Check clients without stops, create missing stops, and log reasons

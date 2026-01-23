@@ -690,11 +690,13 @@ export default function RoutesPage() {
 
     // ===== PDF helpers (unchanged but referenced) =====
     const buildSortedForLabels = React.useCallback(() => {
+        // Create meta with route data and stops directly from routes
         const meta = (routes || []).map((r, i) => ({
             i,
             num: rankForRoute(r, i),
             color: r?.color,
             name: r?.driverName || r?.name || `Driver ${i}`,
+            stops: r?.stops || [], // Get stops directly from route
         }));
         meta.sort((a, b) => {
             const aa = Number.isFinite(a.num) ? a.num : (a.i ?? 0);
@@ -705,7 +707,8 @@ export default function RoutesPage() {
         const enrichedSorted = meta.map((m, newIdx) => {
             const driverNum = Number.isFinite(m.num) ? m.num : newIdx;
             const driverName = `Driver ${driverNum}`;
-            const arr = (routeStops[m.i] || []);
+            // Use stops directly from meta (which came from routes)
+            const arr = (m.stops || []);
             return arr.map((s: any, si: number) => ({
                 ...s,
                 __driverNumber: driverNum,
@@ -714,7 +717,7 @@ export default function RoutesPage() {
             }));
         });
         return { enrichedSorted, colorsSorted };
-    }, [routes, routeStops, driverColors]);
+    }, [routes, driverColors]);
 
     // Add a new driver
     async function handleAddDriver() {
@@ -1034,6 +1037,20 @@ export default function RoutesPage() {
                                 return;
                             }
 
+                            // Log route structure for debugging
+                            console.log('[Download Labels] Routes structure:', {
+                                routesCount: routes.length,
+                                routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length,
+                                totalStops: routes.reduce((sum, r) => sum + (r.stops?.length || 0), 0),
+                                sampleRoute: routes[0] ? {
+                                    driverId: routes[0].driverId,
+                                    driverName: routes[0].driverName,
+                                    stopsCount: routes[0].stops?.length || 0,
+                                    sampleStop: routes[0].stops?.[0] || null
+                                } : null,
+                                selectedDate: selectedDeliveryDate
+                            });
+
                             const totalStopsInRoutes = routes.reduce((sum, r) => sum + (r.stops?.length || 0), 0);
                             if (totalStopsInRoutes === 0) {
                                 alert('No stops found in routes. Please assign stops to drivers first.');
@@ -1045,14 +1062,23 @@ export default function RoutesPage() {
                             
                             // Validate enrichedSorted has data
                             if (!enrichedSorted || enrichedSorted.length === 0) {
-                                console.error('[Download Labels] enrichedSorted is empty', { routes, routeStops });
+                                console.error('[Download Labels] enrichedSorted is empty', { 
+                                    routes, 
+                                    routesCount: routes.length,
+                                    routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length
+                                });
                                 alert('No stops found to export. Please check that routes have stops assigned.');
                                 return;
                             }
 
                             const totalEnrichedStops = enrichedSorted.reduce((sum, route) => sum + (route?.length || 0), 0);
                             if (totalEnrichedStops === 0) {
-                                console.error('[Download Labels] No stops in enrichedSorted', { enrichedSorted, routes, routeStops });
+                                console.error('[Download Labels] No stops in enrichedSorted', { 
+                                    enrichedSorted, 
+                                    routes,
+                                    routesCount: routes.length,
+                                    routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length
+                                });
                                 alert('No stops found to export. Please check that routes have stops assigned.');
                                 return;
                             }
@@ -1087,11 +1113,19 @@ export default function RoutesPage() {
                             const filteredForExport = stampedWithComplex.filter(route => route && route.length > 0);
                             const totalStops = filteredForExport.reduce((sum, route) => sum + (route?.length || 0), 0);
                             
+                            // Count complex stops for logging
+                            const complexStopsCount = filteredForExport.reduce((sum, route) => 
+                                sum + route.filter((s: any) => s?.complex === true).length, 0
+                            );
+                            
                             console.log('[Download Labels] Exporting:', {
                                 routes: filteredForExport.length,
                                 totalStops,
+                                complexStops: complexStopsCount,
                                 stopsPerRoute: filteredForExport.map(r => r?.length || 0),
+                                complexPerRoute: filteredForExport.map(r => r.filter((s: any) => s?.complex === true).length),
                                 sampleStop: totalStops > 0 ? filteredForExport[0]?.[0] : null,
+                                sampleComplexStop: complexStopsCount > 0 ? filteredForExport.flat().find((s: any) => s?.complex === true) : null,
                                 selectedDate: selectedDeliveryDate,
                             });
 
