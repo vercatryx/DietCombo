@@ -2990,6 +2990,40 @@ async function syncSingleOrderForDeliveryDay(
 
     if (existing) {
         // Update existing
+        // First, check if existing order has order_number
+        const { data: existingOrder } = await supabase
+            .from('upcoming_orders')
+            .select('order_number')
+            .eq('id', existing.id)
+            .single();
+        
+        // If existing order doesn't have order_number, generate one
+        if (existingOrder && (!existingOrder.order_number || existingOrder.order_number < 100000)) {
+            // Get max order_number from both upcoming_orders and orders tables
+            const { data: maxUpcomingOrder } = await supabase
+                .from('upcoming_orders')
+                .select('order_number')
+                .order('order_number', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            
+            const { data: maxOrder } = await supabase
+                .from('orders')
+                .select('order_number')
+                .order('order_number', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            
+            // Calculate next order_number (ensure it's at least 100000)
+            const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
+            const maxFromOrders = maxOrder?.order_number || 0;
+            const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
+            const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+            
+            // Add order_number to update payload
+            upcomingOrderData.order_number = nextOrderNumber;
+        }
+        
         const updatePayload: any = {};
         for (const [key, value] of Object.entries(upcomingOrderData)) {
             if (value !== undefined) {
@@ -3030,9 +3064,34 @@ async function syncSingleOrderForDeliveryDay(
         
         upcomingOrderId = existing.id;
     } else {
-        // Insert new
+        // Insert new - Generate order_number before inserting
+        // Get max order_number from both upcoming_orders and orders tables
+        const { data: maxUpcomingOrder } = await supabase
+            .from('upcoming_orders')
+            .select('order_number')
+            .order('order_number', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        
+        const { data: maxOrder } = await supabase
+            .from('orders')
+            .select('order_number')
+            .order('order_number', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        
+        // Calculate next order_number (ensure it's at least 100000)
+        const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
+        const maxFromOrders = maxOrder?.order_number || 0;
+        const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
+        const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+        
         const upcomingOrderId_new = randomUUID();
-        const insertPayload = { ...upcomingOrderData, id: upcomingOrderId_new };
+        const insertPayload = { 
+            ...upcomingOrderData, 
+            id: upcomingOrderId_new,
+            order_number: nextOrderNumber
+        };
         
         const { data: insertedData, error: insertError } = await supabase
             .from('upcoming_orders')
