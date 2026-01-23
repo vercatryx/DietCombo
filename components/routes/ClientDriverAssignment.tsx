@@ -438,29 +438,32 @@ export default function ClientDriverAssignment({
 
             {/* Orders View */}
             <Box sx={{ flex: 1, position: 'relative', minHeight: 0 }}>
-                <DriversMapLeaflet
-                    drivers={mapDrivers}
-                    unrouted={unroutedStops}
-                    onReassign={readOnly ? undefined : handleMapReassign}
-                    driversForAssignment={drivers}
-                    onDriverChange={async (stop, driverId) => {
-                        const clientId = stop.userId || stop.clientId || stop.id;
-                        if (clientId) {
-                            await handleDriverChange(clientId, driverId);
-                        }
-                    }}
-                    onBulkAssignComplete={async () => {
-                        // Refresh routes and client assignments after bulk area selection is saved
-                        await loadClientDriverAssignments(clients);
-                        if (onDriverAssigned) {
-                            onDriverAssigned();
-                        }
-                    }}
-                    busy={isBulkSaving}
-                    readonly={readOnly}
-                    initialCenter={[40.7128, -74.006]}
-                    initialZoom={10}
-                />
+                {(() => {
+                    const Component = DriversMapLeaflet as any;
+                    return <Component
+                        drivers={mapDrivers}
+                        unrouted={unroutedStops}
+                        onReassign={readOnly ? undefined : handleMapReassign}
+                        driversForAssignment={drivers}
+                        onDriverChange={async (stop: any, driverId: any) => {
+                            const clientId = stop.userId || stop.clientId || stop.id;
+                            if (clientId) {
+                                await handleDriverChange(clientId, driverId);
+                            }
+                        }}
+                        onBulkAssignComplete={async () => {
+                            // Refresh routes and client assignments after bulk area selection is saved
+                            await loadClientDriverAssignments(clients);
+                            if (onDriverAssigned) {
+                                onDriverAssigned();
+                            }
+                        }}
+                        busy={isBulkSaving}
+                        readonly={readOnly}
+                        initialCenter={[40.7128, -74.006]}
+                        initialZoom={10}
+                    />;
+                })()}
             </Box>
 
             {/* Stop Preview Dialog */}

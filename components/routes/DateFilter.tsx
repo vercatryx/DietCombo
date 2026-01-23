@@ -252,7 +252,6 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
                     className={styles.calendarIcon}
                     onClick={handleCalendarIconClick}
                     style={{ cursor: 'pointer' }}
-                    title={showCalendar ? "Hide calendar" : "Show calendar"}
                 />
                 <input
                     type="text"

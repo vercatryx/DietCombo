@@ -146,7 +146,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     // Track if we just created a new client to prevent useEffect from overwriting orderConfig
     const justCreatedClientRef = useRef<boolean>(false);
     // Track if we've already set defaults to prevent infinite loops
-    const defaultsSetRef = useRef<{ [key: string]: boolean; lastKey?: string }>({});
+    const defaultsSetRef = useRef<{ [key: string]: boolean | string | undefined; lastKey?: string }>({});
 
     const [client, setClient] = useState<ClientProfile | null>(null);
     const [statuses, setStatuses] = useState<ClientStatus[]>(initialStatuses || []);
@@ -797,17 +797,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const conf = { ...prev };
                 
                 // First, check if client.activeOrder has boxOrders and use that if conf doesn't have it
-                if (!conf.boxOrders || !Array.isArray(conf.boxOrders) || conf.boxOrders.length === 0) {
-                    if (data.client.activeOrder && data.client.activeOrder.boxOrders && Array.isArray(data.client.activeOrder.boxOrders) && data.client.activeOrder.boxOrders.length > 0) {
+                if (!(conf as any).boxOrders || !Array.isArray((conf as any).boxOrders) || (conf as any).boxOrders.length === 0) {
+                    if (data.client.activeOrder && (data.client.activeOrder as any).boxOrders && Array.isArray((data.client.activeOrder as any).boxOrders) && (data.client.activeOrder as any).boxOrders.length > 0) {
                         console.log('[ClientProfile] hydrateFromInitialData - Using boxOrders from client.activeOrder', {
-                            boxOrdersCount: data.client.activeOrder.boxOrders.length
+                            boxOrdersCount: (data.client.activeOrder as any).boxOrders.length
                         });
-                        conf.boxOrders = [...data.client.activeOrder.boxOrders];
+                        (conf as any).boxOrders = [...(data.client.activeOrder as any).boxOrders];
                     }
                 }
                 
                 // If we have boxOrders, ensure legacy fields are synced
-                if (conf.boxOrders && Array.isArray(conf.boxOrders) && conf.boxOrders.length > 0) {
+                if ((conf as any).boxOrders && Array.isArray((conf as any).boxOrders) && (conf as any).boxOrders.length > 0) {
                     const firstBox = conf.boxOrders[0];
                     if (firstBox.vendorId && !conf.vendorId) {
                         conf.vendorId = firstBox.vendorId;
@@ -1097,12 +1097,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (c.serviceType === 'Boxes') {
                 // NEW: Handle boxOrders array from backend
                 // First, check if client.activeOrder has boxOrders and use that if configToSet doesn't have it
-                if (!configToSet.boxOrders || !Array.isArray(configToSet.boxOrders) || configToSet.boxOrders.length === 0) {
-                    if (c.activeOrder && c.activeOrder.boxOrders && Array.isArray(c.activeOrder.boxOrders) && c.activeOrder.boxOrders.length > 0) {
+                if (!(configToSet as any).boxOrders || !Array.isArray((configToSet as any).boxOrders) || (configToSet as any).boxOrders.length === 0) {
+                    if (c.activeOrder && (c.activeOrder as any).boxOrders && Array.isArray((c.activeOrder as any).boxOrders) && (c.activeOrder as any).boxOrders.length > 0) {
                         console.log('[ClientProfile] loadData - Using boxOrders from client.activeOrder', {
-                            boxOrdersCount: c.activeOrder.boxOrders.length
+                            boxOrdersCount: (c.activeOrder as any).boxOrders.length
                         });
-                        configToSet.boxOrders = [...c.activeOrder.boxOrders];
+                        (configToSet as any).boxOrders = [...(c.activeOrder as any).boxOrders];
                     }
                 }
                 
@@ -1525,7 +1525,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (typeof qtyOrObj === 'number') {
                     q = qtyOrObj;
                 } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
-                    q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                    q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(String(qtyOrObj.quantity)) || 0;
                 } else {
                     q = parseInt(qtyOrObj as any) || 0;
                 }
@@ -1951,7 +1951,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
         }
 
-        if (formData.serviceType === 'Boxes') {
+        if ((formData.serviceType as any) === 'Boxes') {
             const messages: string[] = [];
 
             // Validate each box has a vendorId
@@ -2083,7 +2083,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             return { isValid: true, messages: [] };
         }
 
-        if (formData.serviceType === 'Boxes') {
+        if ((formData.serviceType as any) === 'Boxes') {
             const messages: string[] = [];
             const boxOrders = orderConfig.boxOrders || [];
 
@@ -3110,7 +3110,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                             }
                                             // Handle Date object case
                                             try {
-                                                const dateObj = date instanceof Date ? date : new Date(date);
+                                                const dateObj = (date as any) instanceof Date ? date : new Date(date as any);
                                                 return dateObj.toISOString().split('T')[0];
                                             } catch {
                                                 return '';
@@ -6499,14 +6499,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // For other service types, require caseId
             if (updateData.activeOrder && updateData.activeOrder.caseId) {
                 if (serviceType === 'Custom') {
-                    if (updateData.activeOrder.custom_name && updateData.activeOrder.custom_price && updateData.activeOrder.vendorId && updateData.activeOrder.deliveryDay) {
+                    const activeOrderAny = updateData.activeOrder as any;
+                    if (activeOrderAny.custom_name && activeOrderAny.custom_price && activeOrderAny.vendorId && activeOrderAny.deliveryDay) {
                         await saveClientCustomOrder(
                             clientId,
-                            updateData.activeOrder.vendorId,
-                            updateData.activeOrder.custom_name,
-                            Number(updateData.activeOrder.custom_price),
-                            updateData.activeOrder.deliveryDay,
-                            updateData.activeOrder.caseId
+                            activeOrderAny.vendorId,
+                            activeOrderAny.custom_name,
+                            Number(activeOrderAny.custom_price),
+                            activeOrderAny.deliveryDay,
+                            activeOrderAny.caseId
                         );
                     }
                 }

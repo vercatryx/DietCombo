@@ -124,7 +124,7 @@ export default function FormBuilder({ onSave }: FormBuilderProps) {
 
             if (result.success) {
                 const schema: FormSchema = {
-                    id: result.formId,
+                    id: result.formId || '',
                     title: "Screening Form",
                     questions: questions
                 };

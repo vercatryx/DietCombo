@@ -29,7 +29,7 @@ const FALLBACK_COLORS = [
     "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
 ];
 
-function getLL(s) {
+function getLL(s: any) {
     if (!s) return null;
     const lat = Number(s.lat ?? s.latitude);
     const lng = Number(s.lng ?? s.longitude);
@@ -37,7 +37,7 @@ function getLL(s) {
     return [lat, lng];
 }
 
-function MapBridge({ onReady }) {
+function MapBridge({ onReady }: { onReady?: (map: any) => void }) {
     const map = useMap();
     const onReadyRef = useRef(onReady);
     const calledRef = useRef(false);
@@ -62,13 +62,22 @@ export default function DriversMapLeaflet({
     initialZoom = 10,
     showRouteLinesDefault = false,
     busy = false,
+}: {
+    drivers?: any[];
+    unrouted?: any[];
+    onReassign?: any;
+    onExpose?: any;
+    initialCenter?: [number, number];
+    initialZoom?: number;
+    showRouteLinesDefault?: boolean;
+    busy?: boolean;
 }) {
-    const mapRef = useRef(null);
+    const mapRef = useRef<any>(null);
     const [mapReady, setMapReady] = useState(false);
     const [showRouteLines, setShowRouteLines] = useState(!!showRouteLinesDefault);
 
     const handleMapReady = useCallback(
-        (m) => {
+        (m: any) => {
             mapRef.current = m;
             setMapReady(true);
         },
@@ -100,7 +109,7 @@ export default function DriversMapLeaflet({
         if (!onExpose) return;
         const api = {
             getMap: () => mapRef.current,
-            flyTo: (lat, lng, zoom = 15) =>
+            flyTo: (lat: any, lng: any, zoom = 15) =>
                 mapRef.current?.flyTo([lat, lng], zoom, { animate: true }),
         };
         onExpose(api);
@@ -161,7 +170,7 @@ export default function DriversMapLeaflet({
 
                 {/* Driver markers */}
                 {drivers.map((d, di) =>
-                    (d.stops || []).map((s) => {
+                    (d.stops || []).map((s: any) => {
                         const ll = getLL(s);
                         if (!ll) return null;
                         const color = d.color || FALLBACK_COLORS[di % FALLBACK_COLORS.length];

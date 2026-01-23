@@ -25,13 +25,13 @@ async function fetchSignStatus() {
 }
 
 /** Merge {userId → collected} onto stops as s.sigCollected */
-function mergeSigCounts(stops, sigRows) {
+function mergeSigCounts(stops: any[], sigRows: any[]) {
     const sigMap = new Map(sigRows.map((r) => [String(r.userId), Number(r.collected || 0)]));
     return stops.map((s) => ({ ...s, sigCollected: sigMap.get(String(s.userId)) ?? 0 }));
 }
 
 /** Normalize address for duplicate detection (ignoring unit/apt) */
-function makeAddressKey(stop) {
+function makeAddressKey(stop: any) {
     if (!stop) return "";
     const addrRaw = String(stop.address || "")
         .toLowerCase()
@@ -70,9 +70,9 @@ function makeAddressKey(stop) {
 }
 
 /** Listen for postMessage from the sign iframe */
-function InlineMessageListener({ onDone }) {
+function InlineMessageListener({ onDone }: { onDone?: () => void | Promise<void> }) {
     useEffect(() => {
-        const handler = async (e) => {
+        const handler = async (e: MessageEvent) => {
             if (!e?.data || e.data.type !== "signatures:done") return;
             try { await onDone?.(); } catch {}
         };
@@ -115,25 +115,25 @@ export default function DriverDetailPage() {
         }
     }, []);
 
-    const [driver, setDriver] = useState(null);
-    const [stops, setStops] = useState([]);       // ordered, server-truth only, with sigCollected
-    const [allStops, setAllStops] = useState([]); // for SearchStops, with sigCollected
+    const [driver, setDriver] = useState<any>(null);
+    const [stops, setStops] = useState<any[]>([]);       // ordered, server-truth only, with sigCollected
+    const [allStops, setAllStops] = useState<any[]>([]); // for SearchStops, with sigCollected
     const [loading, setLoading] = useState(true);
 
     // Map sheet state + API from Leaflet
     const [mapOpen, setMapOpen] = useState(false);
-    const mapApiRef = useRef(null);       // provided by DriversMapLeaflet.onExpose
-    const myLocMarkerRef = useRef(null);  // blue dot
-    const myLocAccuracyRef = useRef(null);// faint ring
+    const mapApiRef = useRef<{ getMap: () => any } | null>(null);       // provided by DriversMapLeaflet.onExpose
+    const myLocMarkerRef = useRef<any>(null);  // blue dot
+    const myLocAccuracyRef = useRef<any>(null);// faint ring
 
     // Geolocation (ask on button click)
-    const [myLoc, setMyLoc] = useState(null); // { lat, lng, acc } or null
+    const [myLoc, setMyLoc] = useState<{ lat: number; lng: number; acc?: number } | null>(null); // { lat, lng, acc } or null
     const askedOnceRef = useRef(false);
 
     // Signature sheet state
     const [sheetOpen, setSheetOpen] = useState(false);
     const [sheetTitle, setSheetTitle] = useState("");
-    const [sheetToken, setSheetToken] = useState(null);
+    const [sheetToken, setSheetToken] = useState<string | null>(null);
     const [sheetUrl, setSheetUrl] = useState("");
 
     // Per-stop state
@@ -144,15 +144,15 @@ export default function DriverDetailPage() {
     const [reversing, setReversing] = useState(false);
 
     /** Order "every" by the driver's stopIds without any local overlay */
-    function orderByDriverStopIds(route, every) {
-        const byId = new Map(every.map((s) => [String(s.id), s]));
+    function orderByDriverStopIds(route: any, every: any[]) {
+        const byId = new Map(every.map((s: any) => [String(s.id), s]));
         return (route?.stopIds ?? [])
-            .map((sid) => byId.get(String(sid)))
+            .map((sid: any) => byId.get(String(sid)))
             .filter(Boolean)
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+            .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
     }
 
-    async function reverseOnServer(routeId) {
+    async function reverseOnServer(routeId: string) {
         const res = await fetch("/api/route/reverse", {
             method: "POST",
             headers: { "Content-Type": "application/json", "cache-control": "no-store" },
@@ -167,9 +167,9 @@ export default function DriverDetailPage() {
         setLoading(true);
         try {
             // 1) Driver (with date filtering)
-            const d = await fetchDriver(id, selectedDate);
+            const d = await fetchDriver(id as string, (selectedDate || null) as any);
             // 2) All stops (with date filtering)
-            const every = await fetchStops(selectedDate);
+            const every = await fetchStops((selectedDate || null) as any);
             // 3) Signature counts
             const sigRows = await fetchSignStatus().catch(() => []);
 
@@ -274,7 +274,7 @@ export default function DriverDetailPage() {
         if (reversing) return;
         setReversing(true);
         try {
-            const r = await reverseOnServer(id);
+            const r = await reverseOnServer(id as string);
             if (!r?.ok) console.error("Reverse failed:", r?.error);
             await loadData(); // fresh after reverse
         } finally {
@@ -292,7 +292,7 @@ export default function DriverDetailPage() {
     };
 
     // Same endpoint your UsersTable uses
-    async function ensureTokenForUser(userId) {
+    async function ensureTokenForUser(userId: string) {
         const url = `/api/signatures/ensure-token/${encodeURIComponent(userId)}`;
         const res = await fetch(url, { method: "POST", headers: { "cache-control": "no-store" }, cache: "no-store" });
         const raw = await res.text();
@@ -384,7 +384,7 @@ export default function DriverDetailPage() {
                         const lat = Number(s?.lat), lng = Number(s?.lng);
                         return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
                     })
-                    .filter(Boolean);
+                    .filter((p): p is [number, number] => p !== null);
 
                 if (pts.length > 0) {
                     try {
@@ -409,7 +409,7 @@ export default function DriverDetailPage() {
                     }).addTo(map);
 
                     let ring = null;
-                    if (Number.isFinite(myLoc.acc) && myLoc.acc > 0) {
+                    if (myLoc.acc !== undefined && Number.isFinite(myLoc.acc) && myLoc.acc > 0) {
                         ring = L.circle([myLoc.lat, myLoc.lng], {
                             radius: Math.min(myLoc.acc, 120),
                             color: "#0B66FF",
@@ -764,13 +764,16 @@ export default function DriverDetailPage() {
                             </div>
                         </div>
                         <div className="mapsheet-body">
-                            <DriversMapLeaflet
-                                drivers={mapDrivers}
-                                unrouted={[]}
-                                showRouteLinesDefault
-                                onReassign={async () => {}}
-                                onExpose={(api) => { mapApiRef.current = api; }}
-                            />
+                            {(() => {
+                                const Component = DriversMapLeaflet as any;
+                                return <Component
+                                    drivers={mapDrivers}
+                                    unrouted={[]}
+                                    showRouteLinesDefault
+                                    onReassign={async () => {}}
+                                    onExpose={(api: any) => { mapApiRef.current = api; }}
+                                />;
+                            })()}
                         </div>
                     </div>
                 </div>

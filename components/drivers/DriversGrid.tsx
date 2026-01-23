@@ -15,7 +15,7 @@ async function fetchSignStatusClient() {
 }
 
 /** Build a normalized address key that ignores apt/unit and collapses spacing/case. */
-function makeAddressKey(stop) {
+function makeAddressKey(stop: any) {
     if (!stop) return "";
     const addrRaw = String(stop.address || "")
         .toLowerCase()
@@ -53,8 +53,8 @@ function makeAddressKey(stop) {
     return addrNoUnit;
 }
 
-export default function DriversGrid({ drivers = [], allStops = [], selectedDate = '' }) {
-    const [sigRows, setSigRows] = useState([]);
+export default function DriversGrid({ drivers = [], allStops = [], selectedDate = '' }: { drivers?: any[]; allStops?: any[]; selectedDate?: string }) {
+    const [sigRows, setSigRows] = useState<any[]>([]);
 
     useEffect(() => {
         let active = true;
@@ -94,9 +94,9 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
     );
 
     const getStopsForDriver = useMemo(() => {
-        return (d) => {
+        return (d: any) => {
             if (Array.isArray(d?.stopIds) && d.stopIds.length)
-                return d.stopIds.map((sid) => stopsById.get(String(sid))).filter(Boolean);
+                return d.stopIds.map((sid: any) => stopsById.get(String(sid))).filter(Boolean);
             return filteredStops.filter((s) => Number(s.driverId) === Number(d.id));
         };
     }, [stopsById, filteredStops]);
@@ -142,12 +142,12 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
                 const apiTotal = d.totalStops ?? (d.stopIds?.length ?? 0);
                 const total = actualTotal > 0 ? actualTotal : apiTotal;
                 const done = cardStops.length > 0 
-                    ? cardStops.filter((s) => !!s?.completed).length 
+                    ? cardStops.filter((s: any) => !!s?.completed).length 
                     : (d.completedStops ?? 0);
                 const pct = total > 0 ? (done / total) * 100 : 0;
 
                 const sigUsersDone = cardStops.length > 0
-                    ? cardStops.filter((s) => (sigMap.get(String(s?.userId)) ?? 0) >= 5).length
+                    ? cardStops.filter((s: any) => (sigMap.get(String(s?.userId)) ?? 0) >= 5).length
                     : 0;
                 const pctSigs = total > 0 ? (sigUsersDone / total) * 100 : 0;
 

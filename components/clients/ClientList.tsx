@@ -3,7 +3,7 @@
 import { ClientProfileDetail } from './ClientProfile';
 import { ClientInfoShelf } from './ClientInfoShelf';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, ReactElement } from 'react';
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem } from '@/lib/types';
 import {
     getClientsPaginated,
@@ -327,9 +327,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setVendors(vData);
             setBoxTypes(bData);
             setMenuItems(mData);
-            setClients(cRes.clients);
+            setClients(cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null));
             setTotalClients(cRes.total);
-            setAllClientsForLookup(allClientsData);
+            setAllClientsForLookup(allClientsData.filter((c): c is NonNullable<typeof c> => c !== null));
             setPage(1);
         } catch (error) {
             console.error("Error loading initial data:", error);
@@ -360,11 +360,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setVendors(vData);
             setBoxTypes(bData);
             setMenuItems(mData);
-            setClients(cRes.clients);
+            setClients(cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null));
             setTotalClients(cRes.total);
             // Refresh all clients lookup when refreshing
             const allClientsData = await getClients();
-            setAllClientsForLookup(allClientsData);
+            setAllClientsForLookup(allClientsData.filter((c): c is NonNullable<typeof c> => c !== null));
             setPage(1);
             
             // Refresh signature counts
@@ -383,7 +383,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setClients(prev => {
                 // Deduplicate just in case
                 const existingIds = new Set(prev.map(c => c.id));
-                const newClients = res.clients.filter(c => !existingIds.has(c.id));
+                const newClients = res.clients.filter((c): c is NonNullable<typeof c> => c !== null && !existingIds.has(c.id));
                 return [...prev, ...newClients];
             });
             setPage(nextPage);
@@ -403,7 +403,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         try {
             const details = await getClientFullDetails(clientId);
             if (details) {
-                setDetailsCache(prev => ({ ...prev, [clientId]: details }));
+                setDetailsCache(prev => ({ ...prev, [clientId]: details as any }));
             }
         } catch (error) {
             console.error(`Error prefetching client ${clientId}:`, error);
@@ -843,7 +843,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             } else if (st === 'Boxes') {
                 // Simplified vendor extraction - check all possible locations
                 const vendorIdsToCheck = new Set<string>();
-                const boxesArray = conf.boxOrders || (conf as any).boxes;
+                const boxesArray = (conf as any).boxOrders || (conf as any).boxes;
                 
                 // Strategy 1: Check top-level vendorId
                 if (conf.vendorId) {
@@ -950,6 +950,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         // Full Details for ClientInfoShelf (forceDetails=true)
         // Group by day of week for both Food and Boxes
         const dayOrderArray = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        let vendorName: string = 'No Vendor';
+        let itemsList: { name: string; quantity: number }[] = [];
 
         if (st === 'Food') {
             const isMultiDay = conf.deliveryDayOrders && typeof conf.deliveryDayOrders === 'object';
@@ -1269,10 +1271,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             } else {
                 // Legacy single-day format
             // Boxes Logic
-            const boxOrders = conf.boxOrders || [];
+            const boxOrders = (conf as any).boxOrders || [];
             const uniqueVendors = new Set<string>();
             const itemsList: { name: string; quantity: number }[] = [];
-            let vendorName: string;
 
             if (boxOrders.length > 0) {
                 boxOrders.forEach((box: any) => {
@@ -1301,7 +1302,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             if (typeof qtyOrObj === 'number') {
                                 q = qtyOrObj;
                             } else if (qtyOrObj && typeof qtyOrObj === 'object' && 'quantity' in qtyOrObj) {
-                                q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(qtyOrObj.quantity) || 0;
+                                q = typeof qtyOrObj.quantity === 'number' ? qtyOrObj.quantity : parseInt(String(qtyOrObj.quantity)) || 0;
                             } else {
                                 q = parseInt(qtyOrObj as any) || 0;
                             }
@@ -1404,9 +1405,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             const vId = conf.vendorId;
             vendorName = vendors.find(v => v.id === vId)?.name || 'No Vendor';
 
-            const desc = conf.custom_name || 'Custom Item';
-            const price = conf.custom_price || 0;
+            const desc = (conf as any).custom_name || 'Custom Item';
+            const price = (conf as any).custom_price || 0;
 
+            itemsList = [];
             itemsList.push({
                 name: `${desc} ($${Number(price).toFixed(2)})`,
                 quantity: 1
@@ -1442,7 +1444,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     function getScreeningStatus(client: ClientProfile) {
         const status = client.screeningStatus || 'not_started';
 
-        const statusConfig: Record<string, { label: string; color: string; bgColor: string; icon: JSX.Element }> = {
+        const statusConfig: Record<string, { label: string; color: string; bgColor: string; icon: ReactElement }> = {
             not_started: {
                 label: 'Not Started',
                 color: 'var(--text-tertiary)',

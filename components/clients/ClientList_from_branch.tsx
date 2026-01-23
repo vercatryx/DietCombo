@@ -86,7 +86,7 @@ export function ClientList() {
             setVendors(vData);
             setBoxTypes(bData);
             setMenuItems(mData);
-            setClients(cRes.clients);
+            setClients(cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null));
             setTotalClients(cRes.total);
             setPage(1);
         } catch (error) {
@@ -103,7 +103,7 @@ export function ClientList() {
             setClients(prev => {
                 // Deduplicate just in case
                 const existingIds = new Set(prev.map(c => c.id));
-                const newClients = res.clients.filter(c => !existingIds.has(c.id));
+                const newClients = res.clients.filter((c): c is NonNullable<typeof c> => c !== null && !existingIds.has(c.id));
                 return [...prev, ...newClients];
             });
             setPage(nextPage);
@@ -123,7 +123,7 @@ export function ClientList() {
         try {
             const details = await getClientFullDetails(clientId);
             if (details) {
-                setDetailsCache(prev => ({ ...prev, [clientId]: details }));
+                setDetailsCache(prev => ({ ...prev, [clientId]: details as any }));
             }
         } catch (error) {
             console.error(`Error prefetching client ${clientId}:`, error);

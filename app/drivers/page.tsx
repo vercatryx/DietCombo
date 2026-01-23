@@ -37,8 +37,8 @@ export default function DriversHome() {
 
             // Then fetch the cleaned data with date filtering
             const [driversData, stopsData] = await Promise.all([
-                fetchDrivers(selectedDate),
-                fetchStops(selectedDate)
+                fetchDrivers((selectedDate || null) as any),
+                fetchStops((selectedDate || null) as any)
             ]);
             setDrivers(driversData);
             setAllStops(stopsData);

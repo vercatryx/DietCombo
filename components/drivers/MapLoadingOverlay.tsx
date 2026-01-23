@@ -1,7 +1,7 @@
 // components/drivers/MapLoadingOverlay.tsx
 "use client";
 
-export default function MapLoadingOverlay({ show, logoSrc }) {
+export default function MapLoadingOverlay({ show, logoSrc }: { show?: boolean; logoSrc?: string }) {
     if (!show) return null;
     return (
         <div

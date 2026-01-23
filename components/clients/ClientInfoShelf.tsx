@@ -137,7 +137,7 @@ export function ClientInfoShelf({
                 dependentName.trim(),
                 client.id,
                 dependentDob || null,
-                dependentCin || null
+                dependentCin ? Number(dependentCin) : null
             );
             if (newDep) {
                 // Update local state

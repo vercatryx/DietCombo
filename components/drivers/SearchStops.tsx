@@ -13,7 +13,7 @@ import { mapsUrlFromAddress } from "@/lib/maps";
  *  - drivers: array of route objects, each with { id, name, color, stopIds, routeNumber }
  *  - themeColor: optional string to tint accents
  */
-export default function SearchStops({ allStops = [], drivers = [], themeColor = "#3665F3" }) {
+export default function SearchStops({ allStops = [], drivers = [], themeColor = "#3665F3" }: { allStops?: any[]; drivers?: any[]; themeColor?: string }) {
     const router = useRouter();
     const [q, setQ] = useState("");
 

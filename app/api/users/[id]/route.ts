@@ -132,13 +132,13 @@ export async function PUT(
         if (finalLng !== null) stopPayload.lng = finalLng;
         
         if (Object.keys(stopPayload).length > 0) {
-            await supabase
+            const { error } = await supabase
                 .from('stops')
                 .update(stopPayload)
-                .eq('client_id', userId)
-                .catch(err => {
-                    console.error("Failed to cascade to stops:", err);
-                });
+                .eq('client_id', userId);
+            if (error) {
+                console.error("Failed to cascade to stops:", error);
+            }
         }
     }
     
