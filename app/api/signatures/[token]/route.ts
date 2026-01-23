@@ -155,8 +155,8 @@ export async function POST(
 
         return NextResponse.json({
             ok: true,
-            collected: after.length,
-            slots: after.map((s) => s.slot),
+            collected: after?.length || 0,
+            slots: (after || []).map((s) => s.slot),
         });
     } catch (error: any) {
         console.error("[signatures POST] error:", error);
