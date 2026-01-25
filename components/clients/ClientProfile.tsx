@@ -939,6 +939,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
         if (c) {
             setClient(c);
+            setFormData(c);
         }
         setStatuses(s);
         setNavigators(n);
@@ -3374,8 +3375,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                     <input
                                                         type="number"
                                                         className="input"
-                                                        value={formData.approvedMealsPerWeek || 0}
-                                                        onChange={e => setFormData({ ...formData, approvedMealsPerWeek: Number(e.target.value) })}
+                                                        value={formData.approvedMealsPerWeek ?? 0}
+                                                        onChange={e => setFormData({ ...formData, approvedMealsPerWeek: Number(e.target.value) || 0 })}
                                                     />
                                                 </div>
 

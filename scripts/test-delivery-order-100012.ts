@@ -327,7 +327,8 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
                         .select('*')
                         .eq('upcoming_order_id', upcomingOrder.id);
 
-                    if (boxSelections) {
+                    if (boxSelections && boxSelections.length > 0) {
+                        // First, copy all box selections
                         for (const bs of boxSelections) {
                             const { error: bsError } = await supabaseAdmin
                                 .from('order_box_selections')
@@ -346,99 +347,122 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
                             } else {
                                 console.log(`✅ Successfully copied box selection for order ${newOrder.id}`);
                             }
+                        }
 
-                            // Also copy items from upcoming_order_items for Box orders
-                            // Box order items have null vendor_selection_id and upcoming_vendor_selection_id
-                            const { data: boxItems } = await supabaseAdmin
-                                .from('upcoming_order_items')
-                                .select('*')
-                                .eq('upcoming_order_id', upcomingOrder.id)
-                                .is('upcoming_vendor_selection_id', null)
-                                .is('vendor_selection_id', null);
+                        // Then, copy box items from upcoming_order_items (only once, outside the loop)
+                        // Box order items have null vendor_selection_id and upcoming_vendor_selection_id
+                        const { data: boxItems } = await supabaseAdmin
+                            .from('upcoming_order_items')
+                            .select('*')
+                            .eq('upcoming_order_id', upcomingOrder.id)
+                            .is('upcoming_vendor_selection_id', null)
+                            .is('vendor_selection_id', null);
 
-                            if (boxItems && boxItems.length > 0) {
-                                console.log(`   📦 Found ${boxItems.length} box items to copy for order ${newOrder.id}`);
-                                
-                                // Create a vendor selection for Box orders if it doesn't exist (needed for order_items)
-                                let boxVsId: string | null = null;
+                        if (boxItems && boxItems.length > 0) {
+                            console.log(`   📦 Found ${boxItems.length} box items to copy for order ${newOrder.id}`);
+                            
+                            // Get unique vendor IDs from box selections to create vendor selections
+                            const uniqueVendorIds = [...new Set(boxSelections.map(bs => bs.vendor_id).filter(Boolean))];
+                            
+                            // Create vendor selections for each unique vendor (needed for order_items)
+                            const vendorSelectionMap = new Map<string, string>();
+                            
+                            for (const vendorId of uniqueVendorIds) {
+                                // Check if vendor selection already exists
                                 const { data: existingVs } = await supabaseAdmin
                                     .from('order_vendor_selections')
                                     .select('id')
                                     .eq('order_id', newOrder.id)
-                                    .eq('vendor_id', bs.vendor_id)
+                                    .eq('vendor_id', vendorId)
                                     .maybeSingle();
 
                                 if (existingVs) {
-                                    boxVsId = existingVs.id;
+                                    vendorSelectionMap.set(vendorId, existingVs.id);
                                 } else {
                                     // Create vendor selection for Box orders
                                     const { data: newBoxVs, error: vsError } = await supabaseAdmin
                                         .from('order_vendor_selections')
                                         .insert({
                                             order_id: newOrder.id,
-                                            vendor_id: bs.vendor_id
+                                            vendor_id: vendorId
                                         })
                                         .select()
                                         .single();
 
                                     if (vsError || !newBoxVs) {
-                                        console.error(`⚠️  Warning: Failed to create vendor selection for box items: ${vsError?.message}`);
+                                        console.error(`⚠️  Warning: Failed to create vendor selection for vendor ${vendorId}: ${vsError?.message}`);
                                     } else {
-                                        boxVsId = newBoxVs.id;
-                                        console.log(`   ✅ Created vendor selection ${boxVsId} for box order items`);
-                                    }
-                                }
-
-                                // Copy box items to order_items
-                                if (boxVsId) {
-                                    for (const item of boxItems) {
-                                        // Skip items with null menu_item_id and meal_item_id
-                                        if (!item.menu_item_id && !item.meal_item_id) {
-                                            console.log(`   ⏭️  Skipping box item with null menu_item_id and meal_item_id`);
-                                            continue;
-                                        }
-
-                                        const itemData: any = {
-                                            id: randomUUID(),
-                                            vendor_selection_id: boxVsId,
-                                            quantity: item.quantity
-                                        };
-
-                                        if (item.menu_item_id) {
-                                            itemData.menu_item_id = item.menu_item_id;
-                                        }
-
-                                        if (item.meal_item_id) {
-                                            itemData.meal_item_id = item.meal_item_id;
-                                        }
-
-                                        if (item.notes) {
-                                            itemData.notes = item.notes;
-                                        }
-
-                                        if (item.custom_name) {
-                                            itemData.custom_name = item.custom_name;
-                                        }
-
-                                        if (item.custom_price !== null && item.custom_price !== undefined) {
-                                            itemData.custom_price = item.custom_price;
-                                        }
-
-                                        const { error: itemError } = await supabaseAdmin
-                                            .from('order_items')
-                                            .insert(itemData);
-
-                                        if (itemError) {
-                                            const errorMsg = `Failed to copy box item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
-                                            console.error(`   ⚠️  ${errorMsg}`);
-                                        } else {
-                                            console.log(`   ✅ Successfully copied box item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
-                                        }
+                                        vendorSelectionMap.set(vendorId, newBoxVs.id);
+                                        console.log(`   ✅ Created vendor selection ${newBoxVs.id} for vendor ${vendorId}`);
                                     }
                                 }
                             }
+
+                            // Copy box items to order_items
+                            // For box items, we need to determine which vendor selection to use
+                            // We'll use the first vendor selection if we can't determine the vendor from the item
+                            const firstVendorId = uniqueVendorIds[0];
+                            const defaultVsId = firstVendorId ? vendorSelectionMap.get(firstVendorId) : null;
+
+                            if (defaultVsId) {
+                                for (const item of boxItems) {
+                                    // Skip items with null menu_item_id and meal_item_id
+                                    if (!item.menu_item_id && !item.meal_item_id) {
+                                        console.log(`   ⏭️  Skipping box item with null menu_item_id and meal_item_id`);
+                                        continue;
+                                    }
+
+                                    // Try to find the vendor for this item to use the correct vendor selection
+                                    // For now, use the default vendor selection (first vendor)
+                                    // TODO: If items have vendor_id, use that to find the correct vendor selection
+                                    const itemVsId = defaultVsId;
+
+                                    const itemData: any = {
+                                        id: randomUUID(),
+                                        vendor_selection_id: itemVsId,
+                                        quantity: item.quantity
+                                    };
+
+                                    if (item.menu_item_id) {
+                                        itemData.menu_item_id = item.menu_item_id;
+                                    }
+
+                                    if (item.meal_item_id) {
+                                        itemData.meal_item_id = item.meal_item_id;
+                                    }
+
+                                    if (item.notes) {
+                                        itemData.notes = item.notes;
+                                    }
+
+                                    if (item.custom_name) {
+                                        itemData.custom_name = item.custom_name;
+                                    }
+
+                                    if (item.custom_price !== null && item.custom_price !== undefined) {
+                                        itemData.custom_price = item.custom_price;
+                                    }
+
+                                    const { error: itemError } = await supabaseAdmin
+                                        .from('order_items')
+                                        .insert(itemData);
+
+                                    if (itemError) {
+                                        const errorMsg = `Failed to copy box item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
+                                        console.error(`   ⚠️  ${errorMsg}`);
+                                    } else {
+                                        console.log(`   ✅ Successfully copied box item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
+                                    }
+                                }
+                            } else {
+                                console.error(`⚠️  Warning: Failed to create vendor selection for box items: No vendor selections available`);
+                            }
+                        } else {
+                            console.log(`   ℹ️  No box items found to copy for order ${newOrder.id}`);
                         }
                         console.log('✅ Box selections copied');
+                    } else {
+                        console.log(`   ℹ️  No box selections found for upcoming order ${upcomingOrder.id}`);
                     }
                 }
 
