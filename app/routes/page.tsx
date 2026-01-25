@@ -1061,7 +1061,7 @@ export default function RoutesPage() {
 
                             // Mark stops as complex using routeStops (with proper indices) before building enrichedSorted
                             const complexMarked = (routeStops || []).map((stops) =>
-                                (stops || []).map((s, si) => {
+                                (stops || []).map((s: any, si: number) => {
                                     const marked = markStopComplex(s, si, idxs);
                                     return marked;
                                 })
@@ -1069,7 +1069,7 @@ export default function RoutesPage() {
 
                             // Build a map of complex-marked stops by ID
                             const complexById = new Map();
-                            complexMarked.forEach(route => route.forEach(s => complexById.set(String(s.id), s)));
+                            complexMarked.forEach((route: any[]) => route.forEach((s: any) => complexById.set(String(s.id), s)));
 
                             const { enrichedSorted, colorsSorted } = buildSortedForLabels();
                             
