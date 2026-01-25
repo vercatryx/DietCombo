@@ -4975,38 +4975,155 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
             if (boxSelections && boxSelections.length > 0) {
                 // PRIORITY 1: Load items from order_items table (same as getActiveOrderForClient)
                 // This is the primary source for box items now
-                const { data: boxItems, error: boxItemsError } = await supabase
-                    .from(itemsTable)
-                    .select('*')
-                    .eq('order_id', orderData.id)
-                    .is('vendor_selection_id', null); // Box items don't have vendor selections
+                let boxItems: any[] = [];
+                let boxItemsError: any = null;
 
-                if (boxItemsError) {
-                    console.error('Error fetching box items from items table:', boxItemsError);
+                // Strategy 1: Try querying by order_id with null vendor_selection_id (if order_id field exists)
+                // Note: order_items may not have order_id field, and vendor_selection_id is NOT NULL in schema
+                // So this query might not work, but we try it first
+                try {
+                    const { data: itemsByOrderId, error: errorByOrderId } = await supabase
+                        .from(itemsTable)
+                        .select('*')
+                        .eq('order_id', orderData.id)
+                        .is('vendor_selection_id', null);
+                    
+                    if (!errorByOrderId && itemsByOrderId && itemsByOrderId.length > 0) {
+                        boxItems = itemsByOrderId;
+                        console.log('[getRecentOrdersForClient] Found', boxItems.length, 'box items using order_id query');
+                    } else if (errorByOrderId) {
+                        // Log but don't fail - this is expected if order_id doesn't exist
+                        if (errorByOrderId.code !== 'PGRST116') {
+                            console.log('[getRecentOrdersForClient] order_id query returned error (may be expected):', errorByOrderId.message);
+                        }
+                    }
+                } catch (e) {
+                    console.log('[getRecentOrdersForClient] order_id query failed (field may not exist):', e);
+                }
+
+                // Strategy 2: If Strategy 1 didn't work, try finding items through vendor selections
+                // For Boxes orders, items might be linked through vendor selections created for the box order
+                if (boxItems.length === 0) {
+                    const { data: vendorSelections } = await supabase
+                        .from('order_vendor_selections')
+                        .select('id')
+                        .eq('order_id', orderData.id);
+                    
+                    const vendorSelectionIds = vendorSelections?.map(vs => vs.id) || [];
+                    
+                    if (vendorSelectionIds.length > 0) {
+                        // For Boxes orders, items linked to vendor selections ARE the box items
+                        // (unlike Food orders where vendor selections have food items)
+                        // Get all items linked to vendor selections for this order
+                        const { data: itemsThroughVS } = await supabase
+                            .from(itemsTable)
+                            .select('*')
+                            .in('vendor_selection_id', vendorSelectionIds);
+                        
+                        if (itemsThroughVS && itemsThroughVS.length > 0) {
+                            console.log('[getRecentOrdersForClient] Found', itemsThroughVS.length, 'items through vendor selections for Boxes order');
+                            
+                            // For Boxes orders, if we find items through vendor selections, they are box items
+                            // We can optionally match them to box JSON, but if JSON is empty/outdated, use all items
+                            const boxItemMenuIds = new Set<string>();
+                            let hasBoxJson = false;
+                            boxSelections.forEach((bs: any) => {
+                                try {
+                                    const boxItemsJson = typeof bs.items === 'string' ? JSON.parse(bs.items) : (bs.items || {});
+                                    if (boxItemsJson && typeof boxItemsJson === 'object' && Object.keys(boxItemsJson).length > 0) {
+                                        hasBoxJson = true;
+                                        Object.keys(boxItemsJson).forEach(itemId => {
+                                            if (boxItemsJson[itemId] && Number(boxItemsJson[itemId]) > 0) {
+                                                boxItemMenuIds.add(itemId);
+                                            }
+                                        });
+                                    }
+                                } catch (e) {
+                                    // Ignore parse errors
+                                }
+                            });
+                            
+                            // If box JSON exists and has items, try to match
+                            // Otherwise, use all items found (they're box items for this Boxes order)
+                            if (hasBoxJson && boxItemMenuIds.size > 0) {
+                                boxItems = itemsThroughVS.filter((item: any) => 
+                                    item.menu_item_id && boxItemMenuIds.has(item.menu_item_id)
+                                );
+                                
+                                if (boxItems.length > 0) {
+                                    console.log('[getRecentOrdersForClient] Matched', boxItems.length, 'box items to box JSON');
+                                } else {
+                                    // JSON exists but no matches - use all items anyway (JSON might be outdated)
+                                    console.log('[getRecentOrdersForClient] No items matched box JSON, using all', itemsThroughVS.length, 'items as box items');
+                                    boxItems = itemsThroughVS;
+                                }
+                            } else {
+                                // No box JSON or empty JSON - use all items (they're box items for this Boxes order)
+                                boxItems = itemsThroughVS;
+                                console.log('[getRecentOrdersForClient] Using all', boxItems.length, 'items as box items (no box JSON to match against)');
+                            }
+                        }
+                    } else {
+                        // No vendor selections found - try to find items that might be linked directly
+                        // Some box items might be stored with a special vendor_selection_id or in a different way
+                        console.log('[getRecentOrdersForClient] No vendor selections found, cannot query order_items through vendor selections');
+                    }
+                }
+
+                if (boxItemsError && boxItemsError.code !== 'PGRST116') {
+                    console.error('[getRecentOrdersForClient] Error fetching box items from items table:', boxItemsError);
+                }
+                
+                // Final check: If we still have no items but box selections have items in JSON, log it
+                if (boxItems.length === 0 && boxSelections.length > 0) {
+                    const hasJsonItems = boxSelections.some((bs: any) => {
+                        try {
+                            const json = typeof bs.items === 'string' ? JSON.parse(bs.items) : (bs.items || {});
+                            return json && typeof json === 'object' && Object.keys(json).length > 0;
+                        } catch (e) {
+                            return false;
+                        }
+                    });
+                    if (hasJsonItems) {
+                        console.log('[getRecentOrdersForClient] No items found in order_items, but box selections have JSON items - will use JSON fallback');
+                    } else {
+                        console.warn('[getRecentOrdersForClient] No items found in order_items AND no JSON items in box selections');
+                    }
                 }
 
                 // Build items map from order_items table
                 let itemsFromTable: any = {};
                 const itemPricesMap: any = {};
                 if (boxItems && boxItems.length > 0) {
+                    console.log('[getRecentOrdersForClient] Processing', boxItems.length, 'box items from order_items table');
                     for (const item of boxItems) {
                         if (item.menu_item_id) {
-                            itemsFromTable[item.menu_item_id] = item.quantity;
+                            // Sum quantities if same item appears multiple times (for multiple boxes)
+                            const existingQty = itemsFromTable[item.menu_item_id] || 0;
+                            const itemQty = item.quantity || 1;
+                            itemsFromTable[item.menu_item_id] = existingQty + itemQty;
                             // Store price if available (from custom_price or calculated)
-                            if (item.custom_price) {
+                            if (item.custom_price && !itemPricesMap[item.menu_item_id]) {
                                 itemPricesMap[item.menu_item_id] = parseFloat(item.custom_price.toString());
                             }
+                            console.log('[getRecentOrdersForClient] Added item', item.menu_item_id, 'qty:', itemQty, 'total:', itemsFromTable[item.menu_item_id]);
+                        } else {
+                            console.warn('[getRecentOrdersForClient] Box item missing menu_item_id:', item);
                         }
                     }
+                    console.log('[getRecentOrdersForClient] Loaded', Object.keys(itemsFromTable).length, 'unique box items from order_items table:', itemsFromTable);
+                } else {
+                    console.log('[getRecentOrdersForClient] No box items found in order_items table, will use JSON fallback');
                 }
 
                 // Map to boxOrders format
-                orderConfig.boxOrders = boxSelections.map((box: any) => {
+                orderConfig.boxOrders = boxSelections.map((box: any, boxIdx: number) => {
                     // PRIORITY 1: Use items from order_items table if available
                     let items: any = {};
-                    if (Object.keys(itemsFromTable).length > 0) {
-                        items = itemsFromTable;
-                        console.log('[getRecentOrdersForClient] Using items from order_items table:', Object.keys(items).length, 'items');
+                    const itemsFromTableCount = Object.keys(itemsFromTable).length;
+                    if (itemsFromTableCount > 0) {
+                        items = { ...itemsFromTable }; // Create a copy to avoid reference issues
+                        console.log(`[getRecentOrdersForClient] Box ${boxIdx}: Using ${itemsFromTableCount} items from order_items table:`, items);
                     } else {
                         // PRIORITY 2: Fallback to JSON field if no items found in items table
                         // Parse items from JSON if available (similar to getOrderHistory)
@@ -5044,14 +5161,25 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
                         }
                     }
 
+                    const finalItems = items || {};
+                    const finalItemsCount = Object.keys(finalItems).length;
+                    console.log(`[getRecentOrdersForClient] Box ${boxIdx} (${box.box_type_id}): Final items count: ${finalItemsCount}`, finalItems);
+                    
                     return {
                         boxTypeId: box.box_type_id,
                         vendorId: box.vendor_id,
                         quantity: box.quantity,
-                        items: items,
+                        items: finalItems,
                         itemNotes: box.item_notes || {}
                     };
                 });
+                
+                // Debug: Log final boxOrders structure
+                console.log('[getRecentOrdersForClient] Final boxOrders:', JSON.stringify(orderConfig.boxOrders.map((b: any) => ({
+                    boxTypeId: b.boxTypeId,
+                    itemsCount: Object.keys(b.items || {}).length,
+                    items: b.items
+                })), null, 2));
                 // Also set top-level properties for backward compatibility if single box
                 if (boxSelections.length === 1) {
                     orderConfig.boxTypeId = boxSelections[0].box_type_id;
