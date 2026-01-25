@@ -2803,12 +2803,119 @@ async function syncSingleOrderForDeliveryDay(
             takeEffectDate = fallbackDate;
             scheduledDeliveryDate = fallbackDate; // Also set this so the check below passes
         }
+    } else if (orderConfig.serviceType === 'Custom') {
+        // For Custom orders: validate vendorId and customItems
+        if (!orderConfig.vendorId || orderConfig.vendorId.trim() === '') {
+            const errorMsg = `Cannot save Custom order: No vendor selected. Please select a vendor.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                hasVendorId: !!orderConfig.vendorId
+            });
+            throw new Error(errorMsg);
+        }
+
+        const customItems = (orderConfig as any).customItems || [];
+        if (!Array.isArray(customItems) || customItems.length === 0) {
+            const errorMsg = `Cannot save Custom order: No custom items found. Please add at least one custom item.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                customItemsCount: customItems.length
+            });
+            throw new Error(errorMsg);
+        }
+
+        // Validate that all custom items have required fields
+        const invalidItems = customItems.filter((item: any) => 
+            !item.name || !item.name.trim() || 
+            !item.price || item.price <= 0 || 
+            !item.quantity || item.quantity <= 0
+        );
+        if (invalidItems.length > 0) {
+            const errorMsg = `Cannot save Custom order: ${invalidItems.length} custom item(s) have invalid data. Please ensure all items have a name, valid price > 0, and quantity > 0.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                invalidItemsCount: invalidItems.length
+            });
+            throw new Error(errorMsg);
+        }
+
+        // For Custom orders, try to get delivery day from vendor if available
+        const vendor = vendors.find(v => v.id === orderConfig.vendorId);
+        if (vendor && deliveryDay) {
+            // Validate that vendor can deliver on that day
+            const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+            if (deliveryDays && !deliveryDays.includes(deliveryDay)) {
+                const vendorName = vendor?.name || orderConfig.vendorId;
+                const errorMsg = `Cannot save Custom order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day or vendor.`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                    serviceType: orderConfig.serviceType,
+                    deliveryDay,
+                    vendorId: orderConfig.vendorId,
+                    vendorName
+                });
+                throw new Error(errorMsg);
+            }
+            
+            // Get the nearest occurrence of the client-selected delivery day
+            scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
+            
+            if (!scheduledDeliveryDate) {
+                const errorMsg = `Cannot save Custom order: Could not calculate delivery date for ${deliveryDay}.`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                    serviceType: orderConfig.serviceType,
+                    deliveryDay
+                });
+                throw new Error(errorMsg);
+            }
+        } else if (vendor) {
+            // Fallback: find the first delivery date from vendor
+            const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+            if (deliveryDays && deliveryDays.length > 0) {
+                const dayNameToNumber: { [key: string]: number } = {
+                    'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+                    'Thursday': 4, 'Friday': 5, 'Saturday': 6
+                };
+                const deliveryDayNumbers = deliveryDays
+                    .map((day: string) => dayNameToNumber[day])
+                    .filter((num: number | undefined): num is number => num !== undefined);
+
+                const today = new Date(currentTime);
+                today.setHours(0, 0, 0, 0);
+                for (let i = 0; i <= 14; i++) {
+                    const checkDate = new Date(today);
+                    checkDate.setDate(today.getDate() + i);
+                    if (deliveryDayNumbers.includes(checkDate.getDay())) {
+                        scheduledDeliveryDate = checkDate;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // IMPORTANT: take_effect_date must always be a Sunday using weekly locking logic
+        takeEffectDate = getTakeEffectDateFromUtils(settings);
+        
+        if (!takeEffectDate) {
+            const errorMsg = `Cannot save Custom order: Could not calculate take effect date. Please check system settings.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                settings: settings ? 'present' : 'missing'
+            });
+            throw new Error(errorMsg);
+        }
+
+        // If still no scheduled delivery date, use a fallback (far future date)
+        if (!scheduledDeliveryDate) {
+            console.log(`[syncSingleOrderForDeliveryDay] No delivery date calculated for Custom order - using fallback date`);
+            const fallbackDate = new Date('2099-12-31T00:00:00.000Z');
+            scheduledDeliveryDate = fallbackDate;
+        }
     }
 
     // For Boxes orders, dates are optional - they can be set later
-    // Only require dates for Food orders
+    // Only require dates for Food and Custom orders
     // This check should rarely be hit now since we validate earlier, but keep as a safety net
-    if (orderConfig.serviceType === 'Food' && (!takeEffectDate || !scheduledDeliveryDate)) {
+    if ((orderConfig.serviceType === 'Food' || orderConfig.serviceType === 'Custom') && (!takeEffectDate || !scheduledDeliveryDate)) {
         const vendorIds = orderConfig.vendorSelections?.map((s: any) => s.vendorId).filter((id: string) => id) || [];
         const vendorNames = vendorIds.map((id: string) => {
             const vendor = vendors.find(v => v.id === id);
@@ -2909,6 +3016,25 @@ async function syncSingleOrderForDeliveryDay(
                 totalValue = boxType.priceEach * totalItems;
             }
         }
+    } else if (orderConfig.serviceType === 'Custom') {
+        // Calculate totals from customItems array
+        const customItems = (orderConfig as any).customItems || [];
+        console.log(`[syncSingleOrderForDeliveryDay] Processing Custom order with ${customItems.length} custom items`);
+        for (const item of customItems) {
+            if (item.name && item.name.trim() && item.price > 0 && item.quantity > 0) {
+                const itemTotal = parseFloat(item.price) * parseInt(item.quantity);
+                totalValue += itemTotal;
+                totalItems += parseInt(item.quantity);
+                console.log(`[syncSingleOrderForDeliveryDay] Custom item: ${item.name}`, {
+                    name: item.name,
+                    price: item.price,
+                    quantity: item.quantity,
+                    itemTotal,
+                    currentTotalValue: totalValue
+                });
+            }
+        }
+        console.log(`[syncSingleOrderForDeliveryDay] Custom order totals: totalValue=${totalValue}, totalItems=${totalItems}`);
     }
 
     // Get current user from session for updated_by
@@ -2990,6 +3116,19 @@ async function syncSingleOrderForDeliveryDay(
         }
         if (vendorId) {
             console.log(`[syncSingleOrderForDeliveryDay] Extracted vendor_id for Boxes order: ${vendorId}`);
+        }
+    } else if (orderConfig.serviceType === 'Custom') {
+        // For Custom orders, use the vendorId from orderConfig
+        if (orderConfig.vendorId && orderConfig.vendorId.trim() !== '') {
+            vendorId = orderConfig.vendorId;
+            console.log(`[syncSingleOrderForDeliveryDay] Extracted vendor_id for Custom order: ${vendorId}`);
+        } else {
+            const errorMsg = `Cannot save Custom order: No vendor selected. Please select a vendor.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                hasVendorId: !!orderConfig.vendorId
+            });
+            throw new Error(errorMsg);
         }
     }
     
@@ -3432,6 +3571,160 @@ async function syncSingleOrderForDeliveryDay(
             console.log(`[syncSingleOrderForDeliveryDay] Skipping total item insertion - total_value (${calculatedTotalFromItems}) is stored in upcoming_orders table`);
             // Note: We don't insert a total item because menu_item_id is NOT NULL in the schema
             // The total is already calculated and stored in upcoming_orders.total_value
+        }
+    } else if (orderConfig.serviceType === 'Custom') {
+        // Handle Custom orders - create vendor selection and custom items
+        console.log('[syncSingleOrderForDeliveryDay] Processing Custom order for upcoming_order_id:', upcomingOrderId);
+        const customItems = (orderConfig as any).customItems || [];
+        console.log('[syncSingleOrderForDeliveryDay] Custom orderConfig:', {
+            vendorId: orderConfig.vendorId,
+            customItemsCount: customItems.length,
+            customItems: customItems.map((item: any) => ({
+                name: item.name,
+                price: item.price,
+                quantity: item.quantity
+            }))
+        });
+
+        if (!orderConfig.vendorId || orderConfig.vendorId.trim() === '') {
+            const errorMsg = `Cannot save Custom order: No vendor selected. Please select a vendor.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                hasVendorId: !!orderConfig.vendorId
+            });
+            throw new Error(errorMsg);
+        }
+
+        if (!Array.isArray(customItems) || customItems.length === 0) {
+            const errorMsg = `Cannot save Custom order: No custom items found. Please add at least one custom item.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                customItemsCount: customItems.length
+            });
+            throw new Error(errorMsg);
+        }
+
+        // Create vendor selection for Custom order
+        console.log(`[syncSingleOrderForDeliveryDay] Creating vendor selection for Custom order vendor ${orderConfig.vendorId}`);
+        const vsId = randomUUID();
+        const vsInsertPayload = { 
+            id: vsId, 
+            upcoming_order_id: upcomingOrderId, 
+            vendor_id: orderConfig.vendorId 
+        };
+        
+        console.log(`[syncSingleOrderForDeliveryDay] Vendor selection insert payload:`, vsInsertPayload);
+        
+        const { data: vsData, error: vsError } = await supabase
+            .from('upcoming_order_vendor_selections')
+            .insert([vsInsertPayload])
+            .select()
+            .single();
+        
+        if (vsError) {
+            const errorMsg = `Failed to create vendor selection for Custom order vendor ${orderConfig.vendorId}: ${vsError.message}`;
+            console.error(`[syncSingleOrderForDeliveryDay] Error creating vendor selection:`, {
+                error: vsError,
+                payload: vsInsertPayload,
+                errorDetails: vsError
+            });
+            throw new Error(errorMsg);
+        }
+        
+        if (!vsData) {
+            const errorMsg = `Vendor selection insert returned no data for Custom order vendor ${orderConfig.vendorId}`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`);
+            throw new Error(errorMsg);
+        }
+        
+        const vendorSelection = { id: vsData.id, upcoming_order_id: upcomingOrderId, vendor_id: orderConfig.vendorId };
+        console.log(`[syncSingleOrderForDeliveryDay] Created vendor selection ${vendorSelection.id} for Custom order vendor ${orderConfig.vendorId}`);
+
+        // Insert custom items
+        const itemInsertErrors: string[] = [];
+        let calculatedTotalFromItems = 0;
+        
+        for (const item of customItems) {
+            if (!item.name || !item.name.trim() || !item.price || item.price <= 0 || !item.quantity || item.quantity <= 0) {
+                console.warn(`[syncSingleOrderForDeliveryDay] Skipping invalid custom item:`, item);
+                continue;
+            }
+
+            const itemPrice = parseFloat(item.price);
+            const quantity = parseInt(item.quantity);
+            const itemTotal = itemPrice * quantity;
+            calculatedTotalFromItems += itemTotal;
+
+            console.log(`[syncSingleOrderForDeliveryDay] Inserting custom item:`, {
+                name: item.name,
+                price: itemPrice,
+                quantity: quantity,
+                itemTotal,
+                calculatedTotalBefore: calculatedTotalFromItems - itemTotal,
+                upcomingOrderId,
+                upcomingVendorSelectionId: vendorSelection.id
+            });
+
+            const itemId_uuid = randomUUID();
+            const insertPayload = {
+                id: itemId_uuid,
+                upcoming_order_id: upcomingOrderId,
+                vendor_selection_id: null, // NULL for upcoming orders
+                upcoming_vendor_selection_id: vendorSelection.id, // Use the ID from upcoming_order_vendor_selections
+                menu_item_id: null, // NULL for custom items
+                quantity: quantity,
+                custom_name: item.name.trim(),
+                custom_price: itemPrice
+            };
+
+            console.log(`[syncSingleOrderForDeliveryDay] Custom item insert payload:`, insertPayload);
+
+            const { data: insertedItem, error: itemError } = await supabase
+                .from('upcoming_order_items')
+                .insert([insertPayload])
+                .select()
+                .single();
+            
+            if (itemError) {
+                const errorMsg = `Failed to insert custom item "${item.name}": ${itemError.message}`;
+                console.error(`[syncSingleOrderForDeliveryDay] Error inserting custom item:`, {
+                    error: itemError,
+                    payload: insertPayload,
+                    errorDetails: itemError
+                });
+                itemInsertErrors.push(errorMsg);
+            } else if (!insertedItem) {
+                const errorMsg = `Custom item "${item.name}" insert returned no data`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`);
+                itemInsertErrors.push(errorMsg);
+            } else {
+                console.log(`[syncSingleOrderForDeliveryDay] Successfully inserted custom item "${item.name}" with id ${insertedItem.id}`);
+            }
+        }
+
+        // If any items failed to insert, throw an error
+        if (itemInsertErrors.length > 0) {
+            throw new Error(`Failed to insert ${itemInsertErrors.length} custom item(s): ${itemInsertErrors.join('; ')}`);
+        }
+
+        console.log(`[syncSingleOrderForDeliveryDay] Final calculatedTotalFromItems for Custom order: ${calculatedTotalFromItems}`);
+        console.log(`[syncSingleOrderForDeliveryDay] Original totalValue: ${totalValue}`);
+
+        // Update total_value to match calculated total from items
+        if (calculatedTotalFromItems !== totalValue) {
+            console.log(`[syncSingleOrderForDeliveryDay] Mismatch detected! Updating total_value from ${totalValue} to ${calculatedTotalFromItems}`);
+            totalValue = calculatedTotalFromItems;
+            try {
+                await supabase
+                    .from('upcoming_orders')
+                    .update({ total_value: totalValue })
+                    .eq('id', upcomingOrderId);
+                console.log(`[syncSingleOrderForDeliveryDay] Successfully updated total_value to ${totalValue}`);
+            } catch (error) {
+                console.error(`[syncSingleOrderForDeliveryDay] Error updating total_value:`, error);
+            }
+        } else {
+            console.log(`[syncSingleOrderForDeliveryDay] Total values match, no update needed`);
         }
     } else if (orderConfig.serviceType === 'Boxes') {
         console.log('[syncSingleOrderForDeliveryDay] Processing Boxes order for upcoming_order_id:', upcomingOrderId);
@@ -4256,6 +4549,35 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
             } else {
                 // No vendorId for boxes - will use default delivery day from settings in syncSingleOrderForDeliveryDay
                 console.log(`[syncCurrentOrderToUpcoming] No vendorId found for Boxes order${orderConfig.boxTypeId ? ` with boxTypeId ${orderConfig.boxTypeId}` : ''}, will calculate dates based on settings`);
+                deliveryDays = []; // Empty array - syncSingleOrderForDeliveryDay will handle it with settings
+            }
+        } else if (orderConfig.serviceType === 'Custom') {
+            // For Custom orders, get delivery days from vendor if available
+            console.log('[syncCurrentOrderToUpcoming] Processing Custom order (old format):', {
+                vendorId: orderConfig.vendorId,
+                customItemsCount: (orderConfig as any).customItems?.length || 0,
+                hasCustomItems: !!(orderConfig as any).customItems && Array.isArray((orderConfig as any).customItems) && (orderConfig as any).customItems.length > 0
+            });
+
+            if (orderConfig.vendorId && orderConfig.vendorId.trim() !== '') {
+                const vendor = vendors.find(v => v.id === orderConfig.vendorId);
+                if (vendor) {
+                    const deliveryDaysList = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+                    if (deliveryDaysList && deliveryDaysList.length > 0) {
+                        // For Custom orders, use the first available delivery day
+                        // (similar to Boxes - one recurring order per week)
+                        deliveryDays = [deliveryDaysList[0]];
+                    } else {
+                        // If vendor has no delivery days, still try to sync (will use default logic)
+                        console.warn(`[syncCurrentOrderToUpcoming] Vendor ${orderConfig.vendorId} has no delivery days configured, will attempt sync anyway`);
+                        deliveryDays = [];
+                    }
+                } else {
+                    console.warn(`[syncCurrentOrderToUpcoming] Vendor ${orderConfig.vendorId} not found, will attempt sync anyway`);
+                    deliveryDays = [];
+                }
+            } else {
+                console.warn(`[syncCurrentOrderToUpcoming] No vendorId found for Custom order, will calculate dates based on settings`);
                 deliveryDays = []; // Empty array - syncSingleOrderForDeliveryDay will handle it with settings
             }
         }
@@ -7050,7 +7372,7 @@ export async function getOrderById(orderId: string) {
                             unitValue: item.unit_value
                         });
 
-                        const itemPrice = item.custom_price ? parseFloat(item.custom_price) : (menuItem?.priceEach ?? parseFloat(item.unit_value));
+                        const itemPrice = item.custom_price ? parseFloat(item.custom_price) : (menuItem?.priceEach ?? parseFloat(item.unit_value || '0'));
                         const quantity = item.quantity;
                         const itemTotal = itemPrice * quantity;
                         return {
@@ -7969,12 +8291,6 @@ export async function saveClientCustomOrder(clientId: string, vendorId: string, 
             vendor_selection_id: vendorSelection.id,
             menu_item_id: null,
             quantity: 1,
-            unit_value: 0, // Not really relevant for custom price, or could be price
-            total_value: 0, // Standard fields might be ignored or used for reporting, but custom_price is the source of truth for value here?
-            // Wait, logic usually sums total_value. Let's set total_value to 0 and rely on custom_price? 
-            // Or better, set unit_value/total_value to 0 and rely on the order total_value we set above.
-            // Actually, let's look at `saveCustomOrder` (one-off).
-            // It sets custom_price and custom_name. 
             custom_name: itemDescription,
             custom_price: price
         });

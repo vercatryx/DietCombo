@@ -15,14 +15,16 @@ export function TimeProvider({ children, initialFakeTime }: { children: React.Re
         initialFakeTime ? new Date(initialFakeTime) : null
     );
 
-    // If fake time is set, that's the "current" time. Otherwise, basic new Date().
-    // NOTE: In a real "clock" scenario, we might want this to tick. 
-    // But for a "testing override", usually a static fixed time is easier to debug, or a "simulated clock" offset.
-    // The user request implies "setting what time the system thinks it is".
-    // If we want it to actually tick from that point, we'd need an offset.
-    // For now, let's treat the fake time as a static snapshot unless changed, or just the base.
-    // Actually simplicity: if fake time is set, return that. If not, return real date.
-    const currentTime = fakeTime || new Date();
+    // Tick state: when using real time, update every second so the sidebar clock ticks.
+    // When fake time is set, no tick (static override for testing).
+    const [tick, setTick] = useState(0);
+    useEffect(() => {
+        if (fakeTime) return;
+        const id = setInterval(() => setTick((t) => t + 1), 1000);
+        return () => clearInterval(id);
+    }, [fakeTime]);
+
+    const currentTime = fakeTime ?? new Date();
 
     const setFakeTime = (time: Date | null) => {
         setFakeTimeState(time);
@@ -32,10 +34,6 @@ export function TimeProvider({ children, initialFakeTime }: { children: React.Re
             document.cookie = 'x-fake-time=; path=/; max-age=0; SameSite=Lax';
         }
     };
-
-    // Optional: Auto-refresh "real" time if not fake? 
-    // For many apps, just getting new Date() on render is enough, but to show a ticking clock we might need state.
-    // Let's stick to the override logic primarily.
 
     return (
         <TimeContext.Provider value={{ currentTime, isFakeTime: !!fakeTime, setFakeTime }}>

@@ -108,6 +108,13 @@ export interface OrderConfiguration {
   // Delivery Schedule Configuration
   deliveryDistribution?: { [dayOfWeek: string]: number }; // e.g. "Monday": 5
 
+  // For Custom orders
+  customItems?: Array<{
+    name: string;
+    price: number;
+    quantity: number;
+  }>;
+
   // Display Helpers
   orderNumber?: number;
   proofOfDelivery?: string;

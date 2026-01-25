@@ -704,6 +704,31 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                         }
                     }
                 }
+            } else if (data.service_type === 'Custom') {
+                // Handle Custom orders - load vendor selection and custom items
+                const vendorSelections = db.upcomingOrderVendorSelections.filter(vs => vs.upcoming_order_id === data.id);
+                if (vendorSelections.length > 0) {
+                    // For Custom orders, there should be only one vendor selection
+                    const vs = vendorSelections[0];
+                    orderConfig.vendorId = vs.vendor_id;
+                    
+                    // Load custom items from upcoming_order_items
+                    const customItems = db.upcomingOrderItems.filter(
+                        item => item.upcoming_order_id === data.id && 
+                        item.upcoming_vendor_selection_id === vs.id &&
+                        item.menu_item_id === null // Custom items have null menu_item_id
+                    );
+                    
+                    if (customItems && customItems.length > 0) {
+                        orderConfig.customItems = customItems.map((item: any) => ({
+                            name: item.custom_name || 'Custom Item',
+                            price: parseFloat(item.custom_price || item.unit_value || 0),
+                            quantity: item.quantity || 1
+                        }));
+                    } else {
+                        orderConfig.customItems = [];
+                    }
+                }
             }
             return orderConfig;
         }
@@ -788,6 +813,31 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                     }
                 } else {
                     console.warn('[getUpcomingOrderForClientLocal] No box selection found for upcoming order:', data.id);
+                }
+            } else if (data.service_type === 'Custom') {
+                // Handle Custom orders - load vendor selection and custom items
+                const vendorSelections = db.upcomingOrderVendorSelections.filter(vs => vs.upcoming_order_id === data.id);
+                if (vendorSelections.length > 0) {
+                    // For Custom orders, there should be only one vendor selection
+                    const vs = vendorSelections[0];
+                    orderConfig.vendorId = vs.vendor_id;
+                    
+                    // Load custom items from upcoming_order_items
+                    const customItems = db.upcomingOrderItems.filter(
+                        item => item.upcoming_order_id === data.id && 
+                        item.upcoming_vendor_selection_id === vs.id &&
+                        item.menu_item_id === null // Custom items have null menu_item_id
+                    );
+                    
+                    if (customItems && customItems.length > 0) {
+                        orderConfig.customItems = customItems.map((item: any) => ({
+                            name: item.custom_name || 'Custom Item',
+                            price: parseFloat(item.custom_price || item.unit_value || 0),
+                            quantity: item.quantity || 1
+                        }));
+                    } else {
+                        orderConfig.customItems = [];
+                    }
                 }
             }
 
