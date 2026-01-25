@@ -2836,7 +2836,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                         opacity: saving ? 0.7 : 1 
                                     }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-                                            <label className="label" style={{ margin: 0 }}>Location</label>
+                                            <label className="label" style={{ margin: 0 }}>Location (Required)</label>
                                             {(geoBusy || geoPersisting) && (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                                     <Loader2 size={16} className="spin" />
@@ -5996,6 +5996,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                 return false;
             }
+        }
+
+        // Validate location (lat/lng) is required
+        const lat = formData.lat ?? formData.latitude;
+        const lng = formData.lng ?? formData.longitude;
+        if (lat == null || lng == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+            setValidationError({
+                show: true,
+                messages: ['Location is required. Please geocode the client address before saving.']
+            });
+            return false;
         }
 
         // Validate Order Config before saving (if we have config)
