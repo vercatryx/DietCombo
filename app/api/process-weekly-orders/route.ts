@@ -457,12 +457,10 @@ async function precheckAndTransferUpcomingOrders() {
                                             // Skip total items (menu_item_id is null) - we'll recalculate and add a new one
                                             if (item.menu_item_id !== null) {
                                                 await supabase.from('order_items').insert({
-                                                    order_id: newOrder.id,
+                                                    id: randomUUID(),
                                                     vendor_selection_id: newVs.id,
                                                     menu_item_id: item.menu_item_id,
-                                                    quantity: item.quantity,
-                                                    unit_value: item.unit_value,
-                                                    total_value: item.total_value
+                                                    quantity: item.quantity
                                                 });
                                             }
                                         }
@@ -950,12 +948,10 @@ export async function GET(request: NextRequest) {
                                                 // Skip total items (menu_item_id is null) - we'll recalculate and add a new one
                                                 if (item.menu_item_id !== null) {
                                                     const { error: itemError } = await supabase.from('order_items').insert({
-                                                        order_id: newOrder.id,
+                                                        id: randomUUID(),
                                                         vendor_selection_id: newVs.id,
                                                         menu_item_id: item.menu_item_id,
-                                                        quantity: item.quantity,
-                                                        unit_value: item.unit_value,
-                                                        total_value: item.total_value
+                                                        quantity: item.quantity
                                                     });
 
                                                     if (itemError) {
@@ -1057,14 +1053,15 @@ export async function GET(request: NextRequest) {
                             const newCaseId = generateUniqueCaseId();
 
                             const currentTime = await getCurrentTime();
+                            const currentTimeISO = currentTime.toISOString(); // Cache to avoid multiple calls
                             await supabase
                                 .from('upcoming_orders')
                                 .update({
                                     case_id: newCaseId,
-                                    last_updated: currentTime.toISOString(),
+                                    last_updated: currentTimeISO,
                                     updated_by: order.updated_by || 'System',
                                     processed_order_id: newOrder.id,
-                                    processed_at: currentTime.toISOString()
+                                    processed_at: currentTimeISO
                                     // Keep status as 'scheduled' (don't change to 'processed')
                                     // Keep all other fields the same (scheduled_delivery_date, take_effect_date, etc.)
                                 })

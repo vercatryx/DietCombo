@@ -1058,6 +1058,19 @@ export default function RoutesPage() {
                             }
 
                             const idxs = buildComplexIndex(users);
+
+                            // Mark stops as complex using routeStops (with proper indices) before building enrichedSorted
+                            const complexMarked = (routeStops || []).map((stops) =>
+                                (stops || []).map((s, si) => {
+                                    const marked = markStopComplex(s, si, idxs);
+                                    return marked;
+                                })
+                            );
+
+                            // Build a map of complex-marked stops by ID
+                            const complexById = new Map();
+                            complexMarked.forEach(route => route.forEach(s => complexById.set(String(s.id), s)));
+
                             const { enrichedSorted, colorsSorted } = buildSortedForLabels();
                             
                             // Validate enrichedSorted has data
@@ -1083,17 +1096,7 @@ export default function RoutesPage() {
                                 return;
                             }
                             
-                            // Build complex index from enrichedSorted (same order/structure as what we'll export)
-                            const complexById = new Map();
-                            enrichedSorted.forEach((route) => {
-                                route.forEach((s: any) => {
-                                    if (s && s.id) {
-                                        const marked = markStopComplex(s, 0, idxs);
-                                        complexById.set(String(s.id), marked);
-                                    }
-                                });
-                            });
-                            
+                            // Map complex flags from marked stops to enrichedSorted
                             const stampedWithComplex = enrichedSorted.map((route, ri) =>
                                 (route || []).map((s: any, si: number) => {
                                     if (!s || !s.id) return null;

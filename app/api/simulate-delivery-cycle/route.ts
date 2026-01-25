@@ -135,6 +135,8 @@ export async function POST(request: NextRequest) {
             // We look for the NEXT occurrence of the day, starting from today.
             const { getNextOccurrence } = await import('@/lib/order-dates');
             const currentTime = await getCurrentTime();
+            // Cache ISO string to avoid multiple getCurrentTime() calls (which can block)
+            const currentTimeISO = currentTime.toISOString();
 
             // Try to determine delivery_day if it's null
             let deliveryDay = upOrder.delivery_day;
@@ -503,8 +505,8 @@ export async function POST(request: NextRequest) {
                         total_items: vendorItemCount,
                         notes: upOrder.notes,
                         order_number: nextOrderNumber,
-                        created_at: (await getCurrentTime()).toISOString(),
-                        last_updated: (await getCurrentTime()).toISOString(),
+                        created_at: currentTimeISO,
+                        last_updated: currentTimeISO,
                         updated_by: upOrder.updated_by
                     };
 
@@ -697,12 +699,12 @@ export async function POST(request: NextRequest) {
                     delivery_distribution: upOrder.delivery_distribution,
                     total_value: upOrder.total_value,
                     total_items: upOrder.total_items,
-                    notes: upOrder.notes,
-                    order_number: nextOrderNumber,
-                    created_at: (await getCurrentTime()).toISOString(),
-                    last_updated: (await getCurrentTime()).toISOString(),
-                    updated_by: upOrder.updated_by
-                };
+                        notes: upOrder.notes,
+                        order_number: nextOrderNumber,
+                        created_at: currentTimeISO,
+                        last_updated: currentTimeISO,
+                        updated_by: upOrder.updated_by
+                    };
 
                 const logMsg2 = `[Simulate Delivery] Creating order with initial total_value: ${orderData.total_value}`;
                 console.log(logMsg2);

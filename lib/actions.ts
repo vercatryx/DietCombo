@@ -6032,19 +6032,27 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
                                 if (items) {
                                     for (const item of items) {
+                                        // Skip items with null menu_item_id (these are total items, not actual menu items)
+                                        if (!item.menu_item_id) {
+                                            console.log(`[Process Pending Order] Skipping item with null menu_item_id (likely a total item)`);
+                                            continue;
+                                        }
+
                                         const { error: itemError } = await supabase
                                             .from('order_items')
                                             .insert({
-                                                order_id: newOrder.id,
+                                                id: randomUUID(),
                                                 vendor_selection_id: newVs.id,
                                                 menu_item_id: item.menu_item_id,
-                                                quantity: item.quantity,
-                                                unit_value: item.unit_value,
-                                                total_value: item.total_value
+                                                quantity: item.quantity
                                             });
 
                                         if (itemError) {
-                                            errors.push(`Failed to copy item: ${itemError.message}`);
+                                            const errorMsg = `Failed to copy item ${item.menu_item_id}: ${itemError.message}`;
+                                            console.error(`[Process Pending Order] ${errorMsg}`);
+                                            errors.push(errorMsg);
+                                        } else {
+                                            console.log(`[Process Pending Order] Successfully copied item ${item.menu_item_id} (quantity: ${item.quantity})`);
                                         }
                                     }
                                 }

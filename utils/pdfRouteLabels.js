@@ -201,6 +201,20 @@ function atFreshTop(state) {
     return state.col === 0 && state.row === 0 && state.x === MARGIN_L && state.y === MARGIN_T;
 }
 
+/* ---------- Complex detection helper (comprehensive) ---------- */
+function isComplexStop(u = {}) {
+    // Primary check: direct complex flag (most common case from routes page)
+    if (toBool(u?.complex)) return true;
+    
+    // Fallback checks for nested complex flags
+    if (isComplexFallback(u)) return true;
+    
+    // Additional check: __complexSource indicates it was marked as complex
+    if (u?.__complexSource && u.__complexSource !== "none") return true;
+    
+    return false;
+}
+
 /* ---------- Main export ---------- */
 export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
     const doc = new jsPDF({ unit: "in", format: "letter" });
@@ -222,18 +236,30 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
     const state = { x: MARGIN_L, y: MARGIN_T, col: 0, row: 0 };
     const complexAll = [];
 
+    // First pass: Separate complex stops from non-complex stops
     routes.forEach((stops, di) => {
         const colorRGB = hexToRgb(palette[di % palette.length]);
         let printed = false;
 
         (stops || []).forEach((u, si) => {
-            // Check for complex using both toBool and fallback method to ensure we catch all complex stops
-            const isCx = toBool(u?.complex) || isComplexFallback(u);
+            // Comprehensive complex detection
+            const isCx = isComplexStop(u);
+            
             if (isCx) {
+                // Collect complex stops for later segregation
                 complexAll.push({ u, driverIdx: di, stopIdx: si });
-                return;
+                console.log(`[Route Labels PDF] Marked stop as complex:`, {
+                    id: u?.id,
+                    name: displayName(u),
+                    driverIdx: di,
+                    stopIdx: si,
+                    complex: u?.complex,
+                    __complexSource: u?.__complexSource
+                });
+                return; // Skip printing in main section
             }
 
+            // Print non-complex stops in route order
             const dislikeText = getDislikes(u);
 
             const lines = [
@@ -261,7 +287,7 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
     try {
         const perDriver = routes.map((stops, i) => ({
             driver: i + 1,
-            complex: (stops || []).filter((s) => toBool(s?.complex) || isComplexFallback(s)).length,
+            complex: (stops || []).filter((s) => isComplexStop(s)).length,
             total: (stops || []).length,
         }));
         const totalCx = perDriver.reduce((a, r) => a + r.complex, 0);
@@ -272,40 +298,54 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
         console.groupEnd();
     } catch {}
 
+    // Segregate complex stops: Print them in a separate section after all non-complex stops
     if (complexAll.length > 0) {
+        // Add a new page to clearly separate complex stops section
         resetPage(state, doc);
         
-        // Draw a more prominent header for Complex Stops section
-        doc.setFontSize(16);
+        // Draw a prominent header for Complex Stops section
+        doc.setFontSize(18);
         doc.setFont('helvetica', 'bold');
+        doc.setTextColor(200, 0, 0); // Red color to make it stand out
+        const headerY = MARGIN_T - 0.15;
+        doc.text("COMPLEX STOPS", MARGIN_L, headerY);
+        
+        // Draw a thicker line under the header for better visibility
+        doc.setLineWidth(0.02);
+        doc.setDrawColor(200, 0, 0);
+        doc.line(MARGIN_L, headerY + 0.08, 8.5 - MARGIN_L, headerY + 0.08);
+        
+        // Reset text color and state for label printing
         doc.setTextColor(0, 0, 0);
-        const headerY = MARGIN_T - 0.2;
-        doc.text("Complex Stops", MARGIN_L, headerY);
-        
-        // Draw a line under the header
-        doc.setLineWidth(0.01);
-        doc.line(MARGIN_L, headerY + 0.05, 8.5 - MARGIN_L, headerY + 0.05);
-        
-        // Reset state for label printing
         state.x = MARGIN_L;
-        state.y = MARGIN_T + 0.1; // Add a bit more space after header
+        state.y = MARGIN_T + 0.2; // Add more space after header for better separation
         state.col = 0;
         state.row = 0;
 
         console.log(`[Route Labels PDF] Printing ${complexAll.length} complex stops in segregated section`);
 
+        // Print all complex stops, maintaining their driver colors
         for (const { u, driverIdx, stopIdx } of complexAll) {
-            // Verify this is actually a complex stop
-            const isCx = toBool(u?.complex) || isComplexFallback(u);
+            // Double-check this is actually a complex stop
+            const isCx = isComplexStop(u);
             if (!isCx) {
-                console.warn(`[Route Labels PDF] Stop ${u?.id} was in complexAll but complex flag is false`);
+                console.warn(`[Route Labels PDF] Stop ${u?.id} was in complexAll but complex flag is false`, {
+                    id: u?.id,
+                    name: displayName(u),
+                    complex: u?.complex,
+                    __complexSource: u?.__complexSource
+                });
+                // Continue anyway - it was marked as complex, so print it
             }
             
             const colorRGB = hexToRgb(palette[driverIdx % palette.length]);
             const driverIdx0 = getDriverIdx0(u, driverIdx);
             const stopNum1 = getStopNum1(u, stopIdx);
+            
+            // Draw badge with driver.stop number
             drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}.${stopNum1}`, colorRGB);
 
+            // Prepare label content
             const dislikeText = getDislikes(u);
             const lines = [
                 displayName(u),
@@ -315,11 +355,12 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
                 dislikeText ? `Dislikes: ${dislikeText}` : "",
             ].filter(Boolean);
 
+            // Draw the label content
             drawLines(doc, state.x, state.y, colorRGB, lines);
             advance(state, doc);
         }
         
-        console.log(`[Route Labels PDF] Completed printing complex stops section`);
+        console.log(`[Route Labels PDF] Completed printing ${complexAll.length} complex stops in segregated section`);
     } else {
         console.log(`[Route Labels PDF] No complex stops found - skipping complex stops section`);
     }
@@ -327,8 +368,7 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
     // Final summary
     const totalNonComplex = routes.reduce((sum, stops, di) => {
         return sum + (stops || []).filter((u) => {
-            const isCx = toBool(u?.complex) || isComplexFallback(u);
-            return !isCx;
+            return !isComplexStop(u);
         }).length;
     }, 0);
     
@@ -336,7 +376,8 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
         totalNonComplexStops: totalNonComplex,
         totalComplexStops: complexAll.length,
         totalStops: totalNonComplex + complexAll.length,
-        hasComplexSection: complexAll.length > 0
+        hasComplexSection: complexAll.length > 0,
+        segregationWorking: complexAll.length > 0 ? "Yes - Complex stops printed in separate section" : "N/A - No complex stops"
     });
 
     doc.save(`labels (route order) ${tsString()}.pdf`);
