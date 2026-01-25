@@ -126,212 +126,343 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
             throw new Error('Upcoming order not found: ' + (fetchError?.message || 'Unknown error'));
         }
 
+        // Handle case_id - generate one for testing if missing
+        let caseId = upcomingOrder.case_id;
+        if (!caseId) {
+            // Generate a test case_id for orders without one
+            caseId = `TEST-${randomUUID()}`;
+            console.log(`⚠️  Upcoming order has no case_id, generating test case_id: ${caseId}`);
+        }
+
         // Check if already processed - look for order with same case_id
-        if (upcomingOrder.case_id) {
-            const { data: existingOrder } = await supabaseAdmin
+        const { data: existingOrder } = await supabaseAdmin
+            .from('orders')
+            .select('id')
+            .eq('case_id', caseId)
+            .maybeSingle();
+
+        if (existingOrder) {
+            // Already processed, use the existing order ID
+            orderId = existingOrder.id;
+            wasProcessed = false;
+            console.log(`ℹ️  Order already processed, using existing order ID: ${orderId}`);
+        } else {
+            // Not processed yet, process it now
+            console.log(`📦 Creating new Order for Case ${caseId} with status 'billing_pending'`);
+            console.log(`📋 Copying order_number from upcoming order: ${upcomingOrder.order_number}`);
+            
+            const currentTime = new Date();
+            const orderData: any = {
+                id: randomUUID(),
+                client_id: upcomingOrder.client_id,
+                service_type: upcomingOrder.service_type,
+                case_id: caseId,
+                status: 'billing_pending',
+                last_updated: currentTime.toISOString(),
+                updated_by: 'Test Script',
+                scheduled_delivery_date: upcomingOrder.scheduled_delivery_date,
+                delivery_distribution: null,
+                total_value: upcomingOrder.total_value,
+                total_items: upcomingOrder.total_items,
+                notes: upcomingOrder.notes,
+                actual_delivery_date: currentTime.toISOString(),
+                order_number: upcomingOrder.order_number // Copy order_number directly from upcoming_orders
+            };
+
+            const { data: newOrder, error: orderError } = await supabaseAdmin
                 .from('orders')
+                .insert(orderData)
+                .select()
+                .single();
+
+            if (orderError || !newOrder) {
+                throw new Error('Failed to create order: ' + (orderError?.message || 'Unknown error'));
+            }
+
+            orderId = newOrder.id;
+            wasProcessed = true;
+            console.log(`✅ Successfully created Order ${newOrder.id}`);
+
+            // Create billing record for the processed order
+            const { data: client } = await supabaseAdmin
+                .from('clients')
+                .select('navigator_id, full_name, authorized_amount')
+                .eq('id', upcomingOrder.client_id)
+                .single();
+
+            // Check if billing record already exists for this order
+            const { data: existingBilling } = await supabaseAdmin
+                .from('billing_records')
                 .select('id')
-                .eq('case_id', upcomingOrder.case_id)
+                .eq('order_id', newOrder.id)
                 .maybeSingle();
 
-            if (existingOrder) {
-                // Already processed, use the existing order ID
-                orderId = existingOrder.id;
-                wasProcessed = false;
-                console.log(`ℹ️  Order already processed, using existing order ID: ${orderId}`);
-            } else {
-                // Not processed yet, process it now
-                console.log(`📦 Creating new Order for Case ${upcomingOrder.case_id} with status 'billing_pending'`);
-                console.log(`📋 Copying order_number from upcoming order: ${upcomingOrder.order_number}`);
-                
-                const currentTime = new Date();
-                const orderData: any = {
-                    id: randomUUID(),
-                    client_id: upcomingOrder.client_id,
-                    service_type: upcomingOrder.service_type,
-                    case_id: upcomingOrder.case_id,
-                    status: 'billing_pending',
-                    last_updated: currentTime.toISOString(),
-                    updated_by: 'Test Script',
-                    scheduled_delivery_date: upcomingOrder.scheduled_delivery_date,
-                    delivery_distribution: null,
-                    total_value: upcomingOrder.total_value,
-                    total_items: upcomingOrder.total_items,
-                    notes: upcomingOrder.notes,
-                    actual_delivery_date: currentTime.toISOString(),
-                    order_number: upcomingOrder.order_number // Copy order_number directly from upcoming_orders
-                };
-
-                const { data: newOrder, error: orderError } = await supabaseAdmin
-                    .from('orders')
-                    .insert(orderData)
-                    .select()
-                    .single();
-
-                if (orderError || !newOrder) {
-                    throw new Error('Failed to create order: ' + (orderError?.message || 'Unknown error'));
-                }
-
-                orderId = newOrder.id;
-                wasProcessed = true;
-                console.log(`✅ Successfully created Order ${newOrder.id}`);
-
-                // Create billing record for the processed order
-                const { data: client } = await supabaseAdmin
-                    .from('clients')
-                    .select('navigator_id, full_name, authorized_amount')
-                    .eq('id', upcomingOrder.client_id)
-                    .single();
-
-                // Check if billing record already exists for this order
-                const { data: existingBilling } = await supabaseAdmin
+            if (!existingBilling) {
+                console.log(`📄 Creating Billing Record for ${newOrder.id}`);
+                const { error: billingError } = await supabaseAdmin
                     .from('billing_records')
-                    .select('id')
-                    .eq('order_id', newOrder.id)
-                    .maybeSingle();
-
-                if (!existingBilling) {
-                    console.log(`📄 Creating Billing Record for ${newOrder.id}`);
-                    const billingPayload = {
+                    .insert([{
+                        id: randomUUID(),
                         client_id: upcomingOrder.client_id,
-                        client_name: client?.full_name || 'Unknown Client',
                         order_id: newOrder.id,
                         status: 'pending',
                         amount: upcomingOrder.total_value || 0,
-                        navigator: client?.navigator_id || 'Unknown',
-                        delivery_date: newOrder.actual_delivery_date,
+                        navigator: client?.navigator_id || null,
                         remarks: 'Auto-generated when order processed for delivery'
-                    };
+                    }]);
 
-                    const { error: billingError } = await supabaseAdmin
-                        .from('billing_records')
-                        .insert([billingPayload]);
-
-                    if (billingError) {
-                        console.error('⚠️  Warning: Failed to create billing record:', billingError.message);
-                    } else {
-                        console.log('✅ Billing record created');
-                    }
+                if (billingError) {
+                    console.error('⚠️  Warning: Failed to create billing record:', billingError.message);
+                } else {
+                    console.log('✅ Billing record created');
                 }
+            }
 
-                // Reduce client's authorized amount by the order amount (only if billing record didn't already exist)
-                if (!existingBilling && client) {
-                    console.log(`💰 Processing deduction for client ${upcomingOrder.client_id}`);
-                    const currentAmount = client.authorized_amount ?? 0;
-                    const orderAmount = upcomingOrder.total_value || 0;
-                    const newAuthorizedAmount = currentAmount - orderAmount;
+            // Reduce client's authorized amount by the order amount (only if billing record didn't already exist)
+            if (!existingBilling && client) {
+                console.log(`💰 Processing deduction for client ${upcomingOrder.client_id}`);
+                const currentAmount = client.authorized_amount ?? 0;
+                const orderAmount = upcomingOrder.total_value || 0;
+                const newAuthorizedAmount = currentAmount - orderAmount;
 
-                    console.log(`   Deducting ${orderAmount} from ${currentAmount}. New amount: ${newAuthorizedAmount}`);
+                console.log(`   Deducting ${orderAmount} from ${currentAmount}. New amount: ${newAuthorizedAmount}`);
 
-                    const { error: authAmountError } = await supabaseAdmin
-                        .from('clients')
-                        .update({ authorized_amount: newAuthorizedAmount })
-                        .eq('id', upcomingOrder.client_id);
+                const { error: authAmountError } = await supabaseAdmin
+                    .from('clients')
+                    .update({ authorized_amount: newAuthorizedAmount })
+                    .eq('id', upcomingOrder.client_id);
 
-                    if (authAmountError) {
-                        console.error('⚠️  Warning: Failed to update authorized amount:', authAmountError.message);
-                    } else {
-                        console.log('✅ Successfully updated authorized_amount');
-                    }
+                if (authAmountError) {
+                    console.error('⚠️  Warning: Failed to update authorized amount:', authAmountError.message);
+                } else {
+                    console.log('✅ Successfully updated authorized_amount');
                 }
+            }
 
-                // Copy vendor selections and items (for Food orders)
-                if (upcomingOrder.service_type === 'Food') {
-                    console.log('🍽️  Copying vendor selections and items for Food order...');
-                    const { data: vendorSelections } = await supabaseAdmin
-                        .from('upcoming_order_vendor_selections')
-                        .select('*')
-                        .eq('upcoming_order_id', upcomingOrder.id);
+            // Copy vendor selections and items (for Food orders)
+            if (upcomingOrder.service_type === 'Food') {
+                console.log('🍽️  Copying vendor selections and items for Food order...');
+                const { data: vendorSelections } = await supabaseAdmin
+                    .from('upcoming_order_vendor_selections')
+                    .select('*')
+                    .eq('upcoming_order_id', upcomingOrder.id);
 
-                    if (vendorSelections) {
-                        for (const vs of vendorSelections) {
-                            const { data: newVs, error: vsError } = await supabaseAdmin
+                if (vendorSelections) {
+                    for (const vs of vendorSelections) {
+                        const { data: newVs, error: vsError } = await supabaseAdmin
+                            .from('order_vendor_selections')
+                            .insert({
+                                order_id: newOrder.id,
+                                vendor_id: vs.vendor_id
+                            })
+                            .select()
+                            .single();
+
+                        if (vsError || !newVs) {
+                            console.error(`⚠️  Warning: Failed to copy vendor selection: ${vsError?.message}`);
+                            continue;
+                        }
+
+                        // Copy items - use upcoming_vendor_selection_id to find items from upcoming orders
+                        const { data: items } = await supabaseAdmin
+                            .from('upcoming_order_items')
+                            .select('*')
+                            .eq('upcoming_vendor_selection_id', vs.id);
+
+                        if (items) {
+                            console.log(`   📦 Found ${items.length} items for vendor selection ${vs.id}`);
+                            for (const item of items) {
+                                // Skip items with null menu_item_id and meal_item_id (these are total items, not actual menu items)
+                                if (!item.menu_item_id && !item.meal_item_id) {
+                                    console.log(`   ⏭️  Skipping item with null menu_item_id and meal_item_id (likely a total item)`);
+                                    continue;
+                                }
+
+                                // Build item data with all fields that should be copied
+                                const itemData: any = {
+                                    id: randomUUID(),
+                                    vendor_selection_id: newVs.id,
+                                    quantity: item.quantity
+                                };
+
+                                // Copy menu_item_id if present (can be null for meal items)
+                                if (item.menu_item_id) {
+                                    itemData.menu_item_id = item.menu_item_id;
+                                }
+
+                                // Copy meal_item_id if present
+                                if (item.meal_item_id) {
+                                    itemData.meal_item_id = item.meal_item_id;
+                                }
+
+                                // Copy notes if present
+                                if (item.notes) {
+                                    itemData.notes = item.notes;
+                                }
+
+                                // Copy custom_name if present
+                                if (item.custom_name) {
+                                    itemData.custom_name = item.custom_name;
+                                }
+
+                                // Copy custom_price if present
+                                if (item.custom_price !== null && item.custom_price !== undefined) {
+                                    itemData.custom_price = item.custom_price;
+                                }
+
+                                const { error: itemError } = await supabaseAdmin
+                                    .from('order_items')
+                                    .insert(itemData);
+
+                                if (itemError) {
+                                    const errorMsg = `Failed to copy item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
+                                    console.error(`   ⚠️  ${errorMsg}`);
+                                } else {
+                                    console.log(`   ✅ Successfully copied item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
+                                }
+                            }
+                        } else {
+                            console.log(`   ℹ️  No items found for vendor selection ${vs.id}`);
+                        }
+                    }
+                    console.log('✅ Vendor selections and items copied');
+                }
+            }
+
+            // Copy box selections (for Box orders)
+            if (upcomingOrder.service_type === 'Boxes') {
+                console.log('📦 Copying box selections for Boxes order...');
+                const { data: boxSelections } = await supabaseAdmin
+                    .from('upcoming_order_box_selections')
+                    .select('*')
+                    .eq('upcoming_order_id', upcomingOrder.id);
+
+                if (boxSelections) {
+                    for (const bs of boxSelections) {
+                        const { error: bsError } = await supabaseAdmin
+                            .from('order_box_selections')
+                            .insert({
+                                order_id: newOrder.id,
+                                box_type_id: bs.box_type_id,
+                                vendor_id: bs.vendor_id,
+                                quantity: bs.quantity,
+                                unit_value: bs.unit_value || 0,
+                                total_value: bs.total_value || 0,
+                                items: bs.items || {}
+                            });
+
+                        if (bsError) {
+                            console.error(`⚠️  Warning: Failed to copy box selection: ${bsError.message}`);
+                        } else {
+                            console.log(`✅ Successfully copied box selection for order ${newOrder.id}`);
+                        }
+
+                        // Also copy items from upcoming_order_items for Box orders
+                        // Box order items have null vendor_selection_id and upcoming_vendor_selection_id
+                        const { data: boxItems } = await supabaseAdmin
+                            .from('upcoming_order_items')
+                            .select('*')
+                            .eq('upcoming_order_id', upcomingOrder.id)
+                            .is('upcoming_vendor_selection_id', null)
+                            .is('vendor_selection_id', null);
+
+                        if (boxItems && boxItems.length > 0) {
+                            console.log(`   📦 Found ${boxItems.length} box items to copy for order ${newOrder.id}`);
+                            
+                            // Create a vendor selection for Box orders if it doesn't exist (needed for order_items)
+                            let boxVsId: string | null = null;
+                            const { data: existingVs } = await supabaseAdmin
                                 .from('order_vendor_selections')
-                                .insert({
-                                    order_id: newOrder.id,
-                                    vendor_id: vs.vendor_id
-                                })
-                                .select()
-                                .single();
+                                .select('id')
+                                .eq('order_id', newOrder.id)
+                                .eq('vendor_id', bs.vendor_id)
+                                .maybeSingle();
 
-                            if (vsError || !newVs) {
-                                console.error(`⚠️  Warning: Failed to copy vendor selection: ${vsError?.message}`);
-                                continue;
+                            if (existingVs) {
+                                boxVsId = existingVs.id;
+                            } else {
+                                // Create vendor selection for Box orders
+                                const { data: newBoxVs, error: vsError } = await supabaseAdmin
+                                    .from('order_vendor_selections')
+                                    .insert({
+                                        order_id: newOrder.id,
+                                        vendor_id: bs.vendor_id
+                                    })
+                                    .select()
+                                    .single();
+
+                                if (vsError || !newBoxVs) {
+                                    console.error(`⚠️  Warning: Failed to create vendor selection for box items: ${vsError?.message}`);
+                                } else {
+                                    boxVsId = newBoxVs.id;
+                                    console.log(`   ✅ Created vendor selection ${boxVsId} for box order items`);
+                                }
                             }
 
-                            // Copy items - use upcoming_vendor_selection_id to find items from upcoming orders
-                            const { data: items } = await supabaseAdmin
-                                .from('upcoming_order_items')
-                                .select('*')
-                                .eq('upcoming_vendor_selection_id', vs.id);
+                            // Copy box items to order_items
+                            if (boxVsId) {
+                                for (const item of boxItems) {
+                                    // Skip items with null menu_item_id and meal_item_id
+                                    if (!item.menu_item_id && !item.meal_item_id) {
+                                        console.log(`   ⏭️  Skipping box item with null menu_item_id and meal_item_id`);
+                                        continue;
+                                    }
 
-                            if (items) {
-                                for (const item of items) {
+                                    const itemData: any = {
+                                        id: randomUUID(),
+                                        vendor_selection_id: boxVsId,
+                                        quantity: item.quantity
+                                    };
+
+                                    if (item.menu_item_id) {
+                                        itemData.menu_item_id = item.menu_item_id;
+                                    }
+
+                                    if (item.meal_item_id) {
+                                        itemData.meal_item_id = item.meal_item_id;
+                                    }
+
+                                    if (item.notes) {
+                                        itemData.notes = item.notes;
+                                    }
+
+                                    if (item.custom_name) {
+                                        itemData.custom_name = item.custom_name;
+                                    }
+
+                                    if (item.custom_price !== null && item.custom_price !== undefined) {
+                                        itemData.custom_price = item.custom_price;
+                                    }
+
                                     const { error: itemError } = await supabaseAdmin
                                         .from('order_items')
-                                        .insert({
-                                            order_id: newOrder.id,
-                                            vendor_selection_id: newVs.id,
-                                            menu_item_id: item.menu_item_id,
-                                            quantity: item.quantity,
-                                            unit_value: item.unit_value,
-                                            total_value: item.total_value
-                                        });
+                                        .insert(itemData);
 
                                     if (itemError) {
-                                        console.error(`⚠️  Warning: Failed to copy item: ${itemError.message}`);
+                                        const errorMsg = `Failed to copy box item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
+                                        console.error(`   ⚠️  ${errorMsg}`);
+                                    } else {
+                                        console.log(`   ✅ Successfully copied box item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
                                     }
                                 }
                             }
                         }
-                        console.log('✅ Vendor selections and items copied');
                     }
+                    console.log('✅ Box selections copied');
                 }
-
-                // Copy box selections (for Box orders)
-                if (upcomingOrder.service_type === 'Boxes') {
-                    console.log('📦 Copying box selections for Boxes order...');
-                    const { data: boxSelections } = await supabaseAdmin
-                        .from('upcoming_order_box_selections')
-                        .select('*')
-                        .eq('upcoming_order_id', upcomingOrder.id);
-
-                    if (boxSelections) {
-                        for (const bs of boxSelections) {
-                            const { error: bsError } = await supabaseAdmin
-                                .from('order_box_selections')
-                                .insert({
-                                    order_id: newOrder.id,
-                                    box_type_id: bs.box_type_id,
-                                    vendor_id: bs.vendor_id,
-                                    quantity: bs.quantity,
-                                    unit_value: bs.unit_value || 0,
-                                    total_value: bs.total_value || 0,
-                                    items: bs.items || {}
-                                });
-
-                            if (bsError) {
-                                console.error(`⚠️  Warning: Failed to copy box selection: ${bsError.message}`);
-                            }
-                        }
-                        console.log('✅ Box selections copied');
-                    }
-                }
-
-                // Update upcoming order status to processed
-                await supabaseAdmin
-                    .from('upcoming_orders')
-                    .update({
-                        status: 'processed',
-                        processed_order_id: newOrder.id,
-                        processed_at: new Date().toISOString()
-                    })
-                    .eq('id', upcomingOrder.id);
-                
-                console.log('✅ Updated upcoming_order status to processed');
             }
-        } else {
-            throw new Error('Upcoming order has no case_id, cannot safely process');
+
+            // Update upcoming order status to processed
+            await supabaseAdmin
+                .from('upcoming_orders')
+                .update({
+                    status: 'processed',
+                    processed_order_id: newOrder.id,
+                    processed_at: new Date().toISOString()
+                })
+                .eq('id', upcomingOrder.id);
+            
+            console.log('✅ Updated upcoming_order status to processed');
         }
     }
 
@@ -382,20 +513,17 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
 
             if (!existingBilling) {
                 console.log('📄 Creating billing record...');
-                const billingPayload = {
-                    client_id: orderDetails.client_id,
-                    client_name: client?.full_name || 'Unknown Client',
-                    order_id: orderId,
-                    status: 'pending',
-                    amount: orderDetails.total_value || 0,
-                    navigator: client?.navigator_id || 'Unknown',
-                    delivery_date: orderDetails.actual_delivery_date,
-                    remarks: 'Auto-generated upon proof upload'
-                };
-
                 const { error: billingError } = await supabaseAdmin
                     .from('billing_records')
-                    .insert([billingPayload]);
+                    .insert([{
+                        id: randomUUID(),
+                        client_id: orderDetails.client_id,
+                        order_id: orderId,
+                        status: 'pending',
+                        amount: orderDetails.total_value || 0,
+                        navigator: client?.navigator_id || null,
+                        remarks: 'Auto-generated upon proof upload'
+                    }]);
 
                 if (billingError) {
                     console.error('⚠️  Warning: Failed to create billing record:', billingError.message);

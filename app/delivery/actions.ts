@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
+import { randomUUID } from 'crypto';
 
 export async function processDeliveryProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -157,18 +158,15 @@ export async function processDeliveryProof(formData: FormData) {
                 .maybeSingle();
 
             if (!existingBilling) {
-                const billingPayload = {
+                await supabaseAdmin.from('billing_records').insert([{
+                    id: randomUUID(),
                     client_id: orderDetails.client_id,
-                    client_name: client?.full_name || 'Unknown Client',
                     order_id: orderId,
                     status: 'pending',
                     amount: orderDetails.total_value || 0,
-                    navigator: client?.navigator_id || 'Unknown',
-                    delivery_date: orderDetails.actual_delivery_date,
+                    navigator: client?.navigator_id || null,
                     remarks: 'Auto-generated upon proof upload'
-                };
-
-                await supabaseAdmin.from('billing_records').insert([billingPayload]);
+                }]);
             }
 
             if (!existingBilling && client) {

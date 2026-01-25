@@ -190,20 +190,16 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
 
                 if (!existingBilling) {
                     console.log(`📄 Creating Billing Record for ${newOrder.id}`);
-                    const billingPayload = {
-                        client_id: upcomingOrder.client_id,
-                        client_name: client?.full_name || 'Unknown Client',
-                        order_id: newOrder.id,
-                        status: 'pending',
-                        amount: upcomingOrder.total_value || 0,
-                        navigator: client?.navigator_id || 'Unknown',
-                        delivery_date: newOrder.actual_delivery_date,
-                        remarks: 'Auto-generated when order processed for delivery'
-                    };
-
                     const { error: billingError } = await supabaseAdmin
                         .from('billing_records')
-                        .insert([billingPayload]);
+                        .insert([{
+                            client_id: upcomingOrder.client_id,
+                            order_id: newOrder.id,
+                            status: 'pending',
+                            amount: upcomingOrder.total_value || 0,
+                            navigator: client?.navigator_id || null,
+                            remarks: 'Auto-generated when order processed for delivery'
+                        }]);
 
                     if (billingError) {
                         console.error('⚠️  Warning: Failed to create billing record:', billingError.message);
@@ -264,22 +260,59 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
                                 .eq('upcoming_vendor_selection_id', vs.id);
 
                             if (items) {
+                                console.log(`   📦 Found ${items.length} items for vendor selection ${vs.id}`);
                                 for (const item of items) {
+                                    // Skip items with null menu_item_id and meal_item_id (these are total items, not actual menu items)
+                                    if (!item.menu_item_id && !item.meal_item_id) {
+                                        console.log(`   ⏭️  Skipping item with null menu_item_id and meal_item_id (likely a total item)`);
+                                        continue;
+                                    }
+
+                                    // Build item data with all fields that should be copied
+                                    const itemData: any = {
+                                        id: randomUUID(),
+                                        vendor_selection_id: newVs.id,
+                                        quantity: item.quantity
+                                    };
+
+                                    // Copy menu_item_id if present (can be null for meal items)
+                                    if (item.menu_item_id) {
+                                        itemData.menu_item_id = item.menu_item_id;
+                                    }
+
+                                    // Copy meal_item_id if present
+                                    if (item.meal_item_id) {
+                                        itemData.meal_item_id = item.meal_item_id;
+                                    }
+
+                                    // Copy notes if present
+                                    if (item.notes) {
+                                        itemData.notes = item.notes;
+                                    }
+
+                                    // Copy custom_name if present
+                                    if (item.custom_name) {
+                                        itemData.custom_name = item.custom_name;
+                                    }
+
+                                    // Copy custom_price if present
+                                    if (item.custom_price !== null && item.custom_price !== undefined) {
+                                        itemData.custom_price = item.custom_price;
+                                    }
+
                                     const { error: itemError } = await supabaseAdmin
                                         .from('order_items')
-                                        .insert({
-                                            order_id: newOrder.id,
-                                            vendor_selection_id: newVs.id,
-                                            menu_item_id: item.menu_item_id,
-                                            quantity: item.quantity,
-                                            unit_value: item.unit_value,
-                                            total_value: item.total_value
-                                        });
+                                        .insert(itemData);
 
                                     if (itemError) {
-                                        console.error(`⚠️  Warning: Failed to copy item: ${itemError.message}`);
+                                        const errorMsg = `Failed to copy item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
+                                        console.error(`   ⚠️  ${errorMsg}`);
+                                    } else {
+                                        console.log(`   ✅ Successfully copied item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
                                     }
                                 }
+                            } else {
+                                console.log(`   ℹ️  No items found for vendor selection ${vs.id}`);
                             }
                         }
                         console.log('✅ Vendor selections and items copied');
@@ -310,6 +343,99 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
 
                             if (bsError) {
                                 console.error(`⚠️  Warning: Failed to copy box selection: ${bsError.message}`);
+                            } else {
+                                console.log(`✅ Successfully copied box selection for order ${newOrder.id}`);
+                            }
+
+                            // Also copy items from upcoming_order_items for Box orders
+                            // Box order items have null vendor_selection_id and upcoming_vendor_selection_id
+                            const { data: boxItems } = await supabaseAdmin
+                                .from('upcoming_order_items')
+                                .select('*')
+                                .eq('upcoming_order_id', upcomingOrder.id)
+                                .is('upcoming_vendor_selection_id', null)
+                                .is('vendor_selection_id', null);
+
+                            if (boxItems && boxItems.length > 0) {
+                                console.log(`   📦 Found ${boxItems.length} box items to copy for order ${newOrder.id}`);
+                                
+                                // Create a vendor selection for Box orders if it doesn't exist (needed for order_items)
+                                let boxVsId: string | null = null;
+                                const { data: existingVs } = await supabaseAdmin
+                                    .from('order_vendor_selections')
+                                    .select('id')
+                                    .eq('order_id', newOrder.id)
+                                    .eq('vendor_id', bs.vendor_id)
+                                    .maybeSingle();
+
+                                if (existingVs) {
+                                    boxVsId = existingVs.id;
+                                } else {
+                                    // Create vendor selection for Box orders
+                                    const { data: newBoxVs, error: vsError } = await supabaseAdmin
+                                        .from('order_vendor_selections')
+                                        .insert({
+                                            order_id: newOrder.id,
+                                            vendor_id: bs.vendor_id
+                                        })
+                                        .select()
+                                        .single();
+
+                                    if (vsError || !newBoxVs) {
+                                        console.error(`⚠️  Warning: Failed to create vendor selection for box items: ${vsError?.message}`);
+                                    } else {
+                                        boxVsId = newBoxVs.id;
+                                        console.log(`   ✅ Created vendor selection ${boxVsId} for box order items`);
+                                    }
+                                }
+
+                                // Copy box items to order_items
+                                if (boxVsId) {
+                                    for (const item of boxItems) {
+                                        // Skip items with null menu_item_id and meal_item_id
+                                        if (!item.menu_item_id && !item.meal_item_id) {
+                                            console.log(`   ⏭️  Skipping box item with null menu_item_id and meal_item_id`);
+                                            continue;
+                                        }
+
+                                        const itemData: any = {
+                                            id: randomUUID(),
+                                            vendor_selection_id: boxVsId,
+                                            quantity: item.quantity
+                                        };
+
+                                        if (item.menu_item_id) {
+                                            itemData.menu_item_id = item.menu_item_id;
+                                        }
+
+                                        if (item.meal_item_id) {
+                                            itemData.meal_item_id = item.meal_item_id;
+                                        }
+
+                                        if (item.notes) {
+                                            itemData.notes = item.notes;
+                                        }
+
+                                        if (item.custom_name) {
+                                            itemData.custom_name = item.custom_name;
+                                        }
+
+                                        if (item.custom_price !== null && item.custom_price !== undefined) {
+                                            itemData.custom_price = item.custom_price;
+                                        }
+
+                                        const { error: itemError } = await supabaseAdmin
+                                            .from('order_items')
+                                            .insert(itemData);
+
+                                        if (itemError) {
+                                            const errorMsg = `Failed to copy box item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
+                                            console.error(`   ⚠️  ${errorMsg}`);
+                                        } else {
+                                            console.log(`   ✅ Successfully copied box item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
+                                        }
+                                    }
+                                }
                             }
                         }
                         console.log('✅ Box selections copied');
@@ -380,20 +506,17 @@ async function processDeliveryProofForOrder(orderNumber: number, proofUrl: strin
 
             if (!existingBilling) {
                 console.log('📄 Creating billing record...');
-                const billingPayload = {
-                    client_id: orderDetails.client_id,
-                    client_name: client?.full_name || 'Unknown Client',
-                    order_id: orderId,
-                    status: 'pending',
-                    amount: orderDetails.total_value || 0,
-                    navigator: client?.navigator_id || 'Unknown',
-                    delivery_date: orderDetails.actual_delivery_date,
-                    remarks: 'Auto-generated upon proof upload'
-                };
-
                 const { error: billingError } = await supabaseAdmin
                     .from('billing_records')
-                    .insert([billingPayload]);
+                    .insert([{
+                        id: randomUUID(),
+                        client_id: orderDetails.client_id,
+                        order_id: orderId,
+                        status: 'pending',
+                        amount: orderDetails.total_value || 0,
+                        navigator: client?.navigator_id || null,
+                        remarks: 'Auto-generated upon proof upload'
+                    }]);
 
                 if (billingError) {
                     console.error('⚠️  Warning: Failed to create billing record:', billingError.message);

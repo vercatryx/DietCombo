@@ -315,6 +315,10 @@ async function precheckAndTransferUpcomingOrders() {
         errors: [] as string[]
     };
 
+    // Cache current time at function start to avoid multiple getCurrentTime() calls (triangleorder pattern)
+    const currentTime = await getCurrentTime();
+    const currentTimeISO = currentTime.toISOString();
+
     try {
         // Fetch all upcoming orders (excluding 'processed' status)
         const { data: upcomingOrders, error: upcomingError } = await supabase
@@ -377,7 +381,7 @@ async function precheckAndTransferUpcomingOrders() {
                         if (upcomingOrder.delivery_day) {
                             // Import the function if needed, or calculate inline
                             const deliveryDay = upcomingOrder.delivery_day;
-                            const today = await getCurrentTime();
+                            const today = new Date(currentTime);
                             today.setHours(0, 0, 0, 0);
                             const dayNameToNumber: { [key: string]: number } = {
                                 'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
@@ -404,7 +408,7 @@ async function precheckAndTransferUpcomingOrders() {
                             service_type: upcomingOrder.service_type,
                             case_id: upcomingOrder.case_id,
                             status: 'pending',
-                            last_updated: (await getCurrentTime()).toISOString(),
+                            last_updated: currentTimeISO,
                             updated_by: upcomingOrder.updated_by,
                             scheduled_delivery_date: scheduledDeliveryDate,
                             delivery_distribution: null, // Can be set later if needed
@@ -562,6 +566,10 @@ async function precheckAndTransferUpcomingOrders() {
 }
 
 export async function GET(request: NextRequest) {
+    // Cache current time at function start to avoid multiple getCurrentTime() calls (triangleorder pattern)
+    const currentTime = await getCurrentTime();
+    const currentTimeISO = currentTime.toISOString();
+
     try {
         // Precheck: Transfer upcoming orders for clients with no existing orders
         const precheckResults = await precheckAndTransferUpcomingOrders();
@@ -752,7 +760,6 @@ export async function GET(request: NextRequest) {
                 // Priority 2: If from upcoming_orders and has delivery_day, calculate the nearest occurrence
                 else if (isFromUpcomingOrders && (order as any).delivery_day) {
                     const deliveryDay = (order as any).delivery_day;
-                    const currentTime = await getCurrentTime();
                     const nextDate = getNextOccurrence(deliveryDay, currentTime);
                     if (nextDate) {
                         scheduledDeliveryDate = nextDate.toISOString().split('T')[0];
@@ -873,7 +880,7 @@ export async function GET(request: NextRequest) {
                             service_type: order.service_type,
                             case_id: order.case_id,
                             status: 'pending',
-                            last_updated: (await getCurrentTime()).toISOString(),
+                            last_updated: currentTimeISO,
                             updated_by: order.updated_by,
                             scheduled_delivery_date: scheduledDeliveryDate,
                             delivery_distribution: null, // Can be set later if needed
@@ -1052,8 +1059,6 @@ export async function GET(request: NextRequest) {
                             // Generate unique case_id for the updated upcoming order
                             const newCaseId = generateUniqueCaseId();
 
-                            const currentTime = await getCurrentTime();
-                            const currentTimeISO = currentTime.toISOString(); // Cache to avoid multiple calls
                             await supabase
                                 .from('upcoming_orders')
                                 .update({
@@ -1097,7 +1102,6 @@ export async function GET(request: NextRequest) {
                     .from('billing_records')
                     .insert({
                         client_id: order.client_id,
-                        client_name: client.fullName,
                         status: 'request sent',
                         remarks: billingRemarks,
                         navigator: navigatorName,
@@ -1113,7 +1117,7 @@ export async function GET(request: NextRequest) {
                     billingRecords.push({
                         id: billingRecord.id,
                         clientId: billingRecord.client_id,
-                        clientName: billingRecord.client_name,
+                        clientName: client.fullName,
                         status: billingRecord.status,
                         remarks: billingRecord.remarks,
                         navigator: billingRecord.navigator,
@@ -1176,7 +1180,7 @@ export async function GET(request: NextRequest) {
                                 service_type: serviceType,
                                 case_id: uniqueCaseId,
                                 status: 'scheduled',
-                                last_updated: (await getCurrentTime()).toISOString(),
+                                last_updated: currentTimeISO,
                                 updated_by: order.updated_by || 'System',
                                 take_effect_date: formatDateToYYYYMMDD(takeEffectDate),
                                 total_value: vendorDetail.totalValue || 0,
@@ -1269,7 +1273,7 @@ export async function GET(request: NextRequest) {
                                 service_type: order.service_type,
                                 case_id: uniqueCaseId,
                                 status: 'scheduled',
-                                last_updated: (await getCurrentTime()).toISOString(),
+                                last_updated: currentTimeISO,
                                 updated_by: order.updated_by || 'System',
                                 scheduled_delivery_date: scheduledDeliveryDate ? formatDateToYYYYMMDD(scheduledDeliveryDate) : null,
                                 take_effect_date: formatDateToYYYYMMDD(takeEffectDate),

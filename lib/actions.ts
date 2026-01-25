@@ -537,6 +537,10 @@ export async function deleteEquipment(id: string) {
 }
 
 export async function saveEquipmentOrder(clientId: string, vendorId: string, equipmentId: string, caseId?: string) {
+    // Cache current time at function start to avoid multiple getCurrentTime() calls (triangleorder pattern)
+    const currentTime = await getCurrentTime();
+    const currentTimeISO = currentTime.toISOString();
+
     // Get equipment item to calculate price
     const equipmentList = await getEquipment();
     const equipmentItem = equipmentList.find(e => e.id === equipmentId);
@@ -554,7 +558,7 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
     let scheduledDeliveryDate: Date | null = null;
 
     if (vendor && vendor.deliveryDays && vendor.deliveryDays.length > 0) {
-        const today = await getCurrentTime();
+        const today = new Date(currentTime);
         // Reset to start of day for accurate day-of-week adding
         today.setHours(0, 0, 0, 0);
         const dayNameToNumber: { [key: string]: number } = {
@@ -590,7 +594,7 @@ export async function saveEquipmentOrder(clientId: string, vendorId: string, equ
         service_type: 'Equipment',
         case_id: caseId || null,
         status: 'pending',
-        last_updated: (await getCurrentTime()).toISOString(),
+        last_updated: currentTimeISO,
         updated_by: currentUserName,
         scheduled_delivery_date: scheduledDeliveryDate ? formatDateToYYYYMMDD(scheduledDeliveryDate) : null,
         total_value: equipmentItem.price,
@@ -2025,6 +2029,13 @@ export async function getBillingHistory(clientId: string) {
             getBoxTypes()
         ]);
 
+        // Fetch client name
+        const { data: clientData } = await supabase
+            .from('clients')
+            .select('id, full_name')
+            .eq('id', clientId)
+            .single();
+
         // Fetch order details separately if order_id exists
         const recordsWithOrderData = await Promise.all(
             (billingRecords || []).map(async (d: any) => {
@@ -2196,7 +2207,7 @@ export async function getBillingHistory(clientId: string) {
             return {
                 id: d.id,
                 clientId: d.client_id,
-                clientName: d.client_name,
+                clientName: clientData?.full_name || 'Unknown Client',
                 status: d.status,
                 remarks: d.remarks,
                 navigator: d.navigator,
@@ -2403,6 +2414,15 @@ export async function getAllBillingRecords() {
             getBoxTypes()
         ]);
 
+        // Fetch all unique client IDs and get their names
+        const uniqueClientIds = [...new Set((billingRecords || []).map((br: any) => br.client_id).filter(Boolean))];
+        const { data: clientsData } = await supabase
+            .from('clients')
+            .select('id, full_name')
+            .in('id', uniqueClientIds);
+        
+        const clientsMap = new Map((clientsData || []).map((c: any) => [c.id, c.full_name]));
+
         // Fetch order details separately if order_id exists
         const recordsWithOrderData = await Promise.all(
             (billingRecords || []).map(async (d: any) => {
@@ -2468,7 +2488,7 @@ export async function getAllBillingRecords() {
             return {
                 id: d.id,
                 clientId: d.client_id,
-                clientName: d.client_name,
+                clientName: clientsMap.get(d.client_id) || 'Unknown Client',
                 status: d.status,
                 remarks: d.remarks,
                 navigator: d.navigator,
@@ -2530,6 +2550,8 @@ async function syncSingleOrderForDeliveryDay(
     menuItems: any[],
     boxTypes: any[]
 ): Promise<void> {
+    // Cache current time at function start to avoid multiple getCurrentTime() calls (triangleorder pattern)
+    const currentTime = await getCurrentTime();
 
     console.log('[syncSingleOrderForDeliveryDay] Start', {
         clientId,
@@ -2634,7 +2656,6 @@ async function syncSingleOrderForDeliveryDay(
             }
             
             // Get the nearest occurrence of the client-selected delivery day
-            const currentTime = await getCurrentTime();
             scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
             
             if (!scheduledDeliveryDate) {
@@ -2660,7 +2681,7 @@ async function syncSingleOrderForDeliveryDay(
                         .map((day: string) => dayNameToNumber[day])
                         .filter((num: number | undefined): num is number => num !== undefined);
 
-                    const today = await getCurrentTime();
+                    const today = new Date(currentTime);
                     today.setHours(0, 0, 0, 0);
                     for (let i = 0; i <= 14; i++) {
                         const checkDate = new Date(today);
@@ -2675,7 +2696,6 @@ async function syncSingleOrderForDeliveryDay(
             
             // If still no scheduled delivery date, try using getNextDeliveryDate
             if (!scheduledDeliveryDate) {
-                const currentTime = await getCurrentTime();
                 scheduledDeliveryDate = getNextDeliveryDate(vendorIds[0], vendors, currentTime);
                 
                 if (!scheduledDeliveryDate) {
@@ -2733,7 +2753,6 @@ async function syncSingleOrderForDeliveryDay(
                 }
                 
                 // Get the nearest occurrence of the client-selected delivery day
-                const currentTime = await getCurrentTime();
                 scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
                 
                 if (!scheduledDeliveryDate) {
@@ -2750,7 +2769,7 @@ async function syncSingleOrderForDeliveryDay(
                 if (vendor) {
                     const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
                     if (deliveryDays && deliveryDays.length > 0) {
-                        const today = await getCurrentTime();
+                        const today = new Date(currentTime);
                         today.setHours(0, 0, 0, 0);
                         const dayNameToNumber: { [key: string]: number } = {
                             'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
@@ -2903,7 +2922,7 @@ async function syncSingleOrderForDeliveryDay(
     });
 
     // Upsert upcoming order for this delivery day
-    const currentTime = await getCurrentTime();
+    // currentTime already cached at function start
     
     // Validate and normalize service_type to match database constraint
     // Allowed values: 'Food', 'Meal', 'Boxes', 'Equipment', 'Custom'
@@ -3991,12 +4010,14 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
     // This ensures Case ID, Vendor, and other selections are persisted even if the 
     // full sync to upcoming_orders fails (e.g. if the vendor/delivery day isn't fully set yet).
     if (!skipClientUpdate && client.activeOrder) {
+        // Cache current time at function start to avoid multiple getCurrentTime() calls (triangleorder pattern)
         const currentTime = await getCurrentTime();
+        const currentTimeISO = currentTime.toISOString();
         const { error: updateError } = await supabase
             .from('clients')
             .update({ 
                 active_order: client.activeOrder,
-                updated_at: currentTime.toISOString()
+                updated_at: currentTimeISO
             })
             .eq('id', clientId);
         
@@ -5781,29 +5802,18 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
         .maybeSingle();
 
     if (!existingBilling) {
-        const billingPayload = {
-            client_id: order.client_id,
-            client_name: client?.full_name || 'Unknown Client',
-            order_id: order.id,
-            status: 'pending',
-            amount: order.total_value || 0,
-            navigator: client?.navigator_id || 'Unknown',
-            delivery_date: order.actual_delivery_date,
-            remarks: 'Auto-generated upon proof upload'
-        };
-
         const billingId = randomUUID();
         try {
             await supabase
                 .from('billing_records')
                 .insert([{
                     id: billingId,
-                    client_id: billingPayload.client_id,
-                    order_id: billingPayload.order_id,
-                    status: billingPayload.status,
-                    amount: billingPayload.amount,
-                    navigator: billingPayload.navigator || null,
-                    remarks: billingPayload.remarks
+                    client_id: order.client_id,
+                    order_id: order.id,
+                    status: 'pending',
+                    amount: order.total_value || 0,
+                    navigator: client?.navigator_id || null,
+                    remarks: 'Auto-generated upon proof upload'
                 }]);
         } catch (billingError) {
             console.error('Failed to create billing record:', billingError);
@@ -5954,20 +5964,16 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
                     if (!existingBilling) {
                         console.log(`[Process Pending Order] Creating Billing Record for ${newOrder.id}`);
-                        const billingPayload = {
-                            client_id: upcomingOrder.client_id,
-                            client_name: client?.full_name || 'Unknown Client',
-                            order_id: newOrder.id,
-                            status: 'pending',
-                            amount: upcomingOrder.total_value || 0,
-                            navigator: client?.navigator_id || 'Unknown',
-                            delivery_date: newOrder.actual_delivery_date,
-                            remarks: 'Auto-generated when order processed for delivery'
-                        };
-
                         const { error: billingError } = await supabase
                             .from('billing_records')
-                            .insert([billingPayload]);
+                            .insert([{
+                                client_id: upcomingOrder.client_id,
+                                order_id: newOrder.id,
+                                status: 'pending',
+                                amount: upcomingOrder.total_value || 0,
+                                navigator: client?.navigator_id || null,
+                                remarks: 'Auto-generated when order processed for delivery'
+                            }]);
 
                         if (billingError) {
                             errors.push('Failed to create billing record: ' + billingError.message);
@@ -6031,30 +6037,60 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                                     .eq('upcoming_vendor_selection_id', vs.id);
 
                                 if (items) {
+                                    console.log(`[Process Pending Order] Found ${items.length} items for vendor selection ${vs.id}`);
                                     for (const item of items) {
                                         // Skip items with null menu_item_id (these are total items, not actual menu items)
-                                        if (!item.menu_item_id) {
-                                            console.log(`[Process Pending Order] Skipping item with null menu_item_id (likely a total item)`);
+                                        if (!item.menu_item_id && !item.meal_item_id) {
+                                            console.log(`[Process Pending Order] Skipping item with null menu_item_id and meal_item_id (likely a total item)`);
                                             continue;
+                                        }
+
+                                        // Build item data with all fields that should be copied
+                                        const itemData: any = {
+                                            id: randomUUID(),
+                                            vendor_selection_id: newVs.id,
+                                            quantity: item.quantity
+                                        };
+
+                                        // Copy menu_item_id if present (can be null for meal items)
+                                        if (item.menu_item_id) {
+                                            itemData.menu_item_id = item.menu_item_id;
+                                        }
+
+                                        // Copy meal_item_id if present
+                                        if (item.meal_item_id) {
+                                            itemData.meal_item_id = item.meal_item_id;
+                                        }
+
+                                        // Copy notes if present
+                                        if (item.notes) {
+                                            itemData.notes = item.notes;
+                                        }
+
+                                        // Copy custom_name if present
+                                        if (item.custom_name) {
+                                            itemData.custom_name = item.custom_name;
+                                        }
+
+                                        // Copy custom_price if present
+                                        if (item.custom_price !== null && item.custom_price !== undefined) {
+                                            itemData.custom_price = item.custom_price;
                                         }
 
                                         const { error: itemError } = await supabase
                                             .from('order_items')
-                                            .insert({
-                                                id: randomUUID(),
-                                                vendor_selection_id: newVs.id,
-                                                menu_item_id: item.menu_item_id,
-                                                quantity: item.quantity
-                                            });
+                                            .insert(itemData);
 
                                         if (itemError) {
-                                            const errorMsg = `Failed to copy item ${item.menu_item_id}: ${itemError.message}`;
+                                            const errorMsg = `Failed to copy item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
                                             console.error(`[Process Pending Order] ${errorMsg}`);
                                             errors.push(errorMsg);
                                         } else {
-                                            console.log(`[Process Pending Order] Successfully copied item ${item.menu_item_id} (quantity: ${item.quantity})`);
+                                            console.log(`[Process Pending Order] Successfully copied item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
                                         }
                                     }
+                                } else {
+                                    console.log(`[Process Pending Order] No items found for vendor selection ${vs.id}`);
                                 }
                             }
                         }
@@ -6083,6 +6119,100 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
                                 if (bsError) {
                                     errors.push(`Failed to copy box selection: ${bsError.message}`);
+                                } else {
+                                    console.log(`[Process Pending Order] Successfully copied box selection for order ${newOrder.id}`);
+                                }
+
+                                // Also copy items from upcoming_order_items for Box orders
+                                // Box order items have null vendor_selection_id and upcoming_vendor_selection_id
+                                const { data: boxItems } = await supabase
+                                    .from('upcoming_order_items')
+                                    .select('*')
+                                    .eq('upcoming_order_id', upcomingOrder.id)
+                                    .is('upcoming_vendor_selection_id', null)
+                                    .is('vendor_selection_id', null);
+
+                                if (boxItems && boxItems.length > 0) {
+                                    console.log(`[Process Pending Order] Found ${boxItems.length} box items to copy for order ${newOrder.id}`);
+                                    
+                                    // Create a vendor selection for Box orders if it doesn't exist (needed for order_items)
+                                    let boxVsId: string | null = null;
+                                    const { data: existingVs } = await supabase
+                                        .from('order_vendor_selections')
+                                        .select('id')
+                                        .eq('order_id', newOrder.id)
+                                        .eq('vendor_id', bs.vendor_id)
+                                        .maybeSingle();
+
+                                    if (existingVs) {
+                                        boxVsId = existingVs.id;
+                                    } else {
+                                        // Create vendor selection for Box orders
+                                        const { data: newBoxVs, error: vsError } = await supabase
+                                            .from('order_vendor_selections')
+                                            .insert({
+                                                order_id: newOrder.id,
+                                                vendor_id: bs.vendor_id
+                                            })
+                                            .select()
+                                            .single();
+
+                                        if (vsError || !newBoxVs) {
+                                            errors.push(`Failed to create vendor selection for box items: ${vsError?.message}`);
+                                        } else {
+                                            boxVsId = newBoxVs.id;
+                                            console.log(`[Process Pending Order] Created vendor selection ${boxVsId} for box order items`);
+                                        }
+                                    }
+
+                                    // Copy box items to order_items
+                                    if (boxVsId) {
+                                        for (const item of boxItems) {
+                                            // Skip items with null menu_item_id and meal_item_id
+                                            if (!item.menu_item_id && !item.meal_item_id) {
+                                                console.log(`[Process Pending Order] Skipping box item with null menu_item_id and meal_item_id`);
+                                                continue;
+                                            }
+
+                                            const itemData: any = {
+                                                id: randomUUID(),
+                                                vendor_selection_id: boxVsId,
+                                                quantity: item.quantity
+                                            };
+
+                                            if (item.menu_item_id) {
+                                                itemData.menu_item_id = item.menu_item_id;
+                                            }
+
+                                            if (item.meal_item_id) {
+                                                itemData.meal_item_id = item.meal_item_id;
+                                            }
+
+                                            if (item.notes) {
+                                                itemData.notes = item.notes;
+                                            }
+
+                                            if (item.custom_name) {
+                                                itemData.custom_name = item.custom_name;
+                                            }
+
+                                            if (item.custom_price !== null && item.custom_price !== undefined) {
+                                                itemData.custom_price = item.custom_price;
+                                            }
+
+                                            const { error: itemError } = await supabase
+                                                .from('order_items')
+                                                .insert(itemData);
+
+                                            if (itemError) {
+                                                const errorMsg = `Failed to copy box item ${item.menu_item_id || item.meal_item_id || 'unknown'}: ${itemError.message}`;
+                                                console.error(`[Process Pending Order] ${errorMsg}`);
+                                                errors.push(errorMsg);
+                                            } else {
+                                                console.log(`[Process Pending Order] Successfully copied box item ${item.menu_item_id || item.meal_item_id || 'custom'} (quantity: ${item.quantity})`);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -6161,20 +6291,16 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
         if (!existingBilling) {
             // Create billing record if it doesn't exist
-            const billingPayload = {
-                client_id: order.client_id,
-                client_name: client?.full_name || 'Unknown Client',
-                order_id: order.id,
-                status: 'pending',
-                amount: order.total_value || 0,
-                navigator: client?.navigator_id || 'Unknown',
-                delivery_date: order.actual_delivery_date || new Date().toISOString(),
-                remarks: 'Auto-generated upon proof upload'
-            };
-
             const { error: billingError } = await supabase
                 .from('billing_records')
-                .insert([billingPayload]);
+                .insert([{
+                    client_id: order.client_id,
+                    order_id: order.id,
+                    status: 'pending',
+                    amount: order.total_value || 0,
+                    navigator: client?.navigator_id || null,
+                    remarks: 'Auto-generated upon proof upload'
+                }]);
 
             if (billingError) {
                 errors.push('Failed to create billing record: ' + billingError.message);
