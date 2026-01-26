@@ -4409,10 +4409,14 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
 
     // Check if orderConfig uses the new deliveryDayOrders format
     // Boxes orders should NOT use deliveryDayOrders format - they use the old format
+    // CRITICAL: Also check that deliveryDayOrders has at least one key, otherwise
+    // an empty object {} would be treated as new format but have no days to process
+    const deliveryDayOrdersObj = (orderConfig as any)?.deliveryDayOrders;
     const hasDeliveryDayOrders = orderConfig &&
         orderConfig.serviceType !== 'Boxes' &&
-        (orderConfig as any).deliveryDayOrders &&
-        typeof (orderConfig as any).deliveryDayOrders === 'object';
+        deliveryDayOrdersObj &&
+        typeof deliveryDayOrdersObj === 'object' &&
+        Object.keys(deliveryDayOrdersObj).length > 0;
 
     if (hasDeliveryDayOrders) {
         // New format: create/update orders for each delivery day

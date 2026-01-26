@@ -4103,14 +4103,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                                                             <div className={styles.formGroup}>
                                                                 <label className="label">Vendor <span style={{ color: 'var(--color-danger)' }}>*</span></label>
-                                                                {/* Display selected vendor name (similar to sidebar logic) */}
+                                                                {/* Display selected vendor name as read-only label */}
                                                                 {computedVendorId && (() => {
                                                                     // Get vendor name from vendors array (similar to sidebar)
-                                                                    const vendorName = vendors.find(v => v.id === computedVendorId)?.name || 'Unknown Vendor';
+                                                                    const vendor = vendors.find(v => v.id === computedVendorId);
+                                                                    const vendorName = vendor?.name || 'Unknown Vendor';
                                                                     return (
                                                                         <div style={{
-                                                                            marginBottom: '0.5rem',
-                                                                            padding: '0.5rem',
+                                                                            padding: '0.75rem',
                                                                             backgroundColor: 'var(--bg-surface-hover)',
                                                                             borderRadius: 'var(--radius-sm)',
                                                                             border: '1px solid var(--border-color)',
@@ -4118,23 +4118,54 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                             fontWeight: 500,
                                                                             color: 'var(--text-primary)'
                                                                         }}>
-                                                                            Selected: <strong>{vendorName}</strong>
+                                                                            {vendorName}
                                                                         </div>
                                                                     );
                                                                 })()}
-                                                                <select
-                                                                    className="input"
-                                                                    value={box.vendorId || ''}
-                                                                    onChange={e => handleBoxUpdate(index, 'vendorId', e.target.value)}
-                                                                    required
-                                                                    disabled
-                                                                >
-                                                                    <option value="">Select Vendor...</option>
-                                                                    {vendors.filter(v => v.serviceTypes.includes('Boxes') && v.isActive).map(v => (
-                                                                        <option key={v.id} value={v.id}>{v.name}</option>
-                                                                    ))}
-                                                                </select>
+                                                                {!computedVendorId && (
+                                                                    <div style={{
+                                                                        padding: '0.75rem',
+                                                                        backgroundColor: 'var(--bg-surface-hover)',
+                                                                        borderRadius: 'var(--radius-sm)',
+                                                                        border: '1px solid var(--border-color)',
+                                                                        fontSize: '0.9rem',
+                                                                        color: 'var(--text-secondary)',
+                                                                        fontStyle: 'italic'
+                                                                    }}>
+                                                                        No vendor selected
+                                                                    </div>
+                                                                )}
                                                             </div>
+
+                                                            {/* Delivery Days Indicator - Read-only */}
+                                                            {computedVendorId && (() => {
+                                                                const vendor = vendors.find(v => v.id === computedVendorId);
+                                                                const deliveryDays = vendor?.deliveryDays || [];
+                                                                
+                                                                if (deliveryDays.length > 0) {
+                                                                    return (
+                                                                        <div className={styles.formGroup}>
+                                                                            <label className="label">Delivery Day(s)</label>
+                                                                            <div style={{
+                                                                                padding: '0.75rem',
+                                                                                backgroundColor: 'var(--bg-surface-hover)',
+                                                                                borderRadius: 'var(--radius-sm)',
+                                                                                border: '1px solid var(--border-color)',
+                                                                                fontSize: '0.9rem',
+                                                                                color: 'var(--text-primary)',
+                                                                                display: 'flex',
+                                                                                alignItems: 'center',
+                                                                                gap: '0.5rem'
+                                                                            }}>
+                                                                                <Calendar size={16} style={{ color: 'var(--color-primary)' }} />
+                                                                                <span>{deliveryDays.join(', ')}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                }
+                                                                
+                                                                return null;
+                                                            })()}
 
                                                             {/* Take Effect Date for this vendor */}
                                                             {computedVendorId && settings && (() => {
