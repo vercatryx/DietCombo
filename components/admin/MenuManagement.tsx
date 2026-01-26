@@ -28,12 +28,16 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
 import * as actions from '@/lib/actions';
+import { DefaultOrderTemplate } from './DefaultOrderTemplate';
+
+type MenuSubTab = 'items' | 'template';
 
 export function MenuManagement() {
     const { getVendors, getMenuItems, invalidateReferenceData } = useDataCache();
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-    const [selectedVendorId, setSelectedVendorId] = useState<string>('');
+    const [mainVendor, setMainVendor] = useState<Vendor | null>(null);
+    const [activeSubTab, setActiveSubTab] = useState<MenuSubTab>('items');
 
     const [isCreating, setIsCreating] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -82,29 +86,17 @@ export function MenuManagement() {
     useEffect(() => {
         async function loadData() {
             const [vData, mData] = await Promise.all([getVendors(), getMenuItems()]);
-            // Show all vendors (no filtering by service type)
             setVendors(vData);
             setMenuItems(mData);
-            // Set or validate selectedVendorId
-            // Use functional update to avoid stale closure issue
-            setSelectedVendorId(prev => {
-                // If no vendors, clear selection
-                if (vData.length === 0) {
-                    return '';
-                }
-                // If no selection or current selection is invalid, select first vendor
-                if (!prev || !vData.find(v => v.id === prev)) {
-                    return vData[0].id;
-                }
-                // Keep current selection if it's still valid
-                return prev;
-            });
+            // Get main vendor (first active vendor)
+            const main = vData.find(v => v.isActive) || vData[0] || null;
+            setMainVendor(main);
         }
         loadData();
     }, [getVendors, getMenuItems]);
 
-    const filteredItems = selectedVendorId 
-        ? menuItems.filter(item => item.vendorId === selectedVendorId)
+    const filteredItems = mainVendor
+        ? menuItems.filter(item => item.vendorId === mainVendor.id)
             .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
         : [];
 
@@ -253,7 +245,7 @@ export function MenuManagement() {
     };
 
     async function handleSubmit() {
-        if (!selectedVendorId) return;
+        if (!mainVendor) return;
         if (!formData.name) return;
         if (!formData.priceEach || formData.priceEach <= 0) {
             alert('Price must be greater than 0');
@@ -265,7 +257,7 @@ export function MenuManagement() {
         } else {
             await addMenuItem({
                 ...formData,
-                vendorId: selectedVendorId
+                vendorId: mainVendor.id
             } as Omit<MenuItem, 'id'>);
         }
 
@@ -289,33 +281,57 @@ export function MenuManagement() {
     }
 
     if (vendors.length === 0) {
-        return <div className={styles.emptyState}>No vendors available. Please creating a vendor first.</div>;
+        return <div className={styles.emptyState}>No vendors available. Please create a vendor first.</div>;
+    }
+
+    if (!mainVendor) {
+        return <div className={styles.emptyState}>No active vendor found. Please activate a vendor first.</div>;
     }
 
     return (
         <div className={styles.container}>
-            <div className={styles.sidebar}>
-                <h3 className={styles.sidebarTitle}>Vendors</h3>
-                <div className={styles.vendorList}>
-                    {vendors.map(v => (
-                        <button
-                            key={v.id}
-                            className={`${styles.vendorBtn} ${selectedVendorId === v.id ? styles.activeVendor : ''}`}
-                            onClick={() => { setSelectedVendorId(v.id); resetForm(); }}
-                        >
-                            {v.name}
-                            <span className="badge" style={{ fontSize: '0.65rem' }}>{v.serviceTypes.join(', ')}</span>
-                        </button>
-                    ))}
+            <div className={styles.main} style={{ width: '100%' }}>
+                {/* Sub-tabs */}
+                <div style={{ display: 'flex', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-lg)', borderBottom: '1px solid var(--border-color)' }}>
+                    <button
+                        className={`${styles.tab} ${activeSubTab === 'items' ? styles.activeTab : ''}`}
+                        onClick={() => setActiveSubTab('items')}
+                        style={{
+                            padding: 'var(--spacing-sm) var(--spacing-md)',
+                            background: 'none',
+                            border: 'none',
+                            borderBottom: activeSubTab === 'items' ? '2px solid var(--color-primary)' : '2px solid transparent',
+                            color: activeSubTab === 'items' ? 'var(--color-primary)' : 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            fontWeight: activeSubTab === 'items' ? 600 : 400
+                        }}
+                    >
+                        Menu Items
+                    </button>
+                    <button
+                        className={`${styles.tab} ${activeSubTab === 'template' ? styles.activeTab : ''}`}
+                        onClick={() => setActiveSubTab('template')}
+                        style={{
+                            padding: 'var(--spacing-sm) var(--spacing-md)',
+                            background: 'none',
+                            border: 'none',
+                            borderBottom: activeSubTab === 'template' ? '2px solid var(--color-primary)' : '2px solid transparent',
+                            color: activeSubTab === 'template' ? 'var(--color-primary)' : 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            fontWeight: activeSubTab === 'template' ? 600 : 400
+                        }}
+                    >
+                        Default Order Template
+                    </button>
                 </div>
-            </div>
 
-            <div className={styles.main}>
-                <div className={styles.header}>
-                    <div>
-                        <h2 className={styles.title}>Menu Items</h2>
-                        <p className={styles.subtitle}>Manage items for {vendors.find(v => v.id === selectedVendorId)?.name}</p>
-                    </div>
+                {activeSubTab === 'items' && (
+                    <>
+                        <div className={styles.header}>
+                            <div>
+                                <h2 className={styles.title}>Menu Items</h2>
+                                <p className={styles.subtitle}>Manage items for {mainVendor.name}</p>
+                            </div>
                     {!isCreating && !editingId && (
                         <button className="btn btn-primary" onClick={() => setIsCreating(true)}>
                             <Plus size={16} /> Add Item
@@ -565,6 +581,12 @@ export function MenuManagement() {
                         <div className={styles.emptyList}>No items found for this vendor.</div>
                     )}
                 </div>
+                    </>
+                )}
+
+                {activeSubTab === 'template' && (
+                    <DefaultOrderTemplate mainVendor={mainVendor} menuItems={filteredItems} />
+                )}
             </div>
         </div >
     );
