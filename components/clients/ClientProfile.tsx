@@ -40,7 +40,7 @@ interface Props {
     currentUser?: { role: string; id: string } | null;
 }
 
-const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes', 'Custom'];
+const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes', 'Custom', 'Produce'];
 
 // Min/Max validation for approved meals per week
 const MIN_APPROVED_MEALS_PER_WEEK = 1;
@@ -364,16 +364,23 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 return;
             }
             
-            const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
-            setOrderConfig((prev: any) => ({
-                ...prev,
-                boxOrders: [{
-                    boxTypeId: firstActiveBoxType?.id || '',
-                    vendorId: firstActiveBoxType?.vendorId || '',
-                    quantity: 1,
-                    items: {}
-                }]
-            }));
+            // Only initialize if box types are available
+            if (boxTypes.length === 0) {
+                return;
+            }
+            
+            const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+            if (firstActiveBoxType) {
+                setOrderConfig((prev: any) => ({
+                    ...prev,
+                    boxOrders: [{
+                        boxTypeId: firstActiveBoxType.id,
+                        vendorId: firstActiveBoxType.vendorId || '',
+                        quantity: 1,
+                        items: {}
+                    }]
+                }));
+            }
         }
     }, [formData.serviceType, boxTypes, orderConfig.vendorId, orderConfig.boxTypeId, orderConfig.items]);
 
@@ -535,14 +542,21 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
         } else if (formData.serviceType === 'Boxes') {
+            // Only initialize boxes if box types are available
+            if (boxTypes.length === 0) {
+                return;
+            }
+            
             const boxOrders = newConfig.boxOrders || [];
             const hasEmpty = boxOrders.length === 0 || boxOrders.some((box: any) => !box.vendorId || box.vendorId.trim() === '');
             if (hasEmpty) {
+                const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
                 const updated = boxOrders.length === 0
-                    ? [{ vendorId: defaultVendorId, boxTypeId: '', quantity: 1, items: {}, itemNotes: {} }]
+                    ? [{ vendorId: defaultVendorId || firstActiveBoxType?.vendorId || '', boxTypeId: firstActiveBoxType?.id || '', quantity: 1, items: {}, itemNotes: {} }]
                     : ensureDefaultVendors(boxOrders, 'Boxes').map((box: any) => ({
                         ...box,
-                        vendorId: !box.vendorId || box.vendorId.trim() === '' ? defaultVendorId : box.vendorId
+                        vendorId: !box.vendorId || box.vendorId.trim() === '' ? (defaultVendorId || firstActiveBoxType?.vendorId || '') : box.vendorId,
+                        boxTypeId: !box.boxTypeId ? (firstActiveBoxType?.id || '') : box.boxTypeId
                     }));
                 newConfig.boxOrders = updated;
                 if (updated.length > 0 && updated[0].vendorId) {
@@ -1218,14 +1232,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     if (legacyBox.boxTypeId || legacyBox.vendorId || (legacyBox.items && Object.keys(legacyBox.items).length > 0)) {
                         configToSet.boxOrders = [legacyBox];
                     } else {
-                        // Default empty box
-                        const firstActiveBoxType = b?.find((bt: any) => bt.isActive);
-                        configToSet.boxOrders = [{
-                            boxTypeId: firstActiveBoxType?.id || '',
-                            vendorId: firstActiveBoxType?.vendorId || '',
-                            quantity: 1,
-                            items: {}
-                        }];
+                        // Default empty box - only if box types are available
+                        if (b && b.length > 0) {
+                            const firstActiveBoxType = b.find((bt: any) => bt.isActive) || b[0];
+                            if (firstActiveBoxType) {
+                                configToSet.boxOrders = [{
+                                    boxTypeId: firstActiveBoxType.id,
+                                    vendorId: firstActiveBoxType.vendorId || '',
+                                    quantity: 1,
+                                    items: {}
+                                }];
+                            }
+                        }
+                        // If no box types available, leave boxOrders empty (UI will show message)
                     }
                 }
 
@@ -2235,12 +2254,25 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         const limit = formData.authorizedAmount;
         if (limit && currentBoxes.length >= limit) return;
 
-        const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+        // Check if box types are available
+        if (boxTypes.length === 0) {
+            setMessage('No box types available. Add box types in the Box Types tab first.');
+            setTimeout(() => setMessage(null), 3000);
+            return;
+        }
+
+        const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+        if (!firstActiveBoxType) {
+            setMessage('No box types available. Add box types in the Box Types tab first.');
+            setTimeout(() => setMessage(null), 3000);
+            return;
+        }
+
         // Get default vendor for Boxes service if boxType doesn't have one
         const defaultVendorId = getDefaultVendor('Boxes');
         const newBox = {
-            boxTypeId: firstActiveBoxType?.id || '',
-            vendorId: firstActiveBoxType?.vendorId || defaultVendorId || '',
+            boxTypeId: firstActiveBoxType.id,
+            vendorId: firstActiveBoxType.vendorId || defaultVendorId || '',
             quantity: 1,
             items: {}
         };
@@ -2259,12 +2291,32 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         const currentBoxes = [...(orderConfig.boxOrders || [])];
         if (currentBoxes.length <= 1) {
             // If removing the last one, just reset it to empty/default instead of removing
-            const firstActiveBoxType = boxTypes.find(bt => bt.isActive);
+            // But only if box types are available
+            if (boxTypes.length === 0) {
+                // No box types available, just clear boxOrders
+                setOrderConfig({
+                    ...orderConfig,
+                    boxOrders: [],
+                    vendorId: ''
+                });
+                return;
+            }
+            
+            const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+            if (!firstActiveBoxType) {
+                setOrderConfig({
+                    ...orderConfig,
+                    boxOrders: [],
+                    vendorId: ''
+                });
+                return;
+            }
+            
             // Get default vendor for Boxes service if boxType doesn't have one
             const defaultVendorId = getDefaultVendor('Boxes');
             const resetBox = {
-                boxTypeId: firstActiveBoxType?.id || '',
-                vendorId: firstActiveBoxType?.vendorId || defaultVendorId || '',
+                boxTypeId: firstActiveBoxType.id,
+                vendorId: firstActiveBoxType.vendorId || defaultVendorId || '',
                 quantity: 1,
                 items: {}
             };
@@ -4784,6 +4836,27 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                         {formData.serviceType === 'Boxes' && (() => {
                                             const currentBoxes = orderConfig.boxOrders || [];
 
+                                            // Check if box types are available
+                                            if (boxTypes.length === 0) {
+                                                return (
+                                                    <div className="animate-fade-in">
+                                                        <div style={{
+                                                            padding: '1.5rem',
+                                                            backgroundColor: 'var(--bg-surface-active)',
+                                                            borderRadius: 'var(--radius-md)',
+                                                            border: '1px dashed var(--border-color)',
+                                                            color: 'var(--text-secondary)',
+                                                            textAlign: 'center'
+                                                        }}>
+                                                            <AlertTriangle size={24} style={{ marginBottom: '0.5rem', color: 'var(--color-warning)' }} />
+                                                            <p style={{ margin: 0, fontSize: '0.9rem', fontWeight: 500 }}>
+                                                                No box types available. Add box types in the Box Types tab first.
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            }
+
                                             return (
                                                 <div className="animate-fade-in">
                                                     {/* Display items from all existing upcoming Boxes orders */}
@@ -5570,6 +5643,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         )}
                                                     </div>
                                                 )}
+                                            </div>
+                                        )}
+
+                                        {formData.serviceType === 'Produce' && (
+                                            <div className="animate-fade-in">
+                                                {/* Produce tab content - blank for now */}
                                             </div>
                                         )}
                                     </>

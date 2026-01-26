@@ -28,16 +28,12 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
 import * as actions from '@/lib/actions';
-import { DefaultOrderTemplate } from './DefaultOrderTemplate';
-
-type MenuSubTab = 'items' | 'template';
 
 export function MenuManagement() {
     const { getVendors, getMenuItems, invalidateReferenceData } = useDataCache();
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [mainVendor, setMainVendor] = useState<Vendor | null>(null);
-    const [activeSubTab, setActiveSubTab] = useState<MenuSubTab>('items');
 
     const [isCreating, setIsCreating] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -291,43 +287,7 @@ export function MenuManagement() {
     return (
         <div className={styles.container}>
             <div className={styles.main} style={{ width: '100%' }}>
-                {/* Sub-tabs */}
-                <div style={{ display: 'flex', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-lg)', borderBottom: '1px solid var(--border-color)' }}>
-                    <button
-                        className={`${styles.tab} ${activeSubTab === 'items' ? styles.activeTab : ''}`}
-                        onClick={() => setActiveSubTab('items')}
-                        style={{
-                            padding: 'var(--spacing-sm) var(--spacing-md)',
-                            background: 'none',
-                            border: 'none',
-                            borderBottom: activeSubTab === 'items' ? '2px solid var(--color-primary)' : '2px solid transparent',
-                            color: activeSubTab === 'items' ? 'var(--color-primary)' : 'var(--text-secondary)',
-                            cursor: 'pointer',
-                            fontWeight: activeSubTab === 'items' ? 600 : 400
-                        }}
-                    >
-                        Menu Items
-                    </button>
-                    <button
-                        className={`${styles.tab} ${activeSubTab === 'template' ? styles.activeTab : ''}`}
-                        onClick={() => setActiveSubTab('template')}
-                        style={{
-                            padding: 'var(--spacing-sm) var(--spacing-md)',
-                            background: 'none',
-                            border: 'none',
-                            borderBottom: activeSubTab === 'template' ? '2px solid var(--color-primary)' : '2px solid transparent',
-                            color: activeSubTab === 'template' ? 'var(--color-primary)' : 'var(--text-secondary)',
-                            cursor: 'pointer',
-                            fontWeight: activeSubTab === 'template' ? 600 : 400
-                        }}
-                    >
-                        Default Order Template
-                    </button>
-                </div>
-
-                {activeSubTab === 'items' && (
-                    <>
-                        <div className={styles.header}>
+                <div className={styles.header}>
                             <div>
                                 <h2 className={styles.title}>Menu Items</h2>
                                 <p className={styles.subtitle}>Manage items for {mainVendor.name}</p>
@@ -581,12 +541,6 @@ export function MenuManagement() {
                         <div className={styles.emptyList}>No items found for this vendor.</div>
                     )}
                 </div>
-                    </>
-                )}
-
-                {activeSubTab === 'template' && (
-                    <DefaultOrderTemplate mainVendor={mainVendor} menuItems={filteredItems} />
-                )}
             </div>
         </div >
     );

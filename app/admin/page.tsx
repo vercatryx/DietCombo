@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import styles from './Admin.module.css';
 import { StatusManagement } from '@/components/admin/StatusManagement';
 import { VendorManagement } from '@/components/admin/VendorManagement';
@@ -12,14 +12,38 @@ import { AdminManagement } from '@/components/admin/AdminManagement';
 import { NutritionistManagement } from '@/components/admin/NutritionistManagement';
 import FormBuilder from '@/components/forms/FormBuilder';
 import { saveSingleForm } from '@/lib/form-actions';
+import { DefaultOrderTemplate } from '@/components/admin/DefaultOrderTemplate';
+import { useDataCache } from '@/lib/data-cache';
+import { Vendor, MenuItem } from '@/lib/types';
 
 import { GlobalSettings } from '@/components/admin/GlobalSettings';
 import { MealSelectionManagement } from '@/components/admin/MealSelectionManagement';
 
-type Tab = 'vendors' | 'menus' | 'statuses' | 'boxes' | 'equipment' | 'navigators' | 'nutritionists' | 'settings' | 'admins' | 'form' | 'meals';
+type Tab = 'vendors' | 'menus' | 'statuses' | 'boxes' | 'equipment' | 'navigators' | 'nutritionists' | 'settings' | 'admins' | 'form' | 'meals' | 'template';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('menus');
+    const { getVendors, getMenuItems } = useDataCache();
+    const [vendors, setVendors] = useState<Vendor[]>([]);
+    const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+    const [mainVendor, setMainVendor] = useState<Vendor | null>(null);
+
+    useEffect(() => {
+        async function loadData() {
+            const [vData, mData] = await Promise.all([getVendors(), getMenuItems()]);
+            setVendors(vData);
+            setMenuItems(mData);
+            // Get main vendor (first active vendor)
+            const main = vData.find(v => v.isActive) || vData[0] || null;
+            setMainVendor(main);
+        }
+        loadData();
+    }, [getVendors, getMenuItems]);
+
+    const filteredMenuItems = mainVendor
+        ? menuItems.filter(item => item.vendorId === mainVendor.id)
+            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+        : [];
 
     return (
         <div className={styles.container}>
@@ -95,6 +119,12 @@ export default function AdminPage() {
                 >
                     Meal Selection
                 </button>
+                <button
+                    className={`${styles.tab} ${activeTab === 'template' ? styles.activeTab : ''}`}
+                    onClick={() => setActiveTab('template')}
+                >
+                    Default Order Template
+                </button>
             </div>
 
             <div className={styles.content}>
@@ -122,6 +152,14 @@ export default function AdminPage() {
                 {activeTab === 'settings' && <GlobalSettings />}
                 {activeTab === 'admins' && <AdminManagement />}
                 {activeTab === 'meals' && <MealSelectionManagement />}
+                {activeTab === 'template' && mainVendor && (
+                    <DefaultOrderTemplate mainVendor={mainVendor} menuItems={filteredMenuItems} />
+                )}
+                {activeTab === 'template' && !mainVendor && (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                        No active vendor found. Please activate a vendor first.
+                    </div>
+                )}
             </div>
         </div>
     );
