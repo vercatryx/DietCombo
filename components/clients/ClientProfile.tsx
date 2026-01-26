@@ -270,6 +270,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setOriginalOrderConfig({});
                 setLoading(false);
                 setLoadingOrderDetails(false);
+            }).catch((error) => {
+                console.error('[ClientProfile] Error loading lookups for new client:', error);
+                setLoading(false);
+                setLoadingOrderDetails(false);
             });
             return;
         }
@@ -298,7 +302,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // Should hopefully not happen in ClientList usage, but handle it
                 // Also check if vendors array is empty (not just undefined)
                 setLoading(true);
-                loadLookups().then(() => setLoading(false));
+                loadLookups().then(() => setLoading(false)).catch((error) => {
+                    console.error('[ClientProfile] Error loading lookups:', error);
+                    setLoading(false);
+                });
             } else {
                 // Still fetch auxiliary data that might not be in props (settings, categories, allClients)
                 // But do NOT block UI
@@ -307,7 +314,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
         } else {
             setLoading(true);
-            loadData().then(() => setLoading(false));
+            loadData().then(() => setLoading(false)).catch((error) => {
+                console.error('[ClientProfile] Error loading data:', error);
+                setLoading(false);
+            });
         }
     }, [clientId, initialData, isNewClient]);
 
@@ -926,54 +936,61 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }
 
     async function loadLookups() {
-        const [s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
-            getStatuses(),
-            getNavigators(),
-            getVendors(),
-            getMenuItems(),
-            getBoxTypes(),
-            getSettings(),
-            getCategories(),
-            getClients(),
-            getRegularClients()
-        ]);
-        setStatuses(s);
-        setNavigators(n);
-        // Ensure vendors array is set (even if empty, to avoid undefined issues)
-        const vendorsArray = v || [];
-        setVendors(vendorsArray);
-        if (vendorsArray && vendorsArray.length > 0) {
-            console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
-            // Log Food vendors specifically
-            const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
-            console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
-            // Log vendors with empty serviceTypes for debugging
-            const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
-            if (vendorsWithEmptyServiceTypes.length > 0) {
-                console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
+        try {
+            const [s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
+                getStatuses(),
+                getNavigators(),
+                getVendors(),
+                getMenuItems(),
+                getBoxTypes(),
+                getSettings(),
+                getCategories(),
+                getClients(),
+                getRegularClients()
+            ]);
+            setStatuses(s);
+            setNavigators(n);
+            // Ensure vendors array is set (even if empty, to avoid undefined issues)
+            const vendorsArray = v || [];
+            setVendors(vendorsArray);
+            if (vendorsArray && vendorsArray.length > 0) {
+                console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+                // Log Food vendors specifically
+                const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
+                console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
+                // Log vendors with empty serviceTypes for debugging
+                const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
+                if (vendorsWithEmptyServiceTypes.length > 0) {
+                    console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
+                }
+            } else {
+                console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
             }
-        } else {
-            console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
+            setMenuItems(m);
+            setBoxTypes(b);
+            setSettings(appSettings);
+            setCategories(catData);
+            setAllClients(allClientsData);
+            setRegularClients(regularClientsData);
+        } catch (error) {
+            console.error('[ClientProfile] Error loading lookups:', error);
+            setMessage('Error loading data. Please refresh the page.');
+            throw error; // Re-throw to allow callers to handle it
         }
-        setMenuItems(m);
-        setBoxTypes(b);
-        setSettings(appSettings);
-        setCategories(catData);
-        setAllClients(allClientsData);
-        setRegularClients(regularClientsData);
     }
 
     async function loadData() {
-        setLoadingOrderDetails(true);
-        
-        // Get client first to determine if we need to filter by case_id for Boxes
-        // For Boxes service type, use case_id from orderConfig or client's activeOrder
-        const client = await getClient(clientId);
-        const caseId = client?.serviceType === 'Boxes' 
-            ? (orderConfig?.caseId || client?.activeOrder?.caseId || null)
-            : null;
-        
-        const [c, s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData, upcomingOrderData, activeOrderData, historyData, orderHistoryData, billingHistoryData] = await Promise.all([
+        try {
+            setLoadingOrderDetails(true);
+            
+            // Get client first to determine if we need to filter by case_id for Boxes
+            // For Boxes service type, use case_id from orderConfig or client's activeOrder
+            const client = await getClient(clientId);
+            const caseId = client?.serviceType === 'Boxes' 
+                ? (orderConfig?.caseId || client?.activeOrder?.caseId || null)
+                : null;
+            
+            const [c, s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData, upcomingOrderData, activeOrderData, historyData, orderHistoryData, billingHistoryData] = await Promise.all([
             Promise.resolve(client),
             getStatuses(),
             getNavigators(),
@@ -991,63 +1008,63 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // For Boxes service type, filter order history by case_id
             getOrderHistory(clientId, caseId),
             getBillingHistory(clientId)
-        ]);
+            ]);
 
-        if (c) {
-            setClient(c);
-            setFormData(c);
-        }
-        setStatuses(s);
-        setNavigators(n);
-        // Ensure vendors array is set (even if empty, to avoid undefined issues)
-        const vendorsArray = v || [];
-        setVendors(vendorsArray);
-        if (vendorsArray && vendorsArray.length > 0) {
-            console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
-            // Log Food vendors specifically
-            const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
-            console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
-            // Log vendors with empty serviceTypes for debugging
-            const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
-            if (vendorsWithEmptyServiceTypes.length > 0) {
-                console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
+            if (c) {
+                setClient(c);
+                setFormData(c);
             }
-        } else {
-            console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
-        }
-        setMenuItems(m);
-        setBoxTypes(b);
-        setSettings(appSettings);
-        setCategories(catData);
-        setAllClients(allClientsData);
-        setRegularClients(regularClientsData);
-        setActiveOrder(activeOrderData);
-        setHistory(historyData || []);
-        setOrderHistory(orderHistoryData || []);
-        setBillingHistory(billingHistoryData || []);
-        setLoadingOrderDetails(false);
+            setStatuses(s);
+            setNavigators(n);
+            // Ensure vendors array is set (even if empty, to avoid undefined issues)
+            const vendorsArray = v || [];
+            setVendors(vendorsArray);
+            if (vendorsArray && vendorsArray.length > 0) {
+                console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
+                // Log Food vendors specifically
+                const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
+                console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
+                // Log vendors with empty serviceTypes for debugging
+                const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
+                if (vendorsWithEmptyServiceTypes.length > 0) {
+                    console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
+                }
+            } else {
+                console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
+            }
+            setMenuItems(m);
+            setBoxTypes(b);
+            setSettings(appSettings);
+            setCategories(catData);
+            setAllClients(allClientsData);
+            setRegularClients(regularClientsData);
+            setActiveOrder(activeOrderData);
+            setHistory(historyData || []);
+            setOrderHistory(orderHistoryData || []);
+            setBillingHistory(billingHistoryData || []);
+            setLoadingOrderDetails(false);
 
-        // Load dependents if this is a regular client (not a dependent)
-        if (c && !c.parentClientId) {
-            const dependentsData = await getDependentsByParentId(c.id);
-            setDependents(dependentsData);
-        }
+            // Load dependents if this is a regular client (not a dependent)
+            if (c && !c.parentClientId) {
+                const dependentsData = await getDependentsByParentId(c.id);
+                setDependents(dependentsData);
+            }
 
-        // Set order config from upcoming_orders table (Current Order Request)
-        // If no upcoming order exists, fall back to active_order from clients table
-        // If no active_order exists, initialize with default based on service type
-        if (c) {
-            console.log('[ClientProfile] loadData - Debugging Boxes Vendor', {
-                clientId: c.id,
-                serviceType: c.serviceType,
-                upcomingOrderData: JSON.stringify(upcomingOrderData, null, 2),
-                activeOrderData: JSON.stringify(activeOrderData, null, 2),
-                clientActiveOrder: JSON.stringify(c.activeOrder, null, 2)
-            });
-            let configToSet: any = null;
-            
-            // If there's a case ID, prioritize loading from upcoming orders
-            const hasCaseId = orderConfig?.caseId || c.activeOrder?.caseId || upcomingOrderData?.caseId;
+            // Set order config from upcoming_orders table (Current Order Request)
+            // If no upcoming order exists, fall back to active_order from clients table
+            // If no active_order exists, initialize with default based on service type
+            if (c) {
+                console.log('[ClientProfile] loadData - Debugging Boxes Vendor', {
+                    clientId: c.id,
+                    serviceType: c.serviceType,
+                    upcomingOrderData: JSON.stringify(upcomingOrderData, null, 2),
+                    activeOrderData: JSON.stringify(activeOrderData, null, 2),
+                    clientActiveOrder: JSON.stringify(c.activeOrder, null, 2)
+                });
+                let configToSet: any = null;
+                
+                // If there's a case ID, prioritize loading from upcoming orders
+                const hasCaseId = orderConfig?.caseId || c.activeOrder?.caseId || upcomingOrderData?.caseId;
             
             if (upcomingOrderData) {
                 // Check if it's the multi-day format (object keyed by delivery day, not deliveryDayOrders)
@@ -1468,6 +1485,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
             setAllUpcomingOrders(extractedOrders);
+            }
+        } catch (error) {
+            console.error('[ClientProfile] Error loading data:', error);
+            setMessage('Error loading client data. Please refresh the page.');
+            setLoadingOrderDetails(false);
+            throw error; // Re-throw to allow callers to handle it
         }
     }
 
@@ -1783,10 +1806,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     // Get total value across all delivery days (handles both formats)
     function getCurrentOrderTotalValueAllDays(): number {
-        // Check for per-vendor delivery days format
-        const currentSelections = getVendorSelectionsForDay(null);
         let total = 0;
 
+        // Check deliveryDayOrders format first (for saved data)
+        // This takes priority to avoid double counting
+        if (orderConfig.deliveryDayOrders) {
+            for (const day of Object.keys(orderConfig.deliveryDayOrders)) {
+                total += getCurrentOrderTotalValue(day);
+            }
+            return total;
+        }
+
+        // If no deliveryDayOrders, check per-vendor delivery days format or single-day format
+        const currentSelections = getVendorSelectionsForDay(null);
         for (const selection of currentSelections || []) {
             if (selection.itemsByDay && selection.selectedDeliveryDays) {
                 // Per-vendor delivery days format
@@ -1805,13 +1837,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     const itemPrice = item ? item.value : 0;
                     total += itemPrice * (qty as number);
                 }
-            }
-        }
-
-        // Also check deliveryDayOrders format (for saved data)
-        if (orderConfig.deliveryDayOrders) {
-            for (const day of Object.keys(orderConfig.deliveryDayOrders)) {
-                total += getCurrentOrderTotalValue(day);
             }
         }
 
@@ -2005,6 +2030,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     }
                 }
             }
+
+            // Note: Category setValue validation is ONLY for Boxes serviceType, not Food
+            // Food serviceType does not validate category set values
 
             if (messages.length > 0) {
                 return { isValid: false, messages };
@@ -2438,6 +2466,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (day && orderConfig.deliveryDayOrders[day]) {
             return orderConfig.deliveryDayOrders[day].vendorSelections || [];
         }
+        // When day is null and we're in multi-day format, return first day's selections
+        // This is needed for "one vendor setup" where we consolidate the view
+        if (!day && orderConfig.deliveryDayOrders) {
+            const days = Object.keys(orderConfig.deliveryDayOrders);
+            if (days.length > 0) {
+                const firstDay = days[0];
+                return orderConfig.deliveryDayOrders[firstDay]?.vendorSelections || [];
+            }
+        }
         return [];
     }
 
@@ -2459,29 +2496,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (day) {
                 deliveryDayOrders[day] = { vendorSelections: ensuredSelections };
             } else {
-                // Updating consolidated view (null day)
-                // Reconstruct deliveryDayOrders from the consolidated list
+                // Updating consolidated view (null day) - for "one vendor setup"
+                // Update the first day with the consolidated selections
                 const allDays = Object.keys(deliveryDayOrders);
-                // Initialize empty to rebuild
-                allDays.forEach(d => deliveryDayOrders[d] = { vendorSelections: [] });
-
-                // Distribute consolidated selections back to days
-                ensuredSelections.forEach(vSel => {
-                    const daysToPopulate = (vSel.selectedDeliveryDays && vSel.selectedDeliveryDays.length > 0)
-                        ? vSel.selectedDeliveryDays
-                        : (allDays.length > 0 ? [allDays[0]] : []);
-
-                    daysToPopulate.forEach((d: string) => {
-                        if (!deliveryDayOrders[d]) deliveryDayOrders[d] = { vendorSelections: [] };
-
-                        const items = vSel.itemsByDay ? (vSel.itemsByDay[d] || {}) : (vSel.items || {});
-
-                        deliveryDayOrders[d].vendorSelections.push({
-                            vendorId: vSel.vendorId,
-                            items: items
-                        });
-                    });
-                });
+                if (allDays.length > 0) {
+                    const firstDay = allDays[0];
+                    deliveryDayOrders[firstDay] = { vendorSelections: ensuredSelections };
+                } else {
+                    // No days exist, create a default day
+                    const defaultVendor = vendors.find(v => v.isDefault === true) || vendors.find(v => v.serviceTypes?.includes('Food')) || vendors[0];
+                    if (defaultVendor && defaultVendor.deliveryDays && defaultVendor.deliveryDays.length > 0) {
+                        const defaultDay = defaultVendor.deliveryDays[0];
+                        deliveryDayOrders[defaultDay] = { vendorSelections: ensuredSelections };
+                    }
+                }
             }
             setOrderConfig({ ...orderConfig, deliveryDayOrders });
         } else if (day && needsMultiDayFormat(ensuredSelections)) {
@@ -2670,6 +2698,839 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             alert(error instanceof Error ? error.message : 'Failed to create dependent');
         } finally {
             setCreatingDependent(false);
+        }
+    }
+
+    // Helper function to create address query for geocoding
+    function streetQueryNoUnit(addressData: { address?: string; city?: string; state?: string; zip?: string }) {
+        const parts = [addressData.address, addressData.city, addressData.state, addressData.zip].filter(Boolean);
+        return parts.join(", ");
+    }
+
+    // Tracked fetch for geocoding with timeout and abort
+    const trackedFetch = async (input: string, init: RequestInit = {}) => {
+        const ctrl = new AbortController();
+        const sig = init.signal
+            ? (() => {
+                try {
+                    return AbortSignal.any([init.signal!, ctrl.signal]);
+                } catch {
+                    return ctrl.signal;
+                }
+            })()
+            : ctrl.signal;
+        inflight.current.add(ctrl);
+        try {
+            const timeout = setTimeout(() => ctrl.abort(), 10000);
+            const res = await fetch(input, { ...init, signal: sig });
+            clearTimeout(timeout);
+            return res;
+        } finally {
+            inflight.current.delete(ctrl);
+            setGeoBusy(false);
+        }
+    };
+
+    // Persist lat/lng to server
+    async function persistLatLng(userId: string, geo: { lat: number; lng: number; address?: string; city?: string; state?: string; zip?: string }) {
+        if (!Number.isFinite(Number(userId))) return;
+        setGeoPersisting(true);
+        try {
+            await updateClient(userId, {
+                lat: geo.lat,
+                lng: geo.lng,
+                ...(geo.address ? { address: geo.address } : {}),
+                ...(geo.city ? { city: geo.city } : {}),
+                ...(geo.state ? { state: geo.state } : {}),
+                ...(geo.zip ? { zip: geo.zip } : {}),
+            });
+        } catch (_) {
+            // Silently fail - user can retry
+        } finally {
+            setGeoPersisting(false);
+        }
+    }
+
+    // Auto geocode function
+    async function tryAutoGeocode() {
+        if (saving || geoBusy) return;
+        setGeoBusy(true);
+        setGeoErr("");
+        setCandsOpen(false);
+        setCands([]);
+        setGeoSuccess(false);
+
+        const qStrict = buildGeocodeQuery({
+            address: formData.address || "",
+            city: formData.city || "",
+            state: formData.state || "",
+            zip: formData.zip || "",
+        }) || streetQueryNoUnit({
+            address: formData.address || "",
+            city: formData.city || "",
+            state: formData.state || "",
+            zip: formData.zip || "",
+        });
+
+        try {
+            const a = await geocodeOneClient(qStrict);
+            setFormData(f => ({ ...f, lat: a.lat, lng: a.lng }));
+            if (formData.id) {
+                await persistLatLng(formData.id, {
+                    lat: a.lat,
+                    lng: a.lng,
+                    address: formData.address || "",
+                    city: formData.city || "",
+                    state: formData.state || "",
+                    zip: formData.zip || "",
+                });
+            }
+            setGeoSuccess(true);
+            setTimeout(() => setGeoSuccess(false), 2000);
+        } catch {
+            try {
+                const qLoose = streetQueryNoUnit({
+                    address: formData.address || "",
+                    city: formData.city || "",
+                    state: formData.state || "",
+                    zip: "",
+                });
+                const a2 = await geocodeOneClient(qLoose);
+                setFormData(f => ({ ...f, lat: a2.lat, lng: a2.lng }));
+                if (formData.id) {
+                    await persistLatLng(formData.id, {
+                        lat: a2.lat,
+                        lng: a2.lng,
+                        address: formData.address || "",
+                        city: formData.city || "",
+                        state: formData.state || "",
+                        zip: formData.zip || "",
+                    });
+                }
+                setGeoSuccess(true);
+                setTimeout(() => setGeoSuccess(false), 2000);
+            } catch {
+                setGeoErr("Address not found. Try suggestions or map selection.");
+            }
+        } finally {
+            setGeoBusy(false);
+        }
+    }
+
+    // Open suggestions for geocoding
+    async function openSuggestions() {
+        if (saving || geoBusy) return;
+        setCandsOpen(true);
+        setCands([]);
+        setGeoBusy(true);
+        setGeoErr("");
+        try {
+            const q = streetQueryNoUnit({
+                address: formData.address || "",
+                city: formData.city || "",
+                state: formData.state || "",
+                zip: formData.zip || "",
+            });
+            const res = await trackedFetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=8`, { cache: "no-store" });
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            const data = await res.json();
+            setCands(Array.isArray(data?.items) ? data.items : []);
+        } catch (e: any) {
+            if (e?.name !== "AbortError") setGeoErr("Failed to load suggestions. Try again or use map.");
+        } finally {
+            setGeoBusy(false);
+        }
+    }
+
+    // Pick a candidate from suggestions
+    async function pickCandidate(item: any) {
+        const lat = Number(item?.lat);
+        const lng = Number(item?.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        setFormData(f => ({ ...f, lat, lng }));
+        setCandsOpen(false);
+        setGeoErr("");
+        if (formData.id) {
+            await persistLatLng(formData.id, {
+                lat,
+                lng,
+                address: formData.address || "",
+                city: formData.city || "",
+                state: formData.state || "",
+                zip: formData.zip || "",
+            });
+        }
+        setGeoSuccess(true);
+        setTimeout(() => setGeoSuccess(false), 2000);
+    }
+
+    // Handle map confirmation
+    async function onMapConfirm({ lat, lng }: { lat: number; lng: number }) {
+        setFormData(f => ({ ...f, lat, lng }));
+        setMapOpen(false);
+        setGeoErr("");
+        if (formData.id) {
+            await persistLatLng(formData.id, {
+                lat,
+                lng,
+                address: formData.address || "",
+                city: formData.city || "",
+                state: formData.state || "",
+                zip: formData.zip || "",
+            });
+        }
+        setGeoSuccess(true);
+        setTimeout(() => setGeoSuccess(false), 2000);
+    }
+
+    async function handleSave(): Promise<boolean> {
+
+        if (!client && !isNewClient) {
+            return false;
+        }
+
+        // Validate approvedMealsPerWeek min/max bounds
+        // Allow 0/undefined (can be under min), but if > 0, must be within min/max bounds
+        const approvedMeals = formData.approvedMealsPerWeek ?? 0;
+
+        // If value is > 0, validate it's within bounds (0 is always allowed)
+        if (approvedMeals > 0) {
+            if (approvedMeals < MIN_APPROVED_MEALS_PER_WEEK) {
+                setValidationError({
+                    show: true,
+                    messages: [`Approved meals per week (${approvedMeals}) must be at least ${MIN_APPROVED_MEALS_PER_WEEK}.`]
+                });
+
+                return false;
+            }
+            if (approvedMeals > MAX_APPROVED_MEALS_PER_WEEK) {
+                setValidationError({
+                    show: true,
+                    messages: [`Approved meals per week (${approvedMeals}) must be at most ${MAX_APPROVED_MEALS_PER_WEEK}.`]
+                });
+
+                return false;
+            }
+        }
+
+        // Validate location (lat/lng) is required
+        const lat = formData.lat ?? formData.latitude;
+        const lng = formData.lng ?? formData.longitude;
+        if (lat == null || lng == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
+            setValidationError({
+                show: true,
+                messages: ['Location is required. Please geocode the client address before saving.']
+            });
+            return false;
+        }
+
+        // Validate Order Config before saving (if we have config)
+        // For Boxes, validate even without caseId (caseId is optional for boxes)
+        // For other services, require caseId
+        const shouldValidate = orderConfig && (
+            formData.serviceType === 'Boxes' 
+                ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
+                : orderConfig.caseId
+        );
+        if (shouldValidate) {
+            const validation = validateOrder();
+            if (!validation.isValid) {
+                setValidationError({ show: true, messages: validation.messages });
+                return false;
+            }
+        }
+
+        // Check for Status Change by Navigator
+        // Only show units modal if the new status requires units on change
+        // Skip this check for new clients
+        if (!isNewClient && client) {
+            if (currentUser?.role === 'navigator' && formData.statusId !== client.statusId) {
+                const newStatus = statuses.find(s => s.id === formData.statusId);
+
+                // Only show modal if the new status has requiresUnitsOnChange enabled
+                if (newStatus?.requiresUnitsOnChange) {
+                    try {
+                        const oldStatusName = getStatusName(client.statusId);
+                        const newStatusName = getStatusName(formData.statusId!);
+                        setPendingStatusChange({ oldStatus: oldStatusName, newStatus: newStatusName });
+                        setShowUnitsModal(true);
+                        return false; // Intercepted
+                    } catch (e) {
+                        console.error('[handleSave] Error in status change logic:', e);
+                    }
+                }
+            }
+        }
+
+
+        return await executeSave(0);
+    }
+
+    async function executeSave(unitsAdded: number = 0): Promise<boolean> {
+        // Helper to prepare cleaned active order
+        const prepareActiveOrder = () => {
+            if (!orderConfig) return undefined;
+
+            const cleanedOrderConfig = { ...orderConfig };
+
+            // CRITICAL: Always preserve caseId at the top level for both Food and Boxes
+            cleanedOrderConfig.caseId = orderConfig.caseId;
+
+            if (formData.serviceType === 'Food') {
+                // For Food service: Ensure vendorId and items are preserved in all vendor selections
+                if (cleanedOrderConfig.deliveryDayOrders) {
+                    // Multi-day format: Clean and preserve vendor selections for each day
+                    for (const day of Object.keys(cleanedOrderConfig.deliveryDayOrders)) {
+                        // Ensure deliveryDay is attached to the day order
+                        if (!cleanedOrderConfig.deliveryDayOrders[day].deliveryDay) {
+                            cleanedOrderConfig.deliveryDayOrders[day].deliveryDay = day;
+                        }
+                        cleanedOrderConfig.deliveryDayOrders[day].vendorSelections = (cleanedOrderConfig.deliveryDayOrders[day].vendorSelections || [])
+                            .filter((s: any) => s.vendorId) // Only keep selections with a vendor
+                            .map((s: any) => ({
+                                vendorId: s.vendorId, // Preserve vendor ID
+                                items: s.items || {}, // Preserve items
+                                deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
+                            }));
+                    }
+                } else if (cleanedOrderConfig.vendorSelections) {
+                    // Check if we have per-vendor delivery days (itemsByDay format)
+                    const hasPerVendorDeliveryDays = cleanedOrderConfig.vendorSelections.some((s: any) =>
+                        s.selectedDeliveryDays && s.selectedDeliveryDays.length > 0 && s.itemsByDay
+                    );
+
+                    if (hasPerVendorDeliveryDays) {
+                        // Convert per-vendor delivery days to deliveryDayOrders format
+                        const deliveryDayOrders: any = {};
+                        for (const selection of cleanedOrderConfig.vendorSelections) {
+                            if (!selection.vendorId || !selection.selectedDeliveryDays || !selection.itemsByDay) continue;
+
+                            for (const day of selection.selectedDeliveryDays) {
+                                if (!deliveryDayOrders[day]) {
+                                    deliveryDayOrders[day] = { 
+                                        vendorSelections: [],
+                                        deliveryDay: day  // Explicitly attach the delivery day to the order
+                                    };
+                                }
+                                const dayItems = selection.itemsByDay[day] || {};
+                                const hasItems = Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
+                                if (hasItems) {
+                                    // Preserve vendorId, items, and deliveryDay for this day
+                                    deliveryDayOrders[day].vendorSelections.push({
+                                        vendorId: selection.vendorId,
+                                        items: dayItems,
+                                        deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
+                                    });
+                                }
+                            }
+                        }
+                        // Clean up days with no vendors
+                        const daysWithVendors = Object.keys(deliveryDayOrders).filter(day =>
+                            deliveryDayOrders[day].vendorSelections && deliveryDayOrders[day].vendorSelections.length > 0
+                        );
+                        if (daysWithVendors.length > 0) {
+                            const cleanedDeliveryDayOrders: any = {};
+                            for (const day of daysWithVendors) cleanedDeliveryDayOrders[day] = deliveryDayOrders[day];
+                            cleanedOrderConfig.deliveryDayOrders = cleanedDeliveryDayOrders;
+                            cleanedOrderConfig.vendorSelections = undefined;
+                        } else {
+                            // CRITICAL FIX: If no days have vendors with items, preserve the original vendorSelections format
+                            // Don't set vendorSelections to undefined - keep the original structure
+                            console.warn('[prepareActiveOrder] No days with vendors found after conversion, preserving original vendorSelections format');
+                            // Keep vendorSelections as-is, don't convert to deliveryDayOrders
+                            cleanedOrderConfig.deliveryDayOrders = undefined;
+                        }
+                    } else {
+                        // Single-day format: Clean and preserve vendor selections
+                        // CRITICAL FIX: Only filter out selections without vendorId, but keep all selections with vendorId
+                        // even if items are empty (they might be added later or items might be in a different format)
+                        cleanedOrderConfig.vendorSelections = (cleanedOrderConfig.vendorSelections || [])
+                            .filter((s: any) => s.vendorId && s.vendorId.trim() !== '') // Only keep selections with a valid vendor
+                            .map((s: any) => ({
+                                vendorId: s.vendorId, // Preserve vendor ID
+                                items: s.items || {} // Preserve items (even if empty - they might be added in a different format)
+                            }));
+                        
+                        // Validate that we have at least one vendor selection with items
+                        const hasItems = cleanedOrderConfig.vendorSelections.some((s: any) => {
+                            const items = s.items || {};
+                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                        });
+                        
+                        if (!hasItems && cleanedOrderConfig.vendorSelections.length > 0) {
+                            console.warn('[prepareActiveOrder] Vendor selections exist but no items found. This might indicate items are in itemsByDay format.');
+                            // Don't remove vendor selections - they might have items in itemsByDay format that we missed
+                        }
+                    }
+                }
+            } else if (formData.serviceType === 'Boxes') {
+                // For Boxes: Use the boxOrders array which supports multiple boxes
+                // Match triangleorder approach: Clean items and notes, only keep items with qty > 0
+                if (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders)) {
+                    cleanedOrderConfig.boxOrders = orderConfig.boxOrders.map((box: any) => {
+                        const cleanedItems: any = {};
+                        const cleanedNotes: any = {};
+
+                        if (box.items) {
+                            Object.entries(box.items).forEach(([itemId, qty]) => {
+                                if (Number(qty) > 0) {
+                                    cleanedItems[itemId] = Number(qty);
+                                    if (box.itemNotes && box.itemNotes[itemId]) {
+                                        cleanedNotes[itemId] = box.itemNotes[itemId];
+                                    }
+                                }
+                            });
+                        }
+
+                        return {
+                            ...box,
+                            items: cleanedItems,
+                            itemNotes: cleanedNotes
+                        };
+                    });
+                } else {
+                    // Fallback: migrate legacy fields to boxOrders array if array is missing
+                    const legacyBox = {
+                        boxTypeId: orderConfig.boxTypeId || '',
+                        vendorId: orderConfig.vendorId || '',
+                        quantity: orderConfig.boxQuantity || 1,
+                        items: orderConfig.items || {},
+                        itemNotes: {}
+                    };
+                    cleanedOrderConfig.boxOrders = [legacyBox];
+                }
+                // Also preserve top-level fields for backward compatibility
+                if (cleanedOrderConfig.boxOrders && cleanedOrderConfig.boxOrders.length > 0) {
+                    const firstBox = cleanedOrderConfig.boxOrders[0];
+                    cleanedOrderConfig.vendorId = firstBox.vendorId;
+                    cleanedOrderConfig.boxTypeId = firstBox.boxTypeId;
+                    cleanedOrderConfig.boxQuantity = firstBox.quantity;
+                    cleanedOrderConfig.items = firstBox.items;
+                }
+                cleanedOrderConfig.caseId = orderConfig.caseId; // Preserve case ID (also set above)
+                cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {}; // Preserve item prices
+                console.log('[prepareActiveOrder] Box Orders prepared:', JSON.stringify(cleanedOrderConfig.boxOrders, null, 2));
+            } else if (formData.serviceType === 'Custom') {
+                // For Custom: Preserve vendorId and customItems
+                if (orderConfig.vendorId !== undefined) {
+                    cleanedOrderConfig.vendorId = orderConfig.vendorId;
+                }
+                cleanedOrderConfig.caseId = orderConfig.caseId; // Preserve case ID (also set above)
+                // Preserve customItems array, filtering out items with empty names
+                cleanedOrderConfig.customItems = (orderConfig.customItems || [])
+                    .filter((item: any) => item.name && item.name.trim() !== '')
+                    .map((item: any) => ({
+                        name: item.name || '',
+                        price: parseFloat(item.price) || 0,
+                        quantity: parseInt(item.quantity) || 1
+                    }));
+            }
+
+            return {
+                ...cleanedOrderConfig,
+                serviceType: formData.serviceType,
+                lastUpdated: new Date().toISOString(),
+                updatedBy: 'Admin'
+            };
+        };
+
+        if (!client && !isNewClient) return false;
+        setSaving(true);
+        setMessage(null);
+
+        try {
+            // Handle new client creation
+            if (isNewClient) {
+                // Validate that client name is not empty
+                if (!formData.fullName || !formData.fullName.trim()) {
+                    setSaving(false);
+                    setMessage('Client name is required. Please enter a client name before saving.');
+                    return false;
+                }
+
+                // Determine if orderConfig has meaningful data to save (before creating client)
+                const hasCaseId = orderConfig?.caseId && orderConfig.caseId.trim() !== '';
+                const hasVendorSelections = orderConfig?.vendorSelections &&
+                    Array.isArray(orderConfig.vendorSelections) &&
+                    orderConfig.vendorSelections.some((s: any) => s.vendorId && s.vendorId.trim() !== '');
+                const hasDeliveryDayOrders = orderConfig?.deliveryDayOrders &&
+                    Object.keys(orderConfig.deliveryDayOrders).length > 0;
+                const hasBoxConfig = (orderConfig?.vendorId && orderConfig.vendorId.trim() !== '') ||
+                    (orderConfig?.boxTypeId && orderConfig.boxTypeId.trim() !== '') ||
+                    (orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0);
+                const hasOrderData = hasCaseId || hasVendorSelections || hasDeliveryDayOrders || hasBoxConfig;
+
+                // Prepare active order data before creating client
+                const preparedActiveOrder = hasOrderData ? prepareActiveOrder() : undefined;
+
+                const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
+                const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
+
+                // Create client WITH activeOrder included during creation
+                const clientData: Omit<ClientProfile, 'id' | 'createdAt' | 'updatedAt'> = {
+                    fullName: formData.fullName ?? '',
+                    email: formData.email ?? '',
+                    address: formData.address ?? '',
+                    phoneNumber: formData.phoneNumber ?? '',
+                    secondaryPhoneNumber: formData.secondaryPhoneNumber ?? null,
+                    navigatorId: formData.navigatorId ?? defaultNavigatorId,
+                    endDate: formData.endDate ?? '',
+                    screeningTookPlace: formData.screeningTookPlace ?? false,
+                    screeningSigned: formData.screeningSigned ?? false,
+                    notes: formData.notes ?? '',
+                    statusId: formData.statusId ?? initialStatusId,
+                    serviceType: formData.serviceType ?? 'Food',
+                    approvedMealsPerWeek: formData.approvedMealsPerWeek ?? 21,
+                    authorizedAmount: formData.authorizedAmount ?? null,
+                    expirationDate: formData.expirationDate ?? null,
+                    // New fields from dietfantasy
+                    firstName: formData.firstName ?? null,
+                    lastName: formData.lastName ?? null,
+                    apt: formData.apt ?? null,
+                    city: formData.city ?? null,
+                    state: formData.state ?? null,
+                    zip: formData.zip ?? null,
+                    county: formData.county ?? null,
+                    clientIdExternal: formData.clientIdExternal ?? null,
+                    caseIdExternal: formData.caseIdExternal ?? null,
+                    medicaid: formData.medicaid ?? false,
+                    paused: formData.paused ?? false,
+                    complex: formData.complex ?? false,
+                    bill: formData.bill ?? true,
+                    delivery: formData.delivery ?? true,
+                    dislikes: formData.dislikes ?? null,
+                    latitude: formData.latitude ?? null,
+                    longitude: formData.longitude ?? null,
+                    lat: formData.lat ?? null,
+                    lng: formData.lng ?? null,
+                    geocodedAt: formData.geocodedAt ?? null,
+                    billings: formData.billings ?? null,
+                    visits: formData.visits ?? null,
+                    signToken: formData.signToken ?? null,
+                    activeOrder: preparedActiveOrder // Include order details during creation
+                };
+
+                const newClient = await addClient(clientData);
+
+                if (!newClient) {
+                    setSaving(false);
+                    return false;
+                }
+
+                // Fetch the created client (it already has activeOrder in the database)
+                const updatedClient = await getClient(newClient.id);
+
+                if (!updatedClient) {
+                    console.error('[ClientProfile] Failed to fetch updated client after update');
+                    setSaving(false);
+                    setMessage('Error: Failed to fetch updated client.');
+                    return false;
+                }
+
+
+
+
+                // IMPORTANT: Set flag BEFORE changing clientId to prevent useEffect from overwriting orderConfig
+                justCreatedClientRef.current = true;
+
+                // Update state with the updated client
+                setActualClientId(updatedClient.id);
+                setClient(updatedClient);
+                setFormData(updatedClient);
+
+                // Set orderConfig from the updated client's activeOrder
+                if (updatedClient.activeOrder && Object.keys(updatedClient.activeOrder).length > 0) {
+
+                    setOrderConfig(updatedClient.activeOrder);
+                    setOriginalOrderConfig(updatedClient.activeOrder);
+                } else {
+                    // If no activeOrder, keep the current orderConfig
+
+                }
+
+                invalidateClientData();
+                setMessage('Client created successfully.');
+
+                // Sync to upcoming_orders if there's order data (same as edit path)
+                if (updatedClient.activeOrder && updatedClient.activeOrder.caseId) {
+                    await syncCurrentOrderToUpcoming(updatedClient.id, updatedClient, true);
+                }
+
+                // IMPORTANT: Set saving to false and return true BEFORE any state updates that might trigger re-renders
+                setSaving(false);
+
+                return true;
+            }
+
+            // Existing client update logic
+            if (!client) {
+                setSaving(false);
+                return false;
+            }
+
+            // Log Navigator Action if applicable
+            if (currentUser?.role === 'navigator' && pendingStatusChange && unitsAdded >= 0) {
+                await logNavigatorAction({
+                    navigatorId: currentUser.id,
+                    clientId: clientId,
+                    oldStatus: pendingStatusChange.oldStatus,
+                    newStatus: pendingStatusChange.newStatus,
+                    unitsAdded: unitsAdded
+                });
+            }
+
+            // -- Change Detection --
+            const changes: string[] = [];
+            if (client.fullName !== formData.fullName) changes.push(`Full Name: "${client.fullName}" -> "${formData.fullName}"`);
+            if (client.address !== formData.address) changes.push(`Address: "${client.address}" -> "${formData.address}"`);
+            if (client.email !== formData.email) changes.push(`Email: "${client.email}" -> "${formData.email}"`);
+            if (client.phoneNumber !== formData.phoneNumber) changes.push(`Phone: "${client.phoneNumber}" -> "${formData.phoneNumber}"`);
+            if ((client.secondaryPhoneNumber || '') !== (formData.secondaryPhoneNumber || '')) {
+                changes.push(`Secondary Phone: "${client.secondaryPhoneNumber || ''}" -> "${formData.secondaryPhoneNumber || ''}"`);
+            }
+            if (client.notes !== formData.notes) changes.push('Notes updated');
+            if (client.statusId !== formData.statusId) {
+                const oldStatus = statuses.find(s => s.id === client.statusId)?.name || 'Unknown';
+                const newStatus = statuses.find(s => s.id === formData.statusId)?.name || 'Unknown';
+                changes.push(`Status: "${oldStatus}" -> "${newStatus}"`);
+            }
+            if (client.navigatorId !== formData.navigatorId) {
+                const oldNav = navigators.find(n => n.id === client.navigatorId)?.name || 'Unassigned';
+                const newNav = navigators.find(n => n.id === formData.navigatorId)?.name || 'Unassigned';
+                changes.push(`Navigator: "${oldNav}" -> "${newNav}"`);
+            }
+            if (client.serviceType !== formData.serviceType) changes.push(`Service Type: "${client.serviceType}" -> "${formData.serviceType}"`);
+            if (client.approvedMealsPerWeek !== formData.approvedMealsPerWeek) changes.push(`Approved Meals: ${client.approvedMealsPerWeek} -> ${formData.approvedMealsPerWeek}`);
+            if (client.screeningTookPlace !== formData.screeningTookPlace) changes.push(`Screening Took Place: ${client.screeningTookPlace} -> ${formData.screeningTookPlace}`);
+            if (client.screeningSigned !== formData.screeningSigned) changes.push(`Screening Signed: ${client.screeningSigned} -> ${formData.screeningSigned}`);
+            if ((client.authorizedAmount ?? null) !== (formData.authorizedAmount ?? null)) {
+                changes.push(`Authorized Amount: ${client.authorizedAmount ?? 'null'} -> ${formData.authorizedAmount ?? 'null'}`);
+            }
+            if ((client.expirationDate || null) !== (formData.expirationDate || null)) {
+                changes.push(`Expiration Date: ${client.expirationDate || 'null'} -> ${formData.expirationDate || 'null'}`);
+            }
+
+            // Check if order configuration changed
+            // For Boxes, check if boxOrders exist (caseId is optional)
+            // For other services, require caseId
+            const hasOrderChanges = orderConfig && (
+                formData.serviceType === 'Boxes' 
+                    ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
+                    : orderConfig.caseId
+            );
+            if (hasOrderChanges) {
+                changes.push('Order configuration changed');
+            }
+
+            const summary = changes.length > 0 ? changes.join(', ') : 'No functional changes detected (re-saved profile)';
+
+            // Update client profile
+            // We defer this call until after we've prepared the activeOrder above if needed
+            // But wait, the order config block is BELOW this. We need to move the updateClient call down or move the prep up.
+            // Actually, let's keep it simple: 
+            // 1. Calculate changes
+            // 2. Prepare updateData
+            // 3. IF order changes, add activeOrder to updateData
+            // 4. Call updateClient once
+
+            // Checking order changes again...
+            // The original code called updateClient BEFORE calculating cleanedOrderConfig.
+            // This means we need to restructure a bit.
+
+            let updateData: Partial<ClientProfile> = { ...formData };
+
+            await recordClientChange(clientId, summary, 'Admin');
+
+            // Sync Current Order Request
+            const hasOrderConfigChanges = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
+            
+            console.log('[ClientProfile] Order save check:', {
+                serviceType: formData.serviceType,
+                hasOrderConfigChanges,
+                hasOrderChanges,
+                hasCaseId: !!orderConfig?.caseId,
+                caseId: orderConfig?.caseId,
+                hasBoxOrders: !!(orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0),
+                boxOrdersCount: orderConfig?.boxOrders?.length || 0
+            });
+            
+            // Match triangleorder approach: Save if there are order config changes OR order changes
+            // Don't check hasValidOrderData - let the backend handle validation
+            if (hasOrderConfigChanges || hasOrderChanges) {
+                // Add activeOrder to updateData so updateClient handles the full save + sync efficiently
+                // efficiently with only ONE revalidation
+                const preparedOrder = prepareActiveOrder();
+                if (preparedOrder) {
+                    updateData.activeOrder = preparedOrder;
+                    console.log('[ClientProfile] Saving order with activeOrder:', {
+                        serviceType: preparedOrder.serviceType,
+                        hasCaseId: !!preparedOrder.caseId,
+                        caseId: preparedOrder.caseId,
+                        hasVendorSelections: !!(preparedOrder as any).vendorSelections,
+                        vendorSelectionsCount: (preparedOrder as any).vendorSelections?.length || 0,
+                        hasDeliveryDayOrders: !!(preparedOrder as any).deliveryDayOrders,
+                        deliveryDayOrdersKeys: (preparedOrder as any).deliveryDayOrders ? Object.keys((preparedOrder as any).deliveryDayOrders) : [],
+                        hasBoxOrders: !!(preparedOrder as any).boxOrders,
+                        boxOrdersCount: (preparedOrder as any).boxOrders?.length || 0,
+                        boxOrders: (preparedOrder as any).boxOrders?.map((box: any) => ({
+                            boxTypeId: box.boxTypeId,
+                            vendorId: box.vendorId,
+                            itemsCount: Object.keys(box.items || {}).length
+                        })) || []
+                    });
+                } else {
+                    console.warn('[ClientProfile] prepareActiveOrder returned undefined, skipping order save');
+                }
+            }
+
+            // CRITICAL: Execute the single update call
+            try {
+                await updateClient(clientId, updateData);
+            } catch (error) {
+                console.error('[ClientProfile] Error updating client:', error);
+                const errorMessage = error instanceof Error ? error.message : 'An error occurred while saving the client.';
+                setErrorModal({ show: true, message: errorMessage });
+                setSaving(false);
+                return false;
+            }
+
+            // Sync to new independent tables if there's order data
+            // Sync to new independent tables if there's order data OR if we need to clear data
+            const serviceType = formData.serviceType;
+            
+            // For Boxes service, save even without caseId (caseId is optional for boxes)
+            if (serviceType === 'Boxes' && updateData.activeOrder) {
+                const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
+                console.log('[ClientProfile] Saving box orders:', {
+                    serviceType,
+                    hasCaseId: !!updateData.activeOrder.caseId,
+                    caseId: updateData.activeOrder.caseId,
+                    boxesCount: boxesToSave.length,
+                    boxes: boxesToSave.map((box: any) => ({
+                        boxTypeId: box.boxTypeId,
+                        vendorId: box.vendorId,
+                        quantity: box.quantity,
+                        itemsCount: Object.keys(box.items || {}).length,
+                        hasItems: Object.keys(box.items || {}).length > 0
+                    }))
+                });
+                if (boxesToSave.length > 0) {
+                    await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
+                        ...box,
+                        caseId: updateData.activeOrder?.caseId
+                    })));
+                }
+            }
+            
+            // For other service types, require caseId
+            if (updateData.activeOrder && updateData.activeOrder.caseId) {
+                if (serviceType === 'Custom') {
+                    const activeOrderAny = updateData.activeOrder as any;
+                    if (activeOrderAny.custom_name && activeOrderAny.custom_price && activeOrderAny.vendorId && activeOrderAny.deliveryDay) {
+                        await saveClientCustomOrder(
+                            clientId,
+                            activeOrderAny.vendorId,
+                            activeOrderAny.custom_name,
+                            Number(activeOrderAny.custom_price),
+                            activeOrderAny.deliveryDay,
+                            activeOrderAny.caseId
+                        );
+                    }
+                }
+
+                // Save to appropriate independent tables based on what data exists
+                // NOTE: A Food service client can have BOTH deliveryDayOrders AND mealSelections (e.g., Breakfast)
+
+                // Save food orders: ALWAYS if service type is Food, to allow clearing
+                if (serviceType === 'Food') {
+                    await saveClientFoodOrder(clientId, {
+                        caseId: updateData.activeOrder.caseId,
+                        deliveryDayOrders: (updateData.activeOrder as any).deliveryDayOrders || {}
+                    });
+                }
+
+                // Also handle the case where we might have food orders but currently not Food service? 
+                // No, only save to Food table if type is Food.
+
+                // Save meal orders if mealSelections exists OR if service type is Meal OR if service type is Food (to allow clearing)
+                if ((updateData.activeOrder as any).mealSelections || serviceType === 'Meal' || serviceType === 'Food') {
+                    await saveClientMealOrder(clientId, {
+                        caseId: updateData.activeOrder.caseId,
+                        mealSelections: (updateData.activeOrder as any).mealSelections || {}
+                    });
+                }
+            }
+            // Still call legacy sync for backward compatibility during migration
+            await syncCurrentOrderToUpcoming(clientId, { ...client, ...updateData } as ClientProfile, true);
+
+            // Reload upcoming order if we had order changes
+            // COMMENTED OUT: We rely on updatedClient.activeOrder which we just loaded above.
+            // Fetching upcomingOrder here caused Draft orders (which don't exist in upcoming_orders table)
+            // to be overwritten with null/empty, clearing the form.
+            /*
+            if (hasOrderConfigChanges || hasOrderChanges) {
+                const updatedUpcomingOrder = await getUpcomingOrderForClient(clientId);
+                if (updatedUpcomingOrder) {
+                    setOrderConfig(updatedUpcomingOrder);
+                    setOriginalOrderConfig(JSON.parse(JSON.stringify(updatedUpcomingOrder)));
+                }
+            }
+            */
+
+            // Show cutoff-aware confirmation message if order was saved
+            let confirmationMessage = 'Changes saved successfully.';
+            if (hasOrderChanges && orderConfig && orderConfig.caseId) {
+                const cutoffPassed = isCutoffPassed();
+                const takeEffectDate = getEarliestTakeEffectDateForOrder();
+
+                if (cutoffPassed && takeEffectDate) {
+                    confirmationMessage = `Order saved. The weekly cutoff has passed, so this order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} (earliest effective date is always a Sunday). View Recent Orders section to see what will be delivered this week.`;
+                } else if (takeEffectDate) {
+                    confirmationMessage = `Order saved successfully. This order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.`;
+                }
+            }
+
+            // Always close modal and client portal after saving (especially for navigators adding units)
+            const wasNavigatorAddingUnits = currentUser?.role === 'navigator' && pendingStatusChange !== null;
+            setShowUnitsModal(false);
+            setPendingStatusChange(null);
+            
+            // If navigator added units, always close the portal
+            if (wasNavigatorAddingUnits && onClose) {
+                onClose();
+                return true;
+            }
+            
+            if (onClose) {
+                onClose();
+            } else {
+                setMessage(confirmationMessage);
+                setTimeout(() => setMessage(null), 6000); // Longer timeout for longer messages
+                const updatedClient = await getClient(clientId);
+                if (updatedClient) {
+                    setClient(updatedClient);
+                    loadData().catch((error) => {
+                        console.error('[ClientProfile] Error reloading data after save:', error);
+                    });
+                }
+            }
+            return true;
+        } catch (error) {
+            setMessage('Error saving changes.');
+            console.error(error);
+            // Even on error, close modal and portal if navigator was adding units
+            const wasNavigatorAddingUnits = currentUser?.role === 'navigator' && pendingStatusChange !== null;
+            setShowUnitsModal(false);
+            setPendingStatusChange(null);
+            if (onClose && wasNavigatorAddingUnits) {
+                onClose();
+            }
+            return false;
+        } finally {
+            setSaving(false);
+            // Ensure modal is closed
+            setShowUnitsModal(false);
+            setPendingStatusChange(null);
         }
     }
 
@@ -3698,12 +4559,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                     const currentSelections = getVendorSelectionsForDay(null);
                                                     let selection = currentSelections && currentSelections.length > 0 ? currentSelections[0] : { vendorId: defaultVendorId || '', items: {} };
                                                     
-                                                    // Ensure vendorId is always set to default
+                                                    // Ensure vendorId is always set to default (for display purposes)
+                                                    // The actual persistence is handled by useEffect hooks and button handlers
                                                     if (!selection.vendorId || selection.vendorId.trim() === '') {
                                                         selection = { ...selection, vendorId: defaultVendorId || '' };
                                                     }
                                                     
-                                                    const vendor = selection.vendorId ? vendors.find(v => v.id === selection.vendorId) : null;
+                                                    // Use defaultVendorId as fallback if selection.vendorId is still empty
+                                                    const effectiveVendorId = selection.vendorId || defaultVendorId || '';
+                                                    
+                                                    const vendor = effectiveVendorId ? vendors.find(v => v.id === effectiveVendorId) : null;
                                                     const vendorMinimum = vendor?.minimumMeals || 0;
                                                     
                                                     // Get items from selection (handle both items and itemsByDay formats)
@@ -3721,14 +4586,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         });
                                                     }
                                                     
-                                                    const vendorMealCount = Object.values(items).reduce((sum: number, qty: any) => {
-                                                        const itemId = Object.keys(items).find(id => items[id] === qty);
-                                                        if (itemId) {
-                                                            const item = menuItems.find(i => i.id === itemId);
-                                                            const quotaValue = item?.quotaValue || 1;
-                                                            return sum + (Number(qty) || 0) * quotaValue;
-                                                        }
-                                                        return sum;
+                                                    const vendorMealCount = Object.entries(items).reduce((sum: number, [itemId, qty]: [string, any]) => {
+                                                        const item = menuItems.find(i => i.id === itemId);
+                                                        const quotaValue = item?.quotaValue || 1;
+                                                        return sum + (Number(qty) || 0) * quotaValue;
                                                     }, 0);
                                                     const meetsMinimum = vendorMinimum === 0 || vendorMealCount >= vendorMinimum;
                                                     
@@ -3809,9 +4670,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                     </div>
                                                                 )}
                                                                 <div className={styles.menuItems}>
-                                                                    {getVendorMenuItems(selection.vendorId).map((item) => {
+                                                                    {effectiveVendorId && getVendorMenuItems(effectiveVendorId).map((item) => {
                                                                         const qty = Number(items[item.id] || 0);
-                                                                        const upcomingQty = getUpcomingOrderQuantityForItem(item.id, selection.vendorId);
+                                                                        const upcomingQty = getUpcomingOrderQuantityForItem(item.id, effectiveVendorId);
                                                                         return (
                                                                             <div key={item.id} className={styles.menuItem}>
                                                                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -3838,45 +4699,80 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                                     </span>
                                                                                     <div className={styles.quantityControl} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                                                         <button onClick={() => {
-                                                                                            // Ensure vendorId is set
-                                                                                            const vendorId = selection.vendorId || defaultVendorId || '';
-                                                                                            if (!vendorId) return;
+                                                                                            // Use effectiveVendorId which always has a value
+                                                                                            if (!effectiveVendorId) return;
                                                                                             
-                                                                                            // Get current selections and update
-                                                                                            const current = getVendorSelectionsForDay(null);
-                                                                                            const currentSelection = current && current.length > 0 ? current[0] : { vendorId, items: {} };
-                                                                                            const currentItems = currentSelection.items || {};
-                                                                                            const newQty = Math.max(0, qty - 1);
+                                                                                            // Get current selections and find the matching vendor selection
+                                                                                            const current = [...getVendorSelectionsForDay(null)];
+                                                                                            const selectionIndex = current.findIndex((sel: any) => sel.vendorId === effectiveVendorId);
                                                                                             
-                                                                                            const updatedItems = { ...currentItems };
-                                                                                            if (newQty > 0) {
-                                                                                                updatedItems[item.id] = newQty;
+                                                                                            let currentSelection;
+                                                                                            if (selectionIndex >= 0) {
+                                                                                                currentSelection = current[selectionIndex];
                                                                                             } else {
-                                                                                                delete updatedItems[item.id];
+                                                                                                // Create new selection if not found
+                                                                                                currentSelection = { vendorId: effectiveVendorId, items: {} };
+                                                                                                current.push(currentSelection);
                                                                                             }
                                                                                             
-                                                                                            setVendorSelectionsForDay(null, [{ vendorId, items: updatedItems }]);
+                                                                                            // Use the displayed items object as the base to avoid double counting
+                                                                                            // This ensures we're working with the same data that's being displayed
+                                                                                            const currentItems = { ...items };
+                                                                                            const newQty = Math.max(0, qty - 1);
+                                                                                            
+                                                                                            if (newQty > 0) {
+                                                                                                currentItems[item.id] = newQty;
+                                                                                            } else {
+                                                                                                delete currentItems[item.id];
+                                                                                            }
+                                                                                            
+                                                                                            // Update the specific selection in the array, clearing itemsByDay to prevent double counting
+                                                                                            if (selectionIndex >= 0) {
+                                                                                                current[selectionIndex] = { ...currentSelection, items: currentItems, itemsByDay: undefined };
+                                                                                            } else {
+                                                                                                current[current.length - 1] = { ...currentSelection, items: currentItems, itemsByDay: undefined };
+                                                                                            }
+                                                                                            
+                                                                                            setVendorSelectionsForDay(null, current);
                                                                                         }} className="btn btn-secondary" style={{ padding: '2px 8px' }}>-</button>
                                                                                         <span style={{ width: '20px', textAlign: 'center' }}>{qty}</span>
                                                                                         <button onClick={() => {
-                                                                                            // Ensure vendorId is set
-                                                                                            const vendorId = selection.vendorId || defaultVendorId || '';
-                                                                                            if (!vendorId) return;
+                                                                                            // Use effectiveVendorId which always has a value
+                                                                                            if (!effectiveVendorId) return;
                                                                                             
-                                                                                            // Get current selections and update
-                                                                                            const current = getVendorSelectionsForDay(null);
-                                                                                            const currentSelection = current && current.length > 0 ? current[0] : { vendorId, items: {} };
-                                                                                            const currentItems = currentSelection.items || {};
+                                                                                            // Get current selections and find the matching vendor selection
+                                                                                            const current = [...getVendorSelectionsForDay(null)];
+                                                                                            const selectionIndex = current.findIndex((sel: any) => sel.vendorId === effectiveVendorId);
                                                                                             
-                                                                                            const updatedItems = { ...currentItems, [item.id]: qty + 1 };
-                                                                                            setVendorSelectionsForDay(null, [{ vendorId, items: updatedItems }]);
+                                                                                            let currentSelection;
+                                                                                            if (selectionIndex >= 0) {
+                                                                                                currentSelection = current[selectionIndex];
+                                                                                            } else {
+                                                                                                // Create new selection if not found
+                                                                                                currentSelection = { vendorId: effectiveVendorId, items: {} };
+                                                                                                current.push(currentSelection);
+                                                                                            }
+                                                                                            
+                                                                                            // Use the displayed items object as the base to avoid double counting
+                                                                                            // This ensures we're working with the same data that's being displayed
+                                                                                            const currentItems = { ...items };
+                                                                                            currentItems[item.id] = qty + 1;
+                                                                                            
+                                                                                            // Update the specific selection in the array, clearing itemsByDay to prevent double counting
+                                                                                            if (selectionIndex >= 0) {
+                                                                                                current[selectionIndex] = { ...currentSelection, items: currentItems, itemsByDay: undefined };
+                                                                                            } else {
+                                                                                                current[current.length - 1] = { ...currentSelection, items: currentItems, itemsByDay: undefined };
+                                                                                            }
+                                                                                            
+                                                                                            setVendorSelectionsForDay(null, current);
                                                                                         }} className="btn btn-secondary" style={{ padding: '2px 8px' }}>+</button>
                                                                                     </div>
                                                                                 </label>
                                                                             </div>
                                                                         );
                                                                     })}
-                                                                    {getVendorMenuItems(selection.vendorId).length === 0 && <span className={styles.hint}>No active menu items.</span>}
+                                                                    {(!effectiveVendorId || getVendorMenuItems(effectiveVendorId).length === 0) && <span className={styles.hint}>No active menu items.</span>}
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -5180,835 +6076,4 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             />
         </>
     );
-
-    // Helper function to create address query for geocoding
-    function streetQueryNoUnit(addressData: { address?: string; city?: string; state?: string; zip?: string }) {
-        const parts = [addressData.address, addressData.city, addressData.state, addressData.zip].filter(Boolean);
-        return parts.join(", ");
-    }
-
-    // Tracked fetch for geocoding with timeout and abort
-    const trackedFetch = async (input: string, init: RequestInit = {}) => {
-        const ctrl = new AbortController();
-        const sig = init.signal
-            ? (() => {
-                try {
-                    return AbortSignal.any([init.signal!, ctrl.signal]);
-                } catch {
-                    return ctrl.signal;
-                }
-            })()
-            : ctrl.signal;
-        inflight.current.add(ctrl);
-        try {
-            const timeout = setTimeout(() => ctrl.abort(), 10000);
-            const res = await fetch(input, { ...init, signal: sig });
-            clearTimeout(timeout);
-            return res;
-        } finally {
-            inflight.current.delete(ctrl);
-            setGeoBusy(false);
-        }
-    };
-
-    // Persist lat/lng to server
-    async function persistLatLng(userId: string, geo: { lat: number; lng: number; address?: string; city?: string; state?: string; zip?: string }) {
-        if (!Number.isFinite(Number(userId))) return;
-        setGeoPersisting(true);
-        try {
-            await updateClient(userId, {
-                lat: geo.lat,
-                lng: geo.lng,
-                ...(geo.address ? { address: geo.address } : {}),
-                ...(geo.city ? { city: geo.city } : {}),
-                ...(geo.state ? { state: geo.state } : {}),
-                ...(geo.zip ? { zip: geo.zip } : {}),
-            });
-        } catch (_) {
-            // Silently fail - user can retry
-        } finally {
-            setGeoPersisting(false);
-        }
-    }
-
-    // Auto geocode function
-    async function tryAutoGeocode() {
-        if (saving || geoBusy) return;
-        setGeoBusy(true);
-        setGeoErr("");
-        setCandsOpen(false);
-        setCands([]);
-        setGeoSuccess(false);
-
-        const qStrict = buildGeocodeQuery({
-            address: formData.address || "",
-            city: formData.city || "",
-            state: formData.state || "",
-            zip: formData.zip || "",
-        }) || streetQueryNoUnit({
-            address: formData.address || "",
-            city: formData.city || "",
-            state: formData.state || "",
-            zip: formData.zip || "",
-        });
-
-        try {
-            const a = await geocodeOneClient(qStrict);
-            setFormData(f => ({ ...f, lat: a.lat, lng: a.lng }));
-            if (formData.id) {
-                await persistLatLng(formData.id, {
-                    lat: a.lat,
-                    lng: a.lng,
-                    address: formData.address || "",
-                    city: formData.city || "",
-                    state: formData.state || "",
-                    zip: formData.zip || "",
-                });
-            }
-            setGeoSuccess(true);
-            setTimeout(() => setGeoSuccess(false), 2000);
-        } catch {
-            try {
-                const qLoose = streetQueryNoUnit({
-                    address: formData.address || "",
-                    city: formData.city || "",
-                    state: formData.state || "",
-                    zip: "",
-                });
-                const a2 = await geocodeOneClient(qLoose);
-                setFormData(f => ({ ...f, lat: a2.lat, lng: a2.lng }));
-                if (formData.id) {
-                    await persistLatLng(formData.id, {
-                        lat: a2.lat,
-                        lng: a2.lng,
-                        address: formData.address || "",
-                        city: formData.city || "",
-                        state: formData.state || "",
-                        zip: formData.zip || "",
-                    });
-                }
-                setGeoSuccess(true);
-                setTimeout(() => setGeoSuccess(false), 2000);
-            } catch {
-                setGeoErr("Address not found. Try suggestions or map selection.");
-            }
-        } finally {
-            setGeoBusy(false);
-        }
-    }
-
-    // Open suggestions for geocoding
-    async function openSuggestions() {
-        if (saving || geoBusy) return;
-        setCandsOpen(true);
-        setCands([]);
-        setGeoBusy(true);
-        setGeoErr("");
-        try {
-            const q = streetQueryNoUnit({
-                address: formData.address || "",
-                city: formData.city || "",
-                state: formData.state || "",
-                zip: formData.zip || "",
-            });
-            const res = await trackedFetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=8`, { cache: "no-store" });
-            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-            const data = await res.json();
-            setCands(Array.isArray(data?.items) ? data.items : []);
-        } catch (e: any) {
-            if (e?.name !== "AbortError") setGeoErr("Failed to load suggestions. Try again or use map.");
-        } finally {
-            setGeoBusy(false);
-        }
-    }
-
-    // Pick a candidate from suggestions
-    async function pickCandidate(item: any) {
-        const lat = Number(item?.lat);
-        const lng = Number(item?.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-        setFormData(f => ({ ...f, lat, lng }));
-        setCandsOpen(false);
-        setGeoErr("");
-        if (formData.id) {
-            await persistLatLng(formData.id, {
-                lat,
-                lng,
-                address: formData.address || "",
-                city: formData.city || "",
-                state: formData.state || "",
-                zip: formData.zip || "",
-            });
-        }
-        setGeoSuccess(true);
-        setTimeout(() => setGeoSuccess(false), 2000);
-    }
-
-    // Handle map confirmation
-    async function onMapConfirm({ lat, lng }: { lat: number; lng: number }) {
-        setFormData(f => ({ ...f, lat, lng }));
-        setMapOpen(false);
-        setGeoErr("");
-        if (formData.id) {
-            await persistLatLng(formData.id, {
-                lat,
-                lng,
-                address: formData.address || "",
-                city: formData.city || "",
-                state: formData.state || "",
-                zip: formData.zip || "",
-            });
-        }
-        setGeoSuccess(true);
-        setTimeout(() => setGeoSuccess(false), 2000);
-    }
-
-    async function handleSave(): Promise<boolean> {
-
-        if (!client && !isNewClient) {
-            return false;
-        }
-
-        // Validate approvedMealsPerWeek min/max bounds
-        // Allow 0/undefined (can be under min), but if > 0, must be within min/max bounds
-        const approvedMeals = formData.approvedMealsPerWeek ?? 0;
-
-        // If value is > 0, validate it's within bounds (0 is always allowed)
-        if (approvedMeals > 0) {
-            if (approvedMeals < MIN_APPROVED_MEALS_PER_WEEK) {
-                setValidationError({
-                    show: true,
-                    messages: [`Approved meals per week (${approvedMeals}) must be at least ${MIN_APPROVED_MEALS_PER_WEEK}.`]
-                });
-
-                return false;
-            }
-            if (approvedMeals > MAX_APPROVED_MEALS_PER_WEEK) {
-                setValidationError({
-                    show: true,
-                    messages: [`Approved meals per week (${approvedMeals}) must be at most ${MAX_APPROVED_MEALS_PER_WEEK}.`]
-                });
-
-                return false;
-            }
-        }
-
-        // Validate location (lat/lng) is required
-        const lat = formData.lat ?? formData.latitude;
-        const lng = formData.lng ?? formData.longitude;
-        if (lat == null || lng == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
-            setValidationError({
-                show: true,
-                messages: ['Location is required. Please geocode the client address before saving.']
-            });
-            return false;
-        }
-
-        // Validate Order Config before saving (if we have config)
-        // For Boxes, validate even without caseId (caseId is optional for boxes)
-        // For other services, require caseId
-        const shouldValidate = orderConfig && (
-            formData.serviceType === 'Boxes' 
-                ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
-                : orderConfig.caseId
-        );
-        if (shouldValidate) {
-            const validation = validateOrder();
-            if (!validation.isValid) {
-                setValidationError({ show: true, messages: validation.messages });
-                return false;
-            }
-        }
-
-        // Check for Status Change by Navigator
-        // Only show units modal if the new status requires units on change
-        // Skip this check for new clients
-        if (!isNewClient && client) {
-            if (currentUser?.role === 'navigator' && formData.statusId !== client.statusId) {
-                const newStatus = statuses.find(s => s.id === formData.statusId);
-
-                // Only show modal if the new status has requiresUnitsOnChange enabled
-                if (newStatus?.requiresUnitsOnChange) {
-                    try {
-                        const oldStatusName = getStatusName(client.statusId);
-                        const newStatusName = getStatusName(formData.statusId!);
-                        setPendingStatusChange({ oldStatus: oldStatusName, newStatus: newStatusName });
-                        setShowUnitsModal(true);
-                        return false; // Intercepted
-                    } catch (e) {
-                        console.error('[handleSave] Error in status change logic:', e);
-                    }
-                }
-            }
-        }
-
-
-        return await executeSave(0);
-    }
-
-    async function executeSave(unitsAdded: number = 0): Promise<boolean> {
-        // Helper to prepare cleaned active order
-        const prepareActiveOrder = () => {
-            if (!orderConfig) return undefined;
-
-            const cleanedOrderConfig = { ...orderConfig };
-
-            // CRITICAL: Always preserve caseId at the top level for both Food and Boxes
-            cleanedOrderConfig.caseId = orderConfig.caseId;
-
-            if (formData.serviceType === 'Food') {
-                // For Food service: Ensure vendorId and items are preserved in all vendor selections
-                if (cleanedOrderConfig.deliveryDayOrders) {
-                    // Multi-day format: Clean and preserve vendor selections for each day
-                    for (const day of Object.keys(cleanedOrderConfig.deliveryDayOrders)) {
-                        // Ensure deliveryDay is attached to the day order
-                        if (!cleanedOrderConfig.deliveryDayOrders[day].deliveryDay) {
-                            cleanedOrderConfig.deliveryDayOrders[day].deliveryDay = day;
-                        }
-                        cleanedOrderConfig.deliveryDayOrders[day].vendorSelections = (cleanedOrderConfig.deliveryDayOrders[day].vendorSelections || [])
-                            .filter((s: any) => s.vendorId) // Only keep selections with a vendor
-                            .map((s: any) => ({
-                                vendorId: s.vendorId, // Preserve vendor ID
-                                items: s.items || {}, // Preserve items
-                                deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
-                            }));
-                    }
-                } else if (cleanedOrderConfig.vendorSelections) {
-                    // Check if we have per-vendor delivery days (itemsByDay format)
-                    const hasPerVendorDeliveryDays = cleanedOrderConfig.vendorSelections.some((s: any) =>
-                        s.selectedDeliveryDays && s.selectedDeliveryDays.length > 0 && s.itemsByDay
-                    );
-
-                    if (hasPerVendorDeliveryDays) {
-                        // Convert per-vendor delivery days to deliveryDayOrders format
-                        const deliveryDayOrders: any = {};
-                        for (const selection of cleanedOrderConfig.vendorSelections) {
-                            if (!selection.vendorId || !selection.selectedDeliveryDays || !selection.itemsByDay) continue;
-
-                            for (const day of selection.selectedDeliveryDays) {
-                                if (!deliveryDayOrders[day]) {
-                                    deliveryDayOrders[day] = { 
-                                        vendorSelections: [],
-                                        deliveryDay: day  // Explicitly attach the delivery day to the order
-                                    };
-                                }
-                                const dayItems = selection.itemsByDay[day] || {};
-                                const hasItems = Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
-                                if (hasItems) {
-                                    // Preserve vendorId, items, and deliveryDay for this day
-                                    deliveryDayOrders[day].vendorSelections.push({
-                                        vendorId: selection.vendorId,
-                                        items: dayItems,
-                                        deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
-                                    });
-                                }
-                            }
-                        }
-                        // Clean up days with no vendors
-                        const daysWithVendors = Object.keys(deliveryDayOrders).filter(day =>
-                            deliveryDayOrders[day].vendorSelections && deliveryDayOrders[day].vendorSelections.length > 0
-                        );
-                        if (daysWithVendors.length > 0) {
-                            const cleanedDeliveryDayOrders: any = {};
-                            for (const day of daysWithVendors) cleanedDeliveryDayOrders[day] = deliveryDayOrders[day];
-                            cleanedOrderConfig.deliveryDayOrders = cleanedDeliveryDayOrders;
-                            cleanedOrderConfig.vendorSelections = undefined;
-                        } else {
-                            // CRITICAL FIX: If no days have vendors with items, preserve the original vendorSelections format
-                            // Don't set vendorSelections to undefined - keep the original structure
-                            console.warn('[prepareActiveOrder] No days with vendors found after conversion, preserving original vendorSelections format');
-                            // Keep vendorSelections as-is, don't convert to deliveryDayOrders
-                            cleanedOrderConfig.deliveryDayOrders = undefined;
-                        }
-                    } else {
-                        // Single-day format: Clean and preserve vendor selections
-                        // CRITICAL FIX: Only filter out selections without vendorId, but keep all selections with vendorId
-                        // even if items are empty (they might be added later or items might be in a different format)
-                        cleanedOrderConfig.vendorSelections = (cleanedOrderConfig.vendorSelections || [])
-                            .filter((s: any) => s.vendorId && s.vendorId.trim() !== '') // Only keep selections with a valid vendor
-                            .map((s: any) => ({
-                                vendorId: s.vendorId, // Preserve vendor ID
-                                items: s.items || {} // Preserve items (even if empty - they might be added in a different format)
-                            }));
-                        
-                        // Validate that we have at least one vendor selection with items
-                        const hasItems = cleanedOrderConfig.vendorSelections.some((s: any) => {
-                            const items = s.items || {};
-                            return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
-                        });
-                        
-                        if (!hasItems && cleanedOrderConfig.vendorSelections.length > 0) {
-                            console.warn('[prepareActiveOrder] Vendor selections exist but no items found. This might indicate items are in itemsByDay format.');
-                            // Don't remove vendor selections - they might have items in itemsByDay format that we missed
-                        }
-                    }
-                }
-            } else if (formData.serviceType === 'Boxes') {
-                // For Boxes: Use the boxOrders array which supports multiple boxes
-                // Match triangleorder approach: Clean items and notes, only keep items with qty > 0
-                if (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders)) {
-                    cleanedOrderConfig.boxOrders = orderConfig.boxOrders.map((box: any) => {
-                        const cleanedItems: any = {};
-                        const cleanedNotes: any = {};
-
-                        if (box.items) {
-                            Object.entries(box.items).forEach(([itemId, qty]) => {
-                                if (Number(qty) > 0) {
-                                    cleanedItems[itemId] = Number(qty);
-                                    if (box.itemNotes && box.itemNotes[itemId]) {
-                                        cleanedNotes[itemId] = box.itemNotes[itemId];
-                                    }
-                                }
-                            });
-                        }
-
-                        return {
-                            ...box,
-                            items: cleanedItems,
-                            itemNotes: cleanedNotes
-                        };
-                    });
-                } else {
-                    // Fallback: migrate legacy fields to boxOrders array if array is missing
-                    const legacyBox = {
-                        boxTypeId: orderConfig.boxTypeId || '',
-                        vendorId: orderConfig.vendorId || '',
-                        quantity: orderConfig.boxQuantity || 1,
-                        items: orderConfig.items || {},
-                        itemNotes: {}
-                    };
-                    cleanedOrderConfig.boxOrders = [legacyBox];
-                }
-                // Also preserve top-level fields for backward compatibility
-                if (cleanedOrderConfig.boxOrders && cleanedOrderConfig.boxOrders.length > 0) {
-                    const firstBox = cleanedOrderConfig.boxOrders[0];
-                    cleanedOrderConfig.vendorId = firstBox.vendorId;
-                    cleanedOrderConfig.boxTypeId = firstBox.boxTypeId;
-                    cleanedOrderConfig.boxQuantity = firstBox.quantity;
-                    cleanedOrderConfig.items = firstBox.items;
-                }
-                cleanedOrderConfig.caseId = orderConfig.caseId; // Preserve case ID (also set above)
-                cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {}; // Preserve item prices
-                console.log('[prepareActiveOrder] Box Orders prepared:', JSON.stringify(cleanedOrderConfig.boxOrders, null, 2));
-            } else if (formData.serviceType === 'Custom') {
-                // For Custom: Preserve vendorId and customItems
-                if (orderConfig.vendorId !== undefined) {
-                    cleanedOrderConfig.vendorId = orderConfig.vendorId;
-                }
-                cleanedOrderConfig.caseId = orderConfig.caseId; // Preserve case ID (also set above)
-                // Preserve customItems array, filtering out items with empty names
-                cleanedOrderConfig.customItems = (orderConfig.customItems || [])
-                    .filter((item: any) => item.name && item.name.trim() !== '')
-                    .map((item: any) => ({
-                        name: item.name || '',
-                        price: parseFloat(item.price) || 0,
-                        quantity: parseInt(item.quantity) || 1
-                    }));
-            }
-
-            return {
-                ...cleanedOrderConfig,
-                serviceType: formData.serviceType,
-                lastUpdated: new Date().toISOString(),
-                updatedBy: 'Admin'
-            };
-        };
-
-        if (!client && !isNewClient) return false;
-        setSaving(true);
-        setMessage(null);
-
-        try {
-            // Handle new client creation
-            if (isNewClient) {
-                // Validate that client name is not empty
-                if (!formData.fullName || !formData.fullName.trim()) {
-                    setSaving(false);
-                    setMessage('Client name is required. Please enter a client name before saving.');
-                    return false;
-                }
-
-                // Determine if orderConfig has meaningful data to save (before creating client)
-                const hasCaseId = orderConfig?.caseId && orderConfig.caseId.trim() !== '';
-                const hasVendorSelections = orderConfig?.vendorSelections &&
-                    Array.isArray(orderConfig.vendorSelections) &&
-                    orderConfig.vendorSelections.some((s: any) => s.vendorId && s.vendorId.trim() !== '');
-                const hasDeliveryDayOrders = orderConfig?.deliveryDayOrders &&
-                    Object.keys(orderConfig.deliveryDayOrders).length > 0;
-                const hasBoxConfig = (orderConfig?.vendorId && orderConfig.vendorId.trim() !== '') ||
-                    (orderConfig?.boxTypeId && orderConfig.boxTypeId.trim() !== '') ||
-                    (orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0);
-                const hasOrderData = hasCaseId || hasVendorSelections || hasDeliveryDayOrders || hasBoxConfig;
-
-                // Prepare active order data before creating client
-                const preparedActiveOrder = hasOrderData ? prepareActiveOrder() : undefined;
-
-                const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
-                const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
-
-                // Create client WITH activeOrder included during creation
-                const clientData: Omit<ClientProfile, 'id' | 'createdAt' | 'updatedAt'> = {
-                    fullName: formData.fullName ?? '',
-                    email: formData.email ?? '',
-                    address: formData.address ?? '',
-                    phoneNumber: formData.phoneNumber ?? '',
-                    secondaryPhoneNumber: formData.secondaryPhoneNumber ?? null,
-                    navigatorId: formData.navigatorId ?? defaultNavigatorId,
-                    endDate: formData.endDate ?? '',
-                    screeningTookPlace: formData.screeningTookPlace ?? false,
-                    screeningSigned: formData.screeningSigned ?? false,
-                    notes: formData.notes ?? '',
-                    statusId: formData.statusId ?? initialStatusId,
-                    serviceType: formData.serviceType ?? 'Food',
-                    approvedMealsPerWeek: formData.approvedMealsPerWeek ?? 21,
-                    authorizedAmount: formData.authorizedAmount ?? null,
-                    expirationDate: formData.expirationDate ?? null,
-                    // New fields from dietfantasy
-                    firstName: formData.firstName ?? null,
-                    lastName: formData.lastName ?? null,
-                    apt: formData.apt ?? null,
-                    city: formData.city ?? null,
-                    state: formData.state ?? null,
-                    zip: formData.zip ?? null,
-                    county: formData.county ?? null,
-                    clientIdExternal: formData.clientIdExternal ?? null,
-                    caseIdExternal: formData.caseIdExternal ?? null,
-                    medicaid: formData.medicaid ?? false,
-                    paused: formData.paused ?? false,
-                    complex: formData.complex ?? false,
-                    bill: formData.bill ?? true,
-                    delivery: formData.delivery ?? true,
-                    dislikes: formData.dislikes ?? null,
-                    latitude: formData.latitude ?? null,
-                    longitude: formData.longitude ?? null,
-                    lat: formData.lat ?? null,
-                    lng: formData.lng ?? null,
-                    geocodedAt: formData.geocodedAt ?? null,
-                    billings: formData.billings ?? null,
-                    visits: formData.visits ?? null,
-                    signToken: formData.signToken ?? null,
-                    activeOrder: preparedActiveOrder // Include order details during creation
-                };
-
-                const newClient = await addClient(clientData);
-
-                if (!newClient) {
-                    setSaving(false);
-                    return false;
-                }
-
-                // Fetch the created client (it already has activeOrder in the database)
-                const updatedClient = await getClient(newClient.id);
-
-                if (!updatedClient) {
-                    console.error('[ClientProfile] Failed to fetch updated client after update');
-                    setSaving(false);
-                    setMessage('Error: Failed to fetch updated client.');
-                    return false;
-                }
-
-
-
-
-                // IMPORTANT: Set flag BEFORE changing clientId to prevent useEffect from overwriting orderConfig
-                justCreatedClientRef.current = true;
-
-                // Update state with the updated client
-                setActualClientId(updatedClient.id);
-                setClient(updatedClient);
-                setFormData(updatedClient);
-
-                // Set orderConfig from the updated client's activeOrder
-                if (updatedClient.activeOrder && Object.keys(updatedClient.activeOrder).length > 0) {
-
-                    setOrderConfig(updatedClient.activeOrder);
-                    setOriginalOrderConfig(updatedClient.activeOrder);
-                } else {
-                    // If no activeOrder, keep the current orderConfig
-
-                }
-
-                invalidateClientData();
-                setMessage('Client created successfully.');
-
-                // Sync to upcoming_orders if there's order data (same as edit path)
-                if (updatedClient.activeOrder && updatedClient.activeOrder.caseId) {
-                    await syncCurrentOrderToUpcoming(updatedClient.id, updatedClient, true);
-                }
-
-                // IMPORTANT: Set saving to false and return true BEFORE any state updates that might trigger re-renders
-                setSaving(false);
-
-                return true;
-            }
-
-            // Existing client update logic
-            if (!client) {
-                setSaving(false);
-                return false;
-            }
-
-            // Log Navigator Action if applicable
-            if (currentUser?.role === 'navigator' && pendingStatusChange && unitsAdded >= 0) {
-                await logNavigatorAction({
-                    navigatorId: currentUser.id,
-                    clientId: clientId,
-                    oldStatus: pendingStatusChange.oldStatus,
-                    newStatus: pendingStatusChange.newStatus,
-                    unitsAdded: unitsAdded
-                });
-            }
-
-            // -- Change Detection --
-            const changes: string[] = [];
-            if (client.fullName !== formData.fullName) changes.push(`Full Name: "${client.fullName}" -> "${formData.fullName}"`);
-            if (client.address !== formData.address) changes.push(`Address: "${client.address}" -> "${formData.address}"`);
-            if (client.email !== formData.email) changes.push(`Email: "${client.email}" -> "${formData.email}"`);
-            if (client.phoneNumber !== formData.phoneNumber) changes.push(`Phone: "${client.phoneNumber}" -> "${formData.phoneNumber}"`);
-            if ((client.secondaryPhoneNumber || '') !== (formData.secondaryPhoneNumber || '')) {
-                changes.push(`Secondary Phone: "${client.secondaryPhoneNumber || ''}" -> "${formData.secondaryPhoneNumber || ''}"`);
-            }
-            if (client.notes !== formData.notes) changes.push('Notes updated');
-            if (client.statusId !== formData.statusId) {
-                const oldStatus = statuses.find(s => s.id === client.statusId)?.name || 'Unknown';
-                const newStatus = statuses.find(s => s.id === formData.statusId)?.name || 'Unknown';
-                changes.push(`Status: "${oldStatus}" -> "${newStatus}"`);
-            }
-            if (client.navigatorId !== formData.navigatorId) {
-                const oldNav = navigators.find(n => n.id === client.navigatorId)?.name || 'Unassigned';
-                const newNav = navigators.find(n => n.id === formData.navigatorId)?.name || 'Unassigned';
-                changes.push(`Navigator: "${oldNav}" -> "${newNav}"`);
-            }
-            if (client.serviceType !== formData.serviceType) changes.push(`Service Type: "${client.serviceType}" -> "${formData.serviceType}"`);
-            if (client.approvedMealsPerWeek !== formData.approvedMealsPerWeek) changes.push(`Approved Meals: ${client.approvedMealsPerWeek} -> ${formData.approvedMealsPerWeek}`);
-            if (client.screeningTookPlace !== formData.screeningTookPlace) changes.push(`Screening Took Place: ${client.screeningTookPlace} -> ${formData.screeningTookPlace}`);
-            if (client.screeningSigned !== formData.screeningSigned) changes.push(`Screening Signed: ${client.screeningSigned} -> ${formData.screeningSigned}`);
-            if ((client.authorizedAmount ?? null) !== (formData.authorizedAmount ?? null)) {
-                changes.push(`Authorized Amount: ${client.authorizedAmount ?? 'null'} -> ${formData.authorizedAmount ?? 'null'}`);
-            }
-            if ((client.expirationDate || null) !== (formData.expirationDate || null)) {
-                changes.push(`Expiration Date: ${client.expirationDate || 'null'} -> ${formData.expirationDate || 'null'}`);
-            }
-
-            // Check if order configuration changed
-            // For Boxes, check if boxOrders exist (caseId is optional)
-            // For other services, require caseId
-            const hasOrderChanges = orderConfig && (
-                formData.serviceType === 'Boxes' 
-                    ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
-                    : orderConfig.caseId
-            );
-            if (hasOrderChanges) {
-                changes.push('Order configuration changed');
-            }
-
-            const summary = changes.length > 0 ? changes.join(', ') : 'No functional changes detected (re-saved profile)';
-
-            // Update client profile
-            // We defer this call until after we've prepared the activeOrder above if needed
-            // But wait, the order config block is BELOW this. We need to move the updateClient call down or move the prep up.
-            // Actually, let's keep it simple: 
-            // 1. Calculate changes
-            // 2. Prepare updateData
-            // 3. IF order changes, add activeOrder to updateData
-            // 4. Call updateClient once
-
-            // Checking order changes again...
-            // The original code called updateClient BEFORE calculating cleanedOrderConfig.
-            // This means we need to restructure a bit.
-
-            let updateData: Partial<ClientProfile> = { ...formData };
-
-            await recordClientChange(clientId, summary, 'Admin');
-
-            // Sync Current Order Request
-            const hasOrderConfigChanges = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
-            
-            console.log('[ClientProfile] Order save check:', {
-                serviceType: formData.serviceType,
-                hasOrderConfigChanges,
-                hasOrderChanges,
-                hasCaseId: !!orderConfig?.caseId,
-                caseId: orderConfig?.caseId,
-                hasBoxOrders: !!(orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0),
-                boxOrdersCount: orderConfig?.boxOrders?.length || 0
-            });
-            
-            // Match triangleorder approach: Save if there are order config changes OR order changes
-            // Don't check hasValidOrderData - let the backend handle validation
-            if (hasOrderConfigChanges || hasOrderChanges) {
-                // Add activeOrder to updateData so updateClient handles the full save + sync efficiently
-                // efficiently with only ONE revalidation
-                const preparedOrder = prepareActiveOrder();
-                if (preparedOrder) {
-                    updateData.activeOrder = preparedOrder;
-                    console.log('[ClientProfile] Saving order with activeOrder:', {
-                        serviceType: preparedOrder.serviceType,
-                        hasCaseId: !!preparedOrder.caseId,
-                        caseId: preparedOrder.caseId,
-                        hasVendorSelections: !!(preparedOrder as any).vendorSelections,
-                        vendorSelectionsCount: (preparedOrder as any).vendorSelections?.length || 0,
-                        hasDeliveryDayOrders: !!(preparedOrder as any).deliveryDayOrders,
-                        deliveryDayOrdersKeys: (preparedOrder as any).deliveryDayOrders ? Object.keys((preparedOrder as any).deliveryDayOrders) : [],
-                        hasBoxOrders: !!(preparedOrder as any).boxOrders,
-                        boxOrdersCount: (preparedOrder as any).boxOrders?.length || 0,
-                        boxOrders: (preparedOrder as any).boxOrders?.map((box: any) => ({
-                            boxTypeId: box.boxTypeId,
-                            vendorId: box.vendorId,
-                            itemsCount: Object.keys(box.items || {}).length
-                        })) || []
-                    });
-                } else {
-                    console.warn('[ClientProfile] prepareActiveOrder returned undefined, skipping order save');
-                }
-            }
-
-            // CRITICAL: Execute the single update call
-            try {
-                await updateClient(clientId, updateData);
-            } catch (error) {
-                console.error('[ClientProfile] Error updating client:', error);
-                const errorMessage = error instanceof Error ? error.message : 'An error occurred while saving the client.';
-                setErrorModal({ show: true, message: errorMessage });
-                setSaving(false);
-                return false;
-            }
-
-            // Sync to new independent tables if there's order data
-            // Sync to new independent tables if there's order data OR if we need to clear data
-            const serviceType = formData.serviceType;
-            
-            // For Boxes service, save even without caseId (caseId is optional for boxes)
-            if (serviceType === 'Boxes' && updateData.activeOrder) {
-                const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
-                console.log('[ClientProfile] Saving box orders:', {
-                    serviceType,
-                    hasCaseId: !!updateData.activeOrder.caseId,
-                    caseId: updateData.activeOrder.caseId,
-                    boxesCount: boxesToSave.length,
-                    boxes: boxesToSave.map((box: any) => ({
-                        boxTypeId: box.boxTypeId,
-                        vendorId: box.vendorId,
-                        quantity: box.quantity,
-                        itemsCount: Object.keys(box.items || {}).length,
-                        hasItems: Object.keys(box.items || {}).length > 0
-                    }))
-                });
-                if (boxesToSave.length > 0) {
-                    await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
-                        ...box,
-                        caseId: updateData.activeOrder?.caseId
-                    })));
-                }
-            }
-            
-            // For other service types, require caseId
-            if (updateData.activeOrder && updateData.activeOrder.caseId) {
-                if (serviceType === 'Custom') {
-                    const activeOrderAny = updateData.activeOrder as any;
-                    if (activeOrderAny.custom_name && activeOrderAny.custom_price && activeOrderAny.vendorId && activeOrderAny.deliveryDay) {
-                        await saveClientCustomOrder(
-                            clientId,
-                            activeOrderAny.vendorId,
-                            activeOrderAny.custom_name,
-                            Number(activeOrderAny.custom_price),
-                            activeOrderAny.deliveryDay,
-                            activeOrderAny.caseId
-                        );
-                    }
-                }
-
-                // Save to appropriate independent tables based on what data exists
-                // NOTE: A Food service client can have BOTH deliveryDayOrders AND mealSelections (e.g., Breakfast)
-
-                // Save food orders: ALWAYS if service type is Food, to allow clearing
-                if (serviceType === 'Food') {
-                    await saveClientFoodOrder(clientId, {
-                        caseId: updateData.activeOrder.caseId,
-                        deliveryDayOrders: (updateData.activeOrder as any).deliveryDayOrders || {}
-                    });
-                }
-
-                // Also handle the case where we might have food orders but currently not Food service? 
-                // No, only save to Food table if type is Food.
-
-                // Save meal orders if mealSelections exists OR if service type is Meal OR if service type is Food (to allow clearing)
-                if ((updateData.activeOrder as any).mealSelections || serviceType === 'Meal' || serviceType === 'Food') {
-                    await saveClientMealOrder(clientId, {
-                        caseId: updateData.activeOrder.caseId,
-                        mealSelections: (updateData.activeOrder as any).mealSelections || {}
-                    });
-                }
-            }
-            // Still call legacy sync for backward compatibility during migration
-            await syncCurrentOrderToUpcoming(clientId, { ...client, ...updateData } as ClientProfile, true);
-
-            // Reload upcoming order if we had order changes
-            // COMMENTED OUT: We rely on updatedClient.activeOrder which we just loaded above.
-            // Fetching upcomingOrder here caused Draft orders (which don't exist in upcoming_orders table)
-            // to be overwritten with null/empty, clearing the form.
-            /*
-            if (hasOrderConfigChanges || hasOrderChanges) {
-                const updatedUpcomingOrder = await getUpcomingOrderForClient(clientId);
-                if (updatedUpcomingOrder) {
-                    setOrderConfig(updatedUpcomingOrder);
-                    setOriginalOrderConfig(JSON.parse(JSON.stringify(updatedUpcomingOrder)));
-                }
-            }
-            */
-
-            // Show cutoff-aware confirmation message if order was saved
-            let confirmationMessage = 'Changes saved successfully.';
-            if (hasOrderChanges && orderConfig && orderConfig.caseId) {
-                const cutoffPassed = isCutoffPassed();
-                const takeEffectDate = getEarliestTakeEffectDateForOrder();
-
-                if (cutoffPassed && takeEffectDate) {
-                    confirmationMessage = `Order saved. The weekly cutoff has passed, so this order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} (earliest effective date is always a Sunday). View Recent Orders section to see what will be delivered this week.`;
-                } else if (takeEffectDate) {
-                    confirmationMessage = `Order saved successfully. This order will take effect on ${takeEffectDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.`;
-                }
-            }
-
-            // Always close modal and client portal after saving (especially for navigators adding units)
-            const wasNavigatorAddingUnits = currentUser?.role === 'navigator' && pendingStatusChange !== null;
-            setShowUnitsModal(false);
-            setPendingStatusChange(null);
-            
-            // If navigator added units, always close the portal
-            if (wasNavigatorAddingUnits && onClose) {
-                onClose();
-                return true;
-            }
-            
-            if (onClose) {
-                onClose();
-            } else {
-                setMessage(confirmationMessage);
-                setTimeout(() => setMessage(null), 6000); // Longer timeout for longer messages
-                const updatedClient = await getClient(clientId);
-                if (updatedClient) {
-                    setClient(updatedClient);
-                    loadData();
-                }
-            }
-            return true;
-        } catch (error) {
-            setMessage('Error saving changes.');
-            console.error(error);
-            // Even on error, close modal and portal if navigator was adding units
-            const wasNavigatorAddingUnits = currentUser?.role === 'navigator' && pendingStatusChange !== null;
-            setShowUnitsModal(false);
-            setPendingStatusChange(null);
-            if (onClose && wasNavigatorAddingUnits) {
-                onClose();
-            }
-            return false;
-        } finally {
-            setSaving(false);
-            // Ensure modal is closed
-            setShowUnitsModal(false);
-            setPendingStatusChange(null);
-        }
-    }
 }

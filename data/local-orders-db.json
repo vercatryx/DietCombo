@@ -68,6 +68,28 @@
       "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     },
     {
+      "id": "371b6f45-9efd-4c92-9346-74731cd38ed2",
+      "client_id": "61e0486c-83a2-4e96-a111-bbe2f8bf0162",
+      "service_type": "Food",
+      "case_id": "98786",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2026-01-27",
+      "take_effect_date": "2026-02-01",
+      "delivery_day": "Tuesday",
+      "delivery_distribution": null,
+      "total_value": 23.97,
+      "total_items": 3,
+      "notes": null,
+      "order_number": 100028,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-26T19:56:50.239",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-26T19:56:52.412366",
+      "meal_type": "Lunch",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    },
+    {
       "id": "488e69ed-5ca9-466a-ab92-568865d742f9",
       "client_id": "client555-5555-5555-5555-55555555555",
       "service_type": "Food",
@@ -525,6 +547,12 @@
       "created_at": "2026-01-25T19:28:01.215568"
     },
     {
+      "id": "beb4e9bc-b3ed-417b-9e18-082debd04829",
+      "upcoming_order_id": "371b6f45-9efd-4c92-9346-74731cd38ed2",
+      "vendor_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "created_at": "2026-01-26T19:56:59.543742"
+    },
+    {
       "id": "582e0382-c49b-497e-8f73-cfb08cdc984d",
       "upcoming_order_id": "af095ea9-9472-496d-bd4c-30c53a0aa710",
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
@@ -860,6 +888,19 @@
       "menu_item_id": "item3333-3333-3333-3333-333333333334",
       "quantity": 3,
       "created_at": "2026-01-25T18:26:11.811168",
+      "custom_name": null,
+      "custom_price": null,
+      "meal_item_id": null,
+      "notes": null
+    },
+    {
+      "id": "d535482c-b804-4412-ae85-b203c3917b8f",
+      "upcoming_order_id": "371b6f45-9efd-4c92-9346-74731cd38ed2",
+      "vendor_selection_id": null,
+      "upcoming_vendor_selection_id": "beb4e9bc-b3ed-417b-9e18-082debd04829",
+      "menu_item_id": "item2222-2222-2222-2222-222222222223",
+      "quantity": 3,
+      "created_at": "2026-01-26T19:56:59.775297",
       "custom_name": null,
       "custom_price": null,
       "meal_item_id": null,
@@ -1818,5 +1859,5 @@
       "created_at": "2026-01-26T18:14:04.361159"
     }
   ],
-  "lastSynced": "2026-01-26T18:19:33.250Z"
+  "lastSynced": "2026-01-26T19:59:12.204Z"
 }

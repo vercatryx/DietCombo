@@ -806,6 +806,61 @@ export async function updateSettings(settings: AppSettings) {
     revalidatePath('/admin');
 }
 
+// --- DEFAULT ORDER TEMPLATE ACTIONS ---
+
+export async function getDefaultOrderTemplate(): Promise<any | null> {
+    try {
+        const { data, error } = await supabase
+            .from('settings')
+            .select('value')
+            .eq('key', 'default_order_template')
+            .single();
+        
+        if (error || !data) {
+            return null;
+        }
+        
+        return JSON.parse(data.value);
+    } catch (error) {
+        console.error('Error fetching default order template:', error);
+        return null;
+    }
+}
+
+export async function saveDefaultOrderTemplate(template: any): Promise<void> {
+    try {
+        const templateJson = JSON.stringify(template);
+        
+        // Check if setting exists
+        const { data: existing } = await supabase
+            .from('settings')
+            .select('id')
+            .eq('key', 'default_order_template')
+            .single();
+        
+        if (existing) {
+            // Update existing
+            const { error } = await supabase
+                .from('settings')
+                .update({ value: templateJson })
+                .eq('key', 'default_order_template');
+            handleError(error);
+        } else {
+            // Insert new
+            const id = randomUUID();
+            const { error } = await supabase
+                .from('settings')
+                .insert([{ id, key: 'default_order_template', value: templateJson }]);
+            handleError(error);
+        }
+        
+        revalidatePath('/admin');
+    } catch (error) {
+        console.error('Error saving default order template:', error);
+        throw error;
+    }
+}
+
 // --- NAVIGATOR ACTIONS ---
 
 export async function getNavigators() {
@@ -1140,10 +1195,22 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
     };
 
     // Save active_order if provided (ClientProfile component handles validation)
+    // If not provided, try to load default order template
     if (data.activeOrder !== undefined && data.activeOrder !== null) {
         payload.active_order = data.activeOrder;
     } else {
-        payload.active_order = {};
+        // Try to load default order template for new clients
+        try {
+            const defaultTemplate = await getDefaultOrderTemplate();
+            if (defaultTemplate) {
+                payload.active_order = defaultTemplate;
+            } else {
+                payload.active_order = {};
+            }
+        } catch (error) {
+            console.error('Error loading default order template:', error);
+            payload.active_order = {};
+        }
     }
 
     const id = randomUUID();
