@@ -4,9 +4,9 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, saveEquipmentOrder, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
-import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getEquipment, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
+import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
 import {
     getNextDeliveryDate as getNextDeliveryDateUtil,
@@ -156,20 +156,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const [boxTypes, setBoxTypes] = useState<BoxType[]>(initialBoxTypes || []);
     const [categories, setCategories] = useState<ItemCategory[]>([]);
     const [boxQuotas, setBoxQuotas] = useState<BoxQuota[]>([]);
-    const [equipment, setEquipment] = useState<any[]>([]);
-    const [showEquipmentOrder, setShowEquipmentOrder] = useState(false);
-    const [equipmentOrder, setEquipmentOrder] = useState<{ vendorId: string; equipmentId: string } | null>(null);
-    const [submittingEquipmentOrder, setSubmittingEquipmentOrder] = useState(false);
-
-    // Refresh vendors and equipment when equipment order section is opened to ensure we have latest data
-    useEffect(() => {
-        if (showEquipmentOrder) {
-            Promise.all([
-                getVendors().then(v => setVendors(v)),
-                getEquipment().then(e => setEquipment(e))
-            ]);
-        }
-    }, [showEquipmentOrder]);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [history, setHistory] = useState<DeliveryRecord[]>([]);
     const [orderHistory, setOrderHistory] = useState<any[]>([]);
@@ -867,7 +853,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }
 
     async function loadLookups() {
-        const [s, n, v, m, b, appSettings, catData, eData, allClientsData, regularClientsData] = await Promise.all([
+        const [s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
             getStatuses(),
             getNavigators(),
             getVendors(),
@@ -875,7 +861,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             getBoxTypes(),
             getSettings(),
             getCategories(),
-            getEquipment(),
             getClients(),
             getRegularClients()
         ]);
@@ -901,7 +886,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         setBoxTypes(b);
         setSettings(appSettings);
         setCategories(catData);
-        setEquipment(eData);
         setAllClients(allClientsData);
         setRegularClients(regularClientsData);
     }
@@ -916,7 +900,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             ? (orderConfig?.caseId || client?.activeOrder?.caseId || null)
             : null;
         
-        const [c, s, n, v, m, b, appSettings, catData, eData, allClientsData, regularClientsData, upcomingOrderData, activeOrderData, historyData, orderHistoryData, billingHistoryData] = await Promise.all([
+        const [c, s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData, upcomingOrderData, activeOrderData, historyData, orderHistoryData, billingHistoryData] = await Promise.all([
             Promise.resolve(client),
             getStatuses(),
             getNavigators(),
@@ -925,7 +909,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             getBoxTypes(),
             getSettings(),
             getCategories(),
-            getEquipment(),
             getClients(),
             getRegularClients(),
             // For Boxes service type, filter by case_id to get the latest upcoming order for the selected client
@@ -963,7 +946,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         setBoxTypes(b);
         setSettings(appSettings);
         setCategories(catData);
-        setEquipment(eData);
         setAllClients(allClientsData);
         setRegularClients(regularClientsData);
         setActiveOrder(activeOrderData);
@@ -1878,7 +1860,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (!deliveryDate) return null;
 
         return {
-            dayOfWeek: deliveryDate.toLocaleDateString('en-US', { weekday: 'long' }),
+            dayOfWeek: '', // Hidden - day of week not displayed
             date: deliveryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
         };
     }
@@ -1902,11 +1884,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (formData.serviceType === 'Food') {
             const messages: string[] = [];
 
-            // Check total order value against approved meals per week
+            // Check total order value against approved meals per week - must be exact match
             const totalValue = getCurrentOrderTotalValueAllDays();
             const approvedMeals = formData.approvedMealsPerWeek || 0;
-            if (approvedMeals > 0 && totalValue > approvedMeals) {
-                messages.push(`Total order value (${totalValue}) exceeds approved meals per week (${approvedMeals}).`);
+            if (approvedMeals > 0 && totalValue !== approvedMeals) {
+                if (totalValue > approvedMeals) {
+                    messages.push(`Total order value (${totalValue}) exceeds approved meals per week (${approvedMeals}). Please reduce your order to exactly match the limit.`);
+                } else {
+                    messages.push(`Total order value (${totalValue}) is less than approved meals per week (${approvedMeals}). Please add items to exactly match the limit.`);
+                }
             }
 
             // Check each vendor meets their minimum requirement (across all delivery days)
@@ -3386,10 +3372,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                     <h4>Current Order Request</h4>
                                                     <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column', alignItems: 'flex-end' }}>
                                                         <div className={styles.budget} style={{
-                                                            color: getCurrentOrderTotalValueAllDays() > (formData.approvedMealsPerWeek || 0) ? 'var(--color-danger)' : 'inherit',
-                                                            backgroundColor: getCurrentOrderTotalValueAllDays() > (formData.approvedMealsPerWeek || 0) ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-surface-hover)'
+                                                            color: getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) ? 'var(--color-danger)' : 'inherit',
+                                                            backgroundColor: getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-surface-hover)'
                                                         }}>
                                                             Value: {getCurrentOrderTotalValueAllDays()} / {formData.approvedMealsPerWeek || 0}
+                                                            {getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) && (
+                                                                <span style={{ marginLeft: '8px', fontSize: '0.85rem' }}>
+                                                                    {getCurrentOrderTotalValueAllDays() > (formData.approvedMealsPerWeek || 0) ? '(OVER)' : '(UNDER)'}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -4011,9 +4002,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                         </div>
                                                                     );
                                                                 })}
-                                                                <button className="btn btn-secondary" onClick={() => addVendorBlock(null)} style={{ marginTop: '0.5rem' }}>
-                                                                    <Plus size={16} /> Add Vendor
-                                                                </button>
                                                             </div>
                                                         );
                                                     }
@@ -4383,9 +4371,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                     </div>
                                                                 );
                                                             })}
-                                                            <button className="btn btn-secondary" onClick={() => addVendorBlock(null)} style={{ marginTop: '0.5rem' }}>
-                                                                <Plus size={16} /> Add Vendor
-                                                            </button>
                                                         </div>
                                                     );
                                                 })()}
@@ -5150,138 +5135,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                 )}
                                             </div>
                                         )}
-
-                                        {/* Equipment Order Section - Always visible */}
-                                        <div className={styles.divider} style={{ marginTop: '2rem', marginBottom: '1rem' }} />
-                                        <div style={{ marginTop: '1rem' }}>
-                                            <h4 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <Wrench size={14} /> Equipment Order
-                                            </h4>
-                                            {!showEquipmentOrder ? (
-                                                <button
-                                                    className="btn btn-secondary"
-                                                    onClick={() => setShowEquipmentOrder(true)}
-                                                    style={{ width: '100%' }}
-                                                >
-                                                    Equipment Order
-                                                </button>
-                                            ) : (
-                                                <div style={{
-                                                    padding: '1rem',
-                                                    backgroundColor: 'var(--bg-surface-hover)',
-                                                    borderRadius: 'var(--radius-md)',
-                                                    border: '1px solid var(--border-color)'
-                                                }}>
-                                                    <div className={styles.formGroup}>
-                                                        <label className="label">Vendor</label>
-                                                        <select
-                                                            className="input"
-                                                            value={equipmentOrder?.vendorId || ''}
-                                                            onChange={e => setEquipmentOrder({
-                                                                ...equipmentOrder,
-                                                                vendorId: e.target.value,
-                                                                equipmentId: '' // Reset equipment selection when vendor changes
-                                                            })}
-                                                        >
-                                                            <option value="">Select Vendor...</option>
-                                                            {vendors && vendors.length > 0 ? vendors
-                                                                .filter(v => {
-                                                                    const hasEquipment = v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Equipment');
-                                                                    const isActive = v.isActive !== undefined ? v.isActive : true;
-                                                                    return hasEquipment && isActive;
-                                                                })
-                                                                .map(v => (
-                                                                    <option key={v.id} value={v.id}>{v.name}</option>
-                                                                )) : <option value="" disabled>Loading vendors...</option>}
-                                                        </select>
-                                                        {vendors.filter(v => v.serviceTypes && v.serviceTypes.includes('Equipment') && v.isActive).length === 0 && (
-                                                            <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.5rem', fontStyle: 'italic' }}>
-                                                                No active vendors with Equipment service type found. Please create a vendor with Equipment service type in the admin panel.
-                                                            </p>
-                                                        )}
-                                                    </div>
-
-                                                    {equipmentOrder?.vendorId && (
-                                                        <div className={styles.formGroup}>
-                                                            <label className="label">Equipment Item</label>
-                                                            <select
-                                                                className="input"
-                                                                value={equipmentOrder?.equipmentId || ''}
-                                                                onChange={e => setEquipmentOrder({
-                                                                    ...equipmentOrder,
-                                                                    equipmentId: e.target.value
-                                                                })}
-                                                            >
-                                                                <option value="">Select Equipment Item...</option>
-                                                                {equipment
-                                                                    .filter(eq => !eq.vendorId || eq.vendorId === equipmentOrder.vendorId)
-                                                                    .map(eq => (
-                                                                        <option key={eq.id} value={eq.id}>
-                                                                            {eq.name} - ${eq.price.toFixed(2)}
-                                                                        </option>
-                                                                    ))}
-                                                            </select>
-                                                        </div>
-                                                    )}
-
-                                                    {equipmentOrder?.equipmentId && (
-                                                        <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-                                                            <button
-                                                                className="btn btn-primary"
-                                                                onClick={async () => {
-                                                                    if (!equipmentOrder.vendorId || !equipmentOrder.equipmentId) {
-                                                                        alert('Please select both vendor and equipment item');
-                                                                        return;
-                                                                    }
-                                                                    if (isNewClient) {
-                                                                        alert('Please save the client first before creating an equipment order.');
-                                                                        return;
-                                                                    }
-                                                                    try {
-                                                                        setSubmittingEquipmentOrder(true);
-                                                                        await saveEquipmentOrder(
-                                                                            clientId,
-                                                                            equipmentOrder.vendorId,
-                                                                            equipmentOrder.equipmentId,
-                                                                            orderConfig.caseId
-                                                                        );
-                                                                        setMessage('Equipment order submitted successfully!');
-                                                                        setTimeout(() => setMessage(null), 3000);
-                                                                        setShowEquipmentOrder(false);
-                                                                        setEquipmentOrder(null);
-                                                                        // Reload data to show the new order in Recent Orders section
-                                                                        setLoadingOrderDetails(true);
-                                                                        const [activeOrderData, orderHistoryData] = await Promise.all([
-                                                                            getRecentOrdersForClient(clientId),
-                                                                            getOrderHistory(clientId)
-                                                                        ]);
-                                                                        setActiveOrder(activeOrderData);
-                                                                        setOrderHistory(orderHistoryData || []);
-                                                                        setLoadingOrderDetails(false);
-                                                                    } catch (error: any) {
-                                                                        alert(`Error submitting equipment order: ${error.message || 'Unknown error'}`);
-                                                                    } finally {
-                                                                        setSubmittingEquipmentOrder(false);
-                                                                    }
-                                                                }}
-                                                                disabled={submittingEquipmentOrder}
-                                                            >
-                                                                {submittingEquipmentOrder ? 'Submitting...' : 'Submit Equipment Order'}
-                                                            </button>
-                                                            <button
-                                                                className="btn btn-secondary"
-                                                                onClick={() => {
-                                                                    setShowEquipmentOrder(false);
-                                                                    setEquipmentOrder(null);
-                                                                }}
-                                                            >
-                                                                Cancel
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
                                     </>
                                 )}
                             </section>

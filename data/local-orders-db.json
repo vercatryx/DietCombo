@@ -462,6 +462,28 @@
       "created_at": "2026-01-21T17:05:48.542845",
       "meal_type": "Lunch",
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    },
+    {
+      "id": "e9fb9613-9a8e-4b12-a426-126cb13a34c3",
+      "client_id": "fbce663d-c236-4c3d-90c1-d036b507270a",
+      "service_type": "Boxes",
+      "case_id": "827387",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2026-01-26",
+      "take_effect_date": "2026-02-01",
+      "delivery_day": "Monday",
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 1,
+      "notes": null,
+      "order_number": 100025,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-26T13:19:45.204",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-26T13:19:47.015823",
+      "meal_type": "Lunch",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"
     }
   ],
   "orderVendorSelections": [],
@@ -1669,7 +1691,16 @@
         "f106746f-99f0-4838-82b1-8dbd757db81b": 15
       },
       "created_at": "2026-01-25T20:47:54.388729"
+    },
+    {
+      "id": "1241862f-f141-4683-a0c7-1db2d4e89185",
+      "upcoming_order_id": "e9fb9613-9a8e-4b12-a426-126cb13a34c3",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "box_type_id": null,
+      "quantity": 1,
+      "items": {},
+      "created_at": "2026-01-26T13:19:47.673752"
     }
   ],
-  "lastSynced": "2026-01-25T21:27:12.074Z"
+  "lastSynced": "2026-01-26T15:02:15.752Z"
 }

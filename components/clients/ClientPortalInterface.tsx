@@ -309,6 +309,17 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 validationErrors.push('Please select at least one item before saving');
             }
 
+            // Check total order value against approved meals per week - must be exact match
+            const totalValue = getTotalMealCountAllDays();
+            const approvedMeals = client.approvedMealsPerWeek || 0;
+            if (approvedMeals > 0 && totalValue !== approvedMeals) {
+                if (totalValue > approvedMeals) {
+                    validationErrors.push(`Total order value (${totalValue}) exceeds approved meals per week (${approvedMeals}). Please reduce your order to exactly match the limit.`);
+                } else {
+                    validationErrors.push(`Total order value (${totalValue}) is less than approved meals per week (${approvedMeals}). Please add items to exactly match the limit.`);
+                }
+            }
+
             // Validate vendors have delivery days configured (if we can check)
             if (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) {
                 const vendorsWithoutDays = orderConfig.vendorSelections
@@ -1079,21 +1090,25 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         <h4>Your Selections</h4>
                         <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column', alignItems: 'flex-end' }}>
                             <div className={styles.budget} style={{
-                                color: getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) ? 'white' : 'inherit',
-                                backgroundColor: getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) ? 'var(--color-danger)' : 'var(--bg-surface-hover)',
+                                color: getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) ? 'white' : 'inherit',
+                                backgroundColor: getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) ? 'var(--color-danger)' : 'var(--bg-surface-hover)',
                                 padding: '8px 12px',
                                 borderRadius: '6px',
                                 fontSize: '1rem',
                                 fontWeight: 700,
-                                border: getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) ? '2px solid #991b1b' : 'none',
-                                boxShadow: getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) ? '0 2px 5px rgba(220, 38, 38, 0.3)' : 'none'
+                                border: getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) ? '2px solid #991b1b' : 'none',
+                                boxShadow: getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) ? '0 2px 5px rgba(220, 38, 38, 0.3)' : 'none'
                             }}>
                                 Meals: {getTotalMealCountAllDays()} / {client.approvedMealsPerWeek || 0}
-                                {getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) && <span style={{ marginLeft: '8px' }}>(OVER LIMIT)</span>}
+                                {getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) && (
+                                    <span style={{ marginLeft: '8px' }}>
+                                        {getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) ? '(OVER LIMIT)' : '(UNDER LIMIT)'}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     </div>
-                    {getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) && (
+                    {getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) && (
                         <div style={{
                             padding: '12px',
                             backgroundColor: '#fee2e2',
@@ -1108,7 +1123,12 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                             width: '100%'
                         }}>
                             <AlertTriangle size={24} />
-                            <span>You have exceeded your meal allowance of {client.approvedMealsPerWeek || 0} meals. Please remove some items.</span>
+                            <span>
+                                {getTotalMealCountAllDays() > (client.approvedMealsPerWeek || 0) 
+                                    ? `You have exceeded your meal allowance of ${client.approvedMealsPerWeek || 0} meals. Please remove some items to exactly match the limit.`
+                                    : `Your order must exactly match your meal allowance of ${client.approvedMealsPerWeek || 0} meals. Please add more items to match the limit.`
+                                }
+                            </span>
                         </div>
                     )}
                 </div>
