@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration } from '@/lib/types';
+import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate } from '@/lib/actions';
 import { Save, Loader2, Plus, Trash2, Package } from 'lucide-react';
 import styles from './DefaultOrderTemplate.module.css';
@@ -13,9 +13,10 @@ interface Props {
 }
 
 export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
-    const { getBoxTypes, getVendors } = useDataCache();
+    const { getBoxTypes, getVendors, getCategories } = useDataCache();
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
     const [vendors, setVendors] = useState<Vendor[]>([]);
+    const [categories, setCategories] = useState<ItemCategory[]>([]);
     const [dataLoaded, setDataLoaded] = useState(false);
     const [template, setTemplate] = useState<OrderConfiguration>({
         serviceType: 'Food',
@@ -27,13 +28,14 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
 
     useEffect(() => {
         async function loadData() {
-            const [bt, v] = await Promise.all([getBoxTypes(), getVendors()]);
+            const [bt, v, c] = await Promise.all([getBoxTypes(), getVendors(), getCategories()]);
             setBoxTypes(bt);
             setVendors(v);
+            setCategories(c);
             setDataLoaded(true);
         }
         loadData();
-    }, [getBoxTypes, getVendors]);
+    }, [getBoxTypes, getVendors, getCategories]);
 
     useEffect(() => {
         // Only load template after reference data is loaded
@@ -41,6 +43,59 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             loadTemplate();
         }
     }, [mainVendor.id, dataLoaded]);
+
+    // Ensure default vendor is set for Custom serviceType when vendors are loaded
+    useEffect(() => {
+        if (dataLoaded && template.serviceType === 'Custom' && vendors.length > 0) {
+            const defaultVendor = vendors.find(v => v.isActive) || vendors[0];
+            if (defaultVendor && template.vendorId !== defaultVendor.id) {
+                setTemplate(prev => ({ ...prev, vendorId: defaultVendor.id }));
+            }
+        }
+    }, [dataLoaded, vendors.length, template.serviceType, template.vendorId]);
+
+    // Ensure default empty box exists for Boxes serviceType
+    useEffect(() => {
+        if (dataLoaded && template.serviceType === 'Boxes') {
+            if (!template.boxes || template.boxes.length === 0) {
+                // Box type is optional - only set if available
+                let boxTypeId: string = '';
+                if (boxTypes.length > 0) {
+                    const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                    if (firstBoxType) {
+                        boxTypeId = firstBoxType.id;
+                    }
+                }
+                setTemplate(prev => ({
+                    ...prev,
+                    boxes: [{
+                        boxNumber: 1,
+                        boxTypeId: boxTypeId,
+                        vendorId: mainVendor.id,
+                        items: {},
+                        itemPrices: {},
+                        itemNotes: {}
+                    }]
+                }));
+            }
+        }
+    }, [dataLoaded, template.serviceType, template.boxes?.length, boxTypes, mainVendor.id]);
+
+    // Ensure all boxes have the default vendor set
+    useEffect(() => {
+        if (dataLoaded && template.serviceType === 'Boxes' && template.boxes && template.boxes.length > 0) {
+            const needsUpdate = template.boxes.some(box => !box.vendorId || box.vendorId !== mainVendor.id);
+            if (needsUpdate) {
+                setTemplate(prev => ({
+                    ...prev,
+                    boxes: (prev.boxes || []).map((box: BoxConfiguration) => ({
+                        ...box,
+                        vendorId: mainVendor.id
+                    }))
+                }));
+            }
+        }
+    }, [dataLoaded, template.serviceType, template.boxes, mainVendor.id]);
 
     async function loadTemplate() {
         setLoading(true);
@@ -56,25 +111,40 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         saved.vendorSelections = [{ vendorId: mainVendor.id, items: {} }];
                     }
                 } else if (saved.serviceType === 'Boxes') {
-                    // Ensure boxes array exists
+                    // Ensure boxes array exists - create empty default box if none exists
                     if (!saved.boxes || saved.boxes.length === 0) {
-                        const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-                        saved.boxes = firstBoxType ? [{
+                        // Box type is optional - only set if available
+                        let boxTypeId: string = '';
+                        if (boxTypes.length > 0) {
+                            const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                            if (firstBoxType) {
+                                boxTypeId = firstBoxType.id;
+                            }
+                        }
+                        saved.boxes = [{
                             boxNumber: 1,
-                            boxTypeId: firstBoxType.id,
+                            boxTypeId: boxTypeId,
+                            vendorId: mainVendor.id,
                             items: {},
                             itemPrices: {},
                             itemNotes: {}
-                        }] : [];
+                        }];
+                    } else {
+                        // Ensure all boxes have the default vendor set
+                        saved.boxes = saved.boxes.map((box: BoxConfiguration) => ({
+                            ...box,
+                            vendorId: box.vendorId || mainVendor.id
+                        }));
                     }
                 } else if (saved.serviceType === 'Custom') {
                     // Ensure customItems array exists
                     if (!saved.customItems) {
                         saved.customItems = [];
                     }
-                    // Ensure vendorId is set
-                    if (!saved.vendorId && vendors.length > 0) {
-                        saved.vendorId = vendors.find(v => v.isActive)?.id || vendors[0]?.id || '';
+                    // Ensure vendorId is set to default vendor
+                    const defaultVendor = vendors.find(v => v.isActive) || vendors[0];
+                    if (defaultVendor) {
+                        saved.vendorId = defaultVendor.id;
                     }
                 }
                 setTemplate(saved);
@@ -111,20 +181,30 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 delete templateToSave.customItems;
                 delete templateToSave.vendorId;
             } else if (templateToSave.serviceType === 'Boxes') {
-                // Ensure boxes array is valid
+                // Ensure boxes array is valid - create empty default box if none exists
                 if (!templateToSave.boxes || templateToSave.boxes.length === 0) {
-                    const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-                    if (firstBoxType) {
-                        templateToSave.boxes = [{
-                            boxNumber: 1,
-                            boxTypeId: firstBoxType.id,
-                            items: {},
-                            itemPrices: {},
-                            itemNotes: {}
-                        }];
-                    } else {
-                        templateToSave.boxes = [];
+                    // Box type is optional - only set if available
+                    let boxTypeId: string = '';
+                    if (boxTypes.length > 0) {
+                        const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                        if (firstBoxType) {
+                            boxTypeId = firstBoxType.id;
+                        }
                     }
+                    templateToSave.boxes = [{
+                        boxNumber: 1,
+                        boxTypeId: boxTypeId,
+                        vendorId: mainVendor.id,
+                        items: {},
+                        itemPrices: {},
+                        itemNotes: {}
+                    }];
+                } else {
+                    // Ensure all boxes have the default vendor set
+                    templateToSave.boxes = templateToSave.boxes.map((box: BoxConfiguration) => ({
+                        ...box,
+                        vendorId: box.vendorId || mainVendor.id
+                    }));
                 }
                 // Remove Food and Custom fields
                 delete templateToSave.vendorSelections;
@@ -138,9 +218,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 templateToSave.customItems = templateToSave.customItems.filter(
                     item => item.name && item.name.trim() !== ''
                 );
-                // Ensure vendorId is set
-                if (!templateToSave.vendorId && vendors.length > 0) {
-                    templateToSave.vendorId = vendors.find(v => v.isActive)?.id || vendors[0]?.id || '';
+                // Ensure vendorId is set to default vendor
+                const defaultVendor = vendors.find(v => v.isActive) || vendors[0];
+                if (defaultVendor) {
+                    templateToSave.vendorId = defaultVendor.id;
                 }
                 // Remove Food and Boxes fields
                 delete templateToSave.vendorSelections;
@@ -185,16 +266,25 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 vendorSelections: [{ vendorId: mainVendor.id, items: {} }]
             });
         } else if (newServiceType === 'Boxes') {
-            const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+            // Create default empty box entry
+            // Box type is optional - only set if available
+            let boxTypeId: string = '';
+            if (boxTypes.length > 0) {
+                const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                if (firstBoxType) {
+                    boxTypeId = firstBoxType.id;
+                }
+            }
             setTemplate({
                 serviceType: 'Boxes',
-                boxes: firstBoxType ? [{
+                boxes: [{
                     boxNumber: 1,
-                    boxTypeId: firstBoxType.id,
+                    boxTypeId: boxTypeId,
+                    vendorId: mainVendor.id,
                     items: {},
                     itemPrices: {},
                     itemNotes: {}
-                }] : []
+                }]
             });
         } else if (newServiceType === 'Custom') {
             const defaultVendor = vendors.find(v => v.isActive) || vendors[0];
@@ -214,17 +304,20 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     function addBox() {
         const currentBoxes = template.boxes || [];
         const nextBoxNumber = currentBoxes.length + 1;
-        const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
         
-        if (!firstBoxType) {
-            setMessage('No box types available. Please create a box type first.');
-            setTimeout(() => setMessage(null), 3000);
-            return;
+        // Box type is optional - only set if available
+        let boxTypeId: string | undefined = undefined;
+        if (boxTypes.length > 0) {
+            const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+            if (firstBoxType) {
+                boxTypeId = firstBoxType.id;
+            }
         }
 
         const newBox: BoxConfiguration = {
             boxNumber: nextBoxNumber,
-            boxTypeId: firstBoxType.id,
+            boxTypeId: boxTypeId || '',
+            vendorId: mainVendor.id,
             items: {},
             itemPrices: {},
             itemNotes: {}
@@ -265,17 +358,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         });
     }
 
-    function updateBoxType(boxNumber: number, boxTypeId: string) {
-        const updatedBoxes = (template.boxes || []).map(box => {
-            if (box.boxNumber !== boxNumber) return box;
-            return { ...box, boxTypeId };
-        });
-
-        setTemplate({
-            ...template,
-            boxes: updatedBoxes
-        });
-    }
 
     // Custom items management functions
     function addCustomItem() {
@@ -423,13 +505,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         Configure default boxes for new clients. Each box can have its own type and items.
                     </p>
                     
-                    {boxTypes.length === 0 ? (
-                        <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                            No box types available. Add box types in the Box Types tab first.
-                        </p>
-                    ) : (
-                        <>
-                            {(template.boxes || []).map((box) => {
+                    <>
+                        {(template.boxes || []).map((box) => {
                                 const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
                                 const boxItems = getBoxItems();
                                 
@@ -457,62 +534,226 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                         </div>
                                         
                                         <div style={{ marginBottom: '1rem' }}>
+                                            <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Vendor</label>
+                                            <div style={{
+                                                padding: '0.75rem',
+                                                backgroundColor: 'var(--bg-surface-hover)',
+                                                borderRadius: 'var(--radius-sm)',
+                                                border: '1px solid var(--border-color)',
+                                                fontSize: '0.9rem',
+                                                fontWeight: 500,
+                                                color: 'var(--text-primary)'
+                                            }}>
+                                                {mainVendor.name}
+                                            </div>
+                                        </div>
+                                        
+                                        <div style={{ marginBottom: '1rem' }}>
                                             <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Box Type</label>
                                             <select
                                                 className="input"
                                                 value={box.boxTypeId || ''}
-                                                onChange={e => updateBoxType(box.boxNumber, e.target.value)}
+                                                onChange={(e) => {
+                                                    const updatedBoxes = (template.boxes || []).map(b =>
+                                                        b.boxNumber === box.boxNumber
+                                                            ? { ...b, boxTypeId: e.target.value }
+                                                            : b
+                                                    );
+                                                    setTemplate({
+                                                        ...template,
+                                                        boxes: updatedBoxes
+                                                    });
+                                                }}
                                             >
                                                 <option value="">Select Box Type...</option>
-                                                {boxTypes.filter(bt => bt.isActive).map(bt => (
-                                                    <option key={bt.id} value={bt.id}>{bt.name}</option>
-                                                ))}
+                                                {boxTypes
+                                                    .filter(bt => bt.isActive)
+                                                    .map(bt => (
+                                                        <option key={bt.id} value={bt.id}>
+                                                            {bt.name}
+                                                        </option>
+                                                    ))}
                                             </select>
                                         </div>
 
-                                        {box.boxTypeId && boxItems.length > 0 && (
+                                        {boxItems.length > 0 && (
                                             <div>
-                                                <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Items</label>
-                                                <div className={styles.itemsList}>
-                                                    {boxItems.map(item => {
-                                                        const qty = (box.items || {})[item.id] || 0;
+                                                <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Box Contents</label>
+                                                
+                                                {/* Show all categories with box items */}
+                                                {[...categories]
+                                                    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+                                                    .map(category => {
+                                                        const availableItems = boxItems
+                                                            .filter(i => i.categoryId === category.id)
+                                                            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+                                                        if (availableItems.length === 0) return null;
+
                                                         return (
-                                                            <div key={item.id} className={styles.itemRow}>
-                                                                <div style={{ flex: 1 }}>
-                                                                    <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
-                                                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                                                                        Value: {item.value} | Price: ${item.priceEach || 0}
+                                                            <div key={category.id} style={{
+                                                                marginBottom: '1rem',
+                                                                background: 'var(--bg-surface-hover)',
+                                                                padding: '0.75rem',
+                                                                borderRadius: '6px',
+                                                                border: '1px solid var(--border-color)'
+                                                            }}>
+                                                                <div style={{ 
+                                                                    display: 'flex', 
+                                                                    justifyContent: 'space-between', 
+                                                                    marginBottom: '0.5rem',
+                                                                    fontSize: '0.85rem'
+                                                                }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                                        <span style={{ fontWeight: 600 }}>{category.name}</span>
+                                                                        {category.setValue !== undefined && category.setValue !== null && (
+                                                                            <span style={{
+                                                                                fontSize: '0.7rem',
+                                                                                color: 'var(--color-primary)',
+                                                                                background: 'var(--bg-app)',
+                                                                                padding: '2px 6px',
+                                                                                borderRadius: '4px',
+                                                                                fontWeight: 500
+                                                                            }}>
+                                                                                Set Value: {category.setValue}
+                                                                            </span>
+                                                                        )}
                                                                     </div>
                                                                 </div>
-                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                                                                    <button
-                                                                        className="btn btn-secondary"
-                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, qty - 1)}
-                                                                        disabled={qty <= 0}
-                                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
-                                                                    >
-                                                                        -
-                                                                    </button>
-                                                                    <input
-                                                                        type="number"
-                                                                        className="input"
-                                                                        value={qty}
-                                                                        onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
-                                                                        min="0"
-                                                                        style={{ width: '80px', textAlign: 'center' }}
-                                                                    />
-                                                                    <button
-                                                                        className="btn btn-secondary"
-                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, qty + 1)}
-                                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
-                                                                    >
-                                                                        +
-                                                                    </button>
+
+                                                                <div className={styles.itemsList}>
+                                                                    {availableItems.map(item => {
+                                                                        const qty = (box.items || {})[item.id] || 0;
+                                                                        return (
+                                                                            <div key={item.id} className={styles.itemRow}>
+                                                                                <div style={{ flex: 1 }}>
+                                                                                    <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
+                                                                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                                                                        Value: {item.value} | Price: ${item.priceEach || 0}
+                                                                                        {item.quotaValue && item.quotaValue > 1 && (
+                                                                                            <span style={{ marginLeft: '8px', color: 'var(--color-primary)' }}>
+                                                                                                (Counts as {item.quotaValue})
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+                                                                                    <button
+                                                                                        className="btn btn-secondary"
+                                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, qty - 1)}
+                                                                                        disabled={qty <= 0}
+                                                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                                                    >
+                                                                                        -
+                                                                                    </button>
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        className="input"
+                                                                                        value={qty}
+                                                                                        onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
+                                                                                        min="0"
+                                                                                        style={{ width: '80px', textAlign: 'center' }}
+                                                                                    />
+                                                                                    <button
+                                                                                        className="btn btn-secondary"
+                                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, qty + 1)}
+                                                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                                                    >
+                                                                                        +
+                                                                                    </button>
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    })}
                                                                 </div>
                                                             </div>
                                                         );
                                                     })}
-                                                </div>
+                                                
+                                                {/* Show uncategorized items if any */}
+                                                {(() => {
+                                                    const uncategorizedItems = boxItems
+                                                        .filter(i => !i.categoryId || !categories.find(c => c.id === i.categoryId))
+                                                        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+                                                    
+                                                    if (uncategorizedItems.length === 0) return null;
+                                                    
+                                                    return (
+                                                        <div style={{
+                                                            marginBottom: '1rem',
+                                                            background: 'var(--bg-surface-hover)',
+                                                            padding: '0.75rem',
+                                                            borderRadius: '6px',
+                                                            border: '1px solid var(--border-color)'
+                                                        }}>
+                                                            <div style={{ 
+                                                                marginBottom: '0.5rem',
+                                                                fontSize: '0.85rem',
+                                                                fontWeight: 600
+                                                            }}>
+                                                                Uncategorized
+                                                            </div>
+                                                            <div className={styles.itemsList}>
+                                                                {uncategorizedItems.map(item => {
+                                                                    const qty = (box.items || {})[item.id] || 0;
+                                                                    return (
+                                                                        <div key={item.id} className={styles.itemRow}>
+                                                                            <div style={{ flex: 1 }}>
+                                                                                <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
+                                                                                <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                                                                    Value: {item.value} | Price: ${item.priceEach || 0}
+                                                                                    {item.quotaValue && item.quotaValue > 1 && (
+                                                                                        <span style={{ marginLeft: '8px', color: 'var(--color-primary)' }}>
+                                                                                            (Counts as {item.quotaValue})
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+                                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+                                                                                <button
+                                                                                    className="btn btn-secondary"
+                                                                                    onClick={() => updateBoxItem(box.boxNumber, item.id, qty - 1)}
+                                                                                    disabled={qty <= 0}
+                                                                                    style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                                                >
+                                                                                    -
+                                                                                </button>
+                                                                                <input
+                                                                                    type="number"
+                                                                                    className="input"
+                                                                                    value={qty}
+                                                                                    onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
+                                                                                    min="0"
+                                                                                    style={{ width: '80px', textAlign: 'center' }}
+                                                                                />
+                                                                                <button
+                                                                                    className="btn btn-secondary"
+                                                                                    onClick={() => updateBoxItem(box.boxNumber, item.id, qty + 1)}
+                                                                                    style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                                                >
+                                                                                    +
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
+                                        )}
+                                        
+                                        {boxItems.length === 0 && (
+                                            <div style={{
+                                                padding: '1rem',
+                                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                                borderRadius: '6px',
+                                                border: '1px solid var(--color-danger)',
+                                                color: 'var(--color-danger)',
+                                                fontSize: '0.9rem'
+                                            }}>
+                                                No box items available. Box items are menu items without a vendor assigned.
                                             </div>
                                         )}
                                     </div>
@@ -526,8 +767,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                             >
                                 <Plus size={16} /> Add Another Box
                             </button>
-                        </>
-                    )}
+                    </>
                 </div>
             )}
 
@@ -540,16 +780,24 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     
                     <div style={{ marginBottom: '1rem' }}>
                         <label className="label">Default Vendor</label>
-                        <select
-                            className="input"
-                            value={template.vendorId || ''}
-                            onChange={e => setTemplate({ ...template, vendorId: e.target.value })}
-                        >
-                            <option value="">Select Vendor...</option>
-                            {vendors.filter(v => v.isActive).map(v => (
-                                <option key={v.id} value={v.id}>{v.name}</option>
-                            ))}
-                        </select>
+                        {(() => {
+                            const vendorId = template.vendorId || '';
+                            const vendor = vendors.find(v => v.id === vendorId);
+                            const vendorName = vendor?.name || 'No vendor available';
+                            
+                            return (
+                                <div style={{
+                                    padding: '0.5rem 0.75rem',
+                                    backgroundColor: 'var(--bg-surface)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '0.9rem'
+                                }}>
+                                    {vendorName}
+                                </div>
+                            );
+                        })()}
                     </div>
 
                     {template.vendorId && (

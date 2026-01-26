@@ -364,23 +364,29 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 return;
             }
             
-            // Only initialize if box types are available
-            if (boxTypes.length === 0) {
-                return;
+            // Box type is optional - initialize with vendor only if available
+            const defaultVendorId = getDefaultVendor('Boxes');
+            let boxTypeId: string | undefined = undefined;
+            let vendorId: string = defaultVendorId || '';
+            
+            // Try to get boxTypeId from available box types if they exist
+            if (boxTypes.length > 0) {
+                const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                if (firstActiveBoxType) {
+                    boxTypeId = firstActiveBoxType.id;
+                    vendorId = firstActiveBoxType.vendorId || defaultVendorId || '';
+                }
             }
             
-            const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-            if (firstActiveBoxType) {
-                setOrderConfig((prev: any) => ({
-                    ...prev,
-                    boxOrders: [{
-                        boxTypeId: firstActiveBoxType.id,
-                        vendorId: firstActiveBoxType.vendorId || '',
-                        quantity: 1,
-                        items: {}
-                    }]
-                }));
-            }
+            setOrderConfig((prev: any) => ({
+                ...prev,
+                boxOrders: [{
+                    boxTypeId: boxTypeId, // Optional - can be undefined
+                    vendorId: vendorId,
+                    quantity: 1,
+                    items: {}
+                }]
+            }));
         }
     }, [formData.serviceType, boxTypes, orderConfig.vendorId, orderConfig.boxTypeId, orderConfig.items]);
 
@@ -542,21 +548,28 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
         } else if (formData.serviceType === 'Boxes') {
-            // Only initialize boxes if box types are available
-            if (boxTypes.length === 0) {
-                return;
-            }
-            
+            // Box type is optional - don't require box types to be available
             const boxOrders = newConfig.boxOrders || [];
             const hasEmpty = boxOrders.length === 0 || boxOrders.some((box: any) => !box.vendorId || box.vendorId.trim() === '');
             if (hasEmpty) {
-                const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                // Try to get boxTypeId from available box types if they exist, but it's optional
+                let boxTypeId: string | undefined = undefined;
+                let vendorIdFromBoxType: string | undefined = undefined;
+                
+                if (boxTypes.length > 0) {
+                    const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                    if (firstActiveBoxType) {
+                        boxTypeId = firstActiveBoxType.id;
+                        vendorIdFromBoxType = firstActiveBoxType.vendorId || undefined;
+                    }
+                }
+                
                 const updated = boxOrders.length === 0
-                    ? [{ vendorId: defaultVendorId || firstActiveBoxType?.vendorId || '', boxTypeId: firstActiveBoxType?.id || '', quantity: 1, items: {}, itemNotes: {} }]
+                    ? [{ vendorId: defaultVendorId || vendorIdFromBoxType || '', boxTypeId: boxTypeId, quantity: 1, items: {}, itemNotes: {} }]
                     : ensureDefaultVendors(boxOrders, 'Boxes').map((box: any) => ({
                         ...box,
-                        vendorId: !box.vendorId || box.vendorId.trim() === '' ? (defaultVendorId || firstActiveBoxType?.vendorId || '') : box.vendorId,
-                        boxTypeId: !box.boxTypeId ? (firstActiveBoxType?.id || '') : box.boxTypeId
+                        vendorId: !box.vendorId || box.vendorId.trim() === '' ? (defaultVendorId || vendorIdFromBoxType || '') : box.vendorId,
+                        boxTypeId: !box.boxTypeId ? boxTypeId : box.boxTypeId // Only set if available, otherwise leave as is
                     }));
                 newConfig.boxOrders = updated;
                 if (updated.length > 0 && updated[0].vendorId) {
@@ -2254,25 +2267,25 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         const limit = formData.authorizedAmount;
         if (limit && currentBoxes.length >= limit) return;
 
-        // Check if box types are available
-        if (boxTypes.length === 0) {
-            setMessage('No box types available. Add box types in the Box Types tab first.');
-            setTimeout(() => setMessage(null), 3000);
-            return;
-        }
-
-        const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-        if (!firstActiveBoxType) {
-            setMessage('No box types available. Add box types in the Box Types tab first.');
-            setTimeout(() => setMessage(null), 3000);
-            return;
-        }
-
-        // Get default vendor for Boxes service if boxType doesn't have one
+        // Get default vendor for Boxes service
         const defaultVendorId = getDefaultVendor('Boxes');
+        
+        // Box type is optional for serviceType "Boxes" - allow creating box without boxTypeId
+        // Only set boxTypeId if box types are available and we can find an active one
+        let boxTypeId: string | undefined = undefined;
+        let vendorIdFromBoxType: string | undefined = undefined;
+        
+        if (boxTypes.length > 0) {
+            const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+            if (firstActiveBoxType) {
+                boxTypeId = firstActiveBoxType.id;
+                vendorIdFromBoxType = firstActiveBoxType.vendorId || undefined;
+            }
+        }
+
         const newBox = {
-            boxTypeId: firstActiveBoxType.id,
-            vendorId: firstActiveBoxType.vendorId || defaultVendorId || '',
+            boxTypeId: boxTypeId, // Optional - can be undefined
+            vendorId: vendorIdFromBoxType || defaultVendorId || '',
             quantity: 1,
             items: {}
         };
@@ -2291,40 +2304,41 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         const currentBoxes = [...(orderConfig.boxOrders || [])];
         if (currentBoxes.length <= 1) {
             // If removing the last one, just reset it to empty/default instead of removing
-            // But only if box types are available
-            if (boxTypes.length === 0) {
-                // No box types available, just clear boxOrders
-                setOrderConfig({
-                    ...orderConfig,
-                    boxOrders: [],
-                    vendorId: ''
-                });
-                return;
-            }
-            
-            const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-            if (!firstActiveBoxType) {
-                setOrderConfig({
-                    ...orderConfig,
-                    boxOrders: [],
-                    vendorId: ''
-                });
-                return;
-            }
-            
-            // Get default vendor for Boxes service if boxType doesn't have one
+            // Box type is optional - reset with vendor only if available
             const defaultVendorId = getDefaultVendor('Boxes');
-            const resetBox = {
-                boxTypeId: firstActiveBoxType.id,
-                vendorId: firstActiveBoxType.vendorId || defaultVendorId || '',
-                quantity: 1,
-                items: {}
-            };
-            setOrderConfig({
-                ...orderConfig,
-                boxOrders: [resetBox],
-                vendorId: resetBox.vendorId // CRITICAL FIX: Sync top-level vendorId
-            });
+            let boxTypeId: string | undefined = undefined;
+            let vendorId: string = defaultVendorId || '';
+            
+            // Try to get boxTypeId from available box types if they exist
+            if (boxTypes.length > 0) {
+                const firstActiveBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
+                if (firstActiveBoxType) {
+                    boxTypeId = firstActiveBoxType.id;
+                    vendorId = firstActiveBoxType.vendorId || defaultVendorId || '';
+                }
+            }
+            
+            // If we have a vendor, reset to a default box; otherwise clear completely
+            if (vendorId) {
+                const resetBox = {
+                    boxTypeId: boxTypeId, // Optional - can be undefined
+                    vendorId: vendorId,
+                    quantity: 1,
+                    items: {}
+                };
+                setOrderConfig({
+                    ...orderConfig,
+                    boxOrders: [resetBox],
+                    vendorId: resetBox.vendorId // CRITICAL FIX: Sync top-level vendorId
+                });
+            } else {
+                // No vendor available, clear boxOrders
+                setOrderConfig({
+                    ...orderConfig,
+                    boxOrders: [],
+                    vendorId: ''
+                });
+            }
             return;
         }
         currentBoxes.splice(index, 1);
@@ -4836,27 +4850,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                         {formData.serviceType === 'Boxes' && (() => {
                                             const currentBoxes = orderConfig.boxOrders || [];
 
-                                            // Check if box types are available
-                                            if (boxTypes.length === 0) {
-                                                return (
-                                                    <div className="animate-fade-in">
-                                                        <div style={{
-                                                            padding: '1.5rem',
-                                                            backgroundColor: 'var(--bg-surface-active)',
-                                                            borderRadius: 'var(--radius-md)',
-                                                            border: '1px dashed var(--border-color)',
-                                                            color: 'var(--text-secondary)',
-                                                            textAlign: 'center'
-                                                        }}>
-                                                            <AlertTriangle size={24} style={{ marginBottom: '0.5rem', color: 'var(--color-warning)' }} />
-                                                            <p style={{ margin: 0, fontSize: '0.9rem', fontWeight: 500 }}>
-                                                                No box types available. Add box types in the Box Types tab first.
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            }
-
+                                            // Box types are optional - allow adding boxes without box types
                                             return (
                                                 <div className="animate-fade-in">
                                                     {/* Display items from all existing upcoming Boxes orders */}
