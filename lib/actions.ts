@@ -2667,34 +2667,32 @@ async function syncSingleOrderForDeliveryDay(
                 throw new Error(errorMsg);
             }
         } else {
-            // Fallback: find the first delivery date
-            const firstVendorId = vendorIds[0];
-            const vendor = vendors.find(v => v.id === firstVendorId);
-            if (vendor) {
-                const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+            // Use main vendor's delivery day as default
+            // Find main vendor (isDefault: true, or first vendor if none is default)
+            const mainVendor = vendors.find(v => v.isDefault === true) || vendors[0];
+            
+            if (mainVendor) {
+                const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
                 if (deliveryDays && deliveryDays.length > 0) {
-                    const dayNameToNumber: { [key: string]: number } = {
-                        'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-                        'Thursday': 4, 'Friday': 5, 'Saturday': 6
-                    };
-                    const deliveryDayNumbers = deliveryDays
-                        .map((day: string) => dayNameToNumber[day])
-                        .filter((num: number | undefined): num is number => num !== undefined);
-
-                    const today = new Date(currentTime);
-                    today.setHours(0, 0, 0, 0);
-                    for (let i = 0; i <= 14; i++) {
-                        const checkDate = new Date(today);
-                        checkDate.setDate(today.getDate() + i);
-                        if (deliveryDayNumbers.includes(checkDate.getDay())) {
-                            scheduledDeliveryDate = checkDate;
-                            break;
-                        }
+                    // Use the first delivery day from main vendor (only one is allowed per vendor)
+                    const mainVendorDeliveryDay = deliveryDays[0];
+                    
+                    // Get the nearest occurrence of the main vendor's delivery day
+                    scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                    
+                    if (!scheduledDeliveryDate) {
+                        const errorMsg = `Cannot save Food order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
+                        console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                            serviceType: orderConfig.serviceType,
+                            mainVendorDeliveryDay,
+                            mainVendorName: mainVendor.name
+                        });
+                        throw new Error(errorMsg);
                     }
                 }
             }
             
-            // If still no scheduled delivery date, try using getNextDeliveryDate
+            // If still no scheduled delivery date, try using getNextDeliveryDate with first vendor
             if (!scheduledDeliveryDate) {
                 scheduledDeliveryDate = getNextDeliveryDate(vendorIds[0], vendors, currentTime);
                 
@@ -2764,27 +2762,54 @@ async function syncSingleOrderForDeliveryDay(
                     throw new Error(errorMsg);
                 }
             } else {
-                // Fallback: find the first delivery date
-                const vendor = vendors.find(v => v.id === boxVendorId);
-                if (vendor) {
-                    const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+                // Use main vendor's delivery day as default
+                // Find main vendor (isDefault: true, or first vendor if none is default)
+                const mainVendor = vendors.find(v => v.isDefault === true) || vendors[0];
+                
+                if (mainVendor) {
+                    const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
                     if (deliveryDays && deliveryDays.length > 0) {
-                        const today = new Date(currentTime);
-                        today.setHours(0, 0, 0, 0);
-                        const dayNameToNumber: { [key: string]: number } = {
-                            'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-                            'Thursday': 4, 'Friday': 5, 'Saturday': 6
-                        };
-                        const deliveryDayNumbers = deliveryDays
-                            .map((day: string) => dayNameToNumber[day])
-                            .filter((num: number | undefined): num is number => num !== undefined);
+                        // Use the first delivery day from main vendor (only one is allowed per vendor)
+                        const mainVendorDeliveryDay = deliveryDays[0];
+                        
+                        // Get the nearest occurrence of the main vendor's delivery day
+                        scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                        
+                        if (!scheduledDeliveryDate) {
+                            const errorMsg = `Cannot save Boxes order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
+                            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                                serviceType: orderConfig.serviceType,
+                                mainVendorDeliveryDay,
+                                mainVendorName: mainVendor.name
+                            });
+                            throw new Error(errorMsg);
+                        }
+                    }
+                }
+                
+                // Fallback: find the first delivery date from box vendor if main vendor didn't work
+                if (!scheduledDeliveryDate) {
+                    const vendor = vendors.find(v => v.id === boxVendorId);
+                    if (vendor) {
+                        const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+                        if (deliveryDays && deliveryDays.length > 0) {
+                            const today = new Date(currentTime);
+                            today.setHours(0, 0, 0, 0);
+                            const dayNameToNumber: { [key: string]: number } = {
+                                'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+                                'Thursday': 4, 'Friday': 5, 'Saturday': 6
+                            };
+                            const deliveryDayNumbers = deliveryDays
+                                .map((day: string) => dayNameToNumber[day])
+                                .filter((num: number | undefined): num is number => num !== undefined);
 
-                        for (let i = 0; i <= 14; i++) {
-                            const checkDate = new Date(today);
-                            checkDate.setDate(today.getDate() + i);
-                            if (deliveryDayNumbers.includes(checkDate.getDay())) {
-                                scheduledDeliveryDate = checkDate;
-                                break;
+                            for (let i = 0; i <= 14; i++) {
+                                const checkDate = new Date(today);
+                                checkDate.setDate(today.getDate() + i);
+                                if (deliveryDayNumbers.includes(checkDate.getDay())) {
+                                    scheduledDeliveryDate = checkDate;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2867,26 +2892,53 @@ async function syncSingleOrderForDeliveryDay(
                 });
                 throw new Error(errorMsg);
             }
-        } else if (vendor) {
-            // Fallback: find the first delivery date from vendor
-            const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
-            if (deliveryDays && deliveryDays.length > 0) {
-                const dayNameToNumber: { [key: string]: number } = {
-                    'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-                    'Thursday': 4, 'Friday': 5, 'Saturday': 6
-                };
-                const deliveryDayNumbers = deliveryDays
-                    .map((day: string) => dayNameToNumber[day])
-                    .filter((num: number | undefined): num is number => num !== undefined);
+        } else {
+            // Use main vendor's delivery day as default
+            // Find main vendor (isDefault: true, or first vendor if none is default)
+            const mainVendor = vendors.find(v => v.isDefault === true) || vendors[0];
+            
+            if (mainVendor) {
+                const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
+                if (deliveryDays && deliveryDays.length > 0) {
+                    // Use the first delivery day from main vendor (only one is allowed per vendor)
+                    const mainVendorDeliveryDay = deliveryDays[0];
+                    
+                    // Get the nearest occurrence of the main vendor's delivery day
+                    scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                    
+                    if (!scheduledDeliveryDate) {
+                        const errorMsg = `Cannot save Custom order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
+                        console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                            serviceType: orderConfig.serviceType,
+                            mainVendorDeliveryDay,
+                            mainVendorName: mainVendor.name
+                        });
+                        throw new Error(errorMsg);
+                    }
+                }
+            }
+            
+            // Fallback: find the first delivery date from selected vendor if main vendor didn't work
+            if (!scheduledDeliveryDate && vendor) {
+                const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+                if (deliveryDays && deliveryDays.length > 0) {
+                    const dayNameToNumber: { [key: string]: number } = {
+                        'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+                        'Thursday': 4, 'Friday': 5, 'Saturday': 6
+                    };
+                    const deliveryDayNumbers = deliveryDays
+                        .map((day: string) => dayNameToNumber[day])
+                        .filter((num: number | undefined): num is number => num !== undefined);
 
-                const today = new Date(currentTime);
-                today.setHours(0, 0, 0, 0);
-                for (let i = 0; i <= 14; i++) {
-                    const checkDate = new Date(today);
-                    checkDate.setDate(today.getDate() + i);
-                    if (deliveryDayNumbers.includes(checkDate.getDay())) {
-                        scheduledDeliveryDate = checkDate;
-                        break;
+                    const today = new Date(currentTime);
+                    today.setHours(0, 0, 0, 0);
+                    for (let i = 0; i <= 14; i++) {
+                        const checkDate = new Date(today);
+                        checkDate.setDate(today.getDate() + i);
+                        if (deliveryDayNumbers.includes(checkDate.getDay())) {
+                            scheduledDeliveryDate = checkDate;
+                            break;
+                        }
                     }
                 }
             }

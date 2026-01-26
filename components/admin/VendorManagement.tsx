@@ -50,9 +50,15 @@ export function VendorManagement() {
             
             // Auto-populate form with main vendor data
             if (main) {
+                // Only keep the first delivery day if multiple days exist
+                const deliveryDays = main.deliveryDays && main.deliveryDays.length > 0 
+                    ? [main.deliveryDays[0]] 
+                    : [];
                 setFormData({
                     ...main,
-                    password: '' // Don't populate password field for security
+                    password: '', // Don't populate password field for security
+                    deliveryDays,
+                    allowsMultipleDeliveries: false // Always false - only one day allowed
                 });
             }
             
@@ -81,17 +87,19 @@ export function VendorManagement() {
             return;
         }
 
-        if (!formData.deliveryDays || formData.deliveryDays.length === 0) {
-            alert('Please select at least one delivery day.');
+        if (!formData.deliveryDays || formData.deliveryDays.length !== 1) {
+            alert('Please select exactly one delivery day.');
             return;
         }
 
         setIsSaving(true);
         try {
             // Ensure password is string | undefined, not null (to match updateVendor signature)
+            // Always set allowsMultipleDeliveries to false since only one day is allowed
             const dataToUpdate = {
                 ...formData,
-                password: formData.password ?? undefined
+                password: formData.password ?? undefined,
+                allowsMultipleDeliveries: false // Force to false - only one delivery day allowed
             };
             await updateVendor(mainVendor.id, dataToUpdate);
             invalidateReferenceData(); // Invalidate cache after update
@@ -105,16 +113,12 @@ export function VendorManagement() {
         }
     }
 
-    function toggleDay(day: string) {
-        const current = formData.deliveryDays || [];
-        const nextDays = current.includes(day)
-            ? current.filter(d => d !== day)
-            : [...current, day];
-
+    function selectDay(day: string) {
+        // Only allow one day to be selected
         setFormData({
             ...formData,
-            deliveryDays: nextDays,
-            allowsMultipleDeliveries: nextDays.length > 1
+            deliveryDays: [day],
+            allowsMultipleDeliveries: false // Always false - only one day allowed
         });
     }
 
@@ -240,15 +244,16 @@ export function VendorManagement() {
                     </div>
 
                     <div className={styles.formGroup}>
-                        <label className="label">Delivery Days</label>
+                        <label className="label">Delivery Day</label>
                         <div className={styles.daysGrid}>
                             {DAYS_OF_WEEK.map(day => (
                                 <label key={day} className={`${styles.daySelect} ${formData.deliveryDays?.includes(day) ? styles.dayActive : ''}`}>
                                     <input
-                                        type="checkbox"
+                                        type="radio"
+                                        name="deliveryDay"
                                         className={styles.hiddenCheck}
                                         checked={formData.deliveryDays?.includes(day)}
-                                        onChange={() => toggleDay(day)}
+                                        onChange={() => selectDay(day)}
                                     />
                                     {day}
                                 </label>
@@ -256,7 +261,12 @@ export function VendorManagement() {
                         </div>
                         {formData.deliveryDays && formData.deliveryDays.length > 0 && (
                             <p className={styles.hint} style={{ marginTop: '0.5rem' }}>
-                                Frequency: {formData.allowsMultipleDeliveries ? 'Multiple deliveries per week' : 'Single delivery per week'} (calculated automatically)
+                                Selected: {formData.deliveryDays[0]} (Single delivery per week)
+                            </p>
+                        )}
+                        {(!formData.deliveryDays || formData.deliveryDays.length === 0) && (
+                            <p className={styles.hint} style={{ marginTop: '0.5rem', color: 'var(--color-danger)' }}>
+                                Please select one delivery day
                             </p>
                         )}
                     </div>
