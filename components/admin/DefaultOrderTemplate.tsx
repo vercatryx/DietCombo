@@ -58,19 +58,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     useEffect(() => {
         if (dataLoaded && template.serviceType === 'Boxes') {
             if (!template.boxes || template.boxes.length === 0) {
-                // Box type is optional - only set if available
-                let boxTypeId: string = '';
-                if (boxTypes.length > 0) {
-                    const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-                    if (firstBoxType) {
-                        boxTypeId = firstBoxType.id;
-                    }
-                }
                 setTemplate(prev => ({
                     ...prev,
                     boxes: [{
                         boxNumber: 1,
-                        boxTypeId: boxTypeId,
+                        boxTypeId: '',
                         vendorId: mainVendor.id,
                         items: {},
                         itemPrices: {},
@@ -79,7 +71,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 }));
             }
         }
-    }, [dataLoaded, template.serviceType, template.boxes?.length, boxTypes, mainVendor.id]);
+    }, [dataLoaded, template.serviceType, template.boxes?.length, mainVendor.id]);
 
     // Ensure all boxes have the default vendor set
     useEffect(() => {
@@ -97,10 +89,23 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         }
     }, [dataLoaded, template.serviceType, template.boxes, mainVendor.id]);
 
-    async function loadTemplate() {
+    // Ensure billAmount is set for Produce serviceType
+    useEffect(() => {
+        if (dataLoaded && template.serviceType === 'Produce') {
+            if (template.billAmount === undefined || template.billAmount === null) {
+                setTemplate(prev => ({
+                    ...prev,
+                    billAmount: 0
+                }));
+            }
+        }
+    }, [dataLoaded, template.serviceType, template.billAmount]);
+
+    async function loadTemplate(serviceTypeToLoad?: string) {
         setLoading(true);
         try {
-            const saved = await getDefaultOrderTemplate();
+            const currentServiceType = serviceTypeToLoad || template.serviceType;
+            const saved = await getDefaultOrderTemplate(currentServiceType);
             if (saved) {
                 // Ensure proper initialization based on service type
                 if (saved.serviceType === 'Food') {
@@ -113,17 +118,9 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 } else if (saved.serviceType === 'Boxes') {
                     // Ensure boxes array exists - create empty default box if none exists
                     if (!saved.boxes || saved.boxes.length === 0) {
-                        // Box type is optional - only set if available
-                        let boxTypeId: string = '';
-                        if (boxTypes.length > 0) {
-                            const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-                            if (firstBoxType) {
-                                boxTypeId = firstBoxType.id;
-                            }
-                        }
                         saved.boxes = [{
                             boxNumber: 1,
-                            boxTypeId: boxTypeId,
+                            boxTypeId: '',
                             vendorId: mainVendor.id,
                             items: {},
                             itemPrices: {},
@@ -146,14 +143,50 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     if (defaultVendor) {
                         saved.vendorId = defaultVendor.id;
                     }
+                } else if (saved.serviceType === 'Produce') {
+                    // Ensure billAmount exists
+                    if (saved.billAmount === undefined || saved.billAmount === null) {
+                        saved.billAmount = 0;
+                    }
                 }
                 setTemplate(saved);
             } else {
                 // Initialize with default structure based on service type
-                setTemplate({
-                    serviceType: 'Food',
-                    vendorSelections: [{ vendorId: mainVendor.id, items: {} }]
-                });
+                if (currentServiceType === 'Food') {
+                    setTemplate({
+                        serviceType: 'Food',
+                        vendorSelections: [{ vendorId: mainVendor.id, items: {} }]
+                    });
+                } else if (currentServiceType === 'Boxes') {
+                    setTemplate({
+                        serviceType: 'Boxes',
+                        boxes: [{
+                            boxNumber: 1,
+                            boxTypeId: '',
+                            vendorId: mainVendor.id,
+                            items: {},
+                            itemPrices: {},
+                            itemNotes: {}
+                        }]
+                    });
+                } else if (currentServiceType === 'Custom') {
+                    const defaultVendor = vendors.find(v => v.isActive) || vendors[0];
+                    setTemplate({
+                        serviceType: 'Custom',
+                        vendorId: defaultVendor?.id || '',
+                        customItems: []
+                    });
+                } else if (currentServiceType === 'Produce') {
+                    setTemplate({
+                        serviceType: 'Produce',
+                        billAmount: 0
+                    });
+                } else {
+                    setTemplate({
+                        serviceType: currentServiceType as any,
+                        vendorSelections: [{ vendorId: mainVendor.id, items: {} }]
+                    });
+                }
             }
         } catch (error) {
             console.error('Error loading template:', error);
@@ -183,17 +216,9 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             } else if (templateToSave.serviceType === 'Boxes') {
                 // Ensure boxes array is valid - create empty default box if none exists
                 if (!templateToSave.boxes || templateToSave.boxes.length === 0) {
-                    // Box type is optional - only set if available
-                    let boxTypeId: string = '';
-                    if (boxTypes.length > 0) {
-                        const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-                        if (firstBoxType) {
-                            boxTypeId = firstBoxType.id;
-                        }
-                    }
                     templateToSave.boxes = [{
                         boxNumber: 1,
-                        boxTypeId: boxTypeId,
+                        boxTypeId: '',
                         vendorId: mainVendor.id,
                         items: {},
                         itemPrices: {},
@@ -223,14 +248,26 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 if (defaultVendor) {
                     templateToSave.vendorId = defaultVendor.id;
                 }
-                // Remove Food and Boxes fields
+                // Remove Food, Boxes, and Produce fields
                 delete templateToSave.vendorSelections;
                 delete templateToSave.boxes;
+                delete templateToSave.billAmount;
+            } else if (templateToSave.serviceType === 'Produce') {
+                // Ensure billAmount exists and is valid
+                if (templateToSave.billAmount === undefined || templateToSave.billAmount === null) {
+                    templateToSave.billAmount = 0;
+                }
+                // Remove Food, Boxes, and Custom fields
+                delete templateToSave.vendorSelections;
+                delete templateToSave.boxes;
+                delete templateToSave.customItems;
+                delete templateToSave.vendorId;
             }
             
-            await saveDefaultOrderTemplate(templateToSave);
+            // Save template for the specific serviceType
+            await saveDefaultOrderTemplate(templateToSave, templateToSave.serviceType);
             setTemplate(templateToSave);
-            setMessage('Default order template saved successfully!');
+            setMessage(`Default order template for ${templateToSave.serviceType} saved successfully!`);
             setTimeout(() => setMessage(null), 3000);
         } catch (error) {
             console.error('Error saving template:', error);
@@ -258,65 +295,19 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         });
     }
 
-    function handleServiceTypeChange(newServiceType: string) {
-        // Initialize appropriate structure based on service type
-        if (newServiceType === 'Food') {
-            setTemplate({
-                serviceType: 'Food',
-                vendorSelections: [{ vendorId: mainVendor.id, items: {} }]
-            });
-        } else if (newServiceType === 'Boxes') {
-            // Create default empty box entry
-            // Box type is optional - only set if available
-            let boxTypeId: string = '';
-            if (boxTypes.length > 0) {
-                const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-                if (firstBoxType) {
-                    boxTypeId = firstBoxType.id;
-                }
-            }
-            setTemplate({
-                serviceType: 'Boxes',
-                boxes: [{
-                    boxNumber: 1,
-                    boxTypeId: boxTypeId,
-                    vendorId: mainVendor.id,
-                    items: {},
-                    itemPrices: {},
-                    itemNotes: {}
-                }]
-            });
-        } else if (newServiceType === 'Custom') {
-            const defaultVendor = vendors.find(v => v.isActive) || vendors[0];
-            setTemplate({
-                serviceType: 'Custom',
-                vendorId: defaultVendor?.id || '',
-                customItems: []
-            });
-        } else {
-            setTemplate({
-                serviceType: newServiceType as any
-            });
-        }
+    async function handleServiceTypeChange(newServiceType: string) {
+        // Load template for the new serviceType
+        await loadTemplate(newServiceType);
     }
 
     // Box management functions
     function addBox() {
         const currentBoxes = template.boxes || [];
         const nextBoxNumber = currentBoxes.length + 1;
-        
-        // Box type is optional - only set if available
-        let boxTypeId: string | undefined = undefined;
-        if (boxTypes.length > 0) {
-            const firstBoxType = boxTypes.find(bt => bt.isActive) || boxTypes[0];
-            if (firstBoxType) {
-                boxTypeId = firstBoxType.id;
-            }
-        }
 
         const newBox: BoxConfiguration = {
             boxNumber: nextBoxNumber,
-            boxTypeId: boxTypeId || '',
+            boxTypeId: '',
             vendorId: mainVendor.id,
             items: {},
             itemPrices: {},
@@ -442,6 +433,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     <option value="Food">Food</option>
                     <option value="Boxes">Boxes</option>
                     <option value="Custom">Custom</option>
+                    <option value="Produce">Produce</option>
                 </select>
             </div>
 
@@ -507,7 +499,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     
                     <>
                         {(template.boxes || []).map((box) => {
-                                const boxType = boxTypes.find(bt => bt.id === box.boxTypeId);
                                 const boxItems = getBoxItems();
                                 
                                 return (
@@ -546,34 +537,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                             }}>
                                                 {mainVendor.name}
                                             </div>
-                                        </div>
-                                        
-                                        <div style={{ marginBottom: '1rem' }}>
-                                            <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Box Type</label>
-                                            <select
-                                                className="input"
-                                                value={box.boxTypeId || ''}
-                                                onChange={(e) => {
-                                                    const updatedBoxes = (template.boxes || []).map(b =>
-                                                        b.boxNumber === box.boxNumber
-                                                            ? { ...b, boxTypeId: e.target.value }
-                                                            : b
-                                                    );
-                                                    setTemplate({
-                                                        ...template,
-                                                        boxes: updatedBoxes
-                                                    });
-                                                }}
-                                            >
-                                                <option value="">Select Box Type...</option>
-                                                {boxTypes
-                                                    .filter(bt => bt.isActive)
-                                                    .map(bt => (
-                                                        <option key={bt.id} value={bt.id}>
-                                                            {bt.name}
-                                                        </option>
-                                                    ))}
-                                            </select>
                                         </div>
 
                                         {boxItems.length > 0 && (
@@ -890,6 +853,39 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                             )}
                         </div>
                     )}
+                </div>
+            )}
+
+            {template.serviceType === 'Produce' && (
+                <div className={styles.formCard}>
+                    <h3 className={styles.sectionTitle}>Produce Order Configuration</h3>
+                    <p className={styles.description}>
+                        Configure the default bill amount for produce orders for new clients.
+                    </p>
+                    
+                    <div style={{ marginBottom: '1rem' }}>
+                        <label className="label">Bill Amount</label>
+                        <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="input"
+                            value={template.billAmount || 0}
+                            onChange={e => setTemplate({
+                                ...template,
+                                billAmount: parseFloat(e.target.value) || 0
+                            })}
+                            placeholder="0.00"
+                            style={{ maxWidth: '300px' }}
+                        />
+                        <p style={{ 
+                            fontSize: '0.875rem', 
+                            color: 'var(--text-secondary)', 
+                            marginTop: '0.5rem' 
+                        }}>
+                            Enter the default bill amount for produce orders.
+                        </p>
+                    </div>
                 </div>
             )}
         </div>
