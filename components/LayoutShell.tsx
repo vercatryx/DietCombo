@@ -20,14 +20,15 @@ export function LayoutShell({ children, userName, userRole, userId }: { children
     const currentSidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH;
 
     // Hide sidebar only for vendor portal (singular /vendor), not admin vendor management (plural /vendors)
-    // Hide sidebar only for vendor portal (singular /vendor), client portal, verify-order, delivery, and drivers routes
+    // Hide sidebar only for vendor portal (singular /vendor), client portal, verify-order, delivery, drivers, and produce routes
     const isVendorPortal = pathname === '/vendor' || pathname.startsWith('/vendor/');
     const isClientPortal = pathname.startsWith('/client-portal');
     const isVerifyOrder = pathname.startsWith('/verify-order');
     const isDelivery = pathname.startsWith('/delivery');
     const isDrivers = pathname.startsWith('/drivers');
+    const isProduce = pathname.startsWith('/produce');
     const isRoutes = pathname === '/routes' || pathname.startsWith('/routes/');
-    const showSidebar = !isVendorPortal && !isClientPortal && !isVerifyOrder && !isDelivery && !isDrivers;
+    const showSidebar = !isVendorPortal && !isClientPortal && !isVerifyOrder && !isDelivery && !isDrivers && !isProduce;
 
     // Adjust padding for routes page: remove top and right padding
     const mainPadding = isRoutes ? '0 0 0 20px' : '2rem 20px 0 20px';

@@ -808,7 +808,7 @@ export async function updateSettings(settings: AppSettings) {
 
 // --- DEFAULT ORDER TEMPLATE ACTIONS ---
 
-export async function getDefaultOrderTemplate(): Promise<any | null> {
+export async function getDefaultOrderTemplate(serviceType?: string): Promise<any | null> {
     try {
         const { data, error } = await supabase
             .from('settings')
@@ -820,23 +820,112 @@ export async function getDefaultOrderTemplate(): Promise<any | null> {
             return null;
         }
         
-        return JSON.parse(data.value);
+        const allTemplates = JSON.parse(data.value);
+        
+        // If no serviceType specified, return all templates (for backward compatibility)
+        if (!serviceType) {
+            // Check if it's the old format (single template with serviceType property)
+            if (allTemplates && allTemplates.serviceType) {
+                // Old format - return as-is for backward compatibility
+                return allTemplates;
+            }
+            // New format - return all templates
+            return allTemplates;
+        }
+        
+        // If serviceType specified, return template for that serviceType
+        // Check if it's the old format (single template)
+        if (allTemplates && allTemplates.serviceType) {
+            // Old format - return only if serviceType matches
+            return allTemplates.serviceType === serviceType ? allTemplates : null;
+        }
+        
+        // New format - return template for specific serviceType
+        return allTemplates && allTemplates[serviceType] ? allTemplates[serviceType] : null;
     } catch (error) {
         console.error('Error fetching default order template:', error);
         return null;
     }
 }
 
-export async function saveDefaultOrderTemplate(template: any): Promise<void> {
+/**
+ * Calculate the default approved meals per week based on the total value
+ * in the default order template for Food serviceType.
+ * Returns 0 if no template exists or if calculation fails.
+ */
+export async function getDefaultApprovedMealsPerWeek(): Promise<number> {
     try {
-        const templateJson = JSON.stringify(template);
+        const template = await getDefaultOrderTemplate('Food');
+        if (!template || template.serviceType !== 'Food') {
+            return 0;
+        }
+
+        const menuItems = await getMenuItems();
+        if (menuItems.length === 0) {
+            return 0;
+        }
+
+        // Calculate total value from vendorSelections
+        let totalValue = 0;
+        const vendorSelections = template.vendorSelections || [];
         
-        // Check if setting exists
+        for (const selection of vendorSelections) {
+            const items = selection.items || {};
+            for (const [itemId, quantity] of Object.entries(items)) {
+                const item = menuItems.find(mi => mi.id === itemId);
+                if (item && item.value) {
+                    totalValue += item.value * (quantity as number);
+                }
+            }
+        }
+
+        return totalValue;
+    } catch (error) {
+        console.error('Error calculating default approved meals per week:', error);
+        return 0;
+    }
+}
+
+export async function saveDefaultOrderTemplate(template: any, serviceType?: string): Promise<void> {
+    try {
+        // If serviceType is provided, save template for that specific serviceType
+        // Otherwise, use the template's serviceType property (backward compatibility)
+        const targetServiceType = serviceType || template.serviceType;
+        
+        if (!targetServiceType) {
+            throw new Error('ServiceType is required to save default order template');
+        }
+        
+        // Get existing templates
         const { data: existing } = await supabase
             .from('settings')
-            .select('id')
+            .select('value')
             .eq('key', 'default_order_template')
             .single();
+        
+        let allTemplates: Record<string, any> = {};
+        
+        if (existing && existing.value) {
+            try {
+                const parsed = JSON.parse(existing.value);
+                // Check if it's old format (single template with serviceType property)
+                if (parsed && parsed.serviceType) {
+                    // Migrate old format to new format
+                    allTemplates[parsed.serviceType] = parsed;
+                } else {
+                    // Already in new format
+                    allTemplates = parsed || {};
+                }
+            } catch (e) {
+                // If parsing fails, start fresh
+                allTemplates = {};
+            }
+        }
+        
+        // Update or add template for the specific serviceType
+        allTemplates[targetServiceType] = template;
+        
+        const templateJson = JSON.stringify(allTemplates);
         
         if (existing) {
             // Update existing
@@ -1195,13 +1284,13 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
     };
 
     // Save active_order if provided (ClientProfile component handles validation)
-    // If not provided, try to load default order template
+    // If not provided, try to load default order template for the client's serviceType
     if (data.activeOrder !== undefined && data.activeOrder !== null) {
         payload.active_order = data.activeOrder;
     } else {
-        // Try to load default order template for new clients
+        // Try to load default order template for new clients based on their serviceType
         try {
-            const defaultTemplate = await getDefaultOrderTemplate();
+            const defaultTemplate = await getDefaultOrderTemplate(data.serviceType);
             if (defaultTemplate) {
                 payload.active_order = defaultTemplate;
             } else {
@@ -1296,6 +1385,9 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         throw new Error('Cannot attach dependent to another dependent');
     }
 
+    // Get default approved meals per week from template for Food serviceType
+    const defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
+
     const payload: any = {
         full_name: name.trim(),
         email: null,
@@ -1309,7 +1401,7 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         notes: '',
         status_id: null,
         service_type: 'Food' as ServiceType, // Default service type
-        approved_meals_per_week: 0,
+        approved_meals_per_week: defaultApprovedMeals,
         authorized_amount: null,
         expiration_date: null,
         active_order: {},
@@ -3029,12 +3121,88 @@ async function syncSingleOrderForDeliveryDay(
             const fallbackDate = new Date('2099-12-31T00:00:00.000Z');
             scheduledDeliveryDate = fallbackDate;
         }
+    } else if (orderConfig.serviceType === 'Produce') {
+        // For Produce orders: validate billAmount
+        if (orderConfig.billAmount === undefined || orderConfig.billAmount === null || orderConfig.billAmount < 0) {
+            const errorMsg = `Cannot save Produce order: Invalid bill amount. Please enter a valid bill amount (>= 0).`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                billAmount: orderConfig.billAmount
+            });
+            throw new Error(errorMsg);
+        }
+
+        // For Produce orders, try to get delivery day from main vendor if available
+        const mainVendor = vendors.find(v => v.isDefault === true) || vendors[0];
+        
+        if (mainVendor && deliveryDay) {
+            // Validate that vendor can deliver on that day
+            const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
+            if (deliveryDays && !deliveryDays.includes(deliveryDay)) {
+                const vendorName = mainVendor?.name || 'selected vendor';
+                const errorMsg = `Cannot save Produce order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day.`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                    serviceType: orderConfig.serviceType,
+                    deliveryDay,
+                    vendorName
+                });
+                throw new Error(errorMsg);
+            }
+            
+            // Get the nearest occurrence of the client-selected delivery day
+            scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
+            
+            if (!scheduledDeliveryDate) {
+                const errorMsg = `Cannot save Produce order: Could not calculate delivery date for ${deliveryDay}.`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                    serviceType: orderConfig.serviceType,
+                    deliveryDay
+                });
+                throw new Error(errorMsg);
+            }
+        } else if (mainVendor) {
+            // Use main vendor's delivery day as default
+            const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
+            if (deliveryDays && deliveryDays.length > 0) {
+                const mainVendorDeliveryDay = deliveryDays[0];
+                scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                
+                if (!scheduledDeliveryDate) {
+                    const errorMsg = `Cannot save Produce order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
+                    console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                        serviceType: orderConfig.serviceType,
+                        mainVendorDeliveryDay,
+                        mainVendorName: mainVendor.name
+                    });
+                    throw new Error(errorMsg);
+                }
+            }
+        }
+
+        // IMPORTANT: take_effect_date must always be a Sunday using weekly locking logic
+        takeEffectDate = getTakeEffectDateFromUtils(settings);
+        
+        if (!takeEffectDate) {
+            const errorMsg = `Cannot save Produce order: Could not calculate take effect date. Please check system settings.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType,
+                settings: settings ? 'present' : 'missing'
+            });
+            throw new Error(errorMsg);
+        }
+
+        // If still no scheduled delivery date, use a fallback (far future date)
+        if (!scheduledDeliveryDate) {
+            console.log(`[syncSingleOrderForDeliveryDay] No delivery date calculated for Produce order - using fallback date`);
+            const fallbackDate = new Date('2099-12-31T00:00:00.000Z');
+            scheduledDeliveryDate = fallbackDate;
+        }
     }
 
     // For Boxes orders, dates are optional - they can be set later
-    // Only require dates for Food and Custom orders
+    // Only require dates for Food, Custom, and Produce orders
     // This check should rarely be hit now since we validate earlier, but keep as a safety net
-    if ((orderConfig.serviceType === 'Food' || orderConfig.serviceType === 'Custom') && (!takeEffectDate || !scheduledDeliveryDate)) {
+    if ((orderConfig.serviceType === 'Food' || orderConfig.serviceType === 'Custom' || orderConfig.serviceType === 'Produce') && (!takeEffectDate || !scheduledDeliveryDate)) {
         const vendorIds = orderConfig.vendorSelections?.map((s: any) => s.vendorId).filter((id: string) => id) || [];
         const vendorNames = vendorIds.map((id: string) => {
             const vendor = vendors.find(v => v.id === id);
@@ -3154,6 +3322,15 @@ async function syncSingleOrderForDeliveryDay(
             }
         }
         console.log(`[syncSingleOrderForDeliveryDay] Custom order totals: totalValue=${totalValue}, totalItems=${totalItems}`);
+    } else if (orderConfig.serviceType === 'Produce') {
+        // For Produce orders, totalValue is the billAmount
+        totalValue = parseFloat(orderConfig.billAmount) || 0;
+        totalItems = 1; // Produce orders are counted as 1 item
+        console.log(`[syncSingleOrderForDeliveryDay] Processing Produce order`, {
+            billAmount: orderConfig.billAmount,
+            totalValue,
+            totalItems
+        });
     }
 
     // Get current user from session for updated_by
@@ -3170,8 +3347,8 @@ async function syncSingleOrderForDeliveryDay(
     // currentTime already cached at function start
     
     // Validate and normalize service_type to match database constraint
-    // Allowed values: 'Food', 'Meal', 'Boxes', 'Equipment', 'Custom'
-    const validServiceTypes = ['Food', 'Meal', 'Boxes', 'Equipment', 'Custom'] as const;
+    // Allowed values: 'Food', 'Meal', 'Boxes', 'Equipment', 'Custom', 'Produce'
+    const validServiceTypes = ['Food', 'Meal', 'Boxes', 'Equipment', 'Custom', 'Produce'] as const;
     let serviceType = orderConfig.serviceType;
     
     if (!serviceType || typeof serviceType !== 'string') {
@@ -3249,6 +3426,15 @@ async function syncSingleOrderForDeliveryDay(
             });
             throw new Error(errorMsg);
         }
+    } else if (orderConfig.serviceType === 'Produce') {
+        // For Produce orders, use main vendor (isDefault: true, or first vendor if none is default)
+        const mainVendor = vendors.find(v => v.isDefault === true) || vendors[0];
+        if (mainVendor) {
+            vendorId = mainVendor.id;
+            console.log(`[syncSingleOrderForDeliveryDay] Extracted vendor_id for Produce order: ${vendorId} (main vendor: ${mainVendor.name})`);
+        } else {
+            console.warn(`[syncSingleOrderForDeliveryDay] No vendor found for Produce order - vendor_id will be null`);
+        }
     }
     
     const upcomingOrderData: any = {
@@ -3263,6 +3449,7 @@ async function syncSingleOrderForDeliveryDay(
         take_effect_date: takeEffectDate ? formatDateToYYYYMMDD(takeEffectDate) : null,
         total_value: totalValue,
         total_items: totalItems,
+        bill_amount: orderConfig.serviceType === 'Produce' ? (orderConfig.billAmount || null) : null,
         notes: null,
         vendor_id: vendorId
     };
@@ -4350,6 +4537,20 @@ async function updateClientActiveOrderFromUpcomingOrder(
                 
                 console.log(`[updateClientActiveOrderFromUpcomingOrder] Updated active_order with ${boxOrders.length} box order(s) for Boxes service type`);
             }
+        } else if (serviceType === 'Produce') {
+            // For Produce orders, get billAmount from total_value in upcoming_orders
+            const { data: upcomingOrder } = await supabase
+                .from('upcoming_orders')
+                .select('total_value')
+                .eq('id', upcomingOrderId)
+                .single();
+
+            if (upcomingOrder) {
+                // Update active_order with billAmount from total_value
+                currentActiveOrder.billAmount = parseFloat(upcomingOrder.total_value) || 0;
+                currentActiveOrder.serviceType = 'Produce';
+                console.log(`[updateClientActiveOrderFromUpcomingOrder] Updated active_order with billAmount ${currentActiveOrder.billAmount} for Produce service type`);
+            }
         }
 
         // Always update the clients table to ensure vendor IDs are persisted
@@ -4484,6 +4685,84 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         deliveryDayOrdersObj &&
         typeof deliveryDayOrdersObj === 'object' &&
         Object.keys(deliveryDayOrdersObj).length > 0;
+
+    // Placeholder upcoming order for new Food clients with no vendor selections yet (caseId optional).
+    // Without this, syncSingleOrderForDeliveryDay would throw "No vendor selections found" and
+    // no row would be created in upcoming_orders or related tables.
+    const hasRealVendorSelections = (orderConfig as any)?.vendorSelections?.some((s: any) => {
+        if (!s.vendorId || String(s.vendorId).trim() === '') return false;
+        const items = s.items || {};
+        return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+    });
+    if (
+        orderConfig.serviceType === 'Food' &&
+        !hasDeliveryDayOrders &&
+        !hasRealVendorSelections
+    ) {
+        console.log('[syncCurrentOrderToUpcoming] Creating placeholder upcoming order for new Food client (no vendors yet)');
+        const { error: deleteErr } = await supabase
+            .from('upcoming_orders')
+            .delete()
+            .eq('client_id', clientId)
+            .eq('service_type', 'Food');
+        if (deleteErr) {
+            console.warn('[syncCurrentOrderToUpcoming] Error deleting existing Food upcoming orders before placeholder:', deleteErr);
+        }
+        const { data: maxUpcomingOrder } = await supabase
+            .from('upcoming_orders')
+            .select('order_number')
+            .order('order_number', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        const { data: maxOrder } = await supabase
+            .from('orders')
+            .select('order_number')
+            .order('order_number', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
+        const maxFromOrders = maxOrder?.order_number || 0;
+        const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
+        const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+        const currentTime = await getCurrentTime();
+        const placeholderId = randomUUID();
+        const session = await getSession();
+        const updatedBy = session?.name || 'Admin';
+        const { error: insertErr } = await supabase
+            .from('upcoming_orders')
+            .insert([{
+                id: placeholderId,
+                client_id: clientId,
+                service_type: 'Food',
+                case_id: orderConfig.caseId && String(orderConfig.caseId).trim() !== '' ? orderConfig.caseId : null,
+                status: 'scheduled',
+                scheduled_delivery_date: null,
+                take_effect_date: null,
+                delivery_day: null,
+                total_value: 0,
+                total_items: 0,
+                bill_amount: null,
+                notes: null,
+                order_number: nextOrderNumber,
+                last_updated: currentTime.toISOString(),
+                updated_by: updatedBy,
+            }]);
+        if (insertErr) {
+            console.error('[syncCurrentOrderToUpcoming] Error creating placeholder upcoming order:', insertErr);
+            throw new Error(`Failed to create upcoming order for new Food client: ${insertErr.message || 'Unknown error'}`);
+        }
+        console.log('[syncCurrentOrderToUpcoming] Placeholder upcoming order created', { id: placeholderId, order_number: nextOrderNumber });
+        const { syncLocalDBFromSupabase } = await import('./local-db');
+        try {
+            await syncLocalDBFromSupabase();
+        } catch (syncError) {
+            console.warn('[syncCurrentOrderToUpcoming] Local DB sync failed (non-critical):', syncError);
+        }
+        revalidatePath('/clients');
+        revalidatePath(`/client-portal/${clientId}`);
+        console.log('[syncCurrentOrderToUpcoming] COMPLETE - Placeholder upcoming order saved successfully');
+        return;
+    }
 
     if (hasDeliveryDayOrders) {
         // New format: create/update orders for each delivery day
@@ -4846,6 +5125,7 @@ export async function processUpcomingOrders() {
                 delivery_distribution: null, // Can be set later if needed
                 total_value: upcomingOrder.total_value,
                 total_items: upcomingOrder.total_items,
+                bill_amount: upcomingOrder.bill_amount || null,
                 notes: upcomingOrder.notes,
                 order_number: upcomingOrder.order_number // Preserve the assigned 6-digit number
             };

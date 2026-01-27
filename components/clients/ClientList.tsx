@@ -369,6 +369,46 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             
             // Refresh signature counts
             loadSignatureCounts();
+            
+            // After refresh, load all remaining pages progressively in the background
+            // This ensures newly added/updated clients are visible even if they're not in the first page
+            if (cRes.total > PAGE_SIZE) {
+                setIsFetchingMore(true);
+                try {
+                    // Load remaining pages in parallel batches to avoid blocking
+                    const totalPages = Math.ceil(cRes.total / PAGE_SIZE);
+                    const batchSize = 3; // Load 3 pages at a time
+                    
+                    for (let batchStart = 2; batchStart <= totalPages; batchStart += batchSize) {
+                        const batchEnd = Math.min(batchStart + batchSize - 1, totalPages);
+                        const pagePromises = [];
+                        
+                        for (let p = batchStart; p <= batchEnd; p++) {
+                            pagePromises.push(getClientsPaginated(p, PAGE_SIZE, ''));
+                        }
+                        
+                        try {
+                            const batchResults = await Promise.all(pagePromises);
+                            setClients(prev => {
+                                const existingIds = new Set(prev.map(c => c.id));
+                                let updated = [...prev];
+                                batchResults.forEach((res, idx) => {
+                                    const newClients = res.clients.filter((c): c is NonNullable<typeof c> => c !== null && !existingIds.has(c.id));
+                                    updated = [...updated, ...newClients];
+                                    newClients.forEach(c => existingIds.add(c.id));
+                                });
+                                return updated;
+                            });
+                            setPage(batchEnd);
+                        } catch (error) {
+                            console.error(`Error fetching pages ${batchStart}-${batchEnd} during refresh:`, error);
+                            // Continue loading other batches even if one fails
+                        }
+                    }
+                } finally {
+                    setIsFetchingMore(false);
+                }
+            }
         } catch (error) {
             console.error("Error refreshing data:", error);
         } finally {

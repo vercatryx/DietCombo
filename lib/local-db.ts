@@ -729,6 +729,11 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                         orderConfig.customItems = [];
                     }
                 }
+            } else if (data.service_type === 'Produce') {
+                // Handle Produce orders - load bill_amount
+                if (data.bill_amount !== null && data.bill_amount !== undefined) {
+                    orderConfig.billAmount = parseFloat(data.bill_amount.toString());
+                }
             }
             return orderConfig;
         }
@@ -838,6 +843,11 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                     } else {
                         orderConfig.customItems = [];
                     }
+                }
+            } else if (data.service_type === 'Produce') {
+                // Handle Produce orders - load bill_amount
+                if (data.bill_amount !== null && data.bill_amount !== undefined) {
+                    orderConfig.billAmount = parseFloat(data.bill_amount.toString());
                 }
             }
 

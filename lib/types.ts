@@ -115,6 +115,9 @@ export interface OrderConfiguration {
     quantity: number;
   }>;
 
+  // For Produce orders
+  billAmount?: number;
+
   // Display Helpers
   orderNumber?: number;
   proofOfDelivery?: string;
@@ -218,7 +221,7 @@ export interface ItemCategory {
 
 export interface MenuItem {
   id: string;
-  vendorId: string;
+  vendorId: string | null; // Can be null for box items (universal items without a vendor)
   name: string;
   value: number;
   priceEach?: number;

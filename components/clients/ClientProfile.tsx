@@ -1259,6 +1259,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 configToSet.caseId = orderConfig.caseId;
             }
 
+            // Ensure billAmount is preserved for Produce orders from upcoming_orders
+            if (c.serviceType === 'Produce' && upcomingOrderData?.billAmount !== null && upcomingOrderData?.billAmount !== undefined) {
+                configToSet.billAmount = parseFloat(upcomingOrderData.billAmount.toString());
+            }
+
             // Fix for Boxes: Handle boxOrders array and migrate legacy fields if needed
             if (c.serviceType === 'Boxes') {
                 // NEW: Handle boxOrders array from backend
@@ -3307,8 +3312,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     (orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0);
                 const hasOrderData = hasCaseId || hasVendorSelections || hasDeliveryDayOrders || hasBoxConfig;
 
-                // Prepare active order data before creating client
-                const preparedActiveOrder = hasOrderData ? prepareActiveOrder() : undefined;
+                // Prepare active order data before creating client.
+                // For Food, always persist at least { serviceType: 'Food' } so we can create a placeholder upcoming_orders record.
+                const preparedActiveOrder = hasOrderData ? prepareActiveOrder() : (formData.serviceType === 'Food' ? { serviceType: 'Food' } : undefined);
 
                 const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
                 const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
@@ -3408,8 +3414,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 invalidateClientData();
                 setMessage('Client created successfully.');
 
-                // Sync to upcoming_orders if there's order data (same as edit path)
-                if (updatedClient.activeOrder && updatedClient.activeOrder.caseId) {
+                // Sync to upcoming_orders if there's order data (same as edit path).
+                // For Food, always sync when we have activeOrder so a placeholder upcoming_orders record is created even without caseId.
+                const shouldSyncOrder = (updatedClient.activeOrder && updatedClient.activeOrder.caseId) ||
+                    (formData.serviceType === 'Food' && updatedClient.activeOrder);
+                if (shouldSyncOrder) {
                     await syncCurrentOrderToUpcoming(updatedClient.id, updatedClient, true);
                 }
 
@@ -4789,46 +4798,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                     return (
                                                         <div className={styles.vendorsList}>
                                                             <div className={styles.vendorBlock}>
-                                                                {(() => {
-                                                                    // Get main vendor's delivery day (isDefault: true, or first vendor if none is default)
-                                                                    const mainVendor = vendors.find(v => v.isDefault === true) || vendors.find(v => v.id === defaultVendorId) || vendors[0];
-                                                                    const mainVendorDeliveryDay = mainVendor?.deliveryDays?.[0] || null;
-                                                                    
-                                                                    if (mainVendorDeliveryDay) {
-                                                                        return (
-                                                                            <div style={{
-                                                                                marginBottom: '1rem',
-                                                                                padding: '0.75rem',
-                                                                                backgroundColor: 'var(--bg-surface-hover)',
-                                                                                borderRadius: 'var(--radius-sm)',
-                                                                                border: '1px solid var(--border-color)'
-                                                                            }}>
-                                                                                <div style={{
-                                                                                    display: 'flex',
-                                                                                    alignItems: 'center',
-                                                                                    gap: '0.5rem',
-                                                                                    fontSize: '0.9rem',
-                                                                                    fontWeight: 500
-                                                                                }}>
-                                                                                    <Calendar size={16} />
-                                                                                    <span>Delivery Day:</span>
-                                                                                    <span style={{
-                                                                                        padding: '0.5rem 1rem',
-                                                                                        borderRadius: 'var(--radius-sm)',
-                                                                                        border: '1px solid var(--border-color)',
-                                                                                        backgroundColor: 'var(--bg-app)',
-                                                                                        color: 'var(--text-primary)',
-                                                                                        fontSize: '0.85rem',
-                                                                                        fontWeight: 600
-                                                                                    }}>
-                                                                                        {mainVendorDeliveryDay}
-                                                                                    </span>
-                                                                                </div>
-                                                                            </div>
-                                                                        );
-                                                                    }
-                                                                    return null;
-                                                                })()}
                                                                 {vendorMinimum > 0 && (
                                                                     <div style={{
                                                                         marginBottom: '0.75rem',
