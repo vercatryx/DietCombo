@@ -3429,9 +3429,25 @@ async function syncSingleOrderForDeliveryDay(
         }
     }
     
+    // Map serviceType to lowercase service_type for upcoming_orders based on selected tab
+    // Food tab → 'food', Boxes tab → 'boxes', Custom tab → 'custom', Produce tab → 'produce'
+    let serviceTypeForUpcomingOrders: string;
+    if (serviceType === 'Food') {
+        serviceTypeForUpcomingOrders = 'food';
+    } else if (serviceType === 'Boxes') {
+        serviceTypeForUpcomingOrders = 'boxes';
+    } else if (serviceType === 'Custom') {
+        serviceTypeForUpcomingOrders = 'custom';
+    } else if (serviceType === 'Produce') {
+        serviceTypeForUpcomingOrders = 'produce';
+    } else {
+        // Fallback: convert to lowercase for any other service type
+        serviceTypeForUpcomingOrders = serviceType.toLowerCase();
+    }
+    
     const upcomingOrderData: any = {
         client_id: clientId,
-        service_type: serviceType,
+        service_type: serviceTypeForUpcomingOrders,
         case_id: orderConfig.caseId,
         status: 'scheduled',
         last_updated: orderConfig.lastUpdated || currentTime.toISOString(),
@@ -3459,7 +3475,7 @@ async function syncSingleOrderForDeliveryDay(
             .from('upcoming_orders')
             .select('id')
             .eq('client_id', clientId)
-            .eq('service_type', serviceType)
+            .eq('service_type', serviceTypeForUpcomingOrders)
             .eq('delivery_day', deliveryDay)
             .maybeSingle();
         existing = existingData;
@@ -3469,7 +3485,7 @@ async function syncSingleOrderForDeliveryDay(
             .from('upcoming_orders')
             .select('id')
             .eq('client_id', clientId)
-            .eq('service_type', serviceType)
+            .eq('service_type', serviceTypeForUpcomingOrders)
             .is('delivery_day', null)
             .maybeSingle();
         existing = existingData;
@@ -4789,11 +4805,17 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
 
         // Delete orders for delivery days that are no longer in the config
         // Filter by service_type to only delete orders of the same type
+        // Map serviceType to lowercase for upcoming_orders: Food → food, Boxes → boxes, Custom → custom, Produce → produce
+        const serviceTypeForQuery = orderConfig.serviceType === 'Food' ? 'food' :
+                                   orderConfig.serviceType === 'Boxes' ? 'boxes' :
+                                   orderConfig.serviceType === 'Custom' ? 'custom' :
+                                   orderConfig.serviceType === 'Produce' ? 'produce' :
+                                   orderConfig.serviceType?.toLowerCase() || 'food';
         const { data: existingOrders } = await supabase
             .from('upcoming_orders')
             .select('id, delivery_day')
             .eq('client_id', clientId)
-            .eq('service_type', orderConfig.serviceType);
+            .eq('service_type', serviceTypeForQuery);
 
         if (existingOrders && existingOrders.length > 0) {
             const existingDeliveryDays = new Set((existingOrders || []).map(o => o.delivery_day).filter(Boolean));
