@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -241,10 +241,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (isNewClient) {
             setLoading(true);
             // Load lookups but don't load client data
-            loadLookups().then(() => {
+            loadLookups().then(async () => {
                 // Initialize with default values
                 const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
                 const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
+                
+                // Get default approved meals per week from template
+                const defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
 
                 const defaultClient: Partial<ClientProfile> = {
                     fullName: '',
@@ -259,15 +262,22 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     notes: '',
                     statusId: initialStatusId,
                     serviceType: 'Food',
-                    approvedMealsPerWeek: 21,
+                    approvedMealsPerWeek: defaultApprovedMeals || 0,
                     authorizedAmount: null,
                     expirationDate: null
                 };
 
                 setFormData(defaultClient);
                 setClient(defaultClient as ClientProfile);
-                setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: '', items: {} }] });
+                
+                // Initialize order config with default template for Food service type
+                const defaultVendorId = getDefaultVendor('Food') || '';
+                setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId, items: {} }] });
                 setOriginalOrderConfig({});
+                
+                // Load and apply default order template for Food
+                await loadAndApplyDefaultTemplate('Food');
+                
                 setLoading(false);
                 setLoadingOrderDetails(false);
             }).catch((error) => {
@@ -483,6 +493,60 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
             return sel;
         });
+    }
+
+    // Helper: Load and apply default order template for new clients
+    async function loadAndApplyDefaultTemplate(serviceType: string): Promise<void> {
+        // Only apply for Food and Produce service types
+        if (serviceType !== 'Food' && serviceType !== 'Produce') {
+            return;
+        }
+
+        try {
+            const template = await getDefaultOrderTemplate(serviceType);
+            if (!template) {
+                console.log(`[ClientProfile] No default template found for service type: ${serviceType}`);
+                return;
+            }
+
+            console.log(`[ClientProfile] Loading default template for ${serviceType}:`, template);
+
+            if (serviceType === 'Food') {
+                // Apply Food template - copy vendorSelections and items
+                const defaultVendorId = getDefaultVendor('Food') || '';
+                const templateVendorSelections = template.vendorSelections || [];
+                
+                // Use template's vendor selections if available, otherwise create one with default vendor
+                let vendorSelections: any[] = [];
+                
+                if (templateVendorSelections.length > 0) {
+                    // Use template's vendor selections, but ensure vendorId is set to default vendor
+                    // The template may have items configured, so we preserve those
+                    vendorSelections = templateVendorSelections.map((vs: any) => ({
+                        vendorId: defaultVendorId, // Always use default vendor for new clients
+                        items: { ...(vs.items || {}) } // Copy items from template
+                    }));
+                } else {
+                    // No vendor selections in template, create default one
+                    vendorSelections = [{ vendorId: defaultVendorId, items: {} }];
+                }
+
+                setOrderConfig((prev: any) => ({
+                    ...prev,
+                    serviceType: 'Food',
+                    vendorSelections: vendorSelections
+                }));
+            } else if (serviceType === 'Produce') {
+                // Apply Produce template - copy billAmount
+                setOrderConfig((prev: any) => ({
+                    ...prev,
+                    serviceType: 'Produce',
+                    billAmount: template.billAmount || 0
+                }));
+            }
+        } catch (error) {
+            console.error(`[ClientProfile] Error loading default template for ${serviceType}:`, error);
+        }
     }
 
     // Effect: Auto-set default vendor when caseId is set and vendor selections are empty
@@ -1184,6 +1248,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 } else if (c.serviceType === 'Custom') {
                     defaultOrder.vendorId = '';
                     defaultOrder.customItems = [];
+                } else if (c.serviceType === 'Produce') {
+                    defaultOrder.billAmount = 0;
                 }
                 configToSet = defaultOrder;
             }
@@ -2467,7 +2533,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     // -- Event Handlers --
 
-    function handleServiceChange(type: ServiceType) {
+    async function handleServiceChange(type: ServiceType) {
         if (formData.serviceType === type) return;
 
         // Check if there is existing configuration to warn about
@@ -2488,6 +2554,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (type === 'Food') {
             const defaultVendorId = getDefaultVendor('Food');
             setOrderConfig({ serviceType: type, vendorSelections: [{ vendorId: defaultVendorId || '', items: {} }] });
+            // Load default template for new clients
+            if (isNewClient) {
+                await loadAndApplyDefaultTemplate('Food');
+            }
+        } else if (type === 'Produce') {
+            setOrderConfig({ serviceType: type, billAmount: 0 });
+            // Load default template for new clients
+            if (isNewClient) {
+                await loadAndApplyDefaultTemplate('Produce');
+            }
         } else if (type === 'Custom') {
             setOrderConfig({ serviceType: type, vendorId: '', customItems: [] });
         } else {
@@ -3045,18 +3121,24 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (formData.serviceType === 'Food') {
                 // For Food service: Ensure vendorId and items are preserved in all vendor selections
                 if (cleanedOrderConfig.deliveryDayOrders) {
-                    // Multi-day format: Clean and preserve vendor selections for each day
+                    // Multi-day format: Clean and preserve vendor selections for each day.
+                    // Keep selections with vendorId OR with items (use default vendor when empty).
+                    const defaultVendorId = getDefaultVendor('Food') || '';
+                    const hasItemsForDay = (s: any) => {
+                        const items = s.items || {};
+                        return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                    };
                     for (const day of Object.keys(cleanedOrderConfig.deliveryDayOrders)) {
-                        // Ensure deliveryDay is attached to the day order
                         if (!cleanedOrderConfig.deliveryDayOrders[day].deliveryDay) {
                             cleanedOrderConfig.deliveryDayOrders[day].deliveryDay = day;
                         }
-                        cleanedOrderConfig.deliveryDayOrders[day].vendorSelections = (cleanedOrderConfig.deliveryDayOrders[day].vendorSelections || [])
-                            .filter((s: any) => s.vendorId) // Only keep selections with a vendor
+                        const daySels = cleanedOrderConfig.deliveryDayOrders[day].vendorSelections || [];
+                        cleanedOrderConfig.deliveryDayOrders[day].vendorSelections = daySels
+                            .filter((s: any) => (s.vendorId && s.vendorId.trim() !== '') || hasItemsForDay(s))
                             .map((s: any) => ({
-                                vendorId: s.vendorId, // Preserve vendor ID
-                                items: s.items || {}, // Preserve items
-                                deliveryDay: day  // Explicitly attach the delivery day to this vendor selection
+                                vendorId: (s.vendorId && s.vendorId.trim() !== '') ? s.vendorId : defaultVendorId,
+                                items: s.items || {},
+                                deliveryDay: day
                             }));
                     }
                 } else if (cleanedOrderConfig.vendorSelections) {
@@ -3108,24 +3190,23 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         }
                     } else {
                         // Single-day format: Clean and preserve vendor selections
-                        // CRITICAL FIX: Only filter out selections without vendorId, but keep all selections with vendorId
-                        // even if items are empty (they might be added later or items might be in a different format)
-                        cleanedOrderConfig.vendorSelections = (cleanedOrderConfig.vendorSelections || [])
-                            .filter((s: any) => s.vendorId && s.vendorId.trim() !== '') // Only keep selections with a valid vendor
-                            .map((s: any) => ({
-                                vendorId: s.vendorId, // Preserve vendor ID
-                                items: s.items || {} // Preserve items (even if empty - they might be added in a different format)
-                            }));
-                        
-                        // Validate that we have at least one vendor selection with items
-                        const hasItems = cleanedOrderConfig.vendorSelections.some((s: any) => {
+                        // CRITICAL: Keep selections with valid vendorId OR with items (new-order placeholder may have vendorId '').
+                        // Use default vendor when vendorId is empty but items exist so we don't drop user data.
+                        const defaultVendorId = getDefaultVendor('Food') || '';
+                        const raw = cleanedOrderConfig.vendorSelections || [];
+                        const hasItems = (s: any) => {
                             const items = s.items || {};
                             return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
-                        });
+                        };
+                        cleanedOrderConfig.vendorSelections = raw
+                            .filter((s: any) => (s.vendorId && s.vendorId.trim() !== '') || hasItems(s))
+                            .map((s: any) => ({
+                                vendorId: (s.vendorId && s.vendorId.trim() !== '') ? s.vendorId : defaultVendorId,
+                                items: s.items || {}
+                            }));
                         
-                        if (!hasItems && cleanedOrderConfig.vendorSelections.length > 0) {
+                        if (cleanedOrderConfig.vendorSelections.length > 0 && !cleanedOrderConfig.vendorSelections.some(hasItems)) {
                             console.warn('[prepareActiveOrder] Vendor selections exist but no items found. This might indicate items are in itemsByDay format.');
-                            // Don't remove vendor selections - they might have items in itemsByDay format that we missed
                         }
                     }
                 }
@@ -3231,6 +3312,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                 const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
                 const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
+                
+                // Get default approved meals per week from template if not set
+                let defaultApprovedMeals = formData.approvedMealsPerWeek;
+                if (defaultApprovedMeals === undefined || defaultApprovedMeals === null) {
+                    if (formData.serviceType === 'Food') {
+                        defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
+                    } else {
+                        defaultApprovedMeals = 0;
+                    }
+                }
 
                 // Create client WITH activeOrder included during creation
                 const clientData: Omit<ClientProfile, 'id' | 'createdAt' | 'updatedAt'> = {
@@ -3246,7 +3337,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     notes: formData.notes ?? '',
                     statusId: formData.statusId ?? initialStatusId,
                     serviceType: formData.serviceType ?? 'Food',
-                    approvedMealsPerWeek: formData.approvedMealsPerWeek ?? 21,
+                    approvedMealsPerWeek: defaultApprovedMeals,
                     authorizedAmount: formData.authorizedAmount ?? null,
                     expirationDate: formData.expirationDate ?? null,
                     // New fields from dietfantasy
@@ -3308,7 +3399,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (updatedClient.activeOrder && Object.keys(updatedClient.activeOrder).length > 0) {
 
                     setOrderConfig(updatedClient.activeOrder);
-                    setOriginalOrderConfig(updatedClient.activeOrder);
+                    setOriginalOrderConfig(JSON.parse(JSON.stringify(updatedClient.activeOrder)));
                 } else {
                     // If no activeOrder, keep the current orderConfig
 
@@ -3320,6 +3411,42 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // Sync to upcoming_orders if there's order data (same as edit path)
                 if (updatedClient.activeOrder && updatedClient.activeOrder.caseId) {
                     await syncCurrentOrderToUpcoming(updatedClient.id, updatedClient, true);
+                }
+
+                // Persist to independent order tables (same as existing-client path) so food/meal/box/custom orders are saved
+                const activeOrder = updatedClient.activeOrder as any;
+                const serviceType = updatedClient.serviceType || formData.serviceType;
+                if (activeOrder) {
+                    if (serviceType === 'Boxes' && (activeOrder.boxOrders?.length ?? 0) > 0) {
+                        await saveClientBoxOrder(updatedClient.id, activeOrder.boxOrders.map((box: any) => ({
+                            ...box,
+                            caseId: activeOrder.caseId
+                        })));
+                    }
+                    if (activeOrder.caseId) {
+                        if (serviceType === 'Custom' && activeOrder.custom_name && activeOrder.custom_price && activeOrder.vendorId && activeOrder.deliveryDay) {
+                            await saveClientCustomOrder(
+                                updatedClient.id,
+                                activeOrder.vendorId,
+                                activeOrder.custom_name,
+                                Number(activeOrder.custom_price),
+                                activeOrder.deliveryDay,
+                                activeOrder.caseId
+                            );
+                        }
+                        if (serviceType === 'Food') {
+                            await saveClientFoodOrder(updatedClient.id, {
+                                caseId: activeOrder.caseId,
+                                deliveryDayOrders: activeOrder.deliveryDayOrders || {}
+                            });
+                        }
+                        if (activeOrder.mealSelections || serviceType === 'Meal' || serviceType === 'Food') {
+                            await saveClientMealOrder(updatedClient.id, {
+                                caseId: activeOrder.caseId,
+                                mealSelections: activeOrder.mealSelections || {}
+                            });
+                        }
+                    }
                 }
 
                 // IMPORTANT: Set saving to false and return true BEFORE any state updates that might trigger re-renders
@@ -5642,7 +5769,30 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                                         {formData.serviceType === 'Produce' && (
                                             <div className="animate-fade-in">
-                                                {/* Produce tab content - blank for now */}
+                                                <div className={styles.formGroup}>
+                                                    <label className="label">Bill Amount</label>
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        min="0"
+                                                        className="input"
+                                                        value={orderConfig.billAmount || 0}
+                                                        readOnly
+                                                        placeholder="0.00"
+                                                        style={{ 
+                                                            maxWidth: '300px',
+                                                            backgroundColor: 'var(--bg-surface-hover)',
+                                                            cursor: 'not-allowed'
+                                                        }}
+                                                    />
+                                                    <p style={{ 
+                                                        fontSize: '0.875rem', 
+                                                        color: 'var(--text-secondary)', 
+                                                        marginTop: '0.5rem' 
+                                                    }}>
+                                                        Bill amount is set from the default order template and cannot be modified here.
+                                                    </p>
+                                                </div>
                                             </div>
                                         )}
                                     </>
