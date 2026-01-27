@@ -329,6 +329,7 @@ model Order {
   deliveryDistribution  Json?     @map("delivery_distribution")
   totalValue            Decimal?  @map("total_value") @db.Decimal(10, 2)
   totalItems            Int?      @map("total_items")
+  billAmount            Decimal?  @map("bill_amount") @db.Decimal(10, 2)
   notes                 String?
   proofOfDeliveryUrl    String?   @map("proof_of_delivery_url") @db.VarChar(500)
   orderNumber           Int?      @unique @map("order_number")
@@ -539,6 +540,7 @@ model UpcomingOrder {
   deliveryDistribution  Json?     @map("delivery_distribution")
   totalValue            Decimal?  @map("total_value") @db.Decimal(10, 2)
   totalItems            Int?      @map("total_items")
+  billAmount            Decimal?  @map("bill_amount") @db.Decimal(10, 2)
   notes                 String?
   orderNumber           Int?      @map("order_number")
   processedOrderId      String?   @map("processed_order_id") @db.VarChar(36)
