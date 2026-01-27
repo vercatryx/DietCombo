@@ -13,58 +13,80 @@ export default async function OrderProducePage({ params }: { params: Promise<{ i
         process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // Verify if it is a UUID
+    // Verify if it is a UUID (client_id)
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
-    // Fetch order details
-    let query = supabaseAdmin
-        .from('orders')
-        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url');
+    if (!isUuid) {
+        // Client ID must be a UUID
+        return (
+            <main className="produce-page">
+                <div className="produce-container text-center">
+                    <div className="error-icon" style={{ marginBottom: '1.5rem' }}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
+                    </div>
+                    <h1 className="text-title">Invalid Client ID</h1>
+                    <p className="text-subtitle" style={{ marginBottom: '2rem' }}>
+                        Client ID must be a valid UUID format. Please check and try again.
+                    </p>
+                    <a href="/produce" className="btn-secondary" style={{ display: 'block', width: '100%', padding: '1rem', textDecoration: 'none' }}>
+                        Try Another Client ID
+                    </a>
+                </div>
+            </main>
+        );
+    }
 
-    if (isUuid) {
-        query = query.eq('id', id);
+    // Fetch orders by client_id - get the most recent order that hasn't been processed
+    // Priority: 1) Orders without proof_of_delivery_url, ordered by scheduled_delivery_date DESC
+    //           2) If none, get the most recent order
+    let order = null;
+    let isUpcoming = false;
+    let orderError = null;
+    let upcomingOrderError = null;
+
+    // First, try to get an unprocessed order (no proof_of_delivery_url)
+    const { data: unprocessedOrders, error: unprocessedError } = await supabaseAdmin
+        .from('orders')
+        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url')
+        .eq('client_id', id)
+        .is('proof_of_delivery_url', null)
+        .order('scheduled_delivery_date', { ascending: false })
+        .limit(1);
+
+    if (unprocessedError) {
+        orderError = unprocessedError;
+    } else if (unprocessedOrders && unprocessedOrders.length > 0) {
+        order = unprocessedOrders[0];
     } else {
-        // Assume it's an order number - Parse as int for safety
-        const idInt = parseInt(id, 10);
-        if (!isNaN(idInt)) {
-            query = query.eq('order_number', idInt);
-        } else {
-            // Fallback or prevent query if invalid number? 
-            // If parse fails, it won't match anyway.
-            query = query.eq('order_number', id);
+        // If no unprocessed orders, get the most recent order for this client
+        const { data: recentOrders, error: recentError } = await supabaseAdmin
+            .from('orders')
+            .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url')
+            .eq('client_id', id)
+            .order('scheduled_delivery_date', { ascending: false })
+            .limit(1);
+
+        if (recentError) {
+            orderError = recentError;
+        } else if (recentOrders && recentOrders.length > 0) {
+            order = recentOrders[0];
         }
     }
 
-    const { data: existingOrder, error: orderError } = await query.maybeSingle();
-
-    let order = existingOrder;
-    let isUpcoming = false;
-    let upcomingOrderError = null;
-
+    // If no order found in orders table, try upcoming_orders
     if (!order && !orderError) {
-        // Try upcoming_orders
-        // Note: upcoming_orders doesn't have a delivery_proof_url column
-        let upcomingQuery = supabaseAdmin
+        const { data: upcomingOrders, error: upcomingErr } = await supabaseAdmin
             .from('upcoming_orders')
-            .select('id, order_number, client_id, scheduled_delivery_date');
+            .select('id, order_number, client_id, scheduled_delivery_date')
+            .eq('client_id', id)
+            .order('scheduled_delivery_date', { ascending: false })
+            .limit(1);
 
-        if (isUuid) {
-            upcomingQuery = upcomingQuery.eq('id', id);
-        } else {
-            const idInt = parseInt(id, 10);
-            if (!isNaN(idInt)) {
-                upcomingQuery = upcomingQuery.eq('order_number', idInt);
-            } else {
-                upcomingQuery = upcomingQuery.eq('order_number', id);
-            }
-        }
-
-        const { data: upcomingOrder, error: upcomingErr } = await upcomingQuery.maybeSingle();
         upcomingOrderError = upcomingErr;
         
-        if (upcomingOrder) {
+        if (upcomingOrders && upcomingOrders.length > 0) {
             order = {
-                ...upcomingOrder,
+                ...upcomingOrders[0],
                 // upcoming_orders doesn't have delivery_proof_url, so set it to null
                 proof_of_delivery_url: null
             };
@@ -79,12 +101,12 @@ export default async function OrderProducePage({ params }: { params: Promise<{ i
                     <div className="error-icon" style={{ marginBottom: '1.5rem' }}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
                     </div>
-                    <h1 className="text-title">Order Not Found</h1>
+                    <h1 className="text-title">No Order Found</h1>
                     <p className="text-subtitle" style={{ marginBottom: '2rem' }}>
-                        We couldn't find order <span style={{ fontFamily: 'monospace', color: 'white' }}>#{id}</span>. Please check the number and try again.
+                        We couldn't find any orders for client ID <span style={{ fontFamily: 'monospace', color: 'white' }}>{id}</span>. Please check the client ID and try again.
                     </p>
                     <a href="/produce" className="btn-secondary" style={{ display: 'block', width: '100%', padding: '1rem', textDecoration: 'none' }}>
-                        Try Another Number
+                        Try Another Client ID
                     </a>
                 </div>
             </main>

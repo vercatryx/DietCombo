@@ -414,6 +414,7 @@ async function precheckAndTransferUpcomingOrders() {
                             delivery_distribution: null, // Can be set later if needed
                             total_value: upcomingOrder.total_value,
                             total_items: upcomingOrder.total_items,
+                            bill_amount: upcomingOrder.bill_amount || null,
                             notes: upcomingOrder.notes || null
                         };
 
@@ -886,6 +887,7 @@ export async function GET(request: NextRequest) {
                             delivery_distribution: null, // Can be set later if needed
                             total_value: order.total_value,
                             total_items: order.total_items,
+                            bill_amount: order.bill_amount || null,
                             notes: order.notes || null
                         };
 

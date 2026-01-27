@@ -25,7 +25,7 @@ export default function ProduceManualEntryPage() {
                             <Package size={40} />
                         </div>
                         <h1 className="text-title">Produce Order Processing</h1>
-                        <p className="text-subtitle" style={{ marginTop: '0.5rem' }}>Enter Order Number manually if QR code fails.</p>
+                        <p className="text-subtitle" style={{ marginTop: '0.5rem' }}>Enter Client ID to process produce order.</p>
                     </div>
 
                     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -34,7 +34,7 @@ export default function ProduceManualEntryPage() {
                                 type="text"
                                 value={orderNum}
                                 onChange={(e) => setOrderNum(e.target.value)}
-                                placeholder="Enter Order #"
+                                placeholder="Enter Client ID"
                                 style={{
                                     width: '100%',
                                     backgroundColor: 'var(--bg-panel)',
