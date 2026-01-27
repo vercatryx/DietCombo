@@ -6779,6 +6779,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                         delivery_distribution: null, // Can be set later if needed
                         total_value: upcomingOrder.total_value,
                         total_items: upcomingOrder.total_items,
+                        bill_amount: upcomingOrder.bill_amount || null,
                         notes: upcomingOrder.notes,
                         actual_delivery_date: currentTime.toISOString(),
                         order_number: upcomingOrder.order_number // Copy order_number directly from upcoming_orders record
@@ -6817,13 +6818,16 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
                     if (!existingBilling) {
                         console.log(`[Process Pending Order] Creating Billing Record for ${newOrder.id}`);
+                        // Use bill_amount if available, otherwise fall back to total_value
+                        const billingAmount = upcomingOrder.bill_amount ?? upcomingOrder.total_value ?? 0;
                         const { error: billingError } = await supabase
                             .from('billing_records')
                             .insert([{
+                                id: randomUUID(),
                                 client_id: upcomingOrder.client_id,
                                 order_id: newOrder.id,
                                 status: 'pending',
-                                amount: upcomingOrder.total_value || 0,
+                                amount: billingAmount,
                                 navigator: client?.navigator_id || null,
                                 remarks: 'Auto-generated when order processed for delivery'
                             }]);
@@ -7168,13 +7172,16 @@ export async function saveDeliveryProofUrlAndProcessOrder(
 
         if (!existingBilling) {
             // Create billing record if it doesn't exist
+            // Use bill_amount if available, otherwise fall back to total_value
+            const billingAmount = order.bill_amount ?? order.total_value ?? 0;
             const { error: billingError } = await supabase
                 .from('billing_records')
                 .insert([{
+                    id: randomUUID(),
                     client_id: order.client_id,
                     order_id: order.id,
                     status: 'pending',
-                    amount: order.total_value || 0,
+                    amount: billingAmount,
                     navigator: client?.navigator_id || null,
                     remarks: 'Auto-generated upon proof upload'
                 }]);

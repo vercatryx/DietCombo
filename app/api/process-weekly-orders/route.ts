@@ -1100,18 +1100,36 @@ export async function GET(request: NextRequest) {
                 const orderIdForBilling = (orderSummary.copiedFromUpcoming && orderSummary.orderId) ? orderSummary.orderId : order.id;
                 const billingRemarks = `${orderSource} #${orderIdForBilling.substring(0, 8)} - ${order.service_type} service${order.case_id ? ` (Case: ${order.case_id})` : ''}`;
 
-                const { data: billingRecord, error: billingError } = await supabase
+                // Check if billing record already exists for this order
+                const { data: existingBillingCheck } = await supabase
                     .from('billing_records')
-                    .insert({
-                        client_id: order.client_id,
-                        status: 'request sent',
-                        remarks: billingRemarks,
-                        navigator: navigatorName,
-                        amount: billingAmount,
-                        order_id: orderIdForBilling
-                    })
-                    .select()
-                    .single();
+                    .select('*')
+                    .eq('order_id', orderIdForBilling)
+                    .maybeSingle();
+
+                let billingRecord = existingBillingCheck;
+                let billingError: any = null;
+
+                if (!existingBillingCheck) {
+                    const result = await supabase
+                        .from('billing_records')
+                        .insert({
+                            id: randomUUID(),
+                            client_id: order.client_id,
+                            status: 'request sent',
+                            remarks: billingRemarks,
+                            navigator: navigatorName,
+                            amount: billingAmount,
+                            order_id: orderIdForBilling
+                        })
+                        .select()
+                        .single();
+                    
+                    billingRecord = result.data;
+                    billingError = result.error;
+                } else {
+                    console.log(`[process-weekly-orders] Billing record already exists for order ${orderIdForBilling}, skipping creation`);
+                }
 
                 if (billingError) {
                     errors.push(`Failed to create billing record for ${isFromUpcomingOrders ? 'upcoming order' : 'order'} ${order.id}: ${billingError.message}`);
@@ -1198,199 +1216,3 @@ export async function GET(request: NextRequest) {
 
                             const { data: newUpcomingOrder, error: upcomingOrderError } = await supabase
                                 .from('upcoming_orders')
-                                .insert(upcomingOrderData)
-                                .select()
-                                .single();
-
-                            if (upcomingOrderError || !newUpcomingOrder) {
-                                errors.push(`Failed to create upcoming order for vendor ${vendorDetail.vendorId}: ${upcomingOrderError?.message}`);
-                                continue;
-                            }
-
-                            // Create vendor selection for this upcoming order
-                            const { data: newVendorSelection, error: vsError } = await supabase
-                                .from('upcoming_order_vendor_selections')
-                                .insert({
-                                    upcoming_order_id: newUpcomingOrder.id,
-                                    vendor_id: vendorDetail.vendorId
-                                })
-                                .select()
-                                .single();
-
-                            if (vsError || !newVendorSelection) {
-                                errors.push(`Failed to create vendor selection for upcoming order ${newUpcomingOrder.id}: ${vsError?.message}`);
-                                continue;
-                            }
-
-                            // Copy items for this vendor from the processed order
-                            if (vendorDetail.items && vendorDetail.items.length > 0) {
-                                for (const item of vendorDetail.items) {
-                                    const { error: itemError } = await supabase
-                                        .from('upcoming_order_items')
-                                        .insert({
-                                            upcoming_order_id: newUpcomingOrder.id,
-                                            vendor_selection_id: newVendorSelection.id,
-                                            menu_item_id: item.itemId,
-                                            quantity: item.quantity,
-                                            unit_value: item.unitValue,
-                                            total_value: item.totalValue
-                                        });
-
-                                    if (itemError) {
-                                        errors.push(`Failed to copy item ${item.itemId} to upcoming order: ${itemError.message}`);
-                                    }
-                                }
-                            }
-                        }
-                    } else if (order.service_type === 'Boxes' && orderSummary.vendorDetails.length > 0) {
-                        // For Box orders, create one upcoming order per vendor
-                        for (const vendorDetail of orderSummary.vendorDetails) {
-                            const vendorId = vendorDetail.vendorId;
-                            if (!vendorId) continue;
-
-                            const vendor = vendors.find(v => v.id === vendorId);
-                            if (!vendor) continue;
-
-                            // Calculate take effect date and scheduled delivery date for this vendor
-                            const takeEffectDate = calculateTakeEffectDate(vendorId, vendors);
-                            const scheduledDeliveryDate = calculateScheduledDeliveryDate(vendorId, vendors);
-
-                            if (!takeEffectDate || !scheduledDeliveryDate) {
-                                errors.push(`Failed to calculate dates for vendor ${vendorId} when creating upcoming order`);
-                                continue;
-                            }
-
-                            // Generate unique case_id
-                            const uniqueCaseId = generateUniqueCaseId();
-
-                            // Calculate totals for this vendor's box selection
-                            const boxType = boxTypes.find(b => b.id === vendorDetail.boxTypeId);
-                            const boxValue = boxType?.priceEach || 0;
-                            const boxQuantity = vendorDetail.quantity || 0;
-                            const totalValue = boxValue * boxQuantity;
-
-                            // Create upcoming order
-                            const upcomingOrderData: any = {
-                                client_id: order.client_id,
-                                service_type: order.service_type,
-                                case_id: uniqueCaseId,
-                                status: 'scheduled',
-                                last_updated: currentTimeISO,
-                                updated_by: order.updated_by || 'System',
-                                scheduled_delivery_date: scheduledDeliveryDate ? formatDateToYYYYMMDD(scheduledDeliveryDate) : null,
-                                take_effect_date: formatDateToYYYYMMDD(takeEffectDate),
-                                total_value: totalValue,
-                                total_items: boxQuantity,
-                                notes: order.notes || null,
-                                vendor_id: vendorId
-                            };
-
-                            // Add delivery_day if we can determine it from the vendor
-                            if (vendorDetail.deliveryDays && vendorDetail.deliveryDays.length > 0) {
-                                upcomingOrderData.delivery_day = vendorDetail.deliveryDays[0]; // Use first delivery day
-                            }
-
-                            const { data: newUpcomingOrder, error: upcomingOrderError } = await supabase
-                                .from('upcoming_orders')
-                                .insert(upcomingOrderData)
-                                .select()
-                                .single();
-
-                            if (upcomingOrderError || !newUpcomingOrder) {
-                                errors.push(`Failed to create upcoming order for vendor ${vendorId}: ${upcomingOrderError?.message}`);
-                                continue;
-                            }
-
-                            // Create box selection for this upcoming order
-                            // Note: items should be copied from the original order's box selection if available
-                            const { error: bsError } = await supabase
-                                .from('upcoming_order_box_selections')
-                                .insert({
-                                    upcoming_order_id: newUpcomingOrder.id,
-                                    vendor_id: vendorId,
-                                    quantity: boxQuantity,
-                                    unit_value: 0,
-                                    total_value: 0,
-                                    items: {} // Items should be copied from original order if needed
-                                });
-
-                            if (bsError) {
-                                errors.push(`Failed to create box selection for upcoming order ${newUpcomingOrder.id}: ${bsError.message}`);
-                            }
-                        }
-                    }
-                } catch (upcomingOrderError: any) {
-                    errors.push(`Error creating upcoming orders for processed order ${order.id}: ${upcomingOrderError.message}`);
-                }
-
-            } catch (error: any) {
-                errors.push(`Error processing ${isFromUpcomingOrders ? 'upcoming order' : 'order'} ${order.id}: ${error.message}`);
-            }
-        }
-
-        // Calculate aggregate statistics
-        const stats = {
-            totalOrders: processedOrders.length,
-            totalBillingRecords: billingRecords.length,
-            totalClients: new Set(processedOrders.map(o => o.clientId)).size,
-            totalValue: processedOrders.reduce((sum, o) => sum + o.totalValue, 0),
-            totalItems: processedOrders.reduce((sum, o) => sum + o.totalItems, 0),
-            byServiceType: {
-                Food: processedOrders.filter(o => o.serviceType === 'Food').length,
-                Boxes: processedOrders.filter(o => o.serviceType === 'Boxes').length,
-
-            },
-            byStatus: {
-                pending: processedOrders.filter(o => o.status === 'pending').length,
-                confirmed: processedOrders.filter(o => o.status === 'confirmed').length
-            },
-            byVendor: {} as Record<string, number>
-        };
-
-        // Count orders by vendor
-        processedOrders.forEach(order => {
-            order.vendorDetails.forEach((vendor: any) => {
-                const vendorName = vendor.vendorName || 'Unknown';
-                stats.byVendor[vendorName] = (stats.byVendor[vendorName] || 0) + 1;
-            });
-        });
-
-        const copiedCount = processedOrders.filter(o => o.copiedFromUpcoming).length;
-
-        // Combine precheck errors with processing errors
-        const allErrors = [...precheckResults.errors, ...errors];
-
-        // Trigger local DB sync in background after processing orders
-        const { triggerSyncInBackground } = await import('@/lib/local-db');
-        triggerSyncInBackground();
-
-        return NextResponse.json({
-            success: true,
-            message: `Successfully processed ${processedOrders.length} order(s)${copiedCount > 0 ? `, copied ${copiedCount} order(s) from upcoming_orders to orders table` : ''} and created ${billingRecords.length} billing record(s)`,
-            precheck: {
-                transferred: precheckResults.transferred,
-                skipped: precheckResults.skipped,
-                errors: precheckResults.errors.length > 0 ? precheckResults.errors : undefined
-            },
-            orderSource: isFromUpcomingOrders ? 'upcoming_orders' : 'orders',
-            copiedFromUpcoming: copiedCount,
-            settings: {
-                weeklyCutoffDay: settings.weeklyCutoffDay,
-                weeklyCutoffTime: settings.weeklyCutoffTime
-            },
-            statistics: stats,
-            orders: processedOrders,
-            billingRecords: billingRecords,
-            errors: allErrors.length > 0 ? allErrors : undefined,
-            processedAt: new Date().toISOString()
-        }, { status: 200 });
-
-    } catch (error: any) {
-        console.error('Error processing weekly orders:', error);
-        return NextResponse.json({
-            success: false,
-            error: error.message || 'Failed to process weekly orders',
-            processedAt: new Date().toISOString()
-        }, { status: 500 });
-    }
-}

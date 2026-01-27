@@ -141,7 +141,7 @@ export async function processProduceProof(formData: FormData) {
         // Create billing record if it doesn't exist (similar to updateOrderDeliveryProof)
         const { data: orderDetails } = await supabaseAdmin
             .from('orders')
-            .select('client_id, total_value, actual_delivery_date')
+            .select('client_id, total_value, bill_amount, actual_delivery_date')
             .eq('id', orderId)
             .single();
 
@@ -159,12 +159,14 @@ export async function processProduceProof(formData: FormData) {
                 .maybeSingle();
 
             if (!existingBilling) {
+                // Use bill_amount if available, otherwise fall back to total_value
+                const billingAmount = orderDetails.bill_amount ?? orderDetails.total_value ?? 0;
                 await supabaseAdmin.from('billing_records').insert([{
                     id: randomUUID(),
                     client_id: orderDetails.client_id,
                     order_id: orderId,
                     status: 'pending',
-                    amount: orderDetails.total_value || 0,
+                    amount: billingAmount,
                     navigator: client?.navigator_id || null,
                     remarks: 'Auto-generated upon produce proof upload'
                 }]);
