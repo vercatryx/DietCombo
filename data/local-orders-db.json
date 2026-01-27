@@ -186,6 +186,29 @@
       "bill_amount": null
     },
     {
+      "id": "37e18e50-16af-47ba-8931-c97cc9994926",
+      "client_id": "983e337e-6283-403e-812d-e6727d8d2923",
+      "service_type": "Food",
+      "case_id": "98641",
+      "status": "scheduled",
+      "scheduled_delivery_date": null,
+      "take_effect_date": null,
+      "delivery_day": null,
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 0,
+      "notes": null,
+      "order_number": 100037,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-01-27T20:00:43.039",
+      "updated_by": "System Administrator",
+      "created_at": "2026-01-27T20:00:44.452022",
+      "meal_type": "Lunch",
+      "vendor_id": null,
+      "bill_amount": null
+    },
+    {
       "id": "09e9963d-b806-4158-9b79-99b65c50e641",
       "client_id": "6c1cdd1b-1314-488b-9496-ddedbd3600f7",
       "service_type": "Boxes",
@@ -1846,5 +1869,5 @@
       "created_at": "2026-01-25T13:34:47.633713"
     }
   ],
-  "lastSynced": "2026-01-27T19:31:55.055Z"
+  "lastSynced": "2026-01-27T20:00:55.548Z"
 }

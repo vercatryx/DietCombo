@@ -194,21 +194,32 @@ export function VendorList() {
             </div>
 
             {/* Tabs */}
-            <div className={styles.tabs}>
-                <button
-                    className={`${styles.tab} ${activeTab === 'vendors' ? styles.tabActive : ''}`}
-                    onClick={() => setActiveTab('vendors')}
-                >
-                    <Truck size={18} />
-                    <span>Vendors</span>
-                </button>
-                <button
-                    className={`${styles.tab} ${activeTab === 'produce' ? styles.tabActive : ''}`}
-                    onClick={() => setActiveTab('produce')}
-                >
-                    <Package size={18} />
-                    <span>Produce Orders</span>
-                </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-lg)' }}>
+                <div className={styles.tabs}>
+                    <button
+                        className={`${styles.tab} ${activeTab === 'vendors' ? styles.tabActive : ''}`}
+                        onClick={() => setActiveTab('vendors')}
+                    >
+                        <Truck size={18} />
+                        <span>Vendors</span>
+                    </button>
+                    <button
+                        className={`${styles.tab} ${activeTab === 'produce' ? styles.tabActive : ''}`}
+                        onClick={() => setActiveTab('produce')}
+                    >
+                        <Package size={18} />
+                        <span>Produce Orders</span>
+                    </button>
+                </div>
+                {activeTab === 'produce' && (
+                    <button
+                        className="btn btn-primary"
+                        onClick={() => router.push('/vendors/produce')}
+                        style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}
+                    >
+                        View Produce Detail
+                    </button>
+                )}
             </div>
 
             {activeTab === 'vendors' ? (
@@ -361,11 +372,11 @@ export function VendorList() {
                                         <div key={dateKey}>
                                             <div
                                                 className={styles.orderRow}
-                                                onClick={() => toggleOrderExpansion(dateKey)}
+                                                onClick={() => router.push(`/vendors/produce/delivery/${dateKey}`)}
                                                 style={{ cursor: 'pointer' }}
                                             >
                                                 <span style={{ width: '40px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                    {expandedOrders.has(dateKey) ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                                    <ChevronDown size={16} />
                                                 </span>
                                                 <span style={{ flex: '2 1 150px', minWidth: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                     <Calendar size={16} style={{ color: 'var(--color-primary)' }} />
@@ -378,24 +389,6 @@ export function VendorList() {
                                                     {dateTotalItems}
                                                 </span>
                                             </div>
-
-                                            {expandedOrders.has(dateKey) && (
-                                                <div className={styles.ordersExpanded}>
-                                                    {dateOrders.map(order => (
-                                                        <div key={order.id} className={styles.orderDetail}>
-                                                            <div className={styles.orderDetailHeader}>
-                                                                <div>
-                                                                    <strong>Order #{order.orderNumber || order.id}</strong>
-                                                                    <span style={{ marginLeft: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                                                                        Client: {getClientName(order.client_id)}
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-                                                            {renderOrderItems(order)}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
                                         </div>
                                     );
                                 })}
@@ -404,11 +397,11 @@ export function VendorList() {
                                     <div>
                                         <div
                                             className={styles.orderRow}
-                                            onClick={() => toggleOrderExpansion('no-date')}
+                                            onClick={() => router.push(`/vendors/produce/delivery/no-date`)}
                                             style={{ cursor: 'pointer' }}
                                         >
                                             <span style={{ width: '40px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                {expandedOrders.has('no-date') ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                                <ChevronDown size={16} />
                                             </span>
                                             <span style={{ flex: '2 1 150px', minWidth: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <Calendar size={16} style={{ color: 'var(--text-tertiary)' }} />
@@ -421,24 +414,6 @@ export function VendorList() {
                                                 {noDate.reduce((sum, o) => sum + (o.total_items || 0), 0)}
                                             </span>
                                         </div>
-
-                                        {expandedOrders.has('no-date') && (
-                                            <div className={styles.ordersExpanded}>
-                                                {noDate.map(order => (
-                                                    <div key={order.id} className={styles.orderDetail}>
-                                                        <div className={styles.orderDetailHeader}>
-                                                            <div>
-                                                                <strong>Order #{order.orderNumber || order.id}</strong>
-                                                                <span style={{ marginLeft: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                                                                    Client: {getClientName(order.client_id)}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        {renderOrderItems(order)}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
                                     </div>
                                 )}
                             </div>

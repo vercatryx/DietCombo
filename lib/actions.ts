@@ -3132,51 +3132,43 @@ async function syncSingleOrderForDeliveryDay(
             throw new Error(errorMsg);
         }
 
-        // For Produce orders, try to get delivery day from main vendor if available
+        // For Produce orders, ALWAYS use the vendor's delivery day from admin settings
+        // The scheduled_delivery_date is the nearest date of the day of the week set by the vendor
         const mainVendor = vendors.find(v => v.isDefault === true) || vendors[0];
         
-        if (mainVendor && deliveryDay) {
-            // Validate that vendor can deliver on that day
-            const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
-            if (deliveryDays && !deliveryDays.includes(deliveryDay)) {
-                const vendorName = mainVendor?.name || 'selected vendor';
-                const errorMsg = `Cannot save Produce order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day.`;
-                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
-                    serviceType: orderConfig.serviceType,
-                    deliveryDay,
-                    vendorName
-                });
-                throw new Error(errorMsg);
-            }
-            
-            // Get the nearest occurrence of the client-selected delivery day
-            scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
-            
-            if (!scheduledDeliveryDate) {
-                const errorMsg = `Cannot save Produce order: Could not calculate delivery date for ${deliveryDay}.`;
-                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
-                    serviceType: orderConfig.serviceType,
-                    deliveryDay
-                });
-                throw new Error(errorMsg);
-            }
-        } else if (mainVendor) {
-            // Use main vendor's delivery day as default
+        if (mainVendor) {
             const deliveryDays = 'deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days;
             if (deliveryDays && deliveryDays.length > 0) {
-                const mainVendorDeliveryDay = deliveryDays[0];
-                scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                // Use the vendor's first delivery day from admin settings
+                const vendorDeliveryDay = deliveryDays[0];
+                // Calculate the nearest occurrence of this day
+                scheduledDeliveryDate = getNextOccurrence(vendorDeliveryDay, currentTime);
                 
                 if (!scheduledDeliveryDate) {
-                    const errorMsg = `Cannot save Produce order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
+                    const errorMsg = `Cannot save Produce order: Could not calculate delivery date for vendor's delivery day (${vendorDeliveryDay}).`;
                     console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                         serviceType: orderConfig.serviceType,
-                        mainVendorDeliveryDay,
-                        mainVendorName: mainVendor.name
+                        vendorDeliveryDay,
+                        vendorName: mainVendor.name
                     });
                     throw new Error(errorMsg);
                 }
+                
+                console.log(`[syncSingleOrderForDeliveryDay] Produce order: Using vendor delivery day ${vendorDeliveryDay} from admin settings, scheduled_delivery_date: ${scheduledDeliveryDate.toISOString()}`);
+            } else {
+                const errorMsg = `Cannot save Produce order: Vendor "${mainVendor.name}" has no delivery days configured in admin settings. Please configure delivery days for this vendor.`;
+                console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                    serviceType: orderConfig.serviceType,
+                    vendorName: mainVendor.name
+                });
+                throw new Error(errorMsg);
             }
+        } else {
+            const errorMsg = `Cannot save Produce order: No vendor found. Please ensure at least one vendor is configured.`;
+            console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
+                serviceType: orderConfig.serviceType
+            });
+            throw new Error(errorMsg);
         }
 
         // IMPORTANT: take_effect_date must always be a Sunday using weekly locking logic
