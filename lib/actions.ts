@@ -6406,6 +6406,89 @@ export async function getOrdersByVendor(vendorId: string) {
     }
 }
 
+/**
+ * Get all orders by service type (for admin use)
+ * Returns orders filtered by service_type
+ */
+export async function getOrdersByServiceType(serviceType: string) {
+    const session = await getSession();
+    if (!session || session.role !== 'admin') {
+        console.error('Unauthorized access to getOrdersByServiceType');
+        return [];
+    }
+
+    try {
+        // Fetch all orders with the specified service type
+        const { data: ordersData, error } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('service_type', serviceType)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('Error fetching orders by service type:', error);
+            return [];
+        }
+
+        if (!ordersData || ordersData.length === 0) {
+            return [];
+        }
+
+        // Process orders similar to getOrdersByVendor but for all vendors
+        // For Produce orders, we need to handle them appropriately
+        const processedOrders = await Promise.all(ordersData.map(async (order) => {
+            // For Produce orders, we might need to get vendor info from notes or other sources
+            // For now, return the order with basic processing
+            const result: any = {
+                ...order,
+                orderNumber: order.order_number,
+                items: [],
+                boxSelection: null,
+                orderType: 'completed'
+            };
+
+            // If Produce orders have vendor selections, fetch them
+            if (serviceType === 'Produce') {
+                // Try to get vendor selections for Produce orders
+                const { data: vendorSelections } = await supabase
+                    .from('order_vendor_selections')
+                    .select('*')
+                    .eq('order_id', order.id)
+                    .limit(1);
+
+                if (vendorSelections && vendorSelections.length > 0) {
+                    const vs = vendorSelections[0];
+                    const { data: items } = await supabase
+                        .from('order_items')
+                        .select('*')
+                        .eq('vendor_selection_id', vs.id);
+
+                    result.items = items || [];
+                    result.vendorId = vs.vendor_id;
+                } else {
+                    // Try to parse from notes if available
+                    try {
+                        const notes = order.notes ? JSON.parse(order.notes) : null;
+                        if (notes && notes.vendorId) {
+                            result.vendorId = notes.vendorId;
+                        }
+                    } catch (e) {
+                        // Ignore parse errors
+                    }
+                }
+            }
+
+            return result;
+        }));
+
+        return processedOrders;
+
+    } catch (err) {
+        console.error('Error in getOrdersByServiceType:', err);
+        return [];
+    }
+}
+
 async function processVendorOrderDetails(order: any, vendorId: string, isUpcoming: boolean) {
     const orderIdField = isUpcoming ? 'upcoming_order_id' : 'order_id';
     const vendorSelectionsTable = isUpcoming ? 'upcoming_order_vendor_selections' : 'order_vendor_selections';
@@ -8328,7 +8411,7 @@ export async function getClientFoodOrder(clientId: string): Promise<ClientFoodOr
     };
 }
 
-export async function saveClientFoodOrder(clientId: string, data: Partial<ClientFoodOrder>) {
+export async function saveClientFoodOrder(clientId: string, data: Partial<ClientFoodOrder>, fullActiveOrder?: any) {
     const session = await getSession();
     const updatedBy = session?.userId || null;
 
@@ -8338,29 +8421,58 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
         process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // Get current client data to preserve existing active_order structure
-    const { data: clientData, error: fetchError } = await supabaseAdmin
-        .from('clients')
-        .select('active_order')
-        .eq('id', clientId)
-        .maybeSingle();
+    // CRITICAL FIX: If fullActiveOrder is provided, use it directly instead of fetching from DB
+    // This ensures we're working with the latest prepared order structure and don't lose
+    // vendorSelections or other fields that might be needed for syncCurrentOrderToUpcoming
+    let activeOrder: any;
+    
+    if (fullActiveOrder) {
+        // Use the provided activeOrder as the base, ensuring we preserve the full structure
+        activeOrder = { ...fullActiveOrder };
+    } else {
+        // Get current client data to preserve existing active_order structure
+        const { data: clientData, error: fetchError } = await supabaseAdmin
+            .from('clients')
+            .select('active_order')
+            .eq('id', clientId)
+            .maybeSingle();
 
-    if (fetchError) {
-        handleError(fetchError);
-        return null;
+        if (fetchError) {
+            handleError(fetchError);
+            return null;
+        }
+
+        // Parse existing active_order or create new one
+        activeOrder = clientData?.active_order 
+            ? (typeof clientData.active_order === 'string' 
+                ? JSON.parse(clientData.active_order) 
+                : clientData.active_order)
+            : {};
     }
 
-    // Parse existing active_order or create new one
-    let activeOrder: any = clientData?.active_order 
-        ? (typeof clientData.active_order === 'string' 
-            ? JSON.parse(clientData.active_order) 
-            : clientData.active_order)
-        : {};
-
     // Update with new Food order data
+    // CRITICAL FIX: Preserve the entire activeOrder structure, especially vendorSelections
+    // The issue was that we were only updating deliveryDayOrders and caseId, which caused
+    // the foods order to not save properly in upcoming_orders table because vendorSelections
+    // (in old format) or the full structure was being lost
     activeOrder.serviceType = 'Food';
     if (data.caseId !== undefined) activeOrder.caseId = data.caseId;
-    if (data.deliveryDayOrders !== undefined) activeOrder.deliveryDayOrders = data.deliveryDayOrders;
+    if (data.deliveryDayOrders !== undefined) {
+        // CRITICAL: Only update deliveryDayOrders if the passed data has actual content
+        // Don't overwrite with empty object {} as that would clear existing selections
+        const hasData = typeof data.deliveryDayOrders === 'object' && 
+                       data.deliveryDayOrders !== null &&
+                       Object.keys(data.deliveryDayOrders).length > 0;
+        if (hasData) {
+            // Merge deliveryDayOrders to preserve any existing structure
+            activeOrder.deliveryDayOrders = data.deliveryDayOrders;
+        }
+        // If data.deliveryDayOrders is empty/undefined, preserve existing activeOrder.deliveryDayOrders
+        // This ensures we don't clear selections when saving
+    }
+    // CRITICAL: Preserve vendorSelections if they exist (old format compatibility)
+    // Don't delete vendorSelections just because we're updating deliveryDayOrders
+    // This ensures syncCurrentOrderToUpcoming can find the order data in either format
 
     // Prepare update payload
     const updatePayload: any = {

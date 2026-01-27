@@ -408,6 +408,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const boxQuantity = useMemo(() => orderConfig?.boxQuantity ?? null, [orderConfig?.boxQuantity]);
     const items = useMemo(() => (orderConfig as any)?.items ?? {}, [(orderConfig as any)?.items]);
     const itemPrices = useMemo(() => (orderConfig as any)?.itemPrices ?? {}, [(orderConfig as any)?.itemPrices]);
+    // Helper function to normalize serviceType to lowercase for active_orders
+    const normalizeServiceTypeForActiveOrder = (serviceType: string | undefined | null): string => {
+        if (!serviceType) return 'food';
+        const normalized = serviceType.toLowerCase();
+        // Only allow: food, boxes, custom, produce
+        const allowedTypes = ['food', 'boxes', 'custom', 'produce'];
+        return allowedTypes.includes(normalized) ? normalized : 'food'; // Default to 'food' if invalid
+    };
+
     const serviceType = useMemo(() => formData?.serviceType ?? null, [formData?.serviceType]);
 
     // Initialize parentClientSearch when formData changes (always call this hook before any conditional returns)
@@ -524,25 +533,41 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     // The template may have items configured, so we preserve those
                     vendorSelections = templateVendorSelections.map((vs: any) => ({
                         vendorId: defaultVendorId, // Always use default vendor for new clients
-                        items: { ...(vs.items || {}) } // Copy items from template
+                        items: { ...(vs.items || {}) } // Copy items from template - preserve all item quantities as-is
                     }));
                 } else {
                     // No vendor selections in template, create default one
                     vendorSelections = [{ vendorId: defaultVendorId, items: {} }];
                 }
 
-                setOrderConfig((prev: any) => ({
-                    ...prev,
+                // CRITICAL: Preserve all template values exactly as they are
+                // This ensures order details are saved as-is from the template, even if values are unchanged
+                const newOrderConfig = {
                     serviceType: 'Food',
                     vendorSelections: vendorSelections
-                }));
-            } else if (serviceType === 'Produce') {
-                // Apply Produce template - copy billAmount
+                };
+
                 setOrderConfig((prev: any) => ({
                     ...prev,
+                    ...newOrderConfig
+                }));
+
+                // Keep originalOrderConfig empty so that the first save will always save the template values
+                // This ensures that order details from the template are persisted even if unchanged
+            } else if (serviceType === 'Produce') {
+                // Apply Produce template - copy billAmount
+                const newOrderConfig = {
                     serviceType: 'Produce',
                     billAmount: template.billAmount || 0
+                };
+
+                setOrderConfig((prev: any) => ({
+                    ...prev,
+                    ...newOrderConfig
                 }));
+
+                // Keep originalOrderConfig empty so that the first save will always save the template values
+                // This ensures that order details from the template are persisted even if unchanged
             }
         } catch (error) {
             console.error(`[ClientProfile] Error loading default template for ${serviceType}:`, error);
@@ -889,8 +914,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     }
                     setOrderConfig(configToSet);
                 } else {
+                    // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                    const serviceType = data.client.serviceType === 'Food' ? 'Food' : (firstDayOrder?.serviceType || data.client.serviceType);
                     let configToSet = {
-                        serviceType: firstDayOrder?.serviceType || data.client.serviceType,
+                        serviceType: serviceType,
                         caseId: firstDayOrder?.caseId,
                         deliveryDayOrders
                     };
@@ -906,7 +933,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 } else {
                     upcomingOrderData.vendorSelections = [{ vendorId: '', items: {} }];
                 }
-                let configToSet = upcomingOrderData;
+                let configToSet = { ...upcomingOrderData, serviceType: 'Food' }; // CRITICAL: Always use 'Food' (not 'Meal')
                 // Merge activeOrder items into orderConfig
                 if (data.activeOrder) {
                     configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
@@ -914,6 +941,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setOrderConfig(configToSet);
             } else {
                 let configToSet = upcomingOrderData;
+                // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                if (data.client.serviceType === 'Food' && configToSet) {
+                    configToSet = { ...configToSet, serviceType: 'Food' };
+                }
                 // Merge activeOrder items into orderConfig
                 if (data.activeOrder) {
                     configToSet = mergeActiveOrderIntoOrderConfig(configToSet, data.activeOrder);
@@ -924,9 +955,22 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // No upcoming order, but we have active_order from clients table - use that
             // This ensures vendorId, items, and other Boxes data are preserved even if sync to upcoming_orders failed
             const activeOrderConfig = { ...data.client.activeOrder };
-            // Ensure serviceType matches client's service type
-            if (!activeOrderConfig.serviceType) {
-                activeOrderConfig.serviceType = data.client.serviceType;
+            // CRITICAL: Normalize serviceType to lowercase for active_orders (food, boxes, custom, produce)
+            // Map from client.serviceType (capitalized) to activeOrder.serviceType (lowercase)
+            if (data.client.serviceType === 'Food') {
+                activeOrderConfig.serviceType = 'food';
+            } else if (data.client.serviceType === 'Boxes') {
+                activeOrderConfig.serviceType = 'boxes';
+            } else if (data.client.serviceType === 'Custom') {
+                activeOrderConfig.serviceType = 'custom';
+            } else if (data.client.serviceType === 'Produce') {
+                activeOrderConfig.serviceType = 'produce';
+            } else if (activeOrderConfig.serviceType) {
+                // Normalize existing serviceType if it's not already lowercase
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder(activeOrderConfig.serviceType);
+            } else {
+                // Fallback: use client's serviceType normalized
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder(data.client.serviceType);
             }
 
             let configToSet = activeOrderConfig;
@@ -1186,16 +1230,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         configToSet = firstDayOrder;
                         if (!configToSet.serviceType) configToSet.serviceType = 'Boxes';
                     } else {
+                        // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                        const serviceType = c.serviceType === 'Food' ? 'Food' : (firstDayOrder?.serviceType || c.serviceType);
                         configToSet = {
-                            serviceType: firstDayOrder?.serviceType || c.serviceType,
+                            serviceType: serviceType,
                             caseId: firstDayOrder?.caseId || hasCaseId,
                             deliveryDayOrders
                         };
                     }
                 } else if (upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
                     // Already in deliveryDayOrders format - use it directly
+                    // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                    const serviceType = c.serviceType === 'Food' ? 'Food' : (upcomingOrderData.serviceType || c.serviceType);
                     configToSet = {
-                        serviceType: upcomingOrderData.serviceType || c.serviceType,
+                        serviceType: serviceType,
                         caseId: upcomingOrderData.caseId || hasCaseId,
                         deliveryDayOrders: upcomingOrderData.deliveryDayOrders
                     };
@@ -1213,8 +1261,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     };
                 } else {
                     // Single order format - ensure caseId is set
+                    // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                    const serviceType = c.serviceType === 'Food' ? 'Food' : (upcomingOrderData.serviceType || c.serviceType);
                     configToSet = {
                         ...upcomingOrderData,
+                        serviceType: serviceType,
                         caseId: upcomingOrderData.caseId || hasCaseId
                     };
                 }
@@ -1230,9 +1281,22 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // No upcoming order, but we have active_order from clients table - use that
                 // This ensures vendorId, items, and other Boxes data are preserved even if sync to upcoming_orders failed
                 configToSet = { ...c.activeOrder };
-                // Ensure serviceType matches client's service type
-                if (!configToSet.serviceType) {
-                    configToSet.serviceType = c.serviceType;
+                // CRITICAL: Normalize serviceType to lowercase for active_orders (food, boxes, custom, produce)
+                // Map from client.serviceType (capitalized) to activeOrder.serviceType (lowercase)
+                if (c.serviceType === 'Food') {
+                    configToSet.serviceType = 'food';
+                } else if (c.serviceType === 'Boxes') {
+                    configToSet.serviceType = 'boxes';
+                } else if (c.serviceType === 'Custom') {
+                    configToSet.serviceType = 'custom';
+                } else if (c.serviceType === 'Produce') {
+                    configToSet.serviceType = 'produce';
+                } else if (configToSet.serviceType) {
+                    // Normalize existing serviceType if it's not already lowercase
+                    configToSet.serviceType = normalizeServiceTypeForActiveOrder(configToSet.serviceType);
+                } else {
+                    // Fallback: use client's serviceType normalized
+                    configToSet.serviceType = normalizeServiceTypeForActiveOrder(c.serviceType);
                 }
                 // Ensure caseId is set if it exists in activeOrder
                 if (!configToSet.caseId && c.activeOrder.caseId) {
@@ -1557,8 +1621,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     for (const day of Object.keys(upcomingOrderData.deliveryDayOrders)) {
                         const dayOrder = (upcomingOrderData.deliveryDayOrders as any)[day];
                         if (dayOrder && dayOrder.vendorSelections) {
+                            // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                            const serviceType = c.serviceType === 'Food' ? 'Food' : (upcomingOrderData.serviceType || configToSet?.serviceType || c.serviceType);
                             extractedOrders.push({
-                                serviceType: upcomingOrderData.serviceType || configToSet?.serviceType,
+                                serviceType: serviceType,
                                 caseId: upcomingOrderData.caseId || configToSet?.caseId,
                                 vendorSelections: dayOrder.vendorSelections,
                                 deliveryDay: day,
@@ -2558,7 +2624,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         // The user must enter a NEW case ID for the new service type.
         if (type === 'Food') {
             const defaultVendorId = getDefaultVendor('Food');
-            setOrderConfig({ serviceType: type, vendorSelections: [{ vendorId: defaultVendorId || '', items: {} }] });
+            // CRITICAL: Always set serviceType to 'Food' (not 'Meal') when Food tab is selected
+            setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId || '', items: {} }] });
             // Load default template for new clients
             if (isNewClient) {
                 await loadAndApplyDefaultTemplate('Food');
@@ -3119,6 +3186,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (!orderConfig) return undefined;
 
             const cleanedOrderConfig = { ...orderConfig };
+            
+            // CRITICAL: Always use formData.serviceType, never use orderConfig.serviceType
+            // Remove any existing serviceType from orderConfig to ensure it's overridden
+            delete cleanedOrderConfig.serviceType;
 
             // CRITICAL: Always preserve caseId at the top level for both Food and Boxes
             cleanedOrderConfig.caseId = orderConfig.caseId;
@@ -3278,9 +3349,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     }));
             }
 
+            // CRITICAL: For active_orders, serviceType must be lowercase: food, boxes, custom, produce
+            const normalizedServiceType = normalizeServiceTypeForActiveOrder(formData.serviceType || 'Food');
+            
             return {
                 ...cleanedOrderConfig,
-                serviceType: formData.serviceType,
+                serviceType: normalizedServiceType,
                 lastUpdated: new Date().toISOString(),
                 updatedBy: 'Admin'
             };
@@ -3401,14 +3475,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setClient(updatedClient);
                 setFormData(updatedClient);
 
-                // Set orderConfig from the updated client's activeOrder
-                if (updatedClient.activeOrder && Object.keys(updatedClient.activeOrder).length > 0) {
+                // Set orderConfig from the prepared order (which has the latest selections) 
+                // or fall back to updated client's activeOrder
+                // CRITICAL: Use preparedActiveOrder to preserve deliveryDayOrders with all selections
+                const orderConfigToSet = preparedActiveOrder && Object.keys(preparedActiveOrder).length > 0
+                    ? preparedActiveOrder
+                    : (updatedClient.activeOrder && Object.keys(updatedClient.activeOrder).length > 0
+                        ? updatedClient.activeOrder
+                        : null);
 
-                    setOrderConfig(updatedClient.activeOrder);
-                    setOriginalOrderConfig(JSON.parse(JSON.stringify(updatedClient.activeOrder)));
+                if (orderConfigToSet) {
+                    setOrderConfig(orderConfigToSet);
+                    setOriginalOrderConfig(JSON.parse(JSON.stringify(orderConfigToSet)));
                 } else {
-                    // If no activeOrder, keep the current orderConfig
-
+                    // If no activeOrder, keep the current orderConfig to preserve user's selections
                 }
 
                 invalidateClientData();
@@ -3444,10 +3524,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             );
                         }
                         if (serviceType === 'Food') {
+                            // Only pass deliveryDayOrders if it has actual data to prevent clearing selections
+                            const hasDeliveryDayOrders = activeOrder.deliveryDayOrders && 
+                                typeof activeOrder.deliveryDayOrders === 'object' &&
+                                Object.keys(activeOrder.deliveryDayOrders).length > 0;
+                            
                             await saveClientFoodOrder(updatedClient.id, {
                                 caseId: activeOrder.caseId,
-                                deliveryDayOrders: activeOrder.deliveryDayOrders || {}
-                            });
+                                ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrder.deliveryDayOrders })
+                            }, activeOrder); // Pass full activeOrder to preserve structure
                         }
                         if (activeOrder.mealSelections || serviceType === 'Meal' || serviceType === 'Food') {
                             await saveClientMealOrder(updatedClient.id, {
@@ -3644,11 +3729,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // NOTE: A Food service client can have BOTH deliveryDayOrders AND mealSelections (e.g., Breakfast)
 
                 // Save food orders: ALWAYS if service type is Food, to allow clearing
+                // CRITICAL FIX: Pass the entire activeOrder structure to preserve vendorSelections
+                // and other fields that might be needed for syncCurrentOrderToUpcoming
                 if (serviceType === 'Food') {
+                    // Only pass deliveryDayOrders if it has actual data to prevent clearing selections
+                    const activeOrderAny = updateData.activeOrder as any;
+                    const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && 
+                        typeof activeOrderAny.deliveryDayOrders === 'object' &&
+                        Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
+                    
                     await saveClientFoodOrder(clientId, {
-                        caseId: updateData.activeOrder.caseId,
-                        deliveryDayOrders: (updateData.activeOrder as any).deliveryDayOrders || {}
-                    });
+                        caseId: activeOrderAny.caseId,
+                        ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
+                    }, activeOrderAny); // Pass full activeOrder to preserve structure
                 }
 
                 // Also handle the case where we might have food orders but currently not Food service? 
