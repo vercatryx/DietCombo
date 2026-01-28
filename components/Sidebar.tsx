@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, Truck, Utensils, Box as BoxIcon, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, Store, History, PlayCircle, AlertCircle, RefreshCw, Mail, ChevronDown, ChevronUp, Route } from 'lucide-react';
+import { Users, Truck, Utensils, Box as BoxIcon, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, Store, History, PlayCircle, AlertCircle, RefreshCw, Mail, ChevronDown, ChevronUp, Route, Package } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -15,6 +15,7 @@ const navItems = [
     { label: 'Client Dashboard', href: '/clients', icon: Users },
     { label: 'My History', href: '/navigator-history', icon: History, role: 'navigator' },
     { label: 'Vendors', href: '/vendors', icon: Store },
+    { label: 'Produce', href: '/vendors/produce', icon: Package },
     { label: 'Routes', href: '/routes', icon: Route },
     { label: 'Admin Control', href: '/admin', icon: Settings },
 ];
@@ -762,6 +763,9 @@ export function Sidebar({
                         return userRole === 'admin' || userRole === 'super-admin';
                     }
                     if (item.label === 'Vendors') {
+                        return userRole === 'admin' || userRole === 'super-admin';
+                    }
+                    if (item.label === 'Produce') {
                         return userRole === 'admin' || userRole === 'super-admin';
                     }
                     if ((item as any).role) {
