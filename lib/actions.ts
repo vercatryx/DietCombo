@@ -232,6 +232,28 @@ export async function getVendors() {
     }
 }
 
+/**
+ * Get the default vendor ID for the app
+ * Returns the vendor with is_default = true, or the first active vendor if none is default
+ */
+export async function getDefaultVendorId(): Promise<string | null> {
+    try {
+        const vendors = await getVendors();
+        if (vendors.length === 0) return null;
+        
+        // First, try to find a vendor with isDefault: true
+        const defaultVendor = vendors.find(v => v.isDefault === true);
+        if (defaultVendor) return defaultVendor.id;
+        
+        // If no default vendor, use the first active vendor
+        const firstActiveVendor = vendors.find(v => v.isActive !== false) || vendors[0];
+        return firstActiveVendor?.id || null;
+    } catch (error) {
+        console.error('[getDefaultVendorId] Error getting default vendor:', error);
+        return null;
+    }
+}
+
 export async function getVendor(id: string) {
     try {
         const { data: v, error } = await supabase.from('vendors').select('*').eq('id', id).single();

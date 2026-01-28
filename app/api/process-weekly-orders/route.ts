@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { getMenuItems, getVendors, getBoxTypes, getSettings, getClient } from '@/lib/actions';
+import { getMenuItems, getVendors, getBoxTypes, getSettings, getClient, getDefaultVendorId } from '@/lib/actions';
 import { randomUUID } from 'crypto';
 import { getNextDeliveryDate, getTakeEffectDateLegacy, getNextOccurrence, formatDateToYYYYMMDD } from '@/lib/order-dates';
 import { getCurrentTime } from '@/lib/time';
@@ -401,6 +401,9 @@ async function precheckAndTransferUpcomingOrders() {
                             }
                         }
 
+                        // Get default vendor ID
+                        const defaultVendorId = await getDefaultVendorId();
+                        
                         // Create order in orders table
                         const orderData: any = {
                             id: randomUUID(),
@@ -415,7 +418,8 @@ async function precheckAndTransferUpcomingOrders() {
                             total_value: upcomingOrder.total_value,
                             total_items: upcomingOrder.total_items,
                             bill_amount: upcomingOrder.bill_amount || null,
-                            notes: upcomingOrder.notes || null
+                            notes: upcomingOrder.notes || null,
+                            vendor_id: defaultVendorId
                         };
 
                         const { data: newOrder, error: orderError } = await supabase
@@ -874,6 +878,9 @@ export async function GET(request: NextRequest) {
                         // Use the same scheduledDeliveryDate we calculated earlier for the order summary
                         // This ensures consistency between order summary and the copied order
 
+                        // Get default vendor ID
+                        const defaultVendorId = await getDefaultVendorId();
+                        
                         // Create order in orders table (copy, not transfer)
                         const orderData: any = {
                             id: randomUUID(),
@@ -888,7 +895,8 @@ export async function GET(request: NextRequest) {
                             total_value: order.total_value,
                             total_items: order.total_items,
                             bill_amount: order.bill_amount || null,
-                            notes: order.notes || null
+                            notes: order.notes || null,
+                            vendor_id: defaultVendorId
                         };
 
                         const { data: newOrder, error: orderError } = await supabase

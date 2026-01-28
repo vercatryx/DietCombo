@@ -492,6 +492,10 @@ export async function POST(request: NextRequest) {
                         }
                     }
 
+                    // Get default vendor ID
+                    const { getDefaultVendorId } = await import('@/lib/actions');
+                    const defaultVendorId = await getDefaultVendorId();
+
                     // Create Order for this vendor
                     const orderData: any = {
                         id: randomUUID(),
@@ -507,7 +511,8 @@ export async function POST(request: NextRequest) {
                         order_number: nextOrderNumber,
                         created_at: currentTimeISO,
                         last_updated: currentTimeISO,
-                        updated_by: upOrder.updated_by
+                        updated_by: upOrder.updated_by,
+                        vendor_id: defaultVendorId
                     };
 
                     const { data: newOrder, error: insertError } = await supabase
@@ -688,6 +693,10 @@ export async function POST(request: NextRequest) {
                     continue;
                 }
 
+                // Get default vendor ID
+                const { getDefaultVendorId } = await import('@/lib/actions');
+                const defaultVendorId = await getDefaultVendorId();
+                
                 // Create Order with calculated delivery date
                 const orderData: any = {
                     id: randomUUID(),
@@ -703,7 +712,8 @@ export async function POST(request: NextRequest) {
                         order_number: nextOrderNumber,
                         created_at: currentTimeISO,
                         last_updated: currentTimeISO,
-                        updated_by: upOrder.updated_by
+                        updated_by: upOrder.updated_by,
+                        vendor_id: defaultVendorId
                     };
 
                 const logMsg2 = `[Simulate Delivery] Creating order with initial total_value: ${orderData.total_value}`;
