@@ -5405,8 +5405,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                 )}
                                                             </div>
 
-                                                            {/* Delivery Days Indicator - Read-only */}
-                                                            {computedVendorId && (() => {
+                                                            {/* Delivery Days Indicator - Read-only - HIDDEN */}
+                                                            {false && computedVendorId && (() => {
                                                                 const vendor = vendors.find(v => v.id === computedVendorId);
                                                                 const deliveryDays = vendor?.deliveryDays || [];
                                                                 
