@@ -336,12 +336,14 @@ model Order {
   lastUpdated           DateTime  @default(now()) @updatedAt @map("last_updated") @db.Timestamp(6)
   updatedBy             String?   @map("updated_by") @db.VarChar(255)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  vendorId              String?   @map("vendor_id") @db.VarChar(36)
   // stops relation removed - orderId in stops can now reference either orders.id or upcoming_orders.id
 
   @@index([orderNumber], map: "idx_orders_order_number")
   @@index([clientId], map: "idx_orders_client_id")
   @@index([status], map: "idx_orders_status")
   @@index([scheduledDeliveryDate], map: "idx_orders_scheduled_delivery_date")
+  @@index([vendorId], map: "idx_orders_vendor_id")
   @@map("orders")
 }
 

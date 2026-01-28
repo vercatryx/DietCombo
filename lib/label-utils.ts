@@ -156,9 +156,8 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
 
         // 4. QR Code & ID (Right Side - Vertical Center)
         try {
-            // Determine Order Identifier (Prefer Order Number)
-            const orderIdentifier = order.orderNumber || order.id;
-            const deliveryUrl = `${origin}/delivery/${orderIdentifier}`;
+            // Use client ID to link to produce page
+            const produceUrl = `${origin}/produce/${order.client_id}`;
 
             const qrSize = 1.1;
             // Center in the reserved zone
@@ -167,7 +166,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
             // Vertically center in label
             const qrY = labelY + ((PROPS.labelHeight - qrSize) / 2) - 0.1;
 
-            const qrDataUrl = await QRCode.toDataURL(deliveryUrl, {
+            const qrDataUrl = await QRCode.toDataURL(produceUrl, {
                 errorCorrectionLevel: 'M',
                 margin: 0,
                 width: 300
