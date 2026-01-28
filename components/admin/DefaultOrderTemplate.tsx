@@ -202,11 +202,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         setMessage(null);
         try {
             const templateToSave = { ...template };
-            
+
             // Clean and validate based on service type
             if (templateToSave.serviceType === 'Food') {
                 // Ensure vendorId matches main vendor for Food orders
-                templateToSave.vendorSelections = templateToSave.vendorSelections?.map((vs, index) => 
+                templateToSave.vendorSelections = templateToSave.vendorSelections?.map((vs, index) =>
                     index === 0 ? { ...vs, vendorId: mainVendor.id } : vs
                 ) || [{ vendorId: mainVendor.id, items: {} }];
                 // Remove boxes and customItems for Food
@@ -263,7 +263,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 delete templateToSave.customItems;
                 delete templateToSave.vendorId;
             }
-            
+
             // Save template for the specific serviceType
             await saveDefaultOrderTemplate(templateToSave, templateToSave.serviceType);
             setTemplate(templateToSave);
@@ -285,7 +285,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         } else {
             delete newItems[itemId];
         }
-        
+
         setTemplate({
             ...template,
             vendorSelections: [{
@@ -382,7 +382,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
 
     // Get box items (items without vendorId)
     function getBoxItems() {
-        return menuItems.filter(item => 
+        return menuItems.filter(item =>
             (item.vendorId === null || item.vendorId === '') && item.isActive
         );
     }
@@ -411,7 +411,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             </div>
 
             {message && (
-                <div className={styles.message} style={{ 
+                <div className={styles.message} style={{
                     padding: 'var(--spacing-sm) var(--spacing-md)',
                     marginBottom: 'var(--spacing-md)',
                     borderRadius: 'var(--radius-sm)',
@@ -431,8 +431,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     style={{ maxWidth: '300px' }}
                 >
                     <option value="Food">Food</option>
-                    <option value="Boxes">Boxes</option>
-                    <option value="Custom">Custom</option>
                     <option value="Produce">Produce</option>
                 </select>
             </div>
@@ -443,7 +441,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     <p className={styles.description}>
                         Select the default items and quantities for new clients.
                     </p>
-                    
+
                     {menuItems.length === 0 ? (
                         <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
                             No menu items available. Add items in the Menu Items tab first.
@@ -496,168 +494,96 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     <p className={styles.description}>
                         Configure default boxes for new clients. Each box can have its own type and items.
                     </p>
-                    
+
                     <>
                         {(template.boxes || []).map((box) => {
-                                const boxItems = getBoxItems();
-                                
-                                return (
-                                    <div key={box.boxNumber} style={{
-                                        marginBottom: '1.5rem',
-                                        padding: '1rem',
-                                        background: 'var(--bg-surface)',
-                                        borderRadius: '8px',
-                                        border: '2px solid var(--border-color)'
-                                    }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                                            <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-                                                Box {box.boxNumber}
-                                            </h4>
-                                            {(template.boxes || []).length > 1 && (
-                                                <button
-                                                    className="btn btn-secondary"
-                                                    onClick={() => removeBox(box.boxNumber)}
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                                >
-                                                    <Trash2 size={14} /> Remove
-                                                </button>
-                                            )}
+                            const boxItems = getBoxItems();
+
+                            return (
+                                <div key={box.boxNumber} style={{
+                                    marginBottom: '1.5rem',
+                                    padding: '1rem',
+                                    background: 'var(--bg-surface)',
+                                    borderRadius: '8px',
+                                    border: '2px solid var(--border-color)'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                        <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
+                                            Box {box.boxNumber}
+                                        </h4>
+                                        {(template.boxes || []).length > 1 && (
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => removeBox(box.boxNumber)}
+                                                style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                            >
+                                                <Trash2 size={14} /> Remove
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div style={{ marginBottom: '1rem' }}>
+                                        <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Vendor</label>
+                                        <div style={{
+                                            padding: '0.75rem',
+                                            backgroundColor: 'var(--bg-surface-hover)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            border: '1px solid var(--border-color)',
+                                            fontSize: '0.9rem',
+                                            fontWeight: 500,
+                                            color: 'var(--text-primary)'
+                                        }}>
+                                            {mainVendor.name}
                                         </div>
-                                        
-                                        <div style={{ marginBottom: '1rem' }}>
-                                            <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Vendor</label>
-                                            <div style={{
-                                                padding: '0.75rem',
-                                                backgroundColor: 'var(--bg-surface-hover)',
-                                                borderRadius: 'var(--radius-sm)',
-                                                border: '1px solid var(--border-color)',
-                                                fontSize: '0.9rem',
-                                                fontWeight: 500,
-                                                color: 'var(--text-primary)'
-                                            }}>
-                                                {mainVendor.name}
-                                            </div>
-                                        </div>
+                                    </div>
 
-                                        {boxItems.length > 0 && (
-                                            <div>
-                                                <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Box Contents</label>
-                                                
-                                                {/* Show all categories with box items */}
-                                                {[...categories]
-                                                    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
-                                                    .map(category => {
-                                                        const availableItems = boxItems
-                                                            .filter(i => i.categoryId === category.id)
-                                                            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+                                    {boxItems.length > 0 && (
+                                        <div>
+                                            <label className="label" style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Box Contents</label>
 
-                                                        if (availableItems.length === 0) return null;
-
-                                                        return (
-                                                            <div key={category.id} style={{
-                                                                marginBottom: '1rem',
-                                                                background: 'var(--bg-surface-hover)',
-                                                                padding: '0.75rem',
-                                                                borderRadius: '6px',
-                                                                border: '1px solid var(--border-color)'
-                                                            }}>
-                                                                <div style={{ 
-                                                                    display: 'flex', 
-                                                                    justifyContent: 'space-between', 
-                                                                    marginBottom: '0.5rem',
-                                                                    fontSize: '0.85rem'
-                                                                }}>
-                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                                        <span style={{ fontWeight: 600 }}>{category.name}</span>
-                                                                        {category.setValue !== undefined && category.setValue !== null && (
-                                                                            <span style={{
-                                                                                fontSize: '0.7rem',
-                                                                                color: 'var(--color-primary)',
-                                                                                background: 'var(--bg-app)',
-                                                                                padding: '2px 6px',
-                                                                                borderRadius: '4px',
-                                                                                fontWeight: 500
-                                                                            }}>
-                                                                                Set Value: {category.setValue}
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-
-                                                                <div className={styles.itemsList}>
-                                                                    {availableItems.map(item => {
-                                                                        const qty = (box.items || {})[item.id] || 0;
-                                                                        return (
-                                                                            <div key={item.id} className={styles.itemRow}>
-                                                                                <div style={{ flex: 1 }}>
-                                                                                    <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
-                                                                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                                                                                        Value: {item.value} | Price: ${item.priceEach || 0}
-                                                                                        {item.quotaValue && item.quotaValue > 1 && (
-                                                                                            <span style={{ marginLeft: '8px', color: 'var(--color-primary)' }}>
-                                                                                                (Counts as {item.quotaValue})
-                                                                                            </span>
-                                                                                        )}
-                                                                                    </div>
-                                                                                </div>
-                                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                                                                                    <button
-                                                                                        className="btn btn-secondary"
-                                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, qty - 1)}
-                                                                                        disabled={qty <= 0}
-                                                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
-                                                                                    >
-                                                                                        -
-                                                                                    </button>
-                                                                                    <input
-                                                                                        type="number"
-                                                                                        className="input"
-                                                                                        value={qty}
-                                                                                        onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
-                                                                                        min="0"
-                                                                                        style={{ width: '80px', textAlign: 'center' }}
-                                                                                    />
-                                                                                    <button
-                                                                                        className="btn btn-secondary"
-                                                                                        onClick={() => updateBoxItem(box.boxNumber, item.id, qty + 1)}
-                                                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
-                                                                                    >
-                                                                                        +
-                                                                                    </button>
-                                                                                </div>
-                                                                            </div>
-                                                                        );
-                                                                    })}
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                
-                                                {/* Show uncategorized items if any */}
-                                                {(() => {
-                                                    const uncategorizedItems = boxItems
-                                                        .filter(i => !i.categoryId || !categories.find(c => c.id === i.categoryId))
+                                            {/* Show all categories with box items */}
+                                            {[...categories]
+                                                .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+                                                .map(category => {
+                                                    const availableItems = boxItems
+                                                        .filter(i => i.categoryId === category.id)
                                                         .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-                                                    
-                                                    if (uncategorizedItems.length === 0) return null;
-                                                    
+
+                                                    if (availableItems.length === 0) return null;
+
                                                     return (
-                                                        <div style={{
+                                                        <div key={category.id} style={{
                                                             marginBottom: '1rem',
                                                             background: 'var(--bg-surface-hover)',
                                                             padding: '0.75rem',
                                                             borderRadius: '6px',
                                                             border: '1px solid var(--border-color)'
                                                         }}>
-                                                            <div style={{ 
+                                                            <div style={{
+                                                                display: 'flex',
+                                                                justifyContent: 'space-between',
                                                                 marginBottom: '0.5rem',
-                                                                fontSize: '0.85rem',
-                                                                fontWeight: 600
+                                                                fontSize: '0.85rem'
                                                             }}>
-                                                                Uncategorized
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                                    <span style={{ fontWeight: 600 }}>{category.name}</span>
+                                                                    {category.setValue !== undefined && category.setValue !== null && (
+                                                                        <span style={{
+                                                                            fontSize: '0.7rem',
+                                                                            color: 'var(--color-primary)',
+                                                                            background: 'var(--bg-app)',
+                                                                            padding: '2px 6px',
+                                                                            borderRadius: '4px',
+                                                                            fontWeight: 500
+                                                                        }}>
+                                                                            Set Value: {category.setValue}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                             </div>
+
                                                             <div className={styles.itemsList}>
-                                                                {uncategorizedItems.map(item => {
+                                                                {availableItems.map(item => {
                                                                     const qty = (box.items || {})[item.id] || 0;
                                                                     return (
                                                                         <div key={item.id} className={styles.itemRow}>
@@ -703,33 +629,105 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                                             </div>
                                                         </div>
                                                     );
-                                                })()}
-                                            </div>
-                                        )}
-                                        
-                                        {boxItems.length === 0 && (
-                                            <div style={{
-                                                padding: '1rem',
-                                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                                                borderRadius: '6px',
-                                                border: '1px solid var(--color-danger)',
-                                                color: 'var(--color-danger)',
-                                                fontSize: '0.9rem'
-                                            }}>
-                                                No box items available. Box items are menu items without a vendor assigned.
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                            
-                            <button
-                                className="btn btn-primary"
-                                onClick={addBox}
-                                style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                            >
-                                <Plus size={16} /> Add Another Box
-                            </button>
+                                                })}
+
+                                            {/* Show uncategorized items if any */}
+                                            {(() => {
+                                                const uncategorizedItems = boxItems
+                                                    .filter(i => !i.categoryId || !categories.find(c => c.id === i.categoryId))
+                                                    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+                                                if (uncategorizedItems.length === 0) return null;
+
+                                                return (
+                                                    <div style={{
+                                                        marginBottom: '1rem',
+                                                        background: 'var(--bg-surface-hover)',
+                                                        padding: '0.75rem',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border-color)'
+                                                    }}>
+                                                        <div style={{
+                                                            marginBottom: '0.5rem',
+                                                            fontSize: '0.85rem',
+                                                            fontWeight: 600
+                                                        }}>
+                                                            Uncategorized
+                                                        </div>
+                                                        <div className={styles.itemsList}>
+                                                            {uncategorizedItems.map(item => {
+                                                                const qty = (box.items || {})[item.id] || 0;
+                                                                return (
+                                                                    <div key={item.id} className={styles.itemRow}>
+                                                                        <div style={{ flex: 1 }}>
+                                                                            <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
+                                                                            <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                                                                Value: {item.value} | Price: ${item.priceEach || 0}
+                                                                                {item.quotaValue && item.quotaValue > 1 && (
+                                                                                    <span style={{ marginLeft: '8px', color: 'var(--color-primary)' }}>
+                                                                                        (Counts as {item.quotaValue})
+                                                                                    </span>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+                                                                            <button
+                                                                                className="btn btn-secondary"
+                                                                                onClick={() => updateBoxItem(box.boxNumber, item.id, qty - 1)}
+                                                                                disabled={qty <= 0}
+                                                                                style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                                            >
+                                                                                -
+                                                                            </button>
+                                                                            <input
+                                                                                type="number"
+                                                                                className="input"
+                                                                                value={qty}
+                                                                                onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
+                                                                                min="0"
+                                                                                style={{ width: '80px', textAlign: 'center' }}
+                                                                            />
+                                                                            <button
+                                                                                className="btn btn-secondary"
+                                                                                onClick={() => updateBoxItem(box.boxNumber, item.id, qty + 1)}
+                                                                                style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                                            >
+                                                                                +
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+
+                                    {boxItems.length === 0 && (
+                                        <div style={{
+                                            padding: '1rem',
+                                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                            borderRadius: '6px',
+                                            border: '1px solid var(--color-danger)',
+                                            color: 'var(--color-danger)',
+                                            fontSize: '0.9rem'
+                                        }}>
+                                            No box items available. Box items are menu items without a vendor assigned.
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+
+                        <button
+                            className="btn btn-primary"
+                            onClick={addBox}
+                            style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        >
+                            <Plus size={16} /> Add Another Box
+                        </button>
                     </>
                 </div>
             )}
@@ -740,14 +738,14 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     <p className={styles.description}>
                         Configure default custom items for new clients. Custom orders allow flexible item definitions.
                     </p>
-                    
+
                     <div style={{ marginBottom: '1rem' }}>
                         <label className="label">Default Vendor</label>
                         {(() => {
                             const vendorId = template.vendorId || '';
                             const vendor = vendors.find(v => v.id === vendorId);
                             const vendorName = vendor?.name || 'No vendor available';
-                            
+
                             return (
                                 <div style={{
                                     padding: '0.5rem 0.75rem',
@@ -862,7 +860,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     <p className={styles.description}>
                         Configure the default bill amount for produce orders for new clients.
                     </p>
-                    
+
                     <div style={{ marginBottom: '1rem' }}>
                         <label className="label">Bill Amount</label>
                         <input
@@ -878,10 +876,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                             placeholder="0.00"
                             style={{ maxWidth: '300px' }}
                         />
-                        <p style={{ 
-                            fontSize: '0.875rem', 
-                            color: 'var(--text-secondary)', 
-                            marginTop: '0.5rem' 
+                        <p style={{
+                            fontSize: '0.875rem',
+                            color: 'var(--text-secondary)',
+                            marginTop: '0.5rem'
                         }}>
                             Enter the default bill amount for produce orders.
                         </p>
