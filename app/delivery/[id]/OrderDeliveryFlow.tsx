@@ -18,7 +18,7 @@ interface OrderDetails {
 
 export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>(
-        order.alreadyDelivered ? 'SUCCESS' : 'VERIFY'
+        order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
     const [imageSrc, setImageSrc] = useState<string | null>(null);
     const [error, setError] = useState<string>('');

@@ -79,27 +79,8 @@ export async function POST(request: NextRequest) {
         const clientDataMap = new Map(clients?.map(c => [c.id, { status_id: c.status_id, created_at: c.created_at }]) || []);
         debugLogs.push(`Loaded ${clients?.length || 0} clients for status/age verification`);
 
-        // Get the starting order number (ensures at least 6 digits, starting from 100000)
-        const { data: maxOrderData } = await supabase
-            .from('orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-        const { data: maxUpcomingData } = await supabase
-            .from('upcoming_orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-        const maxOrderNum = maxOrderData?.order_number || 0;
-        const maxUpcomingNum = maxUpcomingData?.order_number || 0;
-        const maxNum = Math.max(maxOrderNum, maxUpcomingNum);
-
-        // Start from max + 1, ensuring at least 6 digits (100000 = 6 digits minimum)
-        let nextOrderNumber = Math.max(100000, maxNum + 1);
+        // Import the helper function to generate unique order numbers
+        const { generateUniqueOrderNumber } = await import('@/lib/actions');
 
         for (const upOrder of upcomingOrders) {
             console.log(`[Simulate Delivery] Processing upcoming order ${upOrder.id} (client: ${upOrder.client_id}, delivery_day: ${upOrder.delivery_day || 'null'})`);
@@ -496,6 +477,9 @@ export async function POST(request: NextRequest) {
                     const { getDefaultVendorId } = await import('@/lib/actions');
                     const defaultVendorId = await getDefaultVendorId();
 
+                    // Generate unique order_number for this order
+                    const uniqueOrderNumber = await generateUniqueOrderNumber(supabase);
+                    
                     // Create Order for this vendor
                     const orderData: any = {
                         id: randomUUID(),
@@ -508,7 +492,7 @@ export async function POST(request: NextRequest) {
                         total_value: vendorTotal, // Will be recalculated after items are copied
                         total_items: vendorItemCount,
                         notes: upOrder.notes,
-                        order_number: nextOrderNumber,
+                        order_number: uniqueOrderNumber,
                         created_at: currentTimeISO,
                         last_updated: currentTimeISO,
                         updated_by: upOrder.updated_by,
@@ -530,7 +514,7 @@ export async function POST(request: NextRequest) {
                         continue;
                     }
 
-                    console.log(`[Simulate Delivery] SUCCESS: Created order ${newOrder.id} (Order #${nextOrderNumber}) for client ${upOrder.client_id}, vendor ${vs.vendor_id} with delivery date ${deliveryDateStr}`);
+                    console.log(`[Simulate Delivery] SUCCESS: Created order ${newOrder.id} (Order #${uniqueOrderNumber}) for client ${upOrder.client_id}, vendor ${vs.vendor_id} with delivery date ${deliveryDateStr}`);
 
                     // Create vendor selection for this order
                     const vendorSelectionId = randomUUID();
@@ -669,7 +653,7 @@ export async function POST(request: NextRequest) {
                     }
 
                     // Increment order number for next order
-                    nextOrderNumber++;
+                    // Order number is generated per order, no need to increment
                     processedCount++;
                 }
             } else {
@@ -697,6 +681,9 @@ export async function POST(request: NextRequest) {
                 const { getDefaultVendorId } = await import('@/lib/actions');
                 const defaultVendorId = await getDefaultVendorId();
                 
+                // Generate unique order_number for this order
+                const uniqueOrderNumber = await generateUniqueOrderNumber(supabase);
+                
                 // Create Order with calculated delivery date
                 const orderData: any = {
                     id: randomUUID(),
@@ -709,7 +696,7 @@ export async function POST(request: NextRequest) {
                     total_value: upOrder.total_value,
                     total_items: upOrder.total_items,
                         notes: upOrder.notes,
-                        order_number: nextOrderNumber,
+                        order_number: uniqueOrderNumber,
                         created_at: currentTimeISO,
                         last_updated: currentTimeISO,
                         updated_by: upOrder.updated_by,
@@ -735,7 +722,7 @@ export async function POST(request: NextRequest) {
                     continue;
                 }
 
-                console.log(`[Simulate Delivery] SUCCESS: Created order ${newOrder.id} (Order #${nextOrderNumber}) for client ${upOrder.client_id} with delivery date ${deliveryDateStr}`);
+                console.log(`[Simulate Delivery] SUCCESS: Created order ${newOrder.id} (Order #${uniqueOrderNumber}) for client ${upOrder.client_id} with delivery date ${deliveryDateStr}`);
 
                 // 2. Box Selections (Boxes)
                 const { data: boxSelections } = await supabase
@@ -804,7 +791,7 @@ export async function POST(request: NextRequest) {
                 }
 
                 // Increment order number for next order
-                nextOrderNumber++;
+                // Order number is generated per order, no need to increment
                 processedCount++;
             }
         }

@@ -264,47 +264,9 @@ export async function createProduceOrder(clientId: string) {
             }
         }
 
-        // 4. Generate order_number
-        const { data: maxUpcomingOrder } = await supabaseAdmin
-            .from('upcoming_orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        
-        const { data: maxOrder } = await supabaseAdmin
-            .from('orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        
-        const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
-        const maxFromOrders = maxOrder?.order_number || 0;
-        const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
-        const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
-
-        // 5. Validate order_number is unique (double-check to avoid race conditions)
-        const { data: existingOrder } = await supabaseAdmin
-            .from('orders')
-            .select('id')
-            .eq('order_number', nextOrderNumber)
-            .maybeSingle();
-        
-        let finalOrderNumber = nextOrderNumber;
-        if (existingOrder) {
-            console.warn('[Create Produce Order] Order number already exists:', nextOrderNumber);
-            // Try to get a new order number
-            const { data: maxOrderRetry } = await supabaseAdmin
-                .from('orders')
-                .select('order_number')
-                .order('order_number', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-            const retryMax = maxOrderRetry?.order_number || 0;
-            finalOrderNumber = Math.max((retryMax || 99999) + 1, 100000);
-            console.log('[Create Produce Order] Using new order number:', finalOrderNumber);
-        }
+        // 4. Generate unique order_number using helper function (checks both orders and upcoming_orders)
+        const { generateUniqueOrderNumber } = await import('@/lib/actions');
+        const finalOrderNumber = await generateUniqueOrderNumber(supabaseAdmin);
 
         // 6. Create the order in orders table (not upcoming_orders)
         const orderId = randomUUID();

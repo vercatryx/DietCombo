@@ -66,6 +66,181 @@ function logQueryError(error: any, table: string, operation: string = 'select') 
     }
 }
 
+/**
+ * Generates a unique order_number by checking both orders and upcoming_orders tables.
+ * Handles race conditions by retrying if a duplicate is found.
+ * @param supabaseClient - The Supabase client to use (defaults to the module's supabase instance)
+ * @param maxRetries - Maximum number of retries if duplicate is found (default: 10)
+ * @returns A unique order_number (minimum 100000)
+ */
+export async function generateUniqueOrderNumber(
+    supabaseClient: any = supabase,
+    maxRetries: number = 10
+): Promise<number> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            // Get max order_number from both tables
+            const [ordersResult, upcomingOrdersResult] = await Promise.all([
+                supabaseClient
+                    .from('orders')
+                    .select('order_number')
+                    .order('order_number', { ascending: false })
+                    .limit(1)
+                    .maybeSingle(),
+                supabaseClient
+                    .from('upcoming_orders')
+                    .select('order_number')
+                    .order('order_number', { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
+            ]);
+
+            // Check for errors in queries
+            if (ordersResult.error) {
+                console.error(`[generateUniqueOrderNumber] Error querying orders table:`, ordersResult.error);
+                // Continue to retry, but log the error
+            }
+            if (upcomingOrdersResult.error) {
+                console.error(`[generateUniqueOrderNumber] Error querying upcoming_orders table:`, upcomingOrdersResult.error);
+                // Continue to retry, but log the error
+            }
+
+            const maxFromOrders = ordersResult.data?.order_number || 0;
+            const maxFromUpcoming = upcomingOrdersResult.data?.order_number || 0;
+            const maxOrderNumber = Math.max(maxFromOrders, maxFromUpcoming);
+            
+            // Start from max + 1, keep numbers sequential
+            // Only add a small offset (attempt number) to handle race conditions
+            // This ensures order numbers stay close together
+            const baseOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+            const nextOrderNumber = baseOrderNumber + attempt; // Small increment per attempt
+
+            // Double-check for duplicates in both tables (race condition protection)
+            const [duplicateCheckOrders, duplicateCheckUpcoming] = await Promise.all([
+                supabaseClient
+                    .from('orders')
+                    .select('id')
+                    .eq('order_number', nextOrderNumber)
+                    .maybeSingle(),
+                supabaseClient
+                    .from('upcoming_orders')
+                    .select('id')
+                    .eq('order_number', nextOrderNumber)
+                    .maybeSingle()
+            ]);
+
+            // Check for errors in duplicate check queries
+            if (duplicateCheckOrders.error) {
+                console.error(`[generateUniqueOrderNumber] Error checking duplicates in orders table:`, duplicateCheckOrders.error);
+                // If there's an error, we can't verify uniqueness, so retry
+                if (attempt < maxRetries - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+                    continue;
+                }
+            }
+            if (duplicateCheckUpcoming.error) {
+                console.error(`[generateUniqueOrderNumber] Error checking duplicates in upcoming_orders table:`, duplicateCheckUpcoming.error);
+                // If there's an error, we can't verify uniqueness, so retry
+                if (attempt < maxRetries - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+                    continue;
+                }
+            }
+
+            // If no duplicate found, return the number
+            if (!duplicateCheckOrders.data && !duplicateCheckUpcoming.data) {
+                return nextOrderNumber;
+            }
+
+            // If duplicate found, log and retry with exponential backoff
+            if (attempt < maxRetries - 1) {
+                console.warn(`[generateUniqueOrderNumber] Duplicate order_number ${nextOrderNumber} found, retrying (attempt ${attempt + 1}/${maxRetries})`);
+                // Exponential backoff: 100ms, 200ms, 400ms, 800ms, etc.
+                await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+            } else {
+                // Last attempt failed - try multiple fallback strategies
+                console.warn(`[generateUniqueOrderNumber] All retries exhausted, trying fallback strategies`);
+                
+                // Strategy 1: Try sequential numbers starting from base + 1
+                // Keep numbers close together, increment by 1 each time
+                let fallbackNumber = baseOrderNumber;
+                let foundUnique = false;
+                
+                // Try up to 100 sequential numbers to find a gap
+                for (let fallbackAttempt = 0; fallbackAttempt < 100; fallbackAttempt++) {
+                    const [finalCheckOrders, finalCheckUpcoming] = await Promise.all([
+                        supabaseClient
+                            .from('orders')
+                            .select('id')
+                            .eq('order_number', fallbackNumber)
+                            .maybeSingle(),
+                        supabaseClient
+                            .from('upcoming_orders')
+                            .select('id')
+                            .eq('order_number', fallbackNumber)
+                            .maybeSingle()
+                    ]);
+                    
+                    if (!finalCheckOrders.data && !finalCheckUpcoming.data) {
+                        console.log(`[generateUniqueOrderNumber] Successfully generated fallback order_number: ${fallbackNumber}`);
+                        foundUnique = true;
+                        break;
+                    }
+                    
+                    // Try next sequential number (increment by 1)
+                    fallbackNumber += 1;
+                }
+                
+                if (foundUnique) {
+                    return fallbackNumber;
+                }
+                
+                // Strategy 2: Use timestamp + random component as last resort
+                // Use last 5 digits of timestamp + random 1-99 to ensure uniqueness
+                const timestampComponent = Date.now() % 100000; // Last 5 digits
+                const randomComponent = Math.floor(Math.random() * 99) + 1; // 1-99
+                const timestampBasedNumber = 100000 + (timestampComponent * 100) + randomComponent;
+                
+                const [timestampCheckOrders, timestampCheckUpcoming] = await Promise.all([
+                    supabaseClient
+                        .from('orders')
+                        .select('id')
+                        .eq('order_number', timestampBasedNumber)
+                        .maybeSingle(),
+                    supabaseClient
+                        .from('upcoming_orders')
+                        .select('id')
+                        .eq('order_number', timestampBasedNumber)
+                        .maybeSingle()
+                ]);
+                
+                if (!timestampCheckOrders.data && !timestampCheckUpcoming.data) {
+                    console.log(`[generateUniqueOrderNumber] Successfully generated timestamp-based order_number: ${timestampBasedNumber}`);
+                    return timestampBasedNumber;
+                }
+                
+                console.error(`[generateUniqueOrderNumber] Failed to generate unique order_number after ${maxRetries} attempts and fallback strategies. Last attempted: ${nextOrderNumber}`);
+                throw new Error(`Failed to generate unique order_number after ${maxRetries} attempts. Please try again.`);
+            }
+        } catch (error: any) {
+            // If it's not our custom error, log it and retry
+            if (error.message?.includes('Failed to generate unique order_number')) {
+                throw error; // Re-throw our custom error
+            }
+            
+            console.error(`[generateUniqueOrderNumber] Unexpected error on attempt ${attempt + 1}:`, error);
+            if (attempt < maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+            } else {
+                throw new Error(`Failed to generate unique order_number: ${error.message || 'Unknown error'}`);
+            }
+        }
+    }
+
+    // This should never be reached, but TypeScript needs it
+    throw new Error('Failed to generate unique order_number');
+}
+
 // --- STATUS ACTIONS ---
 
 export async function getStatuses() {
@@ -3535,26 +3710,8 @@ async function syncSingleOrderForDeliveryDay(
         
         // If existing order doesn't have order_number, generate one
         if (existingOrder && (!existingOrder.order_number || existingOrder.order_number < 100000)) {
-            // Get max order_number from both upcoming_orders and orders tables
-            const { data: maxUpcomingOrder } = await supabase
-                .from('upcoming_orders')
-                .select('order_number')
-                .order('order_number', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-            
-            const { data: maxOrder } = await supabase
-                .from('orders')
-                .select('order_number')
-                .order('order_number', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-            
-            // Calculate next order_number (ensure it's at least 100000)
-            const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
-            const maxFromOrders = maxOrder?.order_number || 0;
-            const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
-            const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+            // Generate unique order_number using helper function
+            const nextOrderNumber = await generateUniqueOrderNumber();
             
             // Add order_number to update payload
             upcomingOrderData.order_number = nextOrderNumber;
@@ -3600,27 +3757,8 @@ async function syncSingleOrderForDeliveryDay(
         
         upcomingOrderId = existing.id;
     } else {
-        // Insert new - Generate order_number before inserting
-        // Get max order_number from both upcoming_orders and orders tables
-        const { data: maxUpcomingOrder } = await supabase
-            .from('upcoming_orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        
-        const { data: maxOrder } = await supabase
-            .from('orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        
-        // Calculate next order_number (ensure it's at least 100000)
-        const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
-        const maxFromOrders = maxOrder?.order_number || 0;
-        const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
-        const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+        // Insert new - Generate unique order_number before inserting
+        const nextOrderNumber = await generateUniqueOrderNumber();
         
         const upcomingOrderId_new = randomUUID();
         const insertPayload = { 
@@ -4721,15 +4859,27 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
     // Placeholder upcoming order for new Food clients with no vendor selections yet (caseId optional).
     // Without this, syncSingleOrderForDeliveryDay would throw "No vendor selections found" and
     // no row would be created in upcoming_orders or related tables.
+    // CRITICAL FIX: Check both vendorSelections (old format) and deliveryDayOrders (new format) for items
     const hasRealVendorSelections = (orderConfig as any)?.vendorSelections?.some((s: any) => {
         if (!s.vendorId || String(s.vendorId).trim() === '') return false;
         const items = s.items || {};
         return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
     });
+    // Also check deliveryDayOrders format for items
+    const hasItemsInDeliveryDayOrders = hasDeliveryDayOrders && 
+        Object.values(deliveryDayOrdersObj).some((dayOrder: any) => {
+            if (!dayOrder?.vendorSelections || !Array.isArray(dayOrder.vendorSelections)) return false;
+            return dayOrder.vendorSelections.some((s: any) => {
+                if (!s.vendorId || String(s.vendorId).trim() === '') return false;
+                const items = s.items || {};
+                return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+            });
+        });
     if (
         orderConfig.serviceType === 'Food' &&
         !hasDeliveryDayOrders &&
-        !hasRealVendorSelections
+        !hasRealVendorSelections &&
+        !hasItemsInDeliveryDayOrders
     ) {
         console.log('[syncCurrentOrderToUpcoming] Creating placeholder upcoming order for new Food client (no vendors yet)');
         const { error: deleteErr } = await supabase
@@ -4740,22 +4890,8 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         if (deleteErr) {
             console.warn('[syncCurrentOrderToUpcoming] Error deleting existing Food upcoming orders before placeholder:', deleteErr);
         }
-        const { data: maxUpcomingOrder } = await supabase
-            .from('upcoming_orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        const { data: maxOrder } = await supabase
-            .from('orders')
-            .select('order_number')
-            .order('order_number', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        const maxFromUpcoming = maxUpcomingOrder?.order_number || 0;
-        const maxFromOrders = maxOrder?.order_number || 0;
-        const maxOrderNumber = Math.max(maxFromUpcoming, maxFromOrders);
-        const nextOrderNumber = Math.max((maxOrderNumber || 99999) + 1, 100000);
+        // Generate unique order_number using helper function
+        const nextOrderNumber = await generateUniqueOrderNumber();
         const currentTime = await getCurrentTime();
         const placeholderId = randomUUID();
         const session = await getSession();
