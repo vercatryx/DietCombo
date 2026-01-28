@@ -562,6 +562,130 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         });
     }
 
+    // Helper: Extract custom items from previous orders for auto-population
+    function extractCustomItemsFromOrders(): { vendorId: string | null; customItems: any[] } {
+        if (!clientId || clientId === 'new') {
+            return { vendorId: null, customItems: [] };
+        }
+
+        // First, check if current orderConfig already has Custom/Vendor items (from upcoming order)
+        // This takes priority as it's the most recent/current order
+        if (orderConfig && (orderConfig.serviceType === 'Custom' || orderConfig.serviceType === 'Vendor') && orderConfig.customItems && Array.isArray(orderConfig.customItems) && orderConfig.customItems.length > 0) {
+            return {
+                vendorId: orderConfig.vendorId || null,
+                customItems: orderConfig.customItems.map((item: any) => ({
+                    name: item.name || '',
+                    price: parseFloat(item.price) || 0,
+                    quantity: parseInt(item.quantity) || 1
+                })).filter((item: any) => item.name && item.name.trim() && item.price > 0 && item.quantity > 0)
+            };
+        }
+
+        // Check activeOrder (recent orders from orders table)
+        let ordersToCheck: any[] = [];
+        
+        if (activeOrder) {
+            // Handle both single order and multiple orders format
+            if (activeOrder.multiple === true && Array.isArray(activeOrder.orders)) {
+                ordersToCheck = activeOrder.orders;
+            } else if (activeOrder.serviceType || activeOrder.service_type) {
+                ordersToCheck = [activeOrder];
+            }
+        }
+
+        // Also check orderHistory
+        if (orderHistory && Array.isArray(orderHistory)) {
+            ordersToCheck = [...ordersToCheck, ...orderHistory];
+        }
+
+        // Find the most recent Custom/Vendor order
+        const customOrders = ordersToCheck
+            .filter((order: any) => {
+                const serviceType = order.serviceType || order.service_type;
+                return serviceType === 'Custom' || serviceType === 'Vendor';
+            })
+            .sort((a: any, b: any) => {
+                const dateA = a.createdAt || a.created_at || a.lastUpdated || a.last_updated || '';
+                const dateB = b.createdAt || b.created_at || b.lastUpdated || b.last_updated || '';
+                return new Date(dateB).getTime() - new Date(dateA).getTime();
+            });
+
+        if (customOrders.length === 0) {
+            return { vendorId: null, customItems: [] };
+        }
+
+        // Get the most recent Custom order
+        const mostRecentCustomOrder = customOrders[0];
+
+        // Extract vendorId
+        let vendorId: string | null = mostRecentCustomOrder.vendorId || null;
+        
+        // If vendorId not at top level, try to get from vendorSelections
+        if (!vendorId && mostRecentCustomOrder.vendorSelections && Array.isArray(mostRecentCustomOrder.vendorSelections) && mostRecentCustomOrder.vendorSelections.length > 0) {
+            vendorId = mostRecentCustomOrder.vendorSelections[0].vendorId || null;
+        }
+
+        // Extract customItems from the order
+        // Custom items can be stored in different formats:
+        // 1. Direct customItems array in orderConfig
+        // 2. In vendorSelections[0].items as objects with custom_name and custom_price
+        // 3. In orderDetails.vendorSelections[0].items
+        let customItems: any[] = [];
+
+        // Try format 1: Direct customItems array
+        if (mostRecentCustomOrder.customItems && Array.isArray(mostRecentCustomOrder.customItems)) {
+            customItems = mostRecentCustomOrder.customItems.map((item: any) => ({
+                name: item.name || '',
+                price: parseFloat(item.price) || 0,
+                quantity: parseInt(item.quantity) || 1
+            }));
+        } 
+        // Try format 2: From vendorSelections items
+        else if (mostRecentCustomOrder.vendorSelections && Array.isArray(mostRecentCustomOrder.vendorSelections) && mostRecentCustomOrder.vendorSelections.length > 0) {
+            const firstVendorSelection = mostRecentCustomOrder.vendorSelections[0];
+            if (firstVendorSelection.items && Array.isArray(firstVendorSelection.items)) {
+                customItems = firstVendorSelection.items
+                    .filter((item: any) => item.menuItemName || item.custom_name || item.name)
+                    .map((item: any) => ({
+                        name: item.menuItemName || item.custom_name || item.name || '',
+                        price: parseFloat(item.unitValue || item.custom_price || item.price || 0),
+                        quantity: parseInt(item.quantity || 1)
+                    }));
+            }
+        }
+        // Try format 3: From orderDetails (if available)
+        else if (mostRecentCustomOrder.orderDetails && mostRecentCustomOrder.orderDetails.vendorSelections) {
+            const orderDetails = mostRecentCustomOrder.orderDetails;
+            if (orderDetails.vendorSelections && Array.isArray(orderDetails.vendorSelections) && orderDetails.vendorSelections.length > 0) {
+                const firstVendorSelection = orderDetails.vendorSelections[0];
+                if (firstVendorSelection.items && Array.isArray(firstVendorSelection.items)) {
+                    customItems = firstVendorSelection.items
+                        .filter((item: any) => item.menuItemName || item.custom_name || item.name)
+                        .map((item: any) => ({
+                            name: item.menuItemName || item.custom_name || item.name || '',
+                            price: parseFloat(item.unitValue || item.custom_price || item.price || 0),
+                            quantity: parseInt(item.quantity || 1)
+                        }));
+                }
+            }
+        }
+
+        // Filter out invalid items
+        customItems = customItems.filter((item: any) => 
+            item.name && item.name.trim() && 
+            item.price > 0 && 
+            item.quantity > 0
+        );
+
+        console.log('[ClientProfile] Extracted custom items from previous orders:', {
+            vendorId,
+            customItemsCount: customItems.length,
+            customItems
+        });
+
+        return { vendorId, customItems };
+    }
+
     // Helper: Load and apply default order template for new clients
     async function loadAndApplyDefaultTemplate(serviceType: string): Promise<void> {
         // Only apply for Food and Produce service types
@@ -1085,7 +1209,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 activeOrderConfig.serviceType = 'food';
             } else if (data.client.serviceType === 'Boxes') {
                 activeOrderConfig.serviceType = 'boxes';
-            } else if (data.client.serviceType === 'Custom') {
+            } else if (data.client.serviceType === 'Custom' || data.client.serviceType === 'Vendor') {
                 activeOrderConfig.serviceType = 'custom';
             } else if (data.client.serviceType === 'Produce') {
                 activeOrderConfig.serviceType = 'produce';
@@ -1107,7 +1231,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             const defaultOrder: any = { serviceType: data.client.serviceType };
             if (data.client.serviceType === 'Food') {
                 defaultOrder.vendorSelections = [{ vendorId: '', items: {} }];
-            } else if (data.client.serviceType === 'Custom') {
+            } else if (data.client.serviceType === 'Custom' || data.client.serviceType === 'Vendor') {
                 defaultOrder.vendorId = '';
                 defaultOrder.customItems = [];
             }
@@ -1393,31 +1517,55 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     });
 
                 if (isMultiDayFormat) {
-                    // Convert to deliveryDayOrders format
-                    const deliveryDayOrders: any = {};
-                    for (const day of Object.keys(upcomingOrderData)) {
-                        const dayOrder = (upcomingOrderData as any)[day];
-                        if (dayOrder && (dayOrder.serviceType || dayOrder.id)) {
-                            deliveryDayOrders[day] = {
-                                vendorSelections: dayOrder.vendorSelections || []
+                    // For Custom/Vendor client: use the Custom order from upcoming_orders if present
+                    if (c.serviceType === 'Custom' || c.serviceType === 'Vendor') {
+                        const customDayKey = Object.keys(upcomingOrderData).find((key: string) => {
+                            const o = (upcomingOrderData as any)[key];
+                            return o && (o.serviceType === 'Custom' || o.serviceType === 'Vendor');
+                        });
+                        if (customDayKey) {
+                            const customOrder = (upcomingOrderData as any)[customDayKey];
+                            configToSet = {
+                                ...customOrder,
+                                serviceType: 'Custom',
+                                caseId: customOrder.caseId || hasCaseId
                             };
+                            // Ensure customItems and vendorId are present from upcoming_orders
+                            if (customOrder.customItems && !configToSet.customItems) {
+                                configToSet.customItems = customOrder.customItems;
+                            }
+                            if (customOrder.vendorId && !configToSet.vendorId) {
+                                configToSet.vendorId = customOrder.vendorId;
+                            }
                         }
                     }
-                    // Check if it's Boxes - if so, flatten it to single order config
-                    const firstDayKey = Object.keys(upcomingOrderData)[0];
-                    const firstDayOrder = (upcomingOrderData as any)[firstDayKey];
+                    if (!configToSet) {
+                        // Convert to deliveryDayOrders format
+                        const deliveryDayOrders: any = {};
+                        for (const day of Object.keys(upcomingOrderData)) {
+                            const dayOrder = (upcomingOrderData as any)[day];
+                            if (dayOrder && (dayOrder.serviceType || dayOrder.id)) {
+                                deliveryDayOrders[day] = {
+                                    vendorSelections: dayOrder.vendorSelections || []
+                                };
+                            }
+                        }
+                        // Check if it's Boxes - if so, flatten it to single order config
+                        const firstDayKey = Object.keys(upcomingOrderData)[0];
+                        const firstDayOrder = (upcomingOrderData as any)[firstDayKey];
 
-                    if (firstDayOrder?.serviceType === 'Boxes' || c.serviceType === 'Boxes') {
-                        configToSet = firstDayOrder;
-                        if (!configToSet.serviceType) configToSet.serviceType = 'Boxes';
-                    } else {
-                        // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
-                        const serviceType = c.serviceType === 'Food' ? 'Food' : (firstDayOrder?.serviceType || c.serviceType);
-                        configToSet = {
-                            serviceType: serviceType,
-                            caseId: firstDayOrder?.caseId || hasCaseId,
-                            deliveryDayOrders
-                        };
+                        if (firstDayOrder?.serviceType === 'Boxes' || c.serviceType === 'Boxes') {
+                            configToSet = firstDayOrder;
+                            if (!configToSet.serviceType) configToSet.serviceType = 'Boxes';
+                        } else {
+                            // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
+                            const serviceType = c.serviceType === 'Food' ? 'Food' : (firstDayOrder?.serviceType || c.serviceType);
+                            configToSet = {
+                                serviceType: serviceType,
+                                caseId: firstDayOrder?.caseId || hasCaseId,
+                                deliveryDayOrders
+                            };
+                        }
                     }
                 } else if (upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
                     // Already in deliveryDayOrders format - use it directly
@@ -1468,7 +1616,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     configToSet.serviceType = 'food';
                 } else if (c.serviceType === 'Boxes') {
                     configToSet.serviceType = 'boxes';
-                } else if (c.serviceType === 'Custom') {
+                } else if (c.serviceType === 'Custom' || c.serviceType === 'Vendor') {
                     configToSet.serviceType = 'custom';
                 } else if (c.serviceType === 'Produce') {
                     configToSet.serviceType = 'produce';
@@ -1490,7 +1638,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const defaultOrder: any = { serviceType: c.serviceType };
                 if (c.serviceType === 'Food') {
                     defaultOrder.vendorSelections = [{ vendorId: '', items: {} }];
-                } else if (c.serviceType === 'Custom') {
+                } else if (c.serviceType === 'Custom' || c.serviceType === 'Vendor') {
                     defaultOrder.vendorId = '';
                     defaultOrder.customItems = [];
                 } else if (c.serviceType === 'Produce') {
@@ -1823,7 +1971,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     if (c.serviceType === 'Food' && upcomingOrderData.serviceType !== 'Food') {
                         // Skip non-Food orders when client serviceType is 'Food'
                     } else {
-                        // Single order format - ensure items are preserved for Boxes orders
+                        // Single order format - ensure items are preserved for Boxes and Custom orders
                         const extractedOrder = { ...upcomingOrderData };
                         // For Boxes orders, ensure items are included if they exist
                         if (upcomingOrderData.serviceType === 'Boxes') {
@@ -1836,6 +1984,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 extractedOrder.boxOrders = upcomingOrderData.boxOrders;
                             }
                             // Preserve vendorId if it exists
+                            if (upcomingOrderData.vendorId && !extractedOrder.vendorId) {
+                                extractedOrder.vendorId = upcomingOrderData.vendorId;
+                            }
+                        }
+                        // For Custom/Vendor orders, preserve customItems and vendorId from upcoming_orders
+                        if (upcomingOrderData.serviceType === 'Custom' || upcomingOrderData.serviceType === 'Vendor') {
+                            if (upcomingOrderData.customItems && !extractedOrder.customItems) {
+                                extractedOrder.customItems = upcomingOrderData.customItems;
+                            }
                             if (upcomingOrderData.vendorId && !extractedOrder.vendorId) {
                                 extractedOrder.vendorId = upcomingOrderData.vendorId;
                             }
@@ -2551,7 +2708,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
         }
 
-        if (formData.serviceType === 'Custom') {
+        if (formData.serviceType === 'Custom' || formData.serviceType === 'Vendor') {
             const messages: string[] = [];
 
             // Validate vendor is selected
@@ -2828,7 +2985,21 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 await loadAndApplyDefaultTemplate('Produce');
             }
         } else if (type === 'Custom') {
-            setOrderConfig({ serviceType: type, vendorId: '', customItems: [] });
+            // Auto-populate from previous Custom orders if available
+            const extracted = extractCustomItemsFromOrders();
+            const initialConfig: any = { 
+                serviceType: type, 
+                vendorId: extracted.vendorId || '', 
+                customItems: extracted.customItems.length > 0 ? extracted.customItems : []
+            };
+            setOrderConfig(initialConfig);
+            
+            if (extracted.customItems.length > 0) {
+                console.log('[ClientProfile] Auto-populated Custom order from previous orders:', {
+                    vendorId: extracted.vendorId,
+                    itemsCount: extracted.customItems.length
+                });
+            }
         } else {
             setOrderConfig({ serviceType: type, items: {} });
         }
@@ -3643,16 +3814,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         }
                     }
                     if (activeOrder.caseId) {
-                        if (serviceType === 'Custom' && activeOrder.custom_name && activeOrder.custom_price && activeOrder.vendorId && activeOrder.deliveryDay) {
-                            await saveClientCustomOrder(
-                                updatedClient.id,
-                                activeOrder.vendorId,
-                                activeOrder.custom_name,
-                                Number(activeOrder.custom_price),
-                                activeOrder.deliveryDay,
-                                activeOrder.caseId
-                            );
-                        }
+                        // Custom orders are handled by syncCurrentOrderToUpcoming (called by addClient)
+                        // No separate save needed - syncCurrentOrderToUpcoming will save customItems array to upcoming_order_items
                         if (serviceType === 'Meal' || activeOrder.mealSelections) {
                             await saveClientMealOrder(updatedClient.id, {
                                 caseId: activeOrder.caseId,
@@ -3767,9 +3930,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // efficiently with only ONE revalidation
                 // For Food tab: use canonical active_order structure (caseId, serviceType, mealSelections, vendorSelections, deliveryDayOrders)
                 if (orderConfig) {
+                    // Ensure serviceType is set correctly for all service types (must be capitalized: 'Custom', 'Boxes', 'Produce', 'Food')
+                    // For Custom orders, preserve all fields including customItems, vendorId, and caseId
                     const activeOrderToSave = formData.serviceType === 'Food'
                         ? normalizeFoodActiveOrder(orderConfig)
-                        : orderConfig;
+                        : { 
+                            ...orderConfig, 
+                            serviceType: formData.serviceType // Ensure serviceType matches formData (should be 'Custom', 'Boxes', or 'Produce')
+                            // Spread operator preserves: customItems, vendorId, caseId, boxOrders, etc.
+                        };
                     updateData.activeOrder = activeOrderToSave;
                     console.log('[ClientProfile] Saving order with activeOrder:', {
                         serviceType: activeOrderToSave.serviceType,
@@ -3785,7 +3954,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             boxTypeId: box.boxTypeId,
                             vendorId: box.vendorId,
                             itemsCount: Object.keys(box.items || {}).length
-                        })) || []
+                        })) || [],
+                        hasCustomItems: !!(activeOrderToSave as any).customItems,
+                        customItemsCount: (activeOrderToSave as any).customItems?.length || 0,
+                        vendorId: (activeOrderToSave as any).vendorId
                     });
                 } else {
                     console.warn('[ClientProfile] orderConfig is undefined, skipping order save');
@@ -3831,20 +4003,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
             
-            // Custom requires caseId
-            if (updateData.activeOrder && updateData.activeOrder.caseId && serviceType === 'Custom') {
-                const activeOrderAny = updateData.activeOrder as any;
-                if (activeOrderAny.custom_name && activeOrderAny.custom_price && activeOrderAny.vendorId && activeOrderAny.deliveryDay) {
-                    await saveClientCustomOrder(
-                        clientId,
-                        activeOrderAny.vendorId,
-                        activeOrderAny.custom_name,
-                        Number(activeOrderAny.custom_price),
-                        activeOrderAny.deliveryDay,
-                        activeOrderAny.caseId
-                    );
-                }
-            }
+            // Custom orders are handled by syncCurrentOrderToUpcoming (called by updateClient)
+            // No separate save needed - syncCurrentOrderToUpcoming will save customItems array to upcoming_order_items
 
             // Save food orders: ALWAYS when service type is Food and we have activeOrder (even without caseId).
             // CRITICAL: Pass the entire activeOrder so vendorSelections are preserved for syncCurrentOrderToUpcoming.
@@ -5799,7 +5959,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                             );
                                         })()}
 
-                                        {formData.serviceType === 'Custom' && (
+                                        {(formData.serviceType === 'Custom' || formData.serviceType === 'Vendor') && (
                                             <div className="animate-fade-in">
                                                 <div className={styles.formGroup}>
                                                     <label className="label">Vendor</label>
@@ -5812,7 +5972,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                                 vendorId: e.target.value
                                                             });
                                                         }}
-                                                        disabled
                                                     >
                                                         <option value="">Select Vendor...</option>
                                                         {vendors && vendors.length > 0 ? vendors.filter(v => {
@@ -5830,7 +5989,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                     )}
                                                 </div>
 
-                                                {orderConfig?.vendorId && (
+                                                {(orderConfig?.vendorId || (orderConfig?.customItems && orderConfig.customItems.length > 0)) && (
                                                     <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                                                             <h4 style={{ fontSize: '0.9rem', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

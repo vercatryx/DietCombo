@@ -704,11 +704,11 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                         }
                     }
                 }
-            } else if (data.service_type === 'Custom') {
-                // Handle Custom orders - load vendor selection and custom items
+            } else if (data.service_type === 'Custom' || data.service_type === 'Vendor') {
+                // Handle Custom/Vendor orders - load vendor selection and custom items
                 const vendorSelections = db.upcomingOrderVendorSelections.filter(vs => vs.upcoming_order_id === data.id);
                 if (vendorSelections.length > 0) {
-                    // For Custom orders, there should be only one vendor selection
+                    // For Custom/Vendor orders, there should be only one vendor selection
                     const vs = vendorSelections[0];
                     orderConfig.vendorId = vs.vendor_id;
                     
@@ -728,6 +728,21 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                     } else {
                         orderConfig.customItems = [];
                     }
+                } else {
+                    // No vendor selection: still load custom items from upcoming_order_items for this order
+                    const customItems = db.upcomingOrderItems.filter(
+                        item => item.upcoming_order_id === data.id &&
+                        item.menu_item_id === null // Custom items have null menu_item_id
+                    );
+                    if (customItems && customItems.length > 0) {
+                        orderConfig.customItems = customItems.map((item: any) => ({
+                            name: item.custom_name || 'Custom Item',
+                            price: parseFloat(item.custom_price || item.unit_value || 0),
+                            quantity: item.quantity || 1
+                        }));
+                    } else {
+                        orderConfig.customItems = [];
+                    }
                 }
             } else if (data.service_type === 'Produce') {
                 // Handle Produce orders - load bill_amount
@@ -738,12 +753,25 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
             return orderConfig;
         }
 
-        // New format: return orders grouped by delivery day
-        // Structure: { [deliveryDay]: OrderConfiguration }
+        // New format: return orders grouped by delivery day (and service type when needed)
+        // When multiple service types share the same delivery_day (e.g. Custom + Boxes for
+        // client 4572d067), use composite key (day_serviceType) so they are not overwritten.
+        // Otherwise use delivery_day only to preserve Food UI (Monday, Wednesday, etc.).
+        const dayToServiceTypes = new Map<string, Set<string>>();
+        for (const o of upcomingOrders) {
+            const d = o.delivery_day || 'default';
+            if (!dayToServiceTypes.has(d)) dayToServiceTypes.set(d, new Set());
+            dayToServiceTypes.get(d)!.add(o.service_type || 'unknown');
+        }
+        const useCompositeKey = Array.from(dayToServiceTypes.values()).some(s => s.size > 1);
+
         const ordersByDeliveryDay: any = {};
 
         for (const data of upcomingOrders) {
             const deliveryDay = data.delivery_day || 'default';
+            const key = useCompositeKey
+                ? `${deliveryDay}_${data.service_type || 'unknown'}`
+                : deliveryDay;
 
             const orderConfig: any = {
                 id: data.id,
@@ -819,11 +847,11 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                 } else {
                     console.warn('[getUpcomingOrderForClientLocal] No box selection found for upcoming order:', data.id);
                 }
-            } else if (data.service_type === 'Custom') {
-                // Handle Custom orders - load vendor selection and custom items
+            } else if (data.service_type === 'Custom' || data.service_type === 'Vendor') {
+                // Handle Custom/Vendor orders - load vendor selection and custom items
                 const vendorSelections = db.upcomingOrderVendorSelections.filter(vs => vs.upcoming_order_id === data.id);
                 if (vendorSelections.length > 0) {
-                    // For Custom orders, there should be only one vendor selection
+                    // For Custom/Vendor orders, there should be only one vendor selection
                     const vs = vendorSelections[0];
                     orderConfig.vendorId = vs.vendor_id;
                     
@@ -843,6 +871,21 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                     } else {
                         orderConfig.customItems = [];
                     }
+                } else {
+                    // No vendor selection: still load custom items from upcoming_order_items for this order
+                    const customItems = db.upcomingOrderItems.filter(
+                        item => item.upcoming_order_id === data.id &&
+                        item.menu_item_id === null // Custom items have null menu_item_id
+                    );
+                    if (customItems && customItems.length > 0) {
+                        orderConfig.customItems = customItems.map((item: any) => ({
+                            name: item.custom_name || 'Custom Item',
+                            price: parseFloat(item.custom_price || item.unit_value || 0),
+                            quantity: item.quantity || 1
+                        }));
+                    } else {
+                        orderConfig.customItems = [];
+                    }
                 }
             } else if (data.service_type === 'Produce') {
                 // Handle Produce orders - load bill_amount
@@ -851,13 +894,13 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
                 }
             }
 
-            ordersByDeliveryDay[deliveryDay] = orderConfig;
+            ordersByDeliveryDay[key] = orderConfig;
         }
 
-        // If only one delivery day, return it directly for backward compatibility
+        // If only one order, return it directly for backward compatibility
         const deliveryDays = Object.keys(ordersByDeliveryDay);
-        if (deliveryDays.length === 1 && deliveryDays[0] === 'default') {
-            return ordersByDeliveryDay['default'];
+        if (deliveryDays.length === 1) {
+            return ordersByDeliveryDay[deliveryDays[0]];
         }
 
         return ordersByDeliveryDay;

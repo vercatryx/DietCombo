@@ -4766,7 +4766,9 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         hasBoxOrders: !!(orderConfig as any)?.boxOrders && Array.isArray((orderConfig as any).boxOrders),
         boxOrdersCount: (orderConfig as any)?.boxOrders?.length || 0,
         hasItems: !!(orderConfig as any)?.items && Object.keys((orderConfig as any).items || {}).length > 0,
-        itemsCount: (orderConfig as any)?.items ? Object.keys((orderConfig as any).items || {}).length : 0
+        itemsCount: (orderConfig as any)?.items ? Object.keys((orderConfig as any).items || {}).length : 0,
+        hasCustomItems: !!(orderConfig as any)?.customItems && Array.isArray((orderConfig as any).customItems),
+        customItemsCount: (orderConfig as any)?.customItems?.length || 0
     });
     // console.log('[syncCurrentOrderToUpcoming] orderConfig received:', {
     //     serviceType: orderConfig?.serviceType,
