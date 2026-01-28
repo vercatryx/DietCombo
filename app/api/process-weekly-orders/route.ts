@@ -1224,3 +1224,54 @@ export async function GET(request: NextRequest) {
 
                             const { data: newUpcomingOrder, error: upcomingOrderError } = await supabase
                                 .from('upcoming_orders')
+                                .insert(upcomingOrderData)
+                                .select()
+                                .single();
+
+                            if (upcomingOrderError || !newUpcomingOrder) {
+                                errors.push(`Failed to create upcoming order for vendor ${vendorDetail.vendorId}: ${upcomingOrderError?.message || 'Unknown error'}`);
+                                continue;
+                            }
+
+                            console.log(`[process-weekly-orders] Created upcoming order ${newUpcomingOrder.id} for vendor ${vendorDetail.vendorId} with case_id ${uniqueCaseId}`);
+                        }
+                    }
+                } catch (upcomingOrderErr: any) {
+                    errors.push(`Error creating upcoming orders: ${upcomingOrderErr?.message || 'Unknown error'}`);
+                    console.error('[process-weekly-orders] Error creating upcoming orders:', upcomingOrderErr);
+                }
+            } catch (orderError: any) {
+                errors.push(`Error processing order ${order.id}: ${orderError?.message || 'Unknown error'}`);
+                console.error(`[process-weekly-orders] Error processing order ${order.id}:`, orderError);
+            }
+        }
+
+        // Calculate statistics
+        const totalValue = processedOrders.reduce((sum, o) => sum + (o.totalValue || 0), 0);
+        const totalItems = processedOrders.reduce((sum, o) => sum + (o.totalItems || 0), 0);
+
+        return NextResponse.json({
+            success: errors.length === 0,
+            message: errors.length === 0 
+                ? `Successfully processed ${processedOrders.length} order(s) and created ${billingRecords.length} billing record(s)`
+                : `Processed ${processedOrders.length} order(s) with ${errors.length} error(s)`,
+            statistics: {
+                totalOrders: processedOrders.length,
+                totalBillingRecords: billingRecords.length,
+                totalValue: totalValue,
+                totalItems: totalItems
+            },
+            orders: processedOrders,
+            billingRecords: billingRecords,
+            errors: errors.length > 0 ? errors : undefined,
+            processedAt: new Date().toISOString()
+        }, { status: errors.length === 0 ? 200 : 207 });
+    } catch (error: any) {
+        console.error('[process-weekly-orders] Fatal error:', error);
+        return NextResponse.json({
+            success: false,
+            message: `Fatal error: ${error?.message || 'Unknown error'}`,
+            error: error?.message || 'Unknown error'
+        }, { status: 500 });
+    }
+}

@@ -1206,19 +1206,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // CRITICAL: Normalize serviceType to lowercase for active_orders (food, boxes, custom, produce)
             // Map from client.serviceType (capitalized) to activeOrder.serviceType (lowercase)
             if (data.client.serviceType === 'Food') {
-                activeOrderConfig.serviceType = 'food';
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder('Food') as any;
             } else if (data.client.serviceType === 'Boxes') {
-                activeOrderConfig.serviceType = 'boxes';
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder('Boxes') as any;
             } else if (data.client.serviceType === 'Custom' || data.client.serviceType === 'Vendor') {
-                activeOrderConfig.serviceType = 'custom';
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder('Custom') as any;
             } else if (data.client.serviceType === 'Produce') {
-                activeOrderConfig.serviceType = 'produce';
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder('Produce') as any;
             } else if (activeOrderConfig.serviceType) {
                 // Normalize existing serviceType if it's not already lowercase
-                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder(activeOrderConfig.serviceType);
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder(activeOrderConfig.serviceType) as any;
             } else {
                 // Fallback: use client's serviceType normalized
-                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder(data.client.serviceType);
+                activeOrderConfig.serviceType = normalizeServiceTypeForActiveOrder(data.client.serviceType) as any;
             }
 
             let configToSet = activeOrderConfig;
