@@ -1358,7 +1358,9 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
 
     const newClient = mapClientFromDB(res);
 
-    if (newClient.activeOrder && newClient.activeOrder.caseId) {
+    // For Produce serviceType, do NOT create upcoming_orders records - only save to active_orders.
+    // For other service types, sync to upcoming_orders if there's an activeOrder with a caseId.
+    if (newClient.activeOrder && newClient.activeOrder.caseId && newClient.serviceType !== 'Produce') {
         await syncCurrentOrderToUpcoming(newClient.id, newClient, true);
     }
 

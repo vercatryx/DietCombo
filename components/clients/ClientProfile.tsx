@@ -3496,9 +3496,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
                 // Sync to upcoming_orders if there's order data (same as edit path).
                 // For Food, always sync when we have activeOrder so a placeholder upcoming_orders record is created even without caseId.
+                // For Produce, do NOT create upcoming_orders records - only save to active_orders.
                 const shouldSyncOrder = (updatedClient.activeOrder && updatedClient.activeOrder.caseId) ||
                     (formData.serviceType === 'Food' && updatedClient.activeOrder);
-                if (shouldSyncOrder) {
+                if (shouldSyncOrder && formData.serviceType !== 'Produce') {
                     await syncCurrentOrderToUpcoming(updatedClient.id, updatedClient, true);
                 }
 
