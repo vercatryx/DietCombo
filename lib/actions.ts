@@ -1746,7 +1746,10 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
         handleError(error, 'updateClient');
     }
 
-    // If activeOrder was updated, sync to upcoming_orders
+    // IMPORTANT: For existing clients with Food service, updates must be shown in active_orders
+    // The active_order field (active_orders) is already updated above (line 1702) when data.activeOrder is provided
+    // If activeOrder was updated, also sync to upcoming_orders for backward compatibility.
+    // CRITICAL: Do NOT sync Produce to upcoming_orders (Produce uses active_orders only).
     if (data.activeOrder) {
         console.log('[updateClient] activeOrder provided, syncing to upcoming_orders:', {
             clientId: id,
@@ -1758,10 +1761,14 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
         });
         const updatedClient = await getClient(id);
         if (updatedClient) {
-            // Ensure activeOrder is set on the client object
             updatedClient.activeOrder = data.activeOrder;
-            await syncCurrentOrderToUpcoming(id, updatedClient, true);
-            console.log('[updateClient] Successfully synced order to upcoming_orders');
+            const serviceType = updatedClient.serviceType ?? data.serviceType;
+            if (serviceType !== 'Produce') {
+                await syncCurrentOrderToUpcoming(id, updatedClient, true);
+                console.log('[updateClient] Successfully synced order to upcoming_orders');
+            } else {
+                console.log('[updateClient] Skipping upcoming_orders sync for Produce (active_orders only)');
+            }
         } else {
             console.error('[updateClient] Failed to fetch updated client after update');
         }
@@ -3603,20 +3610,22 @@ async function syncSingleOrderForDeliveryDay(
         }
     }
     
-    // Map serviceType to lowercase service_type for upcoming_orders based on selected tab
-    // Food tab → 'food', Boxes tab → 'boxes', Custom tab → 'custom', Produce tab → 'produce'
+    // Map serviceType to DB service_type for upcoming_orders.
+    // CRITICAL: Use 'Food', 'Boxes', 'Custom', 'Produce' (schema/process-weekly-orders expect these).
+    // Never use lowercase ('food', etc.) or inserts/queries will not match.
     let serviceTypeForUpcomingOrders: string;
     if (serviceType === 'Food') {
-        serviceTypeForUpcomingOrders = 'food';
+        serviceTypeForUpcomingOrders = 'Food';
     } else if (serviceType === 'Boxes') {
-        serviceTypeForUpcomingOrders = 'boxes';
+        serviceTypeForUpcomingOrders = 'Boxes';
     } else if (serviceType === 'Custom') {
-        serviceTypeForUpcomingOrders = 'custom';
+        serviceTypeForUpcomingOrders = 'Custom';
     } else if (serviceType === 'Produce') {
-        serviceTypeForUpcomingOrders = 'produce';
+        serviceTypeForUpcomingOrders = 'Produce';
+    } else if (serviceType === 'Meal' || serviceType === 'Equipment') {
+        serviceTypeForUpcomingOrders = serviceType;
     } else {
-        // Fallback: convert to lowercase for any other service type
-        serviceTypeForUpcomingOrders = serviceType.toLowerCase();
+        serviceTypeForUpcomingOrders = serviceType || 'Food';
     }
     
     const upcomingOrderData: any = {
@@ -4732,6 +4741,13 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         activeOrderKeys: client.activeOrder ? Object.keys(client.activeOrder) : []
     });
 
+    // CRITICAL: Never sync Produce to upcoming_orders. Produce uses active_orders only.
+    const clientServiceType = client.serviceType ?? (client.activeOrder as any)?.serviceType;
+    if (clientServiceType === 'Produce') {
+        console.log('[syncCurrentOrderToUpcoming] Skipping Produce (active_orders only)');
+        return;
+    }
+
     // 1. DRAFT PERSISTENCE: Save the raw activeOrder metadata to the clients table.
     // This ensures Case ID, Vendor, and other selections are persisted even if the 
     // full sync to upcoming_orders fails (e.g. if the vendor/delivery day isn't fully set yet).
@@ -4841,7 +4857,12 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
     });
     // Also check deliveryDayOrders format for items
-    const hasItemsInDeliveryDayOrders = hasDeliveryDayOrders && 
+    // CRITICAL FIX: Check for items in deliveryDayOrders independently of hasDeliveryDayOrders
+    // This ensures we detect items even if deliveryDayOrders exists but hasDeliveryDayOrders is false
+    // (e.g., if deliveryDayOrders has items but the structure check failed)
+    const hasItemsInDeliveryDayOrders = deliveryDayOrdersObj &&
+        typeof deliveryDayOrdersObj === 'object' &&
+        Object.keys(deliveryDayOrdersObj).length > 0 &&
         Object.values(deliveryDayOrdersObj).some((dayOrder: any) => {
             if (!dayOrder?.vendorSelections || !Array.isArray(dayOrder.vendorSelections)) return false;
             return dayOrder.vendorSelections.some((s: any) => {
@@ -4907,7 +4928,13 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         return;
     }
 
-    if (hasDeliveryDayOrders) {
+    // CRITICAL FIX: If we have items in deliveryDayOrders but hasDeliveryDayOrders is false,
+    // we should still process them. This can happen if deliveryDayOrders exists but the structure check failed.
+    // Check if we should process deliveryDayOrders format even if hasDeliveryDayOrders is false
+    const shouldProcessDeliveryDayOrders = hasDeliveryDayOrders || 
+        (hasItemsInDeliveryDayOrders && deliveryDayOrdersObj && Object.keys(deliveryDayOrdersObj).length > 0);
+    
+    if (shouldProcessDeliveryDayOrders) {
         // New format: create/update orders for each delivery day
         const deliveryDayOrders = (orderConfig as any).deliveryDayOrders;
         // Only sync days that are in deliveryDayOrders (user's selected days)
@@ -4940,12 +4967,12 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
 
         // Delete orders for delivery days that are no longer in the config
         // Filter by service_type to only delete orders of the same type
-        // Map serviceType to lowercase for upcoming_orders: Food → food, Boxes → boxes, Custom → custom, Produce → produce
-        const serviceTypeForQuery = orderConfig.serviceType === 'Food' ? 'food' :
-                                   orderConfig.serviceType === 'Boxes' ? 'boxes' :
-                                   orderConfig.serviceType === 'Custom' ? 'custom' :
-                                   orderConfig.serviceType === 'Produce' ? 'produce' :
-                                   orderConfig.serviceType?.toLowerCase() || 'food';
+        // CRITICAL: Use 'Food', 'Boxes', etc. (not lowercase). Must match schema and process-weekly-orders.
+        const serviceTypeForQuery = orderConfig.serviceType === 'Food' ? 'Food' :
+                                   orderConfig.serviceType === 'Boxes' ? 'Boxes' :
+                                   orderConfig.serviceType === 'Custom' ? 'Custom' :
+                                   orderConfig.serviceType === 'Produce' ? 'Produce' :
+                                   orderConfig.serviceType || 'Food';
         const { data: existingOrders } = await supabase
             .from('upcoming_orders')
             .select('id, delivery_day')
@@ -5031,13 +5058,44 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         if (orderConfig.serviceType === 'Food' && orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) {
             // Get all unique delivery days from selected vendors
             const allDeliveryDays = new Set<string>();
+            // CRITICAL FIX: Also check if there are items with empty vendorId (template items)
+            // In this case, try to use default vendor or first available vendor
+            let hasItemsWithoutVendor = false;
             for (const selection of orderConfig.vendorSelections) {
+                const items = selection.items || {};
+                const hasItems = Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                if (hasItems && (!selection.vendorId || String(selection.vendorId).trim() === '')) {
+                    hasItemsWithoutVendor = true;
+                }
                 if (selection.vendorId) {
                     const vendor = vendors.find(v => v.id === selection.vendorId);
                     if (vendor) {
                         const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
                         if (deliveryDays) {
                             deliveryDays.forEach((day: string) => allDeliveryDays.add(day));
+                        }
+                    }
+                }
+            }
+            // If we have items but no vendorId, try to use default vendor for Food
+            if (hasItemsWithoutVendor && allDeliveryDays.size === 0) {
+                const defaultVendor = vendors.find(v => 
+                    v.isActive && 
+                    v.serviceTypes && 
+                    Array.isArray(v.serviceTypes) && 
+                    v.serviceTypes.includes('Food')
+                );
+                if (defaultVendor) {
+                    const deliveryDaysList = 'deliveryDays' in defaultVendor ? defaultVendor.deliveryDays : (defaultVendor as any).delivery_days;
+                    if (deliveryDaysList && deliveryDaysList.length > 0) {
+                        deliveryDaysList.forEach((day: string) => allDeliveryDays.add(day));
+                        // Also update the vendorSelections to include the default vendorId
+                        for (const selection of orderConfig.vendorSelections) {
+                            const items = selection.items || {};
+                            const hasItems = Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                            if (hasItems && (!selection.vendorId || String(selection.vendorId).trim() === '')) {
+                                selection.vendorId = defaultVendor.id;
+                            }
                         }
                     }
                 }
@@ -5164,7 +5222,7 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
                     .from('upcoming_orders')
                     .select('id, delivery_day')
                     .eq('client_id', clientId)
-                    .eq('service_type', 'Boxes');
+                    .eq('service_type', 'Boxes'); // Must match schema; do not use 'boxes'
 
                 if (existing && existing.length > 0) {
                     const idsToDelete = existing
@@ -8576,8 +8634,14 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
     let activeOrder: any;
     
     if (fullActiveOrder) {
-        // Use the provided activeOrder as the base, ensuring we preserve the full structure
-        activeOrder = { ...fullActiveOrder };
+        // Use the provided activeOrder as the base (canonical Food structure from ClientProfile).
+        // Preserve caseId, serviceType, mealSelections, vendorSelections, deliveryDayOrders.
+        activeOrder = {
+            ...fullActiveOrder,
+            serviceType: 'Food',
+            mealSelections: fullActiveOrder.mealSelections ?? {},
+            vendorSelections: Array.isArray(fullActiveOrder.vendorSelections) ? fullActiveOrder.vendorSelections : []
+        };
     } else {
         // Get current client data to preserve existing active_order structure
         const { data: clientData, error: fetchError } = await supabaseAdmin

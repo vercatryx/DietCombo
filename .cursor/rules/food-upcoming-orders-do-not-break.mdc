@@ -1,0 +1,25 @@
+---
+description: Food service must always save to upcoming_orders; do not break sync or service_type casing
+globs: "lib/actions.ts,**/ClientProfile.tsx,**/process-weekly-orders/**"
+alwaysApply: false
+---
+
+# Food → upcoming_orders: Do Not Break
+
+When `serviceType = Food`, orders **must** save to `upcoming_orders` and related tables. See `FOOD_SERVICE_SAVE_FLOW.md` §8.
+
+## Rules
+
+1. **`upcoming_orders.service_type`**  
+   Use `'Food'`, `'Boxes'`, `'Custom'`, `'Produce'` (capitalized). **Never** use lowercase (`'food'`, etc.). Schema and `process-weekly-orders` depend on this.
+
+2. **Food sync**  
+   - Always call `saveClientFoodOrder` when `serviceType === 'Food'` and we have `activeOrder` (even without `caseId`).  
+   - Always call `syncCurrentOrderToUpcoming` for Food when we have order data.  
+   - **Produce**: never sync to `upcoming_orders`; it uses `active_orders` only.
+
+3. **Preserve structure**  
+   Pass the **full** `activeOrder` into `saveClientFoodOrder` (e.g. as `fullActiveOrder`). Do not overwrite with a partial object that drops `vendorSelections` or `deliveryDayOrders`.
+
+4. **Touch discipline**  
+   When changing `syncCurrentOrderToUpcoming`, `syncSingleOrderForDeliveryDay`, `saveClientFoodOrder`, or ClientProfile save flow, ensure Food create/edit → add items → Save still creates/updates rows in `upcoming_orders` and related tables.
