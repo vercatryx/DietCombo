@@ -7038,10 +7038,15 @@ export async function saveDeliveryProofUrlAndProcessOrder(
             } else {
                 // Not processed yet, process it now
                 try {
-                    // Calculate scheduled_delivery_date from delivery_day if available
+                    const currentTime = await getCurrentTime();
+                    const proofUploadDateStr = formatDateToYYYYMMDD(currentTime);
+
+                    // For Produce (prompt/realtime delivery), use proof upload date for both scheduled and actual delivery.
+                    // Otherwise calculate scheduled_delivery_date from delivery_day if available.
                     let scheduledDeliveryDate: string | null = null;
-                    if (upcomingOrder.delivery_day) {
-                        const currentTime = await getCurrentTime();
+                    if (upcomingOrder.service_type === 'Produce') {
+                        scheduledDeliveryDate = proofUploadDateStr;
+                    } else if (upcomingOrder.delivery_day) {
                         const calculatedDate = getNextDeliveryDateForDay(
                             upcomingOrder.delivery_day,
                             await getVendors(),
@@ -7057,7 +7062,6 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                     // Create order in orders table
                     console.log(`[Process Pending Order] Creating new Order for Case ${upcomingOrder.case_id} with status 'billing_pending'`);
                     console.log(`[Process Pending Order] Copying order_number from upcoming order: ${upcomingOrder.order_number}`);
-                    const currentTime = await getCurrentTime();
                     
                     const orderData: any = {
                         id: randomUUID(),
@@ -7724,7 +7728,7 @@ export async function invalidateOrderData(path?: string) {
 
 export async function getOrdersPaginated(page: number, pageSize: number, filter?: 'needs-vendor') {
     // For the Orders tab, show orders from both orders and upcoming_orders tables
-    // Exclude billing_pending orders (those should only show on billing page)
+    // Include all statuses (pending, confirmed, completed, waiting_for_proof, billing_pending, cancelled)
     // Show all orders regardless of scheduled_delivery_date (some may use delivery_day instead)
     
     try {
@@ -7732,8 +7736,7 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
         // Fetch orders first, then get client names separately to avoid nested relation issues
         let ordersQuery = supabase
             .from('orders')
-            .select('*')
-            .neq('status', 'billing_pending');
+            .select('*');
 
         // Build base query for upcoming_orders table
         let upcomingOrdersQuery = supabase
@@ -7912,14 +7915,17 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
     const mappedOrders = paginatedOrders.map((o: any) => {
         // Get client name from the map
         const clientName = o.client_id ? (clientsMap[o.client_id] || 'Unknown') : 'Unknown';
-        
+        // For display: prefer actual_delivery_date (e.g. produce proof upload date) over scheduled_delivery_date
+        const displayDeliveryDate = o.actual_delivery_date || o.scheduled_delivery_date || null;
         return {
             ...o,
             clientName: clientName,
             // Use the actual status from the order, default to 'pending' if not set
             status: o.status || (o.is_upcoming ? 'scheduled' : 'pending'),
-            // Map delivery_day to scheduled_delivery_date if needed
+            // Raw scheduled_delivery_date from DB; use displayDeliveryDate for Delivery Date column (prefers actual when set)
             scheduled_delivery_date: o.scheduled_delivery_date || null,
+            actual_delivery_date: o.actual_delivery_date || null,
+            display_delivery_date: displayDeliveryDate,
             // Ensure total_items is included
             total_items: o.total_items || 0
         };

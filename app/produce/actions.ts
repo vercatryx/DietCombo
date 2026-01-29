@@ -121,12 +121,15 @@ export async function processProduceProof(formData: FormData) {
             return { success: true, url: publicUrl };
         }
 
-        // For orders table, update with produce processing status
-        // Note: You may want to add a specific field for produce proof URL or use a different status
+        // For orders table, update with produce processing status.
+        // Set both actual_delivery_date and scheduled_delivery_date to proof upload date (Produce = prompt/realtime).
+        const proofUploadTime = new Date();
+        const proofUploadDateStr = proofUploadTime.toISOString().split('T')[0];
         const updateData: any = {
             proof_of_delivery_url: publicUrl,
             status: 'billing_pending',
-            actual_delivery_date: new Date().toISOString()
+            actual_delivery_date: proofUploadTime.toISOString(),
+            scheduled_delivery_date: proofUploadDateStr
         };
 
         const { error: updateError } = await supabaseAdmin
@@ -223,27 +226,10 @@ export async function getClientForProduce(clientId: string) {
             return { success: false, error: 'Client not found' };
         }
 
-        const { data: vendors } = await supabaseAdmin
-            .from('vendors')
-            .select('id, delivery_days, is_default')
-            .eq('is_active', true)
-            .order('is_default', { ascending: false });
-
-        const mainVendor = vendors?.find(v => v.is_default === true) || vendors?.[0];
-        let scheduledDeliveryDate = new Date();
-        scheduledDeliveryDate.setHours(0, 0, 0, 0);
-
-        if (mainVendor?.delivery_days) {
-            const deliveryDays = typeof mainVendor.delivery_days === 'string'
-                ? JSON.parse(mainVendor.delivery_days)
-                : mainVendor.delivery_days;
-            if (Array.isArray(deliveryDays) && deliveryDays.length > 0) {
-                const nextDate = getNextOccurrence(deliveryDays[0], new Date());
-                if (nextDate) scheduledDeliveryDate = nextDate;
-            }
-        }
-
-        const deliveryDateLabel = scheduledDeliveryDate.toISOString().split('T')[0];
+        // Produce is prompt/realtime delivery: show today's date as scheduled (not vendor delivery days)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const deliveryDateLabel = today.toISOString().split('T')[0];
 
         return {
             success: true,
@@ -326,18 +312,10 @@ export async function createProduceOrderWithProof(clientId: string, deliveryProo
             .order('is_default', { ascending: false });
 
         const mainVendor = vendors?.find(v => v.is_default === true) || vendors?.[0];
-        let scheduledDeliveryDate = new Date();
-        scheduledDeliveryDate.setHours(0, 0, 0, 0);
-
-        if (mainVendor?.delivery_days) {
-            const deliveryDays = typeof mainVendor.delivery_days === 'string'
-                ? JSON.parse(mainVendor.delivery_days)
-                : mainVendor.delivery_days;
-            if (Array.isArray(deliveryDays) && deliveryDays.length > 0) {
-                const nextDate = getNextOccurrence(deliveryDays[0], new Date());
-                if (nextDate) scheduledDeliveryDate = nextDate;
-            }
-        }
+        // Delivery date = date when proof image is uploaded (today)
+        const uploadDate = new Date();
+        uploadDate.setHours(0, 0, 0, 0);
+        const deliveryDateStr = uploadDate.toISOString().split('T')[0];
 
         const { generateUniqueOrderNumber } = await import('@/lib/actions');
         const finalOrderNumber = await generateUniqueOrderNumber(supabaseAdmin);
@@ -347,7 +325,7 @@ export async function createProduceOrderWithProof(clientId: string, deliveryProo
             client_id: clientId,
             service_type: 'Produce',
             order_number: finalOrderNumber,
-            scheduled_delivery_date: scheduledDeliveryDate.toISOString().split('T')[0],
+            scheduled_delivery_date: deliveryDateStr,
             status: 'billing_pending',
             total_value: billAmount,
             total_items: 1,

@@ -1,8 +1,10 @@
 # GoDaddy Email SMTP Setup
 
-## Environment Variables Template
+All outgoing email uses a **single sender**. Credentials are read from your env file (e.g. `.env` or `.env.local`).
 
-Add these to your `.env.local` file:
+## Environment Variables
+
+Add these to your `.env` or `.env.local` file:
 
 ```env
 SMTP_HOST=smtpout.secureserver.net
@@ -10,6 +12,12 @@ SMTP_PORT=465
 SMTP_SECURE=true
 SMTP_USER=your-email@yourdomain.com
 SMTP_PASS=your-email-password
+```
+
+Optional (sender display name; defaults to "Triangle Square System"):
+
+```env
+SMTP_FROM_NAME=Triangle Square System
 ```
 
 **Replace:**

@@ -153,7 +153,7 @@ export function OrdersList() {
                             </span>
                         </span>
                         <span style={{ flex: 1.5, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {order.scheduled_delivery_date ? new Date(order.scheduled_delivery_date).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '-'}
+                            {(order.actual_delivery_date || order.scheduled_delivery_date) ? new Date(order.actual_delivery_date || order.scheduled_delivery_date).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '-'}
                         </span>
                         <span style={{ width: '40px' }}><ChevronRight size={16} /></span>
                     </Link>
