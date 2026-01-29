@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate } from '@/lib/actions';
-import { Save, Loader2, Plus, Trash2, Package } from 'lucide-react';
+import { Save, Loader2, Plus, Trash2, Package, CalendarDays, ChevronLeft, ChevronRight, X, Search, Check } from 'lucide-react';
 import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
+
+type FoodSubTab = 'template' | 'mealPlanner';
 
 interface Props {
     mainVendor: Vendor;
@@ -25,6 +27,15 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
+    const [foodSubTab, setFoodSubTab] = useState<FoodSubTab>('template');
+    const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
+    const [mealPlannerSearchQuery, setMealPlannerSearchQuery] = useState('');
+    const [mealPlannerDateQuantities, setMealPlannerDateQuantities] = useState<Record<string, Record<string, number>>>({});
+    const [mealPlannerSavedTemplatesDemo, setMealPlannerSavedTemplatesDemo] = useState<Record<string, number>>({});
+    const [mealPlannerMonth, setMealPlannerMonth] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1);
+    });
 
     useEffect(() => {
         async function loadData() {
@@ -387,6 +398,99 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         );
     }
 
+    // Meal Planner calendar: days for current month (with leading empty cells)
+    const mealPlannerDays = useMemo(() => {
+        const year = mealPlannerMonth.getFullYear();
+        const month = mealPlannerMonth.getMonth();
+        const firstDay = new Date(year, month, 1);
+        const firstWeekday = firstDay.getDay();
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const days: (Date | null)[] = [];
+        for (let i = 0; i < firstWeekday; i++) days.push(null);
+        for (let d = 1; d <= lastDay; d++) days.push(new Date(year, month, d));
+        return days;
+    }, [mealPlannerMonth]);
+
+    const mealPlannerMonthYear = mealPlannerMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    // Demo: sample indicators (dates with "saved" template + item count) — no backend
+    const mealPlannerSampleIndicators = useMemo(() => {
+        const y = mealPlannerMonth.getFullYear();
+        const m = mealPlannerMonth.getMonth();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const key = (d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
+        return {
+            [key(5)]: 4,
+            [key(12)]: 6,
+            [key(19)]: 3,
+        } as Record<string, number>;
+    }, [mealPlannerMonth]);
+
+    function getIndicatorForDate(d: Date): number | null {
+        const k = formatDateKey(d);
+        if (mealPlannerSavedTemplatesDemo[k] != null) return mealPlannerSavedTemplatesDemo[k];
+        return mealPlannerSampleIndicators[k] ?? null;
+    }
+
+    function formatDateKey(d: Date): string {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    }
+
+    function isToday(d: Date): boolean {
+        const t = new Date();
+        return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
+    }
+
+    // Meal Planner popup: quantities for the selected date (demo only)
+    const mealPlannerQuantitiesForDate = mealPlannerPopupDate
+        ? (mealPlannerDateQuantities[mealPlannerPopupDate] || {})
+        : {};
+
+    function setMealPlannerQuantity(itemId: string, quantity: number) {
+        if (!mealPlannerPopupDate) return;
+        setMealPlannerDateQuantities(prev => ({
+            ...prev,
+            [mealPlannerPopupDate]: {
+                ...(prev[mealPlannerPopupDate] || {}),
+                [itemId]: Math.max(0, quantity)
+            }
+        }));
+    }
+
+    const mealPlannerFilteredItems = useMemo(() => {
+        if (!mealPlannerSearchQuery.trim()) return menuItems;
+        const q = mealPlannerSearchQuery.toLowerCase().trim();
+        return menuItems.filter(item =>
+            item.name.toLowerCase().includes(q) ||
+            (item.value != null && String(item.value).toLowerCase().includes(q))
+        );
+    }, [menuItems, mealPlannerSearchQuery]);
+
+    function handleMealPlannerSave() {
+        if (!mealPlannerPopupDate) return;
+        const qtyMap = mealPlannerDateQuantities[mealPlannerPopupDate] || {};
+        const itemCount = Object.values(qtyMap).filter((q) => q > 0).length;
+        setMealPlannerSavedTemplatesDemo((prev) => {
+            const next = { ...prev };
+            if (itemCount > 0) next[mealPlannerPopupDate] = itemCount;
+            else delete next[mealPlannerPopupDate];
+            return next;
+        });
+        setMessage(`Template for ${mealPlannerPopupDate} saved (demo — no backend).`);
+        setTimeout(() => setMessage(null), 3000);
+        setMealPlannerPopupDate(null);
+        setMealPlannerSearchQuery('');
+    }
+
+    function closeMealPlannerPopup() {
+        setMealPlannerPopupDate(null);
+        setMealPlannerSearchQuery('');
+    }
+
     if (loading) {
         return (
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
@@ -436,6 +540,26 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             </div>
 
             {template.serviceType === 'Food' && (
+                <div className={styles.tabBar}>
+                    <button
+                        type="button"
+                        className={foodSubTab === 'template' ? styles.tabActive : styles.tab}
+                        onClick={() => setFoodSubTab('template')}
+                    >
+                        Default Template
+                    </button>
+                    <button
+                        type="button"
+                        className={foodSubTab === 'mealPlanner' ? styles.tabActive : styles.tab}
+                        onClick={() => setFoodSubTab('mealPlanner')}
+                    >
+                        <CalendarDays size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                        Meal Planner
+                    </button>
+                </div>
+            )}
+
+            {template.serviceType === 'Food' && foodSubTab === 'template' && (
                 <div className={styles.formCard}>
                     <h3 className={styles.sectionTitle}>Menu Items</h3>
                     <p className={styles.description}>
@@ -485,6 +609,191 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                             ))}
                         </div>
                     )}
+                </div>
+            )}
+
+            {template.serviceType === 'Food' && foodSubTab === 'mealPlanner' && (
+                <div className={styles.formCard}>
+                    <h3 className={styles.sectionTitle}>Meal Planner</h3>
+                    <p className={styles.description}>
+                        Click a date to set the default food order template for that day. (Demo — no data is saved.)
+                    </p>
+                    <div className={styles.mealPlannerCalendar}>
+                        <div className={styles.calendarHeader}>
+                            <button
+                                type="button"
+                                className={styles.calendarNav}
+                                onClick={() => setMealPlannerMonth(new Date(mealPlannerMonth.getFullYear(), mealPlannerMonth.getMonth() - 1, 1))}
+                                aria-label="Previous month"
+                            >
+                                <ChevronLeft size={20} />
+                            </button>
+                            <span className={styles.calendarMonthYear}>{mealPlannerMonthYear}</span>
+                            <button
+                                type="button"
+                                className={styles.calendarNav}
+                                onClick={() => setMealPlannerMonth(new Date(mealPlannerMonth.getFullYear(), mealPlannerMonth.getMonth() + 1, 1))}
+                                aria-label="Next month"
+                            >
+                                <ChevronRight size={20} />
+                            </button>
+                        </div>
+                        <div className={styles.calendarWeekdays}>
+                            {WEEKDAY_LABELS.map((label) => (
+                                <div key={label} className={styles.calendarWeekday}>{label}</div>
+                            ))}
+                        </div>
+                        <div className={styles.calendarGrid}>
+                            {mealPlannerDays.map((date, index) => {
+                                const indicator = date ? getIndicatorForDate(date) : null;
+                                const hasPlan = indicator != null;
+                                return (
+                                    <div
+                                        key={date ? formatDateKey(date) : `empty-${index}`}
+                                        className={[
+                                            date ? styles.calendarDay : styles.calendarDayEmpty,
+                                            date && hasPlan && styles.calendarDayHasPlan,
+                                            date && isToday(date) && styles.calendarDayToday,
+                                        ].filter(Boolean).join(' ')}
+                                        onClick={date ? () => setMealPlannerPopupDate(formatDateKey(date)) : undefined}
+                                        role={date ? 'button' : undefined}
+                                        tabIndex={date ? 0 : undefined}
+                                        onKeyDown={date ? (e) => { if (e.key === 'Enter' || e.key === ' ') setMealPlannerPopupDate(formatDateKey(date)); } : undefined}
+                                        title={date && hasPlan ? `Meal plan saved · ${indicator} item${indicator !== 1 ? 's' : ''}` : undefined}
+                                    >
+                                        {date && (
+                                            <>
+                                                {hasPlan && (
+                                                    <span className={styles.calendarDayCheck} aria-hidden>
+                                                        <Check size={12} strokeWidth={2.5} />
+                                                    </span>
+                                                )}
+                                                <span className={styles.calendarDayNum}>{date.getDate()}</span>
+                                                {hasPlan && (
+                                                    <span className={styles.calendarDayIndicator} aria-hidden>
+                                                        {indicator}
+                                                    </span>
+                                                )}
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className={styles.calendarLegend} aria-hidden>
+                            <span className={styles.calendarLegendItem}>
+                                <Check size={14} strokeWidth={2.5} />
+                                <span>Meal plan saved</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {mealPlannerPopupDate && (
+                <div className={styles.popupOverlay} onClick={closeMealPlannerPopup} role="dialog" aria-modal="true" aria-labelledby="meal-planner-popup-title">
+                    <div className={styles.popupContent} onClick={(e) => e.stopPropagation()}>
+                        <div className={styles.popupHeader}>
+                            <h3 id="meal-planner-popup-title" className={styles.popupTitle}>
+                                Default order template for {mealPlannerPopupDate}
+                            </h3>
+                            <button
+                                type="button"
+                                className={styles.popupClose}
+                                onClick={closeMealPlannerPopup}
+                                aria-label="Close"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className={styles.popupBody}>
+                            <p className={styles.popupDemoNote}>
+                                Demo — no data is saved. Set quantities and click Save to see the flow.
+                            </p>
+                            <div className={styles.popupSearchWrap}>
+                                <Search size={18} className={styles.popupSearchIcon} aria-hidden />
+                                <input
+                                    type="search"
+                                    className={`input ${styles.popupSearchInput}`}
+                                    placeholder="Search menu items..."
+                                    value={mealPlannerSearchQuery}
+                                    onChange={(e) => setMealPlannerSearchQuery(e.target.value)}
+                                    aria-label="Search menu items"
+                                />
+                            </div>
+                            <div className={styles.popupItemsList}>
+                                {mealPlannerFilteredItems.length === 0 ? (
+                                    <p className={styles.popupNoItems}>
+                                        {mealPlannerSearchQuery.trim()
+                                            ? 'No menu items match your search.'
+                                            : 'No menu items available.'}
+                                    </p>
+                                ) : (
+                                    mealPlannerFilteredItems.map((item) => {
+                                        const qty = mealPlannerQuantitiesForDate[item.id] ?? 0;
+                                        return (
+                                            <div key={item.id} className={styles.popupItemRow}>
+                                                <div className={styles.popupItemInfo}>
+                                                    <span className={styles.popupItemName}>{item.name}</span>
+                                                    <span className={styles.popupItemMeta}>
+                                                        Value: {item.value} · ${item.priceEach ?? 0} each
+                                                    </span>
+                                                </div>
+                                                <div className={styles.popupItemQty}>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary"
+                                                        onClick={() => setMealPlannerQuantity(item.id, qty - 1)}
+                                                        disabled={qty <= 0}
+                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                        aria-label={`Decrease ${item.name}`}
+                                                    >
+                                                        −
+                                                    </button>
+                                                    <input
+                                                        type="number"
+                                                        className="input"
+                                                        value={qty}
+                                                        onChange={(e) => setMealPlannerQuantity(item.id, parseInt(e.target.value, 10) || 0)}
+                                                        min={0}
+                                                        style={{ width: '64px', textAlign: 'center' }}
+                                                        aria-label={`Quantity for ${item.name}`}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary"
+                                                        onClick={() => setMealPlannerQuantity(item.id, qty + 1)}
+                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
+                                                        aria-label={`Increase ${item.name}`}
+                                                    >
+                                                        +
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                            <div className={styles.popupFooter}>
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={closeMealPlannerPopup}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleMealPlannerSave}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                >
+                                    <Save size={16} />
+                                    Save template
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 

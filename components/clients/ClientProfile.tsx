@@ -20,6 +20,7 @@ import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
 import TextareaAutosize from 'react-textarea-autosize';
 import SubmissionsList from './SubmissionsList';
+import { SavedMealPlanMonth } from './SavedMealPlanMonth';
 import styles from './ClientProfile.module.css';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
@@ -5309,6 +5310,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         </div>
                                                     );
                                                 })()}
+
+                                                <SavedMealPlanMonth />
                                             </div>
                                         )}
 
