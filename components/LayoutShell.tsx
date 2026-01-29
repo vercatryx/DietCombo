@@ -14,6 +14,12 @@ export function LayoutShell({ children, userName, userRole, userId }: { children
         return <>{children}</>;
     }
 
+    // Public/solo pages: no sidebar, full-width content
+    const isVendorsProduce = pathname === '/vendors/produce' || pathname.startsWith('/vendors/produce/');
+    if (isVendorsProduce) {
+        return <>{children}</>;
+    }
+
     // Width constants
     const SIDEBAR_WIDTH = 260;
     const SIDEBAR_COLLAPSED_WIDTH = 80;

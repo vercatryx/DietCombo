@@ -32,7 +32,7 @@ export function ProduceDetail() {
 
             // Filter clients with serviceType = 'Produce'
             const produceClientsList = clientsData.filter(client => client.serviceType === 'Produce');
-            
+
             setProduceClients(produceClientsList);
             setAllClients(clientsData);
             setMenuItems(menuItemsData);
@@ -204,24 +204,21 @@ export function ProduceDetail() {
     return (
         <div className={styles.container}>
             <div className={styles.header}>
-                <button className={styles.backButton} onClick={() => router.push('/vendors')}>
-                    <ArrowLeft size={16} /> Back to Vendors
-                </button>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1 }}>
                     <h1 className={styles.title}>
                         <Package size={24} style={{ marginRight: '12px', verticalAlign: 'middle' }} />
                         Produce Clients
                     </h1>
                     <div style={{ display: 'flex', gap: '1rem' }}>
-                        <button 
-                            className="btn btn-secondary" 
+                        <button
+                            className="btn btn-secondary"
                             onClick={exportLabelsPDF}
                             style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                         >
                             <FileText size={20} /> Download Labels
                         </button>
-                        <button 
-                            className="btn btn-secondary" 
+                        <button
+                            className="btn btn-secondary"
                             onClick={exportClientsToCSV}
                             style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                         >
