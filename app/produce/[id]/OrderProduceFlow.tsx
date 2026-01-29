@@ -2,25 +2,23 @@
 
 import { useState, useRef, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { processProduceProof } from '../actions';
-import { Camera, CheckCircle, Upload, AlertCircle, MapPin, X, PenTool, ExternalLink } from 'lucide-react';
+import { uploadProduceProofOnly, createProduceOrderWithProof } from '../actions';
+import { Camera, CheckCircle, Upload, AlertCircle, MapPin, X, ExternalLink, ImageIcon } from 'lucide-react';
 import '../produce.css';
 
-interface OrderDetails {
+interface ClientDetails {
     id: string;
-    orderNumber: string;
-    clientName: string;
+    full_name: string;
     address: string;
-    deliveryDate: string;
-    alreadyDelivered: boolean;
+    deliveryDateLabel: string;
     clientSignToken?: string | null;
 }
 
-export function OrderProduceFlow({ order }: { order: OrderDetails }) {
-    const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>(
-        order.alreadyDelivered ? 'SUCCESS' : 'VERIFY'
-    );
+export function OrderProduceFlow({ client }: { client: ClientDetails }) {
+    const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>('VERIFY');
     const [imageSrc, setImageSrc] = useState<string | null>(null);
+    const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
+    const [createdOrderNumber, setCreatedOrderNumber] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const webcamRef = useRef<Webcam>(null);
 
@@ -36,35 +34,35 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
         if (!imageSrc) return;
 
         setStep('UPLOADING');
+        setError('');
 
-        // Convert base64 to blob
         const res = await fetch(imageSrc);
         const blob = await res.blob();
         const file = new File([blob], "produce-proof.jpg", { type: "image/jpeg" });
 
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('orderNumber', order.id);
-
-        console.log('[Client Debug] Calling processProduceProof with:', {
-            orderId: order.id,
-            fileSize: file.size,
-            orderNumber: order.orderNumber
-        });
+        formData.append('clientId', client.id);
 
         try {
-            const result = await processProduceProof(formData);
-            console.log('[Client Debug] processProduceProof result:', result);
-
-            if (result.success) {
-                setStep('SUCCESS');
-            } else {
-                console.error('[Client Debug] Server returned error:', result.error);
-                setError(result.error || 'Upload failed');
+            const uploadResult = await uploadProduceProofOnly(formData);
+            if (!uploadResult.success || !uploadResult.url) {
+                setError(uploadResult.error || 'Upload failed');
                 setStep('ERROR');
+                return;
             }
+
+            const createResult = await createProduceOrderWithProof(client.id, uploadResult.url);
+            if (!createResult.success || !createResult.order) {
+                setError(createResult.error || 'Failed to create order');
+                setStep('ERROR');
+                return;
+            }
+
+            setUploadedProofUrl(uploadResult.url);
+            setCreatedOrderNumber(createResult.order.orderNumber);
+            setStep('SUCCESS');
         } catch (err: any) {
-            console.error('[Client Debug] FATAL ERROR calling processProduceProof:', err);
             setError(err?.message || 'Network or Server Error occurred');
             setStep('ERROR');
         }
@@ -75,24 +73,24 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
             <div className="produce-card">
                 <div className="text-center">
                     <span className="produce-badge">
-                        Verify Produce Order
+                        Verify Produce Delivery
                     </span>
                     <h2 className="text-title">
-                        Order #{order.orderNumber}
+                        {client.full_name}
                     </h2>
                     <p className="text-subtitle">
-                        {new Date(order.deliveryDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                        Scheduled: {new Date(client.deliveryDateLabel).toLocaleDateString('en-US', { timeZone: 'UTC' })}
                     </p>
                 </div>
 
                 <div className="info-panel">
                     <div className="info-row">
                         <div className="avatar">
-                            {order.clientName.charAt(0)}
+                            {client.full_name.charAt(0)}
                         </div>
                         <div>
                             <p className="info-label">Client</p>
-                            <p className="info-value">{order.clientName}</p>
+                            <p className="info-value">{client.full_name}</p>
                         </div>
                     </div>
 
@@ -104,10 +102,14 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
                         </div>
                         <div>
                             <p className="info-label">Delivery Address</p>
-                            <p className="info-value">{order.address}</p>
+                            <p className="info-value">{client.address}</p>
                         </div>
                     </div>
                 </div>
+
+                <p className="text-subtitle" style={{ marginTop: '0.5rem', opacity: 0.8 }}>
+                    Upload a delivery proof photo to create the order. The order will be created only after the image is uploaded.
+                </p>
 
                 <button
                     onClick={() => setStep('CAPTURE')}
@@ -203,7 +205,7 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
                 <div className="spinner" style={{ margin: '0 auto', width: '4rem', height: '4rem', borderTopColor: 'var(--color-primary)' }}></div>
                 <div>
                     <h3 className="text-title" style={{ fontSize: '1.25rem' }}>Uploading...</h3>
-                    <p className="text-subtitle">Saving proof of produce processing</p>
+                    <p className="text-subtitle">Saving proof and creating order</p>
                 </div>
             </div>
         );
@@ -217,8 +219,10 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
                 </div>
                 <div>
                     <h2 className="text-title">Processed!</h2>
-                    <p className="text-subtitle" style={{ color: '#4ade80', fontSize: '1.125rem' }}>Order #{order.orderNumber}</p>
-                    <p className="text-subtitle" style={{ marginTop: '1rem' }}>Proof has been securely saved.</p>
+                    {createdOrderNumber && (
+                        <p className="text-subtitle" style={{ color: '#4ade80', fontSize: '1.125rem' }}>Order #{createdOrderNumber}</p>
+                    )}
+                    <p className="text-subtitle" style={{ marginTop: '1rem' }}>Proof has been securely saved and order created.</p>
                 </div>
 
 
@@ -232,9 +236,9 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
                     >
                         Update Proof (Re-take Photo)
                     </button>
-                    {order.clientSignToken && (
+                    {uploadedProofUrl && (
                         <a
-                            href={`/sign/${order.clientSignToken}/view`}
+                            href={uploadedProofUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{
@@ -243,17 +247,17 @@ export function OrderProduceFlow({ order }: { order: OrderDetails }) {
                                 justifyContent: 'center',
                                 gap: '0.5rem',
                                 padding: '0.75rem',
-                                background: 'rgba(59, 130, 246, 0.1)',
-                                border: '1px solid rgba(59, 130, 246, 0.3)',
+                                background: 'rgba(34, 197, 94, 0.1)',
+                                border: '1px solid rgba(34, 197, 94, 0.3)',
                                 borderRadius: '0.5rem',
-                                color: '#60a5fa',
+                                color: '#4ade80',
                                 textDecoration: 'none',
                                 fontWeight: 500,
                                 fontSize: '0.875rem'
                             }}
                         >
-                            <PenTool size={16} />
-                            View Signature Report
+                            <ImageIcon size={16} />
+                            Preview uploaded image
                             <ExternalLink size={14} />
                         </a>
                     )}
