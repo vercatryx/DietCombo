@@ -5310,8 +5310,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                         </div>
                                                     );
                                                 })()}
-
-                                                <SavedMealPlanMonth />
                                             </div>
                                         )}
 
@@ -6138,6 +6136,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     </>
                                 )}
                             </section>
+
+                            {!isNewClient && (
+                                <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
+                                    <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
+                                    <SavedMealPlanMonth clientId={clientId} />
+                                </section>
+                            )}
 
                             {/* Recent Orders Panel */}
                             <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>

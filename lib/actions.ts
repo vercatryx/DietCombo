@@ -11,7 +11,8 @@ import {
     getTakeEffectDate as getTakeEffectDateFromUtils,
     getAllDeliveryDatesForOrder as getAllDeliveryDatesFromUtils,
     getNextOccurrence,
-    formatDateToYYYYMMDD
+    formatDateToYYYYMMDD,
+    DAY_NAME_TO_NUMBER
 } from './order-dates';
 import { supabase } from './supabase';
 import { createClient } from '@supabase/supabase-js';
@@ -1132,6 +1133,21 @@ function mealPlannerDateOnly(dateStr: string): string {
     return trimmed;
 }
 
+/** Normalize DB date value (string or Date) to YYYY-MM-DD for display and filtering. */
+function mealPlannerNormalizeDate(value: string | Date | null | undefined): string {
+    if (value == null) return '';
+    if (typeof value === 'string') {
+        const s = value.trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+    }
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
+    }
+    return '';
+}
+
 export type MealPlannerCustomItemInput = {
     id?: string;
     name: string;
@@ -1232,6 +1248,87 @@ export async function getMealPlannerItemCountsByDate(
     } catch (error) {
         console.error('Error fetching meal planner item counts:', error);
         return {};
+    }
+}
+
+export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: number };
+
+export type MealPlannerOrderResult = {
+    id: string;
+    scheduledDeliveryDate: string;
+    deliveryDay: string | null;
+    status: string;
+    totalItems: number | null;
+    items: MealPlannerOrderDisplayItem[];
+};
+
+/**
+ * Fetch meal planner orders (saved from client meal selections) for a client in a date range.
+ * Used by SavedMealPlanMonth to show dates with saved meal plans and their items.
+ */
+export async function getMealPlannerOrders(
+    clientId: string,
+    startDate: string,
+    endDate: string
+): Promise<MealPlannerOrderResult[]> {
+    try {
+        const start = mealPlannerDateOnly(startDate);
+        const end = mealPlannerDateOnly(endDate);
+        const { data: orders, error: ordersError } = await supabase
+            .from('meal_planner_orders')
+            .select('id, scheduled_delivery_date, delivery_day, status, total_items, items')
+            .eq('client_id', clientId)
+            .gte('scheduled_delivery_date', start)
+            .lte('scheduled_delivery_date', end)
+            .order('scheduled_delivery_date', { ascending: true });
+
+        if (ordersError) {
+            logQueryError(ordersError, 'meal_planner_orders', 'select');
+            return [];
+        }
+        if (!orders || orders.length === 0) return [];
+
+        const menuItems = await getMenuItems();
+        const menuById = new Map(menuItems.map((m) => [m.id, m.name]));
+
+        const list: MealPlannerOrderResult[] = [];
+        for (const row of orders) {
+            const itemsJson = row.items as ClientMealOrder['mealSelections'] | null;
+            const byId = new Map<string, { name: string; quantity: number }>();
+            if (itemsJson && typeof itemsJson === 'object') {
+                for (const [, meal] of Object.entries(itemsJson)) {
+                    if (!meal?.items || typeof meal.items !== 'object') continue;
+                    for (const [itemId, qty] of Object.entries(meal.items)) {
+                        const quantity = Number(qty) || 0;
+                        if (quantity <= 0) continue;
+                        const name = menuById.get(itemId) ?? `Item ${itemId}`;
+                        const existing = byId.get(itemId);
+                        byId.set(itemId, {
+                            name,
+                            quantity: existing ? existing.quantity + quantity : quantity
+                        });
+                    }
+                }
+            }
+            const displayItems: MealPlannerOrderDisplayItem[] = Array.from(byId.entries()).map(
+                ([id, { name, quantity }]) => ({ id, name, quantity })
+            );
+            const dateStr = mealPlannerNormalizeDate(
+                row.scheduled_delivery_date as string | Date | null | undefined
+            );
+            list.push({
+                id: row.id,
+                scheduledDeliveryDate: dateStr,
+                deliveryDay: row.delivery_day ?? null,
+                status: row.status ?? 'draft',
+                totalItems: row.total_items ?? null,
+                items: displayItems
+            });
+        }
+        return list;
+    } catch (error) {
+        console.error('Error fetching meal planner orders:', error);
+        return [];
     }
 }
 
@@ -8950,6 +9047,92 @@ export async function getClientMealOrder(clientId: string): Promise<ClientMealOr
     };
 }
 
+/**
+ * Sync client meal selections from active_order to meal_planner_orders (one row per delivery date).
+ * Uses main vendor's delivery days to generate dates for the next 8 weeks.
+ */
+async function syncMealPlannerToOrders(
+    clientId: string,
+    mealSelections: ClientMealOrder['mealSelections']
+) {
+    if (!mealSelections || typeof mealSelections !== 'object') return;
+
+    const vendors = await getVendors();
+    const mainVendor = vendors.find((v) => v.isDefault === true) || vendors[0];
+    const deliveryDays = mainVendor
+        ? ('deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days) || []
+        : [];
+
+    if (deliveryDays.length === 0) return;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayNumbers = deliveryDays
+        .map((d: string) => DAY_NAME_TO_NUMBER[d])
+        .filter((n: number | undefined): n is number => n !== undefined);
+    if (dayNumbers.length === 0) return;
+
+    const deliveryDates: string[] = [];
+    for (let i = 0; i < 56; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() + i);
+        if (dayNumbers.includes(d.getDay())) {
+            deliveryDates.push(formatDateToYYYYMMDD(d));
+        }
+    }
+
+    const totalItems = Object.values(mealSelections).reduce((sum, meal) => {
+        if (!meal?.items || typeof meal.items !== 'object') return sum;
+        return sum + Object.values(meal.items).reduce((s, q) => s + (Number(q) || 0), 0);
+    }, 0);
+
+    const itemsJson = mealSelections;
+
+    const supabaseAdmin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const todayStr = formatDateToYYYYMMDD(today);
+    const { data: existing } = await supabaseAdmin
+        .from('meal_planner_orders')
+        .select('id')
+        .eq('client_id', clientId)
+        .in('status', ['draft', 'scheduled'])
+        .gte('scheduled_delivery_date', todayStr);
+
+    if (existing && existing.length > 0) {
+        for (const row of existing) {
+            await supabaseAdmin.from('meal_planner_orders').delete().eq('id', row.id);
+        }
+    }
+
+    if (totalItems === 0) return;
+
+    const dayNameFromDate = (dateStr: string) => {
+        const d = new Date(dateStr + 'T12:00:00');
+        const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return names[d.getDay()];
+    };
+
+    for (const dateStr of deliveryDates) {
+        const id = randomUUID();
+        await supabaseAdmin.from('meal_planner_orders').insert({
+            id,
+            client_id: clientId,
+            status: 'scheduled',
+            scheduled_delivery_date: dateStr,
+            delivery_day: dayNameFromDate(dateStr),
+            total_items: totalItems,
+            total_value: null,
+            items: itemsJson,
+            notes: null,
+            processed_order_id: null,
+            processed_at: null
+        });
+    }
+}
+
 export async function saveClientMealOrder(clientId: string, data: Partial<ClientMealOrder>) {
     const session = await getSession();
     const updatedBy = session?.userId || null;
@@ -9015,7 +9198,15 @@ export async function saveClientMealOrder(clientId: string, data: Partial<Client
     handleError(error);
     revalidatePath(`/client-portal/${clientId}`);
     revalidatePath(`/clients/${clientId}`);
-    
+
+    if (updated && activeOrder.mealSelections) {
+        try {
+            await syncMealPlannerToOrders(clientId, activeOrder.mealSelections);
+        } catch (syncErr) {
+            console.error('[saveClientMealOrder] syncMealPlannerToOrders failed:', syncErr);
+        }
+    }
+
     // Return in ClientMealOrder format
     return updated ? {
         id: updated.id,
