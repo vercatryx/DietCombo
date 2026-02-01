@@ -30,10 +30,11 @@ interface SortableMealPlannerRowProps {
     item: MealPlannerCustomItem;
     onUpdate: (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'sortOrder'>>) => void;
     onRemove: (id: string) => void;
+    disabled?: boolean;
 }
 
-function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlannerRowProps) {
-    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
+function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: SortableMealPlannerRowProps) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id, disabled });
     const style = {
         transform: CSS.Transform.toString(transform),
         transition,
@@ -46,6 +47,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlanne
                 {...listeners}
                 className={styles.mealPlannerDragHandle}
                 aria-label="Drag to reorder"
+                style={{ cursor: disabled ? 'not-allowed' : 'grab', opacity: disabled ? 0.5 : 1 }}
             >
                 <GripVertical size={16} />
             </div>
@@ -56,6 +58,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlanne
                 value={item.name}
                 onChange={(e) => onUpdate(item.id, { name: e.target.value })}
                 aria-label="Item name"
+                disabled={disabled}
             />
             <input
                 type="number"
@@ -70,6 +73,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlanne
                 min={1}
                 style={{ width: '60px', textAlign: 'center' }}
                 aria-label="Quantity"
+                disabled={disabled}
             />
             <input
                 type="number"
@@ -86,7 +90,9 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlanne
                 }}
                 style={{ width: '80px', textAlign: 'right' }}
                 aria-label="Price"
+                disabled={disabled}
             />
+            {!disabled && (
             <button
                 type="button"
                 className={styles.popupCustomItemRemove}
@@ -95,6 +101,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlanne
             >
                 <Trash2 size={16} />
             </button>
+            )}
         </div>
     );
 }
@@ -539,6 +546,16 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
     }
 
+    /** Check if a date is in the past (before today) */
+    function isDatePast(dateKey: string): boolean {
+        const [y, m, d] = dateKey.split('-').map(Number);
+        const selectedDate = new Date(y, m - 1, d);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        selectedDate.setHours(0, 0, 0, 0);
+        return selectedDate < today;
+    }
+
     /** Open meal planner dialog for a date. Loads existing records from DB for that date and auto-populates the dialog when they match. */
     async function openMealPlannerPopup(dateKey: string) {
         setMealPlannerPopupDate(dateKey);
@@ -868,18 +885,36 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                             </button>
                         </div>
                         <div className={styles.popupBody}>
-                            <p className={styles.popupDemoNote}>
-                                {mealPlannerDraftItems.length > 0
-                                    ? `${mealPlannerDraftItems.length} saved item(s) for this date. Edit below or add more.`
-                                    : 'Add custom items for this date. Drag rows to reorder.'}
-                            </p>
-                            {mealPlannerPopupLoading ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 'var(--spacing-lg)', color: 'var(--text-secondary)' }}>
-                                    <Loader2 className="animate-spin" size={18} />
-                                    Loading…
-                                </div>
-                            ) : (
-                                <>
+                            {(() => {
+                                const isPast = isDatePast(mealPlannerPopupDate);
+                                return (
+                                    <>
+                                        {isPast && (
+                                            <div style={{
+                                                padding: 'var(--spacing-sm) var(--spacing-md)',
+                                                marginBottom: 'var(--spacing-md)',
+                                                borderRadius: 'var(--radius-sm)',
+                                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                                color: 'var(--color-danger)',
+                                                fontSize: '0.9rem',
+                                                border: '1px solid rgba(239, 68, 68, 0.3)'
+                                            }}>
+                                                This date is in the past. You cannot add, update, or delete items for past dates.
+                                            </div>
+                                        )}
+                                        <p className={styles.popupDemoNote}>
+                                            {mealPlannerDraftItems.length > 0
+                                                ? `${mealPlannerDraftItems.length} saved item(s) for this date. ${isPast ? 'View only.' : 'Edit below or add more.'}`
+                                                : isPast ? 'No items for this date. View only.' : 'Add custom items for this date. Drag rows to reorder.'}
+                                        </p>
+                                        {mealPlannerPopupLoading ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 'var(--spacing-lg)', color: 'var(--text-secondary)' }}>
+                                                <Loader2 className="animate-spin" size={18} />
+                                                Loading…
+                                            </div>
+                                        ) : (
+                                            <>
+                            {!isPast && (
                             <button
                                 type="button"
                                 className={`btn btn-secondary ${styles.popupAddItemBtn}`}
@@ -889,6 +924,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                 <Plus size={16} />
                                 Add item
                             </button>
+                            )}
                             <div className={styles.popupItemsList}>
                                 {mealPlannerDraftItems.length > 0 && (
                                     <div className={styles.popupCustomItemHeader} aria-hidden>
@@ -896,12 +932,12 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                         <span className={styles.popupCustomItemName}>Name</span>
                                         <span style={{ width: '60px', textAlign: 'center' }}>Qty</span>
                                         <span style={{ width: '80px', textAlign: 'right' }}>Price</span>
-                                        <span style={{ width: '40px' }} />
+                                        {!isPast && <span style={{ width: '40px' }} />}
                                     </div>
                                 )}
                                 {mealPlannerDraftItems.length === 0 ? (
                                     <p className={styles.popupNoItems}>
-                                        No custom items yet. Click “Add item” to add one.
+                                        {isPast ? 'No custom items for this date.' : 'No custom items yet. Click "Add item" to add one.'}
                                     </p>
                                 ) : (
                                     <DndContext
@@ -919,6 +955,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                                     item={item}
                                                     onUpdate={handleUpdateMealPlannerDraftItem}
                                                     onRemove={handleRemoveMealPlannerDraftItem}
+                                                    disabled={isPast}
                                                 />
                                             ))}
                                         </SortableContext>
@@ -932,25 +969,30 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                     onClick={closeMealPlannerPopup}
                                     disabled={mealPlannerPopupSaving}
                                 >
-                                    Cancel
+                                    {isPast ? 'Close' : 'Cancel'}
                                 </button>
-                                <button
-                                    type="button"
-                                    className="btn btn-primary"
-                                    onClick={handleMealPlannerSave}
-                                    disabled={mealPlannerPopupSaving}
-                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                                >
-                                    {mealPlannerPopupSaving ? (
-                                        <Loader2 className="animate-spin" size={16} />
-                                    ) : (
-                                        <Save size={16} />
-                                    )}
-                                    {mealPlannerPopupSaving ? 'Saving…' : 'Save'}
-                                </button>
+                                {!isPast && (
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={handleMealPlannerSave}
+                                        disabled={mealPlannerPopupSaving}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                    >
+                                        {mealPlannerPopupSaving ? (
+                                            <Loader2 className="animate-spin" size={16} />
+                                        ) : (
+                                            <Save size={16} />
+                                        )}
+                                        {mealPlannerPopupSaving ? 'Saving…' : 'Save'}
+                                    </button>
+                                )}
                             </div>
                                 </>
                             )}
+                                    </>
+                                );
+                            })()}
                         </div>
                     </div>
                 </div>
