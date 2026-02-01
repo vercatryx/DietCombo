@@ -1,8 +1,11 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { CalendarDays, UtensilsCrossed, ChevronRight } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { CalendarDays, UtensilsCrossed, ChevronRight, Minus, Plus } from 'lucide-react';
 import styles from './SavedMealPlanMonth.module.css';
+
+const MIN_QUANTITY = 1;
+const MAX_QUANTITY = 99;
 
 /** Demo-only: mock meal plan for a given date. */
 function getMockMealPlanForDate(dateStr: string): { planName: string; items: { name: string; quantity: number }[] } {
@@ -57,9 +60,28 @@ export function SavedMealPlanMonth() {
   const futureDates = useMemo(() => getFutureDatesForMonth(), []);
   const firstDate = futureDates[0] ?? null;
   const [selectedDate, setSelectedDate] = useState<string | null>(firstDate);
+  /** Editable copy of items for the selected date (quantity can be changed). */
+  const [items, setItems] = useState<{ name: string; quantity: number }[]>([]);
 
   const mock = selectedDate ? getMockMealPlanForDate(selectedDate) : null;
   const hasDates = futureDates.length > 0;
+
+  // Sync editable items when selected date changes
+  useEffect(() => {
+    if (!selectedDate) {
+      setItems([]);
+      return;
+    }
+    const plan = getMockMealPlanForDate(selectedDate);
+    setItems(plan.items.map((i) => ({ name: i.name, quantity: i.quantity })));
+  }, [selectedDate]);
+
+  const setQuantity = (index: number, quantity: number) => {
+    const clamped = Math.max(MIN_QUANTITY, Math.min(MAX_QUANTITY, quantity));
+    setItems((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, quantity: clamped } : item))
+    );
+  };
 
   return (
     <div className={styles.wrapper}>
@@ -99,11 +121,42 @@ export function SavedMealPlanMonth() {
               </div>
               <div className={styles.planName}>{mock.planName}</div>
               <ul className={styles.itemsList}>
-                {mock.items.map((item, i) => (
+                {items.map((item, i) => (
                   <li key={i} className={styles.itemRow}>
                     <ChevronRight className={styles.itemBullet} size={18} />
                     <span className={styles.itemName}>{item.name}</span>
-                    <span className={styles.itemQty}>× {item.quantity}</span>
+                    <div className={styles.quantityControl}>
+                      <button
+                        type="button"
+                        className={styles.qtyBtn}
+                        onClick={() => setQuantity(i, item.quantity - 1)}
+                        disabled={item.quantity <= MIN_QUANTITY}
+                        aria-label={`Decrease quantity for ${item.name}`}
+                      >
+                        <Minus size={16} />
+                      </button>
+                      <input
+                        type="number"
+                        min={MIN_QUANTITY}
+                        max={MAX_QUANTITY}
+                        value={item.quantity}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          if (!Number.isNaN(v)) setQuantity(i, v);
+                        }}
+                        className={styles.qtyInput}
+                        aria-label={`Quantity for ${item.name}`}
+                      />
+                      <button
+                        type="button"
+                        className={styles.qtyBtn}
+                        onClick={() => setQuantity(i, item.quantity + 1)}
+                        disabled={item.quantity >= MAX_QUANTITY}
+                        aria-label={`Increase quantity for ${item.name}`}
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>

@@ -434,6 +434,45 @@
     flex-shrink: 0;
 }
 
+.popupAddItemBtn {
+    flex-shrink: 0;
+}
+
+.popupCustomItemRow {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.popupCustomItemRow:last-child {
+    border-bottom: none;
+}
+
+.popupCustomItemName {
+    flex: 1;
+    min-width: 0;
+}
+
+.popupCustomItemRemove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+}
+
+.popupCustomItemRemove:hover {
+    color: var(--color-danger, #dc2626);
+    background: rgba(220, 38, 38, 0.08);
+}
+
 .popupFooter {
     display: flex;
     justify-content: flex-end;

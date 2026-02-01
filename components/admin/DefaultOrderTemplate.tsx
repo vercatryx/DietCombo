@@ -3,11 +3,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate } from '@/lib/actions';
-import { Save, Loader2, Plus, Trash2, Package, CalendarDays, ChevronLeft, ChevronRight, X, Search, Check } from 'lucide-react';
+import { Save, Loader2, Plus, Trash2, Package, CalendarDays, ChevronLeft, ChevronRight, X, Check } from 'lucide-react';
 import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
 
 type FoodSubTab = 'template' | 'mealPlanner';
+
+type MealPlannerCustomItem = { id: string; name: string; quantity: number };
 
 interface Props {
     mainVendor: Vendor;
@@ -29,8 +31,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const [message, setMessage] = useState<string | null>(null);
     const [foodSubTab, setFoodSubTab] = useState<FoodSubTab>('template');
     const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
-    const [mealPlannerSearchQuery, setMealPlannerSearchQuery] = useState('');
-    const [mealPlannerDateQuantities, setMealPlannerDateQuantities] = useState<Record<string, Record<string, number>>>({});
+    const [mealPlannerDateCustomItems, setMealPlannerDateCustomItems] = useState<Record<string, MealPlannerCustomItem[]>>({});
+    const [mealPlannerDraftItems, setMealPlannerDraftItems] = useState<MealPlannerCustomItem[]>([]);
     const [mealPlannerSavedTemplatesDemo, setMealPlannerSavedTemplatesDemo] = useState<Record<string, number>>({});
     const [mealPlannerMonth, setMealPlannerMonth] = useState(() => {
         const d = new Date();
@@ -445,50 +447,52 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
     }
 
-    // Meal Planner popup: quantities for the selected date (demo only)
-    const mealPlannerQuantitiesForDate = mealPlannerPopupDate
-        ? (mealPlannerDateQuantities[mealPlannerPopupDate] || {})
-        : {};
-
-    function setMealPlannerQuantity(itemId: string, quantity: number) {
-        if (!mealPlannerPopupDate) return;
-        setMealPlannerDateQuantities(prev => ({
-            ...prev,
-            [mealPlannerPopupDate]: {
-                ...(prev[mealPlannerPopupDate] || {}),
-                [itemId]: Math.max(0, quantity)
-            }
-        }));
+    function openMealPlannerPopup(dateKey: string) {
+        setMealPlannerPopupDate(dateKey);
+        setMealPlannerDraftItems([...(mealPlannerDateCustomItems[dateKey] ?? []).map(i => ({ ...i }))]);
     }
 
-    const mealPlannerFilteredItems = useMemo(() => {
-        if (!mealPlannerSearchQuery.trim()) return menuItems;
-        const q = mealPlannerSearchQuery.toLowerCase().trim();
-        return menuItems.filter(item =>
-            item.name.toLowerCase().includes(q) ||
-            (item.value != null && String(item.value).toLowerCase().includes(q))
+    function addMealPlannerDraftItem() {
+        setMealPlannerDraftItems(prev => [
+            ...prev,
+            { id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`, name: '', quantity: 1 }
+        ]);
+    }
+
+    function updateMealPlannerDraftItem(id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity'>>) {
+        setMealPlannerDraftItems(prev =>
+            prev.map(item => (item.id !== id ? item : { ...item, ...patch }))
         );
-    }, [menuItems, mealPlannerSearchQuery]);
+    }
+
+    function removeMealPlannerDraftItem(id: string) {
+        setMealPlannerDraftItems(prev => prev.filter(item => item.id !== id));
+    }
 
     function handleMealPlannerSave() {
         if (!mealPlannerPopupDate) return;
-        const qtyMap = mealPlannerDateQuantities[mealPlannerPopupDate] || {};
-        const itemCount = Object.values(qtyMap).filter((q) => q > 0).length;
-        setMealPlannerSavedTemplatesDemo((prev) => {
+        const valid = mealPlannerDraftItems.filter(
+            i => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
+        );
+        setMealPlannerDateCustomItems(prev => ({
+            ...prev,
+            [mealPlannerPopupDate]: valid.map(i => ({ ...i }))
+        }));
+        setMealPlannerSavedTemplatesDemo(prev => {
             const next = { ...prev };
-            if (itemCount > 0) next[mealPlannerPopupDate] = itemCount;
+            if (valid.length > 0) next[mealPlannerPopupDate] = valid.length;
             else delete next[mealPlannerPopupDate];
             return next;
         });
         setMessage(`Template for ${mealPlannerPopupDate} saved (demo — no backend).`);
         setTimeout(() => setMessage(null), 3000);
         setMealPlannerPopupDate(null);
-        setMealPlannerSearchQuery('');
+        setMealPlannerDraftItems([]);
     }
 
     function closeMealPlannerPopup() {
         setMealPlannerPopupDate(null);
-        setMealPlannerSearchQuery('');
+        setMealPlannerDraftItems([]);
     }
 
     if (loading) {
@@ -655,10 +659,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                             date && hasPlan && styles.calendarDayHasPlan,
                                             date && isToday(date) && styles.calendarDayToday,
                                         ].filter(Boolean).join(' ')}
-                                        onClick={date ? () => setMealPlannerPopupDate(formatDateKey(date)) : undefined}
+                                        onClick={date ? () => openMealPlannerPopup(formatDateKey(date)) : undefined}
                                         role={date ? 'button' : undefined}
                                         tabIndex={date ? 0 : undefined}
-                                        onKeyDown={date ? (e) => { if (e.key === 'Enter' || e.key === ' ') setMealPlannerPopupDate(formatDateKey(date)); } : undefined}
+                                        onKeyDown={date ? (e) => { if (e.key === 'Enter' || e.key === ' ') openMealPlannerPopup(formatDateKey(date)); } : undefined}
                                         title={date && hasPlan ? `Meal plan saved · ${indicator} item${indicator !== 1 ? 's' : ''}` : undefined}
                                     >
                                         {date && (
@@ -695,7 +699,12 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     <div className={styles.popupContent} onClick={(e) => e.stopPropagation()}>
                         <div className={styles.popupHeader}>
                             <h3 id="meal-planner-popup-title" className={styles.popupTitle}>
-                                Default order template for {mealPlannerPopupDate}
+                                Meal planner default template
+                                {' — '}
+                                {(() => {
+                                    const [y, m, d] = mealPlannerPopupDate.split('-').map(Number);
+                                    return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                                })()}
                             </h3>
                             <button
                                 type="button"
@@ -708,70 +717,53 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         </div>
                         <div className={styles.popupBody}>
                             <p className={styles.popupDemoNote}>
-                                Demo — no data is saved. Set quantities and click Save to see the flow.
+                                Add custom items for this template. Each item has a name and quantity.
                             </p>
-                            <div className={styles.popupSearchWrap}>
-                                <Search size={18} className={styles.popupSearchIcon} aria-hidden />
-                                <input
-                                    type="search"
-                                    className={`input ${styles.popupSearchInput}`}
-                                    placeholder="Search menu items..."
-                                    value={mealPlannerSearchQuery}
-                                    onChange={(e) => setMealPlannerSearchQuery(e.target.value)}
-                                    aria-label="Search menu items"
-                                />
-                            </div>
+                            <button
+                                type="button"
+                                className={`btn btn-secondary ${styles.popupAddItemBtn}`}
+                                onClick={addMealPlannerDraftItem}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 'var(--spacing-md)' }}
+                            >
+                                <Plus size={16} />
+                                Add item
+                            </button>
                             <div className={styles.popupItemsList}>
-                                {mealPlannerFilteredItems.length === 0 ? (
+                                {mealPlannerDraftItems.length === 0 ? (
                                     <p className={styles.popupNoItems}>
-                                        {mealPlannerSearchQuery.trim()
-                                            ? 'No menu items match your search.'
-                                            : 'No menu items available.'}
+                                        No custom items yet. Click “Add item” to add one.
                                     </p>
                                 ) : (
-                                    mealPlannerFilteredItems.map((item) => {
-                                        const qty = mealPlannerQuantitiesForDate[item.id] ?? 0;
-                                        return (
-                                            <div key={item.id} className={styles.popupItemRow}>
-                                                <div className={styles.popupItemInfo}>
-                                                    <span className={styles.popupItemName}>{item.name}</span>
-                                                    <span className={styles.popupItemMeta}>
-                                                        Value: {item.value} · ${item.priceEach ?? 0} each
-                                                    </span>
-                                                </div>
-                                                <div className={styles.popupItemQty}>
-                                                    <button
-                                                        type="button"
-                                                        className="btn btn-secondary"
-                                                        onClick={() => setMealPlannerQuantity(item.id, qty - 1)}
-                                                        disabled={qty <= 0}
-                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
-                                                        aria-label={`Decrease ${item.name}`}
-                                                    >
-                                                        −
-                                                    </button>
-                                                    <input
-                                                        type="number"
-                                                        className="input"
-                                                        value={qty}
-                                                        onChange={(e) => setMealPlannerQuantity(item.id, parseInt(e.target.value, 10) || 0)}
-                                                        min={0}
-                                                        style={{ width: '64px', textAlign: 'center' }}
-                                                        aria-label={`Quantity for ${item.name}`}
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        className="btn btn-secondary"
-                                                        onClick={() => setMealPlannerQuantity(item.id, qty + 1)}
-                                                        style={{ minWidth: '32px', padding: '4px 8px' }}
-                                                        aria-label={`Increase ${item.name}`}
-                                                    >
-                                                        +
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })
+                                    mealPlannerDraftItems.map((item) => (
+                                        <div key={item.id} className={styles.popupCustomItemRow}>
+                                            <input
+                                                type="text"
+                                                className={`input ${styles.popupCustomItemName}`}
+                                                placeholder="Item name"
+                                                value={item.name}
+                                                onChange={(e) => updateMealPlannerDraftItem(item.id, { name: e.target.value })}
+                                                aria-label="Item name"
+                                            />
+                                            <input
+                                                type="number"
+                                                className="input"
+                                                placeholder="Qty"
+                                                value={item.quantity}
+                                                onChange={(e) => updateMealPlannerDraftItem(item.id, { quantity: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                                                min={0}
+                                                style={{ width: '72px', textAlign: 'center' }}
+                                                aria-label="Quantity"
+                                            />
+                                            <button
+                                                type="button"
+                                                className={styles.popupCustomItemRemove}
+                                                onClick={() => removeMealPlannerDraftItem(item.id)}
+                                                aria-label={`Remove ${item.name || 'item'}`}
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
+                                    ))
                                 )}
                             </div>
                             <div className={styles.popupFooter}>
