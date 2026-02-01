@@ -1,15 +1,103 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
-import { getDefaultOrderTemplate, saveDefaultOrderTemplate } from '@/lib/actions';
-import { Save, Loader2, Plus, Trash2, Package, CalendarDays, ChevronLeft, ChevronRight, X, Check } from 'lucide-react';
+import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate } from '@/lib/actions';
+import { Save, Loader2, Plus, Trash2, Package, CalendarDays, ChevronLeft, ChevronRight, X, Check, GripVertical } from 'lucide-react';
+import {
+    DndContext,
+    closestCenter,
+    PointerSensor,
+    useSensor,
+    useSensors,
+    DragEndEvent
+} from '@dnd-kit/core';
+import {
+    arrayMove,
+    SortableContext,
+    verticalListSortingStrategy,
+    useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
 
 type FoodSubTab = 'template' | 'mealPlanner';
 
-type MealPlannerCustomItem = { id: string; name: string; quantity: number };
+type MealPlannerCustomItem = { id: string; name: string; quantity: number; price?: number | null; sortOrder?: number };
+
+interface SortableMealPlannerRowProps {
+    item: MealPlannerCustomItem;
+    onUpdate: (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'sortOrder'>>) => void;
+    onRemove: (id: string) => void;
+}
+
+function SortableMealPlannerRow({ item, onUpdate, onRemove }: SortableMealPlannerRowProps) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.6 : 1,
+    };
+    return (
+        <div ref={setNodeRef} className={styles.popupCustomItemRow} style={style}>
+            <div
+                {...attributes}
+                {...listeners}
+                className={styles.mealPlannerDragHandle}
+                aria-label="Drag to reorder"
+            >
+                <GripVertical size={16} />
+            </div>
+            <input
+                type="text"
+                className={`input ${styles.popupCustomItemName}`}
+                placeholder="Item name"
+                value={item.name}
+                onChange={(e) => onUpdate(item.id, { name: e.target.value })}
+                aria-label="Item name"
+            />
+            <input
+                type="number"
+                className="input"
+                placeholder="Qty"
+                value={item.quantity}
+                onChange={(e) =>
+                    onUpdate(item.id, {
+                        quantity: Math.max(1, parseInt(e.target.value, 10) || 1)
+                    })
+                }
+                min={1}
+                style={{ width: '60px', textAlign: 'center' }}
+                aria-label="Quantity"
+            />
+            <input
+                type="number"
+                className="input"
+                placeholder="Price"
+                step="0.01"
+                min="0"
+                value={item.price ?? ''}
+                onChange={(e) => {
+                    const v = e.target.value;
+                    onUpdate(item.id, {
+                        price: v === '' ? null : parseFloat(v) || 0
+                    });
+                }}
+                style={{ width: '80px', textAlign: 'right' }}
+                aria-label="Price"
+            />
+            <button
+                type="button"
+                className={styles.popupCustomItemRemove}
+                onClick={() => onRemove(item.id)}
+                aria-label={`Remove ${item.name || 'item'}`}
+            >
+                <Trash2 size={16} />
+            </button>
+        </div>
+    );
+}
 
 interface Props {
     mainVendor: Vendor;
@@ -31,13 +119,20 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const [message, setMessage] = useState<string | null>(null);
     const [foodSubTab, setFoodSubTab] = useState<FoodSubTab>('template');
     const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
-    const [mealPlannerDateCustomItems, setMealPlannerDateCustomItems] = useState<Record<string, MealPlannerCustomItem[]>>({});
     const [mealPlannerDraftItems, setMealPlannerDraftItems] = useState<MealPlannerCustomItem[]>([]);
-    const [mealPlannerSavedTemplatesDemo, setMealPlannerSavedTemplatesDemo] = useState<Record<string, number>>({});
+    const [mealPlannerPopupLoading, setMealPlannerPopupLoading] = useState(false);
+    const [mealPlannerPopupSaving, setMealPlannerPopupSaving] = useState(false);
+    const [mealPlannerItemCounts, setMealPlannerItemCounts] = useState<Record<string, number>>({});
     const [mealPlannerMonth, setMealPlannerMonth] = useState(() => {
         const d = new Date();
         return new Date(d.getFullYear(), d.getMonth(), 1);
     });
+
+    const mealPlannerSensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: { distance: 8 },
+        })
+    );
 
     useEffect(() => {
         async function loadData() {
@@ -416,23 +511,20 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const mealPlannerMonthYear = mealPlannerMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-    // Demo: sample indicators (dates with "saved" template + item count) — no backend
-    const mealPlannerSampleIndicators = useMemo(() => {
-        const y = mealPlannerMonth.getFullYear();
-        const m = mealPlannerMonth.getMonth();
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const key = (d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
-        return {
-            [key(5)]: 4,
-            [key(12)]: 6,
-            [key(19)]: 3,
-        } as Record<string, number>;
-    }, [mealPlannerMonth]);
+    // Load meal planner item counts for the current month (for calendar indicators)
+    useEffect(() => {
+        if (foodSubTab !== 'mealPlanner') return;
+        const year = mealPlannerMonth.getFullYear();
+        const month = mealPlannerMonth.getMonth();
+        const startDate = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const endDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        getMealPlannerItemCountsByDate(startDate, endDate, null).then(setMealPlannerItemCounts);
+    }, [mealPlannerMonth, foodSubTab]);
 
     function getIndicatorForDate(d: Date): number | null {
         const k = formatDateKey(d);
-        if (mealPlannerSavedTemplatesDemo[k] != null) return mealPlannerSavedTemplatesDemo[k];
-        return mealPlannerSampleIndicators[k] ?? null;
+        return mealPlannerItemCounts[k] ?? null;
     }
 
     function formatDateKey(d: Date): string {
@@ -447,53 +539,113 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
     }
 
-    function openMealPlannerPopup(dateKey: string) {
+    /** Open meal planner dialog for a date. Loads existing records from DB for that date and auto-populates the dialog when they match. */
+    async function openMealPlannerPopup(dateKey: string) {
         setMealPlannerPopupDate(dateKey);
-        setMealPlannerDraftItems([...(mealPlannerDateCustomItems[dateKey] ?? []).map(i => ({ ...i }))]);
+        setMealPlannerPopupLoading(true);
+        setMealPlannerDraftItems([]);
+        try {
+            const items = await getMealPlannerCustomItems(dateKey, null);
+            setMealPlannerDraftItems(
+                items.map((i) => ({
+                    id: i.id,
+                    name: i.name,
+                    quantity: i.quantity,
+                    price: i.price ?? null,
+                    sortOrder: i.sortOrder ?? 0
+                }))
+            );
+        } catch (e) {
+            setMessage('Error loading meal planner items.');
+            setTimeout(() => setMessage(null), 3000);
+        } finally {
+            setMealPlannerPopupLoading(false);
+        }
     }
 
     function addMealPlannerDraftItem() {
-        setMealPlannerDraftItems(prev => [
+        const maxSort = mealPlannerDraftItems.reduce((m, i) => Math.max(m, i.sortOrder ?? 0), -1);
+        setMealPlannerDraftItems((prev) => [
             ...prev,
-            { id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`, name: '', quantity: 1 }
+            {
+                id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                name: '',
+                quantity: 1,
+                price: null,
+                sortOrder: maxSort + 1
+            }
         ]);
     }
 
-    function updateMealPlannerDraftItem(id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity'>>) {
-        setMealPlannerDraftItems(prev =>
-            prev.map(item => (item.id !== id ? item : { ...item, ...patch }))
-        );
-    }
-
-    function removeMealPlannerDraftItem(id: string) {
-        setMealPlannerDraftItems(prev => prev.filter(item => item.id !== id));
-    }
-
-    function handleMealPlannerSave() {
+    async function handleMealPlannerSave() {
         if (!mealPlannerPopupDate) return;
         const valid = mealPlannerDraftItems.filter(
-            i => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
+            (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
         );
-        setMealPlannerDateCustomItems(prev => ({
-            ...prev,
-            [mealPlannerPopupDate]: valid.map(i => ({ ...i }))
-        }));
-        setMealPlannerSavedTemplatesDemo(prev => {
-            const next = { ...prev };
-            if (valid.length > 0) next[mealPlannerPopupDate] = valid.length;
-            else delete next[mealPlannerPopupDate];
-            return next;
-        });
-        setMessage(`Template for ${mealPlannerPopupDate} saved (demo — no backend).`);
-        setTimeout(() => setMessage(null), 3000);
-        setMealPlannerPopupDate(null);
-        setMealPlannerDraftItems([]);
+        setMealPlannerPopupSaving(true);
+        try {
+            await saveMealPlannerCustomItems(
+                mealPlannerPopupDate,
+                valid.map((i) => ({
+                    id: i.id,
+                    name: i.name,
+                    quantity: i.quantity,
+                    price: i.price ?? null,
+                    sortOrder: i.sortOrder ?? 0
+                })),
+                null
+            );
+            setMealPlannerItemCounts((prev) => {
+                const next = { ...prev };
+                if (valid.length > 0) next[mealPlannerPopupDate] = valid.length;
+                else delete next[mealPlannerPopupDate];
+                return next;
+            });
+            setMessage(`Custom items for ${mealPlannerPopupDate} saved.`);
+            setTimeout(() => setMessage(null), 3000);
+            setMealPlannerPopupDate(null);
+            setMealPlannerDraftItems([]);
+        } catch (e) {
+            setMessage('Error saving meal planner items.');
+            setTimeout(() => setMessage(null), 3000);
+        } finally {
+            setMealPlannerPopupSaving(false);
+        }
     }
 
     function closeMealPlannerPopup() {
         setMealPlannerPopupDate(null);
         setMealPlannerDraftItems([]);
     }
+
+    function handleMealPlannerDragEnd(event: DragEndEvent) {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+        const ordered = [...mealPlannerDraftItems].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+        const oldIndex = ordered.findIndex((i) => i.id === active.id);
+        const newIndex = ordered.findIndex((i) => i.id === over.id);
+        if (oldIndex === -1 || newIndex === -1) return;
+        const reordered = arrayMove(ordered, oldIndex, newIndex);
+        setMealPlannerDraftItems(reordered.map((item, index) => ({ ...item, sortOrder: index })));
+    }
+
+    const mealPlannerOrderedItems = useMemo(
+        () => [...mealPlannerDraftItems].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+        [mealPlannerDraftItems]
+    );
+
+    const handleUpdateMealPlannerDraftItem = useCallback(
+        (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'sortOrder'>>) => {
+            setMealPlannerDraftItems((prev) =>
+                prev.map((item) => (item.id !== id ? item : { ...item, ...patch }))
+            );
+        },
+        []
+    );
+
+    const handleRemoveMealPlannerDraftItem = useCallback((id: string) => {
+        setMealPlannerDraftItems((prev) => prev.filter((item) => item.id !== id));
+    }, []);
 
     if (loading) {
         return (
@@ -620,7 +772,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 <div className={styles.formCard}>
                     <h3 className={styles.sectionTitle}>Meal Planner</h3>
                     <p className={styles.description}>
-                        Click a date to set the default food order template for that day. (Demo — no data is saved.)
+                        Click a date to add or edit custom meal items for that day. Items are saved to the database.
                     </p>
                     <div className={styles.mealPlannerCalendar}>
                         <div className={styles.calendarHeader}>
@@ -696,7 +848,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
 
             {mealPlannerPopupDate && (
                 <div className={styles.popupOverlay} onClick={closeMealPlannerPopup} role="dialog" aria-modal="true" aria-labelledby="meal-planner-popup-title">
-                    <div className={styles.popupContent} onClick={(e) => e.stopPropagation()}>
+                    <div className={`${styles.popupContent} ${styles.popupContentMealPlanner}`} onClick={(e) => e.stopPropagation()}>
                         <div className={styles.popupHeader}>
                             <h3 id="meal-planner-popup-title" className={styles.popupTitle}>
                                 Meal planner default template
@@ -717,8 +869,17 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         </div>
                         <div className={styles.popupBody}>
                             <p className={styles.popupDemoNote}>
-                                Add custom items for this template. Each item has a name and quantity.
+                                {mealPlannerDraftItems.length > 0
+                                    ? `${mealPlannerDraftItems.length} saved item(s) for this date. Edit below or add more.`
+                                    : 'Add custom items for this date. Drag rows to reorder.'}
                             </p>
+                            {mealPlannerPopupLoading ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 'var(--spacing-lg)', color: 'var(--text-secondary)' }}>
+                                    <Loader2 className="animate-spin" size={18} />
+                                    Loading…
+                                </div>
+                            ) : (
+                                <>
                             <button
                                 type="button"
                                 className={`btn btn-secondary ${styles.popupAddItemBtn}`}
@@ -729,41 +890,39 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                 Add item
                             </button>
                             <div className={styles.popupItemsList}>
+                                {mealPlannerDraftItems.length > 0 && (
+                                    <div className={styles.popupCustomItemHeader} aria-hidden>
+                                        <span className={styles.mealPlannerDragHandleHeader} />
+                                        <span className={styles.popupCustomItemName}>Name</span>
+                                        <span style={{ width: '60px', textAlign: 'center' }}>Qty</span>
+                                        <span style={{ width: '80px', textAlign: 'right' }}>Price</span>
+                                        <span style={{ width: '40px' }} />
+                                    </div>
+                                )}
                                 {mealPlannerDraftItems.length === 0 ? (
                                     <p className={styles.popupNoItems}>
                                         No custom items yet. Click “Add item” to add one.
                                     </p>
                                 ) : (
-                                    mealPlannerDraftItems.map((item) => (
-                                        <div key={item.id} className={styles.popupCustomItemRow}>
-                                            <input
-                                                type="text"
-                                                className={`input ${styles.popupCustomItemName}`}
-                                                placeholder="Item name"
-                                                value={item.name}
-                                                onChange={(e) => updateMealPlannerDraftItem(item.id, { name: e.target.value })}
-                                                aria-label="Item name"
-                                            />
-                                            <input
-                                                type="number"
-                                                className="input"
-                                                placeholder="Qty"
-                                                value={item.quantity}
-                                                onChange={(e) => updateMealPlannerDraftItem(item.id, { quantity: Math.max(0, parseInt(e.target.value, 10) || 0) })}
-                                                min={0}
-                                                style={{ width: '72px', textAlign: 'center' }}
-                                                aria-label="Quantity"
-                                            />
-                                            <button
-                                                type="button"
-                                                className={styles.popupCustomItemRemove}
-                                                onClick={() => removeMealPlannerDraftItem(item.id)}
-                                                aria-label={`Remove ${item.name || 'item'}`}
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
-                                        </div>
-                                    ))
+                                    <DndContext
+                                        sensors={mealPlannerSensors}
+                                        collisionDetection={closestCenter}
+                                        onDragEnd={handleMealPlannerDragEnd}
+                                    >
+                                        <SortableContext
+                                            items={mealPlannerOrderedItems.map((i) => i.id)}
+                                            strategy={verticalListSortingStrategy}
+                                        >
+                                            {mealPlannerOrderedItems.map((item) => (
+                                                <SortableMealPlannerRow
+                                                    key={item.id}
+                                                    item={item}
+                                                    onUpdate={handleUpdateMealPlannerDraftItem}
+                                                    onRemove={handleRemoveMealPlannerDraftItem}
+                                                />
+                                            ))}
+                                        </SortableContext>
+                                    </DndContext>
                                 )}
                             </div>
                             <div className={styles.popupFooter}>
@@ -771,6 +930,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                     type="button"
                                     className="btn btn-secondary"
                                     onClick={closeMealPlannerPopup}
+                                    disabled={mealPlannerPopupSaving}
                                 >
                                     Cancel
                                 </button>
@@ -778,12 +938,19 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                     type="button"
                                     className="btn btn-primary"
                                     onClick={handleMealPlannerSave}
+                                    disabled={mealPlannerPopupSaving}
                                     style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                                 >
-                                    <Save size={16} />
-                                    Save template
+                                    {mealPlannerPopupSaving ? (
+                                        <Loader2 className="animate-spin" size={16} />
+                                    ) : (
+                                        <Save size={16} />
+                                    )}
+                                    {mealPlannerPopupSaving ? 'Saving…' : 'Save'}
                                 </button>
                             </div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

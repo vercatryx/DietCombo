@@ -319,6 +319,24 @@
     max-width: 90vw;
 }
 
+.popupContentMealPlanner {
+    width: min(600px, 92vw);
+    min-width: 420px;
+}
+
+.popupCustomItemHeader {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-surface-hover, rgba(0,0,0,0.03));
+}
+
 .popupHeader {
     display: flex;
     align-items: center;
@@ -438,6 +456,29 @@
     flex-shrink: 0;
 }
 
+.mealPlannerDragHandle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    flex-shrink: 0;
+    cursor: grab;
+    color: var(--text-secondary);
+    padding: 4px;
+    border-radius: var(--radius-sm);
+}
+.mealPlannerDragHandle:active {
+    cursor: grabbing;
+}
+.mealPlannerDragHandle:hover {
+    color: var(--text-primary);
+    background: var(--bg-surface-hover, rgba(0, 0, 0, 0.04));
+}
+.mealPlannerDragHandleHeader {
+    display: inline-block;
+    width: 32px;
+    flex-shrink: 0;
+}
 .popupCustomItemRow {
     display: flex;
     align-items: center;

@@ -1122,6 +1122,183 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
     }
 }
 
+// --- MEAL PLANNER CUSTOM ITEMS ACTIONS ---
+
+/** Normalize date string to YYYY-MM-DD for reliable DB matching. */
+function mealPlannerDateOnly(dateStr: string): string {
+    if (typeof dateStr !== 'string' || !dateStr) return dateStr;
+    const trimmed = dateStr.trim();
+    if (trimmed.length >= 10) return trimmed.slice(0, 10);
+    return trimmed;
+}
+
+export type MealPlannerCustomItemInput = {
+    id?: string;
+    name: string;
+    quantity: number;
+    price?: number | null;
+    sortOrder?: number | null;
+};
+
+export type MealPlannerCustomItemResult = {
+    id: string;
+    name: string;
+    quantity: number;
+    price: number | null;
+    sortOrder: number;
+};
+
+/**
+ * Fetch meal planner custom items for a given calendar date.
+ * @param calendarDate - ISO date string (YYYY-MM-DD)
+ * @param clientId - Optional client ID; null/undefined = default template (admin)
+ */
+export async function getMealPlannerCustomItems(
+    calendarDate: string,
+    clientId?: string | null
+): Promise<MealPlannerCustomItemResult[]> {
+    try {
+        const dateOnly = mealPlannerDateOnly(calendarDate);
+        let query = supabase
+            .from('meal_planner_custom_items')
+            .select('id, name, quantity, price, sort_order')
+            .eq('calendar_date', dateOnly)
+            .order('sort_order', { ascending: true });
+
+        if (clientId != null && clientId !== '') {
+            query = query.eq('client_id', clientId);
+        } else {
+            query = query.is('client_id', null);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            logQueryError(error, 'meal_planner_custom_items', 'select');
+            return [];
+        }
+        return (data || []).map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            quantity: row.quantity ?? 1,
+            price: row.price != null ? Number(row.price) : null,
+            sortOrder: row.sort_order ?? 0
+        }));
+    } catch (error) {
+        console.error('Error fetching meal planner custom items:', error);
+        return [];
+    }
+}
+
+/**
+ * Get item counts per date for a date range (for calendar indicators).
+ * @param startDate - ISO date string (YYYY-MM-DD)
+ * @param endDate - ISO date string (YYYY-MM-DD)
+ * @param clientId - Optional; null = default template
+ */
+export async function getMealPlannerItemCountsByDate(
+    startDate: string,
+    endDate: string,
+    clientId?: string | null
+): Promise<Record<string, number>> {
+    try {
+        const start = mealPlannerDateOnly(startDate);
+        const end = mealPlannerDateOnly(endDate);
+        let query = supabase
+            .from('meal_planner_custom_items')
+            .select('calendar_date')
+            .gte('calendar_date', start)
+            .lte('calendar_date', end);
+
+        if (clientId != null && clientId !== '') {
+            query = query.eq('client_id', clientId);
+        } else {
+            query = query.is('client_id', null);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            logQueryError(error, 'meal_planner_custom_items', 'select');
+            return {};
+        }
+        const counts: Record<string, number> = {};
+        for (const row of data || []) {
+            const d = row.calendar_date;
+            if (d != null) {
+                const key = typeof d === 'string' ? mealPlannerDateOnly(d) : String(d).slice(0, 10);
+                counts[key] = (counts[key] ?? 0) + 1;
+            }
+        }
+        return counts;
+    } catch (error) {
+        console.error('Error fetching meal planner item counts:', error);
+        return {};
+    }
+}
+
+/**
+ * Save meal planner custom items for a given date.
+ * Replaces all existing items for that date with the provided list.
+ * @param calendarDate - ISO date string (YYYY-MM-DD)
+ * @param items - Array of items to save
+ * @param clientId - Optional; null = default template (admin)
+ */
+export async function saveMealPlannerCustomItems(
+    calendarDate: string,
+    items: MealPlannerCustomItemInput[],
+    clientId?: string | null
+): Promise<void> {
+    try {
+        const validItems = items.filter(
+            (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
+        );
+        const clientIdVal = clientId && clientId !== '' ? clientId : null;
+        const dateOnly = mealPlannerDateOnly(calendarDate);
+
+        // Delete existing items for this date
+        let deleteQuery = supabase
+            .from('meal_planner_custom_items')
+            .delete()
+            .eq('calendar_date', dateOnly);
+        if (clientIdVal) {
+            deleteQuery = deleteQuery.eq('client_id', clientIdVal);
+        } else {
+            deleteQuery = deleteQuery.is('client_id', null);
+        }
+        const { error: deleteError } = await deleteQuery;
+        if (deleteError) {
+            logQueryError(deleteError, 'meal_planner_custom_items', 'delete');
+            throw new Error(deleteError.message);
+        }
+
+        if (validItems.length === 0) {
+            revalidatePath('/admin');
+            return;
+        }
+
+        const rows = validItems.map((item, idx) => ({
+            id: item.id && item.id.startsWith('custom-') ? randomUUID() : (item.id ?? randomUUID()),
+            client_id: clientIdVal,
+            calendar_date: dateOnly,
+            name: (item.name ?? '').trim(),
+            quantity: Math.max(1, item.quantity ?? 1),
+            price: item.price != null && item.price !== '' && !Number.isNaN(Number(item.price)) ? Number(item.price) : null,
+            sort_order: item.sortOrder ?? idx
+        }));
+
+        const { error: insertError } = await supabase
+            .from('meal_planner_custom_items')
+            .insert(rows);
+        if (insertError) {
+            logQueryError(insertError, 'meal_planner_custom_items', 'insert');
+            throw new Error(insertError.message);
+        }
+        revalidatePath('/admin');
+    } catch (error) {
+        console.error('Error saving meal planner custom items:', error);
+        throw error;
+    }
+}
+
 // --- NAVIGATOR ACTIONS ---
 
 export async function getNavigators() {
