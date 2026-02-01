@@ -1,46 +1,26 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { CalendarDays, UtensilsCrossed, ChevronRight, Minus, Plus } from 'lucide-react';
+import { CalendarDays, UtensilsCrossed } from 'lucide-react';
+import { getMealPlannerOrders, type MealPlannerOrderResult } from '@/lib/actions';
 import styles from './SavedMealPlanMonth.module.css';
 
-const MIN_QUANTITY = 1;
-const MAX_QUANTITY = 99;
-
-/** Demo-only: mock meal plan for a given date. */
-function getMockMealPlanForDate(dateStr: string): { planName: string; items: { name: string; quantity: number }[] } {
-  const d = new Date(dateStr);
-  const day = d.getDate();
-  const plans = [
-    { planName: 'Standard Weekly Plan A', items: [{ name: 'Grilled Chicken Bowl', quantity: 2 }, { name: 'Vegetable Medley', quantity: 1 }, { name: 'Fresh Fruit Cup', quantity: 1 }] },
-    { planName: 'Standard Weekly Plan B', items: [{ name: 'Turkey Wrap', quantity: 2 }, { name: 'Side Salad', quantity: 1 }, { name: 'Apple', quantity: 2 }] },
-    { planName: 'Light Options Plan', items: [{ name: 'Greek Salad', quantity: 2 }, { name: 'Hummus & Crackers', quantity: 1 }, { name: 'Yogurt Parfait', quantity: 1 }] },
-    { planName: 'Heartier Meals Plan', items: [{ name: 'Beef Stroganoff', quantity: 2 }, { name: 'Mashed Potatoes', quantity: 1 }, { name: 'Green Beans', quantity: 1 }] },
-  ];
-  const idx = day % plans.length;
-  return plans[idx];
-}
-
-/** Future dates for the current month (from today through end of month). */
-function getFutureDatesForMonth(): string[] {
-  const out: string[] = [];
+/** Date range: start of current month through end of next month. */
+function getDateRange(): { start: string; end: string } {
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0); // last day of current month
-
-  const cur = new Date(today);
-  while (cur <= end) {
-    const y = cur.getFullYear();
-    const m = String(cur.getMonth() + 1).padStart(2, '0');
-    const d = String(cur.getDate()).padStart(2, '0');
-    out.push(`${y}-${m}-${d}`);
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const start = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const endLast = new Date(y, m + 2, 0);
+  const end = `${endLast.getFullYear()}-${String(endLast.getMonth() + 1).padStart(2, '0')}-${String(endLast.getDate()).padStart(2, '0')}`;
+  return { start, end };
 }
 
 function formatDateLabel(iso: string): string {
-  const d = new Date(iso + 'T12:00:00');
+  if (!iso || typeof iso !== 'string') return iso || '—';
+  const normalized = iso.trim().slice(0, 10);
+  const d = new Date(normalized + 'T12:00:00');
+  if (Number.isNaN(d.getTime())) return normalized || '—';
   const month = d.toLocaleDateString('en-US', { month: 'short' });
   const day = d.getDate();
   const weekday = d.toLocaleDateString('en-US', { weekday: 'short' });
@@ -56,32 +36,48 @@ function isToday(iso: string): boolean {
   return yy === y && mm === m + 1 && dd === d;
 }
 
-export function SavedMealPlanMonth() {
-  const futureDates = useMemo(() => getFutureDatesForMonth(), []);
-  const firstDate = futureDates[0] ?? null;
-  const [selectedDate, setSelectedDate] = useState<string | null>(firstDate);
-  /** Editable copy of items for the selected date (quantity can be changed). */
-  const [items, setItems] = useState<{ name: string; quantity: number }[]>([]);
+export interface SavedMealPlanMonthProps {
+  /** Current client ID; when null or 'new', no data is loaded. */
+  clientId: string | null;
+}
 
-  const mock = selectedDate ? getMockMealPlanForDate(selectedDate) : null;
-  const hasDates = futureDates.length > 0;
+export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
+  const dateRange = useMemo(() => getDateRange(), []);
+  const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
+  const [loadingDates, setLoadingDates] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  // Sync editable items when selected date changes
+  const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
+
+  // Load meal planner orders (saved from client meal selections) for this client
   useEffect(() => {
-    if (!selectedDate) {
-      setItems([]);
+    if (!effectiveClientId) {
+      setOrders([]);
+      setSelectedDate(null);
       return;
     }
-    const plan = getMockMealPlanForDate(selectedDate);
-    setItems(plan.items.map((i) => ({ name: i.name, quantity: i.quantity })));
-  }, [selectedDate]);
+    setLoadingDates(true);
+    getMealPlannerOrders(effectiveClientId, dateRange.start, dateRange.end)
+      .then((list) => {
+        setOrders(list);
+        setSelectedDate(null);
+      })
+      .catch((err) => {
+        console.error('[SavedMealPlanMonth] Error loading meal planner orders:', err);
+        setOrders([]);
+      })
+      .finally(() => setLoadingDates(false));
+  }, [effectiveClientId, dateRange.start, dateRange.end]);
 
-  const setQuantity = (index: number, quantity: number) => {
-    const clamped = Math.max(MIN_QUANTITY, Math.min(MAX_QUANTITY, quantity));
-    setItems((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, quantity: clamped } : item))
-    );
-  };
+  const datesWithPlans = useMemo(
+    () => orders.map((o) => o.scheduledDeliveryDate).filter(Boolean),
+    [orders]
+  );
+  const selectedOrder = useMemo(
+    () => (selectedDate ? orders.find((o) => o.scheduledDeliveryDate === selectedDate) : null),
+    [orders, selectedDate]
+  );
+  const hasDates = datesWithPlans.length > 0;
 
   return (
     <div className={styles.wrapper}>
@@ -89,17 +85,30 @@ export function SavedMealPlanMonth() {
         <div className={styles.titleRow}>
           <CalendarDays className={styles.titleIcon} size={26} />
           <h4 className={styles.title}>Saved Meal Plan for the Month</h4>
-          <span className={styles.demoBadge}>Demo</span>
         </div>
         <p className={styles.subtitle}>
-          Future dates only. Click a date to view its meal plan and items.
+          Dates with a saved meal plan for this client. Click a date to view its items.
         </p>
       </header>
 
-      {hasDates ? (
+      {!effectiveClientId ? (
+        <div className={styles.emptyState}>
+          <CalendarDays size={32} />
+          <p>Save the client first to see saved meal plans.</p>
+        </div>
+      ) : loadingDates ? (
+        <div className={styles.emptyState}>
+          <p>Loading saved dates…</p>
+        </div>
+      ) : !hasDates ? (
+        <div className={styles.emptyState}>
+          <CalendarDays size={32} />
+          <p>No saved meal plans in this date range.</p>
+        </div>
+      ) : (
         <>
           <div className={styles.datesRow}>
-            {futureDates.map((d) => (
+            {datesWithPlans.map((d) => (
               <button
                 key={d}
                 type="button"
@@ -112,62 +121,40 @@ export function SavedMealPlanMonth() {
             ))}
           </div>
 
-          {selectedDate && mock && (
+          {selectedDate && (
             <div className={styles.detailPanel}>
               <div className={styles.detailHeader}>
                 <UtensilsCrossed className={styles.detailIcon} size={22} />
                 <span>{formatDateLabel(selectedDate)}</span>
                 {isToday(selectedDate) && <span className={styles.todayBadge}>Today</span>}
               </div>
-              <div className={styles.planName}>{mock.planName}</div>
-              <ul className={styles.itemsList}>
-                {items.map((item, i) => (
-                  <li key={i} className={styles.itemRow}>
-                    <ChevronRight className={styles.itemBullet} size={18} />
-                    <span className={styles.itemName}>{item.name}</span>
-                    <div className={styles.quantityControl}>
-                      <button
-                        type="button"
-                        className={styles.qtyBtn}
-                        onClick={() => setQuantity(i, item.quantity - 1)}
-                        disabled={item.quantity <= MIN_QUANTITY}
-                        aria-label={`Decrease quantity for ${item.name}`}
-                      >
-                        <Minus size={16} />
-                      </button>
-                      <input
-                        type="number"
-                        min={MIN_QUANTITY}
-                        max={MAX_QUANTITY}
-                        value={item.quantity}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value, 10);
-                          if (!Number.isNaN(v)) setQuantity(i, v);
-                        }}
-                        className={styles.qtyInput}
-                        aria-label={`Quantity for ${item.name}`}
-                      />
-                      <button
-                        type="button"
-                        className={styles.qtyBtn}
-                        onClick={() => setQuantity(i, item.quantity + 1)}
-                        disabled={item.quantity >= MAX_QUANTITY}
-                        aria-label={`Increase quantity for ${item.name}`}
-                      >
-                        <Plus size={16} />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {!selectedOrder ? (
+                <p className={styles.noItems}>No order for this date.</p>
+              ) : selectedOrder.items.length === 0 ? (
+                <p className={styles.noItems}>No items for this date.</p>
+              ) : (
+                <div className={styles.tableWrap}>
+                  <table className={styles.itemsTable}>
+                    <thead>
+                      <tr>
+                        <th className={styles.thName}>Item</th>
+                        <th className={styles.thQty}>Qty</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedOrder.items.map((item) => (
+                        <tr key={item.id} className={styles.itemRow}>
+                          <td className={styles.itemName}>{item.name}</td>
+                          <td className={styles.itemQty}>×{item.quantity}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </>
-      ) : (
-        <div className={styles.emptyState}>
-          <CalendarDays size={32} />
-          <p>No future dates left this month.</p>
-        </div>
       )}
     </div>
   );
