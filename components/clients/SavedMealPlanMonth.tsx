@@ -1,9 +1,16 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { CalendarDays, UtensilsCrossed } from 'lucide-react';
-import { getSavedMealPlanDatesWithItems, type MealPlannerOrderResult } from '@/lib/actions';
+import {
+  getSavedMealPlanDatesWithItems,
+  updateMealPlannerCustomItemQuantity,
+  insertMealPlannerCustomItemForClient,
+  type MealPlannerOrderResult,
+  type MealPlannerOrderDisplayItem
+} from '@/lib/actions';
 import styles from './SavedMealPlanMonth.module.css';
+import clientProfileStyles from './ClientProfile.module.css';
 
 function formatDateLabel(iso: string): string {
   if (!iso || typeof iso !== 'string') return iso || '—';
@@ -42,28 +49,52 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
+  const fetchIdRef = useRef(0);
+  // Only apply fetched data on initial load for this client; never overwrite local edits with refetched data.
+  const initialLoadDoneForClientRef = useRef<string | null>(null);
 
   const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
 
-  // Load all saved meal plan dates from meal_planner_custom_items (grouped by date) for this client.
-  // No date filter so every date that has a saved plan is always shown.
+  // Load meal plan data once when the dialog is opened for a client. Data is applied only on first
+  // load for that client so user edits (quantity changes) are not overwritten by refetches or re-runs.
   useEffect(() => {
     if (!effectiveClientId) {
+      initialLoadDoneForClientRef.current = null;
       setOrders([]);
       setSelectedDate(null);
+      setLoadingDates(false);
+      return;
+    }
+    const alreadyLoadedForThisClient = initialLoadDoneForClientRef.current === effectiveClientId;
+    if (alreadyLoadedForThisClient) {
       return;
     }
     setLoadingDates(true);
+    const thisFetchId = fetchIdRef.current + 1;
+    fetchIdRef.current = thisFetchId;
+
     getSavedMealPlanDatesWithItems(effectiveClientId)
       .then((list) => {
+        if (fetchIdRef.current !== thisFetchId) return;
+        if (initialLoadDoneForClientRef.current === effectiveClientId) return;
+        initialLoadDoneForClientRef.current = effectiveClientId;
         setOrders(list);
-        setSelectedDate(null);
+        const today = getTodayIso();
+        const future = list.filter((o) => (o.scheduledDeliveryDate || '') >= today);
+        const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
+        const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : null;
+        setSelectedDate(firstDate);
       })
       .catch((err) => {
+        if (fetchIdRef.current !== thisFetchId) return;
         console.error('[SavedMealPlanMonth] Error loading meal planner orders:', err);
+        initialLoadDoneForClientRef.current = null;
         setOrders([]);
       })
-      .finally(() => setLoadingDates(false));
+      .finally(() => {
+        if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
+      });
   }, [effectiveClientId]);
 
   const todayIso = useMemo(() => getTodayIso(), []);
@@ -81,6 +112,64 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
     [futureOrders, selectedDate]
   );
   const hasDates = datesWithPlans.length > 0;
+
+  function getItemQty(item: MealPlannerOrderDisplayItem): number {
+    return Math.max(1, Number(item.quantity) || 1);
+  }
+
+  async function changeQuantity(item: MealPlannerOrderDisplayItem, delta: number) {
+    if (!effectiveClientId || !selectedDate || !selectedOrder) return;
+    const currentQty = getItemQty(item);
+    const newQty = Math.max(1, currentQty + delta);
+    if (newQty === currentQty) return;
+    await setQuantityDirect(item, newQty);
+  }
+
+  async function setQuantityDirect(item: MealPlannerOrderDisplayItem, newQty: number) {
+    if (!effectiveClientId || !selectedDate || !selectedOrder) return;
+    const qty = Math.max(1, Number(newQty) || 1);
+    const currentQty = getItemQty(item);
+    if (qty === currentQty) return;
+    setUpdatingItemId(item.id);
+    // Optimistic update so the displayed quantity changes immediately
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.scheduledDeliveryDate === selectedDate
+          ? {
+              ...o,
+              items: o.items.map((i) =>
+                i.id === item.id ? { ...i, quantity: qty } : i
+              )
+            }
+          : o
+      )
+    );
+    try {
+      const isClientItem = item.clientId === effectiveClientId;
+      if (isClientItem) {
+        const { ok } = await updateMealPlannerCustomItemQuantity(
+          effectiveClientId,
+          item.id,
+          qty
+        );
+        if (!ok) {
+          getSavedMealPlanDatesWithItems(effectiveClientId).then(setOrders).catch(() => {});
+        }
+      } else {
+        const { ok } = await insertMealPlannerCustomItemForClient(
+          effectiveClientId,
+          selectedDate,
+          item.name,
+          qty
+        );
+        if (!ok) {
+          getSavedMealPlanDatesWithItems(effectiveClientId).then(setOrders).catch(() => {});
+        }
+      }
+    } finally {
+      setUpdatingItemId(null);
+    }
+  }
 
   return (
     <div className={styles.wrapper}>
@@ -148,7 +237,75 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
                       {selectedOrder.items.map((item) => (
                         <tr key={item.id} className={styles.itemRow}>
                           <td className={styles.itemName}>{item.name}</td>
-                          <td className={styles.itemQty}>×{item.quantity}</td>
+                          <td className={styles.itemQty}>
+                            <div
+                              className={clientProfileStyles.quantityControl}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                backgroundColor: 'var(--bg-surface)',
+                                padding: '2px',
+                                borderRadius: '6px',
+                                border: '1px solid var(--border-color)'
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  changeQuantity(item, -1);
+                                }}
+                                className="btn btn-ghost btn-sm"
+                                style={{
+                                  width: '24px',
+                                  height: '24px',
+                                  padding: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}
+                                disabled={
+                                  getItemQty(item) <= 1 || updatingItemId === item.id
+                                }
+                                aria-label="Decrease quantity"
+                              >
+                                -
+                              </button>
+                              <span
+                                style={{
+                                  width: '24px',
+                                  textAlign: 'center',
+                                  fontWeight: 600,
+                                  fontSize: '0.9rem'
+                                }}
+                              >
+                                {getItemQty(item)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  changeQuantity(item, 1);
+                                }}
+                                className="btn btn-ghost btn-sm"
+                                style={{
+                                  width: '24px',
+                                  height: '24px',
+                                  padding: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}
+                                disabled={updatingItemId === item.id}
+                                aria-label="Increase quantity"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

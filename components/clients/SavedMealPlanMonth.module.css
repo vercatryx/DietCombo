@@ -224,11 +224,12 @@
 .quantityControl {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 2px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
   background: var(--bg-app);
   overflow: hidden;
+  touch-action: manipulation;
 }
 
 .qtyBtn {
@@ -237,12 +238,21 @@
   justify-content: center;
   width: 2rem;
   height: 2rem;
+  min-width: 2rem;
   padding: 0;
   border: none;
   background: var(--bg-surface-hover);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.qtyBtn:active:not(:disabled) {
+  background: var(--color-primary);
+  color: white;
 }
 
 .qtyBtn:hover:not(:disabled) {
