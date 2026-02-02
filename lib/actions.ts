@@ -1527,19 +1527,108 @@ export async function getSavedMealPlanDatesWithItems(
     }
 }
 
+/**
+ * Fetch saved meal plan dates and items from meal_planner_orders and meal_planner_order_items
+ * for the selected client. Used by SavedMealPlanMonth in the client profile dialog so the
+ * calendar shows contents by date from the orders table. Load records for the client upon opening.
+ */
+export async function getSavedMealPlanDatesWithItemsFromOrders(
+    clientId: string,
+    startDate?: string,
+    endDate?: string
+): Promise<MealPlannerOrderResult[]> {
+    try {
+        let query = supabase
+            .from('meal_planner_orders')
+            .select('id, scheduled_delivery_date, delivery_day, status, total_items')
+            .eq('client_id', clientId)
+            .in('status', ['draft', 'scheduled', 'saved'])
+            .order('scheduled_delivery_date', { ascending: true });
+
+        if (startDate != null && startDate !== '') {
+            query = query.gte('scheduled_delivery_date', mealPlannerDateOnly(startDate));
+        }
+        if (endDate != null && endDate !== '') {
+            query = query.lte('scheduled_delivery_date', mealPlannerDateOnly(endDate));
+        }
+
+        const { data: orders, error: ordersError } = await query;
+
+        if (ordersError) {
+            logQueryError(ordersError, 'meal_planner_orders', 'select');
+            return [];
+        }
+        if (!orders || orders.length === 0) return [];
+
+        const orderIds = orders.map((o: { id: string }) => o.id);
+        const { data: orderItems, error: itemsError } = await supabase
+            .from('meal_planner_order_items')
+            .select('id, meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, sort_order')
+            .in('meal_planner_order_id', orderIds)
+            .order('sort_order', { ascending: true });
+
+        if (itemsError) {
+            logQueryError(itemsError, 'meal_planner_order_items', 'select');
+            return [];
+        }
+
+        const menuItems = await getMenuItems();
+        const menuById = new Map(menuItems.map((m) => [m.id, m.name]));
+        const mealItems = await getMealItems();
+        const mealById = new Map(mealItems.map((m) => [m.id, m.name]));
+
+        const itemsByOrderId = new Map<string, { id: string; name: string; quantity: number }[]>();
+        for (const row of orderItems || []) {
+            const orderId = row.meal_planner_order_id as string;
+            const name =
+                (row.custom_name && String(row.custom_name).trim()) ||
+                (row.menu_item_id ? menuById.get(row.menu_item_id) : null) ||
+                (row.meal_item_id ? mealById.get(row.meal_item_id) : null) ||
+                'Item';
+            const quantity = Math.max(1, Number(row.quantity) || 1);
+            const list = itemsByOrderId.get(orderId) ?? [];
+            list.push({ id: row.id, name, quantity });
+            itemsByOrderId.set(orderId, list);
+        }
+
+        const list: MealPlannerOrderResult[] = [];
+        for (const row of orders) {
+            const dateStr = mealPlannerNormalizeDate(
+                row.scheduled_delivery_date as string | Date | null | undefined
+            );
+            if (!dateStr) continue;
+            const items = itemsByOrderId.get(row.id) ?? [];
+            list.push({
+                id: row.id,
+                scheduledDeliveryDate: dateStr,
+                deliveryDay: (row.delivery_day as string) ?? null,
+                status: (row.status as string) ?? 'draft',
+                totalItems: row.total_items ?? items.length,
+                items: items.map((i) => ({ id: i.id, name: i.name, quantity: i.quantity }))
+            });
+        }
+        return list;
+    } catch (error) {
+        console.error('Error fetching saved meal plan dates from meal_planner_orders:', error);
+        return [];
+    }
+}
+
 export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: number; clientId?: string | null };
 
 /**
- * Effective meal plan item (name + quantity) for a client on a date.
+ * Effective meal plan item (name + quantity + price) for a client on a date.
  * Used when syncing meal_planner_custom_items → meal_planner_orders.
+ * quantity and price come from the default meal planner dialog (admin default order template calendar).
  */
-export type EffectiveMealPlanItem = { name: string; quantity: number; sortOrder: number };
+export type EffectiveMealPlanItem = { name: string; quantity: number; sortOrder: number; price: number | null };
 
 type MealPlannerCustomItemRow = {
     client_id: string | null;
     name: string | null;
     quantity: number;
     sort_order: number | null;
+    price: number | string | null;
 };
 
 /**
@@ -1556,7 +1645,7 @@ async function getEffectiveMealPlanItemsForDate(
     const dateOnly = mealPlannerDateOnly(calendarDate);
     const { data: rows, error } = await supabaseClient
         .from('meal_planner_custom_items')
-        .select('id, calendar_date, name, quantity, client_id, sort_order')
+        .select('id, calendar_date, name, quantity, client_id, sort_order, price')
         .eq('calendar_date', dateOnly)
         .or(`client_id.eq.${clientId},client_id.is.null`)
         .order('sort_order', { ascending: true });
@@ -1568,7 +1657,7 @@ async function getEffectiveMealPlanItemsForDate(
     const typedRows = (rows ?? []) as MealPlannerCustomItemRow[];
     if (typedRows.length === 0) return [];
 
-    // Merge by name: client row overrides default (client preference takes precedence)
+    // Merge by name: client row overrides default (client preference takes precedence for quantity and price)
     const byName = new Map<string, EffectiveMealPlanItem>();
     const defaultRows = typedRows.filter((r) => r.client_id == null);
     const clientRows = typedRows.filter((r) => r.client_id === clientId);
@@ -1576,7 +1665,9 @@ async function getEffectiveMealPlanItemsForDate(
         const name = (row.name ?? 'Item').trim() || 'Item';
         const quantity = Math.max(1, Number(row.quantity) ?? 1);
         const sortOrder = Number(row.sort_order) ?? 0;
-        byName.set(name, { name, quantity, sortOrder });
+        const price = row.price != null ? (typeof row.price === 'number' ? row.price : parseFloat(String(row.price))) : null;
+        const priceNum = price != null && !Number.isNaN(price) ? price : null;
+        byName.set(name, { name, quantity, sortOrder, price: priceNum });
     }
     return Array.from(byName.values()).sort((a, b) => a.sortOrder - b.sortOrder);
 }
@@ -1657,7 +1748,7 @@ async function syncMealPlannerCustomItemsToOrders(
                     quantity: item.quantity,
                     notes: null,
                     custom_name: item.name,
-                    custom_price: null,
+                    custom_price: item.price,
                     sort_order: sortOrder++
                 });
                 if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
@@ -1697,7 +1788,7 @@ async function syncMealPlannerCustomItemsToOrders(
                     quantity: item.quantity,
                     notes: null,
                     custom_name: item.name,
-                    custom_price: null,
+                    custom_price: item.price,
                     sort_order: sortOrder++
                 });
                 if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
@@ -1946,6 +2037,32 @@ export async function updateMealPlannerCustomItemQuantity(
         return { ok: true };
     } catch (error) {
         console.error('Error updating meal planner custom item quantity:', error);
+        return { ok: false, error: String(error) };
+    }
+}
+
+/**
+ * Update a single meal_planner_order_item's quantity. Used by SavedMealPlanMonth when the
+ * client profile meal planner is loaded from meal_planner_orders/meal_planner_order_items.
+ */
+export async function updateMealPlannerOrderItemQuantity(
+    itemId: string,
+    quantity: number
+): Promise<{ ok: boolean; error?: string }> {
+    try {
+        const qty = Math.max(1, Math.floor(Number(quantity)) || 1);
+        const { error } = await supabase
+            .from('meal_planner_order_items')
+            .update({ quantity: qty })
+            .eq('id', itemId);
+
+        if (error) {
+            logQueryError(error, 'meal_planner_order_items', 'update');
+            return { ok: false, error: error.message };
+        }
+        return { ok: true };
+    } catch (error) {
+        console.error('Error updating meal planner order item quantity:', error);
         return { ok: false, error: String(error) };
     }
 }

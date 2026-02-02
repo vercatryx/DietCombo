@@ -3,10 +3,8 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { CalendarDays, UtensilsCrossed } from 'lucide-react';
 import {
-  getSavedMealPlanDatesWithItems,
-  updateMealPlannerCustomItemQuantity,
-  insertMealPlannerCustomItemForClient,
-  syncMealPlanDateToOrderForClient,
+  getSavedMealPlanDatesWithItemsFromOrders,
+  updateMealPlannerOrderItemQuantity,
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
 } from '@/lib/actions';
@@ -52,45 +50,36 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const fetchIdRef = useRef(0);
-  // Only apply fetched data on initial load for this client; never overwrite local edits with refetched data.
-  const initialLoadDoneForClientRef = useRef<string | null>(null);
 
   const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
 
-  // Load meal plan data once when the dialog is opened for a client. Data is applied only on first
-  // load for that client so user edits (quantity changes) are not overwritten by refetches or re-runs.
+  // Load meal plan data when the dialog is opened for a client. Always refetch when the client
+  // is set so the list of dates with meal plans is always up to date (e.g. after adding a plan
+  // elsewhere and reopening the dialog).
   useEffect(() => {
     if (!effectiveClientId) {
-      initialLoadDoneForClientRef.current = null;
       setOrders([]);
       setSelectedDate(null);
       setLoadingDates(false);
-      return;
-    }
-    const alreadyLoadedForThisClient = initialLoadDoneForClientRef.current === effectiveClientId;
-    if (alreadyLoadedForThisClient) {
       return;
     }
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
 
-    getSavedMealPlanDatesWithItems(effectiveClientId)
+    getSavedMealPlanDatesWithItemsFromOrders(effectiveClientId)
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
-        if (initialLoadDoneForClientRef.current === effectiveClientId) return;
-        initialLoadDoneForClientRef.current = effectiveClientId;
         setOrders(list);
         const today = getTodayIso();
         const future = list.filter((o) => (o.scheduledDeliveryDate || '') >= today);
         const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
-        const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : null;
+        const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : (list[0]?.scheduledDeliveryDate ?? null);
         setSelectedDate(firstDate);
       })
       .catch((err) => {
         if (fetchIdRef.current !== thisFetchId) return;
         console.error('[SavedMealPlanMonth] Error loading meal planner orders:', err);
-        initialLoadDoneForClientRef.current = null;
         setOrders([]);
       })
       .finally(() => {
@@ -100,8 +89,9 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
+  // Only show today and future dates in the meal planner (from meal_planner_orders + meal_planner_order_items)
   const futureOrders = useMemo(
-    () => orders.filter((o) => o.scheduledDeliveryDate >= todayIso),
+    () => orders.filter((o) => (o.scheduledDeliveryDate || '') >= todayIso),
     [orders, todayIso]
   );
   const datesWithPlans = useMemo(
@@ -146,30 +136,9 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
       )
     );
     try {
-      const isClientItem = item.clientId === effectiveClientId;
-      if (isClientItem) {
-        const { ok } = await updateMealPlannerCustomItemQuantity(
-          effectiveClientId,
-          item.id,
-          qty
-        );
-        if (!ok) {
-          getSavedMealPlanDatesWithItems(effectiveClientId).then(setOrders).catch(() => {});
-        } else {
-          syncMealPlanDateToOrderForClient(effectiveClientId, selectedDate).catch(() => {});
-        }
-      } else {
-        const { ok } = await insertMealPlannerCustomItemForClient(
-          effectiveClientId,
-          selectedDate,
-          item.name,
-          qty
-        );
-        if (!ok) {
-          getSavedMealPlanDatesWithItems(effectiveClientId).then(setOrders).catch(() => {});
-        } else {
-          syncMealPlanDateToOrderForClient(effectiveClientId, selectedDate).catch(() => {});
-        }
+      const { ok } = await updateMealPlannerOrderItemQuantity(item.id, qty);
+      if (!ok) {
+        getSavedMealPlanDatesWithItemsFromOrders(effectiveClientId).then(setOrders).catch(() => {});
       }
     } finally {
       setUpdatingItemId(null);
