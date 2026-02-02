@@ -1714,7 +1714,75 @@ async function syncMealPlannerCustomItemsToOrders(
             .in('status', ['draft', 'scheduled'])
             .maybeSingle();
 
-        if (existingOrder?.user_modified) {
+        if (existingOrder?.id && existingOrder?.user_modified) {
+            const orderId = existingOrder.id;
+            const { data: existingItems } = await supabaseAdmin
+                .from('meal_planner_order_items')
+                .select('id, custom_name, quantity, sort_order')
+                .eq('meal_planner_order_id', orderId)
+                .order('sort_order', { ascending: true });
+
+            const norm = (s: string | null) => ((s ?? '').trim() || 'Item').toLowerCase();
+            const templateNames = new Set(effectiveItems.map((t) => norm(t.name)));
+            const orderByName = new Map<string, { id: string; custom_name: string; quantity: number; sort_order: number }>();
+            (existingItems ?? []).forEach((row: { id: string; custom_name: string | null; quantity: number; sort_order: number | null }) => {
+                const name = (row.custom_name ?? '').trim() || 'Item';
+                orderByName.set(norm(name), {
+                    id: row.id,
+                    custom_name: name,
+                    quantity: Math.max(1, Number(row.quantity) || 1),
+                    sort_order: row.sort_order ?? 0
+                });
+            });
+
+            const toDelete = (existingItems ?? []).filter((row: { custom_name: string | null }) => !templateNames.has(norm(row.custom_name)));
+            const toAdd = effectiveItems.filter((t) => !orderByName.has(norm(t.name)));
+
+            for (const row of toDelete) {
+                const { error: delErr } = await supabaseAdmin
+                    .from('meal_planner_order_items')
+                    .delete()
+                    .eq('id', (row as { id: string }).id);
+                if (delErr) logQueryError(delErr, 'meal_planner_order_items', 'delete');
+            }
+
+            const maxSortOrder = (existingItems ?? []).reduce((m, r: { sort_order: number | null }) => Math.max(m, r.sort_order ?? 0), -1);
+            let nextSortOrder = maxSortOrder + 1;
+            for (const t of toAdd) {
+                const itemId = randomUUID();
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
+                    id: itemId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'default',
+                    menu_item_id: null,
+                    meal_item_id: null,
+                    quantity: t.quantity,
+                    notes: null,
+                    custom_name: t.name,
+                    custom_price: t.price,
+                    sort_order: nextSortOrder++
+                });
+                if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
+            }
+
+            const finalItems = effectiveItems.map((t) => {
+                const existing = orderByName.get(norm(t.name));
+                return { name: t.name, quantity: existing ? existing.quantity : t.quantity };
+            });
+            const newTotalItems = finalItems.reduce((sum, i) => sum + i.quantity, 0);
+            const itemsJson =
+                finalItems.length > 0
+                    ? { default: { items: Object.fromEntries(finalItems.map((i) => [i.name, i.quantity])) } }
+                    : null;
+            const { error: updErr } = await supabaseAdmin
+                .from('meal_planner_orders')
+                .update({
+                    total_items: newTotalItems,
+                    items: itemsJson,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', orderId);
+            if (updErr) logQueryError(updErr, 'meal_planner_orders', 'update');
             continue;
         }
         if (existingOrder?.id) {
