@@ -1708,12 +1708,15 @@ async function syncMealPlannerCustomItemsToOrders(
 
         const { data: existingOrder } = await supabaseAdmin
             .from('meal_planner_orders')
-            .select('id')
+            .select('id, user_modified')
             .eq('client_id', cid)
             .eq('scheduled_delivery_date', dateOnly)
             .in('status', ['draft', 'scheduled'])
             .maybeSingle();
 
+        if (existingOrder?.user_modified) {
+            continue;
+        }
         if (existingOrder?.id) {
             const orderId = existingOrder.id;
             const { error: delErr } = await supabaseAdmin
@@ -2044,6 +2047,8 @@ export async function updateMealPlannerCustomItemQuantity(
 /**
  * Update a single meal_planner_order_item's quantity. Used by SavedMealPlanMonth when the
  * client profile meal planner is loaded from meal_planner_orders/meal_planner_order_items.
+ * Sets user_modified = true on the parent meal_planner_order so admin template updates
+ * won't overwrite client overrides.
  */
 export async function updateMealPlannerOrderItemQuantity(
     itemId: string,
@@ -2051,6 +2056,17 @@ export async function updateMealPlannerOrderItemQuantity(
 ): Promise<{ ok: boolean; error?: string }> {
     try {
         const qty = Math.max(1, Math.floor(Number(quantity)) || 1);
+        const { data: item, error: fetchErr } = await supabase
+            .from('meal_planner_order_items')
+            .select('meal_planner_order_id')
+            .eq('id', itemId)
+            .single();
+
+        if (fetchErr || !item?.meal_planner_order_id) {
+            logQueryError(fetchErr ?? { message: 'Item not found' }, 'meal_planner_order_items', 'select');
+            return { ok: false, error: fetchErr?.message ?? 'Item not found' };
+        }
+
         const { error } = await supabase
             .from('meal_planner_order_items')
             .update({ quantity: qty })
@@ -2060,6 +2076,17 @@ export async function updateMealPlannerOrderItemQuantity(
             logQueryError(error, 'meal_planner_order_items', 'update');
             return { ok: false, error: error.message };
         }
+
+        const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+        const { error: orderErr } = await supabaseAdmin
+            .from('meal_planner_orders')
+            .update({ user_modified: true })
+            .eq('id', item.meal_planner_order_id);
+        if (orderErr) logQueryError(orderErr, 'meal_planner_orders', 'update');
+
         return { ok: true };
     } catch (error) {
         console.error('Error updating meal planner order item quantity:', error);

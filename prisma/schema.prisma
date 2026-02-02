@@ -707,6 +707,7 @@ model MealPlannerOrder {
   notes                 String?
   processedOrderId      String?                @map("processed_order_id") @db.VarChar(36)
   processedAt           DateTime?              @map("processed_at") @db.Timestamp(6)
+  userModified          Boolean                @default(false) @map("user_modified")
   createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt             DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
