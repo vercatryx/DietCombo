@@ -6,6 +6,7 @@ import {
   getSavedMealPlanDatesWithItems,
   updateMealPlannerCustomItemQuantity,
   insertMealPlannerCustomItemForClient,
+  syncMealPlanDateToOrderForClient,
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
 } from '@/lib/actions';
@@ -154,6 +155,8 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
         );
         if (!ok) {
           getSavedMealPlanDatesWithItems(effectiveClientId).then(setOrders).catch(() => {});
+        } else {
+          syncMealPlanDateToOrderForClient(effectiveClientId, selectedDate).catch(() => {});
         }
       } else {
         const { ok } = await insertMealPlannerCustomItemForClient(
@@ -164,6 +167,8 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
         );
         if (!ok) {
           getSavedMealPlanDatesWithItems(effectiveClientId).then(setOrders).catch(() => {});
+        } else {
+          syncMealPlanDateToOrderForClient(effectiveClientId, selectedDate).catch(() => {});
         }
       }
     } finally {

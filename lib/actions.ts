@@ -1117,10 +1117,204 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
         }
         
         revalidatePath('/admin');
+
+        // When saving the Food default template, propagate it to all Food clients as meal_planner_orders + items
+        if (targetServiceType === 'Food' && template?.vendorSelections?.length) {
+            try {
+                await propagateDefaultTemplateToFoodClients(template);
+            } catch (propagateError) {
+                console.error('Error propagating default template to Food clients:', propagateError);
+                // Don't throw - template was saved; propagation can be retried
+            }
+        }
     } catch (error) {
         console.error('Error saving default order template:', error);
         throw error;
     }
+}
+
+/**
+ * Get all client IDs that have serviceType = Food or Meal (including comma-separated service_type).
+ * Used when syncing admin meal planner calendar default template to meal_planner_orders.
+ * Uses service role so RLS does not block listing clients when syncing from meal planner.
+ */
+async function getMealPlannerClientIds(): Promise<string[]> {
+    const supabaseAdmin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data: rows, error } = await supabaseAdmin
+        .from('clients')
+        .select('id, service_type')
+        .not('service_type', 'is', null);
+    if (error) {
+        logQueryError(error, 'clients', 'select');
+        return [];
+    }
+    if (!rows?.length) return [];
+    const ids = rows
+        .filter((r: { service_type: string | null }) => {
+            const st = (r.service_type || '').trim();
+            if (!st) return false;
+            const list = st.split(',').map((s: string) => s.trim()).filter(Boolean);
+            return list.some((s) => s.toLowerCase() === 'food' || s.toLowerCase() === 'meal');
+        })
+        .map((r: { id: string }) => r.id);
+    return ids;
+}
+
+/**
+ * Get all client IDs that have serviceType = Food (including comma-separated service_type like "Food,Produce").
+ */
+async function getFoodClientIds(): Promise<string[]> {
+    const { data: rows, error } = await supabase
+        .from('clients')
+        .select('id, service_type')
+        .not('service_type', 'is', null);
+    if (error) {
+        logQueryError(error, 'clients', 'select');
+        return [];
+    }
+    if (!rows?.length) return [];
+    const ids = rows
+        .filter((r: { service_type: string | null }) => {
+            const st = (r.service_type || '').trim();
+            if (!st) return false;
+            const list = st.split(',').map((s: string) => s.trim()).filter(Boolean);
+            return list.includes('Food');
+        })
+        .map((r: { id: string }) => r.id);
+    return ids;
+}
+
+/**
+ * When a new default order template is saved for Food, create meal_planner_orders and meal_planner_order_items
+ * for every client with serviceType = Food, based on the template's vendorSelections (one order per delivery date).
+ */
+export async function propagateDefaultTemplateToFoodClients(template: any): Promise<{ clientIds: string[]; ordersCreated: number; itemsCreated: number }> {
+    if (!template || template.serviceType !== 'Food' || !template.vendorSelections?.length) {
+        return { clientIds: [], ordersCreated: 0, itemsCreated: 0 };
+    }
+
+    const clientIds = await getFoodClientIds();
+    if (clientIds.length === 0) return { clientIds: [], ordersCreated: 0, itemsCreated: 0 };
+
+    const vendors = await getVendors();
+    const mainVendor = vendors.find((v) => v.isDefault === true) || vendors[0];
+    const deliveryDays = mainVendor
+        ? ('deliveryDays' in mainVendor ? mainVendor.deliveryDays : (mainVendor as any).delivery_days) || []
+        : [];
+    if (deliveryDays.length === 0) {
+        console.warn('[propagateDefaultTemplateToFoodClients] No delivery days on main vendor; skipping.');
+        return { clientIds: [], ordersCreated: 0, itemsCreated: 0 };
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayNumbers = deliveryDays
+        .map((d: string) => DAY_NAME_TO_NUMBER[d])
+        .filter((n: number | undefined): n is number => n !== undefined);
+    if (dayNumbers.length === 0) return { clientIds: [], ordersCreated: 0, itemsCreated: 0 };
+
+    const deliveryDates: string[] = [];
+    for (let i = 0; i < 56; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() + i);
+        if (dayNumbers.includes(d.getDay())) {
+            deliveryDates.push(formatDateToYYYYMMDD(d));
+        }
+    }
+
+    const supabaseAdmin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const todayStr = formatDateToYYYYMMDD(today);
+
+    const dayNameFromDate = (dateStr: string) => {
+        const d = new Date(dateStr + 'T12:00:00');
+        const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return names[d.getDay()];
+    };
+
+    // Flatten template items: menuItemId -> quantity (sum across vendor selections)
+    const templateItems: { menuItemId: string; quantity: number }[] = [];
+    const itemQuantities = new Map<string, number>();
+    for (const vs of template.vendorSelections) {
+        const items = vs?.items && typeof vs.items === 'object' ? vs.items : {};
+        for (const [menuItemId, qty] of Object.entries(items)) {
+            const quantity = Number(qty) || 0;
+            if (quantity <= 0 || !menuItemId) continue;
+            itemQuantities.set(menuItemId, (itemQuantities.get(menuItemId) || 0) + quantity);
+        }
+    }
+    itemQuantities.forEach((quantity, menuItemId) => templateItems.push({ menuItemId, quantity }));
+    const totalItemsCount = templateItems.reduce((sum, i) => sum + i.quantity, 0);
+    const itemsJson = template.vendorSelections.length
+        ? { default: { items: Object.fromEntries(templateItems.map((i) => [i.menuItemId, i.quantity])) } }
+        : null;
+
+    let ordersCreated = 0;
+    let itemsCreated = 0;
+
+    for (const clientId of clientIds) {
+        const { data: existing } = await supabaseAdmin
+            .from('meal_planner_orders')
+            .select('id')
+            .eq('client_id', clientId)
+            .in('status', ['draft', 'scheduled'])
+            .gte('scheduled_delivery_date', todayStr);
+        if (existing?.length) {
+            for (const row of existing) {
+                await supabaseAdmin.from('meal_planner_orders').delete().eq('id', row.id);
+            }
+        }
+
+        if (totalItemsCount === 0) continue;
+
+        for (const dateStr of deliveryDates) {
+            const orderId = randomUUID();
+            const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
+                id: orderId,
+                client_id: clientId,
+                status: 'scheduled',
+                scheduled_delivery_date: dateStr,
+                delivery_day: dayNameFromDate(dateStr),
+                total_items: totalItemsCount,
+                total_value: null,
+                items: itemsJson,
+                notes: null,
+                processed_order_id: null,
+                processed_at: null
+            });
+            if (orderErr) {
+                logQueryError(orderErr, 'meal_planner_orders', 'insert');
+                continue;
+            }
+            ordersCreated++;
+
+            let sortOrder = 0;
+            for (const { menuItemId, quantity } of templateItems) {
+                const itemId = randomUUID();
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
+                    id: itemId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'default',
+                    menu_item_id: menuItemId,
+                    meal_item_id: null,
+                    quantity,
+                    notes: null,
+                    custom_name: null,
+                    custom_price: null,
+                    sort_order: sortOrder++
+                });
+                if (!itemErr) itemsCreated++;
+                else logQueryError(itemErr, 'meal_planner_order_items', 'insert');
+            }
+        }
+    }
+
+    return { clientIds, ordersCreated, itemsCreated };
 }
 
 // --- MEAL PLANNER CUSTOM ITEMS ACTIONS ---
@@ -1268,7 +1462,7 @@ export async function getSavedMealPlanDatesWithItems(
         // Include client-specific items and default template (client_id is null) so dates like Feb 1, Feb 3 show
         let query = supabase
             .from('meal_planner_custom_items')
-            .select('id, calendar_date, name, quantity')
+            .select('id, calendar_date, name, quantity, client_id')
             .or(`client_id.eq.${clientId},client_id.is.null`)
             .order('calendar_date', { ascending: true })
             .order('sort_order', { ascending: true });
@@ -1288,23 +1482,36 @@ export async function getSavedMealPlanDatesWithItems(
         }
         if (!rows || rows.length === 0) return [];
 
-        // Group by date
-        const byDate = new Map<string, MealPlannerOrderDisplayItem[]>();
+        // Group by date; within each date merge by name (prefer client row over default template)
+        const byDateByName = new Map<string, Map<string, MealPlannerOrderDisplayItem>>();
         for (const row of rows) {
             const dateStr = mealPlannerNormalizeDate(
                 row.calendar_date as string | Date | null | undefined
             );
             if (!dateStr) continue;
-            const list = byDate.get(dateStr) ?? [];
-            list.push({
+            const byName = byDateByName.get(dateStr) ?? new Map<string, MealPlannerOrderDisplayItem>();
+            const name = (row.name ?? 'Item').trim() || 'Item';
+            const item: MealPlannerOrderDisplayItem = {
                 id: row.id,
-                name: row.name ?? 'Item',
-                quantity: Number(row.quantity) ?? 1
-            });
-            byDate.set(dateStr, list);
+                name,
+                quantity: Number(row.quantity) ?? 1,
+                clientId: row.client_id as string | null
+            };
+            const existing = byName.get(name);
+            const isClientRow = row.client_id === clientId;
+            const existingIsClient = existing?.clientId === clientId;
+            if (!existing || (isClientRow && !existingIsClient)) {
+                byName.set(name, item);
+            }
+            byDateByName.set(dateStr, byName);
+        }
+        // Convert Map<name, item> to array per date
+        const byDateArrays = new Map<string, MealPlannerOrderDisplayItem[]>();
+        for (const [dateStr, byName] of byDateByName) {
+            byDateArrays.set(dateStr, Array.from(byName.values()));
         }
 
-        return Array.from(byDate.entries())
+        return Array.from(byDateArrays.entries())
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([scheduledDeliveryDate, items]) => ({
                 id: scheduledDeliveryDate,
@@ -1320,7 +1527,195 @@ export async function getSavedMealPlanDatesWithItems(
     }
 }
 
-export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: number };
+export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: number; clientId?: string | null };
+
+/**
+ * Effective meal plan item (name + quantity) for a client on a date.
+ * Used when syncing meal_planner_custom_items → meal_planner_orders.
+ */
+export type EffectiveMealPlanItem = { name: string; quantity: number; sortOrder: number };
+
+type MealPlannerCustomItemRow = {
+    client_id: string | null;
+    name: string | null;
+    quantity: number;
+    sort_order: number | null;
+};
+
+/**
+ * Get the effective list of meal plan items for a client on a calendar date.
+ * Reads meal_planner_custom_items for that date (default + client-specific) and merges by name:
+ * client-specific row overrides default, so client quantity preference is preserved.
+ * Used when creating/updating meal_planner_orders so admin updates don't overwrite client overrides.
+ */
+async function getEffectiveMealPlanItemsForDate(
+    supabaseClient: any,
+    clientId: string,
+    calendarDate: string
+): Promise<EffectiveMealPlanItem[]> {
+    const dateOnly = mealPlannerDateOnly(calendarDate);
+    const { data: rows, error } = await supabaseClient
+        .from('meal_planner_custom_items')
+        .select('id, calendar_date, name, quantity, client_id, sort_order')
+        .eq('calendar_date', dateOnly)
+        .or(`client_id.eq.${clientId},client_id.is.null`)
+        .order('sort_order', { ascending: true });
+
+    if (error) {
+        logQueryError(error, 'meal_planner_custom_items', 'select');
+        return [];
+    }
+    const typedRows = (rows ?? []) as MealPlannerCustomItemRow[];
+    if (typedRows.length === 0) return [];
+
+    // Merge by name: client row overrides default (client preference takes precedence)
+    const byName = new Map<string, EffectiveMealPlanItem>();
+    const defaultRows = typedRows.filter((r) => r.client_id == null);
+    const clientRows = typedRows.filter((r) => r.client_id === clientId);
+    for (const row of [...defaultRows, ...clientRows]) {
+        const name = (row.name ?? 'Item').trim() || 'Item';
+        const quantity = Math.max(1, Number(row.quantity) ?? 1);
+        const sortOrder = Number(row.sort_order) ?? 0;
+        byName.set(name, { name, quantity, sortOrder });
+    }
+    return Array.from(byName.values()).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+/**
+ * Sync meal_planner_custom_items for a calendar date to meal_planner_orders (and meal_planner_order_items).
+ * When admin saves or updates meals for a day in the calendar, this creates/updates meal_planner_orders
+ * for the affected client(s). Effective items are computed with client overrides merged (client quantity
+ * preference takes precedence over admin default).
+ * @param calendarDate - ISO date (YYYY-MM-DD)
+ * @param clientId - If null, sync for all Meal/Food clients (default template); else sync only for this client.
+ */
+async function syncMealPlannerCustomItemsToOrders(
+    calendarDate: string,
+    clientId?: string | null
+): Promise<void> {
+    const dateOnly = mealPlannerDateOnly(calendarDate);
+    const supabaseAdmin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const clientIds =
+        clientId && clientId !== ''
+            ? [clientId]
+            : await getMealPlannerClientIds();
+    if (clientIds.length === 0) return;
+
+    const dayNameFromDate = (dateStr: string) => {
+        const d = new Date(dateStr + 'T12:00:00');
+        const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return names[d.getDay()];
+    };
+
+    for (const cid of clientIds) {
+        const effectiveItems = await getEffectiveMealPlanItemsForDate(supabaseAdmin, cid, dateOnly);
+        const totalItemsCount = effectiveItems.reduce((sum, i) => sum + i.quantity, 0);
+
+        const { data: existingOrder } = await supabaseAdmin
+            .from('meal_planner_orders')
+            .select('id')
+            .eq('client_id', cid)
+            .eq('scheduled_delivery_date', dateOnly)
+            .in('status', ['draft', 'scheduled'])
+            .maybeSingle();
+
+        if (existingOrder?.id) {
+            const orderId = existingOrder.id;
+            const { error: delErr } = await supabaseAdmin
+                .from('meal_planner_order_items')
+                .delete()
+                .eq('meal_planner_order_id', orderId);
+            if (delErr) logQueryError(delErr, 'meal_planner_order_items', 'delete');
+
+            const itemsJson =
+                effectiveItems.length > 0
+                    ? { default: { items: Object.fromEntries(effectiveItems.map((i) => [i.name, i.quantity])) } }
+                    : null;
+            const { error: updErr } = await supabaseAdmin
+                .from('meal_planner_orders')
+                .update({
+                    total_items: totalItemsCount,
+                    items: itemsJson,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', orderId);
+            if (updErr) logQueryError(updErr, 'meal_planner_orders', 'update');
+
+            let sortOrder = 0;
+            for (const item of effectiveItems) {
+                const itemId = randomUUID();
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
+                    id: itemId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'default',
+                    menu_item_id: null,
+                    meal_item_id: null,
+                    quantity: item.quantity,
+                    notes: null,
+                    custom_name: item.name,
+                    custom_price: null,
+                    sort_order: sortOrder++
+                });
+                if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
+            }
+        } else {
+            if (effectiveItems.length === 0) continue;
+            const orderId = randomUUID();
+            const itemsJson = {
+                default: { items: Object.fromEntries(effectiveItems.map((i) => [i.name, i.quantity])) }
+            };
+            const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
+                id: orderId,
+                client_id: cid,
+                status: 'scheduled',
+                scheduled_delivery_date: dateOnly,
+                delivery_day: dayNameFromDate(dateOnly),
+                total_items: totalItemsCount,
+                total_value: null,
+                items: itemsJson,
+                notes: null,
+                processed_order_id: null,
+                processed_at: null
+            });
+            if (orderErr) {
+                logQueryError(orderErr, 'meal_planner_orders', 'insert');
+                continue;
+            }
+            let sortOrder = 0;
+            for (const item of effectiveItems) {
+                const itemId = randomUUID();
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
+                    id: itemId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'default',
+                    menu_item_id: null,
+                    meal_item_id: null,
+                    quantity: item.quantity,
+                    notes: null,
+                    custom_name: item.name,
+                    custom_price: null,
+                    sort_order: sortOrder++
+                });
+                if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
+            }
+        }
+    }
+}
+
+/**
+ * Sync meal planner order for a single client and date (e.g. after client changes quantity in SavedMealPlanMonth).
+ * Keeps meal_planner_orders in sync with client preference without waiting for the next admin save.
+ */
+export async function syncMealPlanDateToOrderForClient(
+    clientId: string,
+    calendarDate: string
+): Promise<void> {
+    await syncMealPlannerCustomItemsToOrders(mealPlannerDateOnly(calendarDate), clientId);
+}
 
 export type MealPlannerOrderResult = {
     id: string;
@@ -1404,6 +1799,7 @@ export async function getMealPlannerOrders(
 /**
  * Save meal planner custom items for a given date.
  * Replaces all existing items for that date with the provided list.
+ * Uses service role so admin default template and client overrides always save and sync to meal_planner_orders.
  * @param calendarDate - ISO date string (YYYY-MM-DD)
  * @param items - Array of items to save
  * @param clientId - Optional; null = default template (admin)
@@ -1420,8 +1816,13 @@ export async function saveMealPlannerCustomItems(
         const clientIdVal = clientId && clientId !== '' ? clientId : null;
         const dateOnly = mealPlannerDateOnly(calendarDate);
 
-        // Delete existing items for this date
-        let deleteQuery = supabase
+        const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+
+        // Delete existing items for this date (service role so RLS does not block)
+        let deleteQuery = supabaseAdmin
             .from('meal_planner_custom_items')
             .delete()
             .eq('calendar_date', dateOnly);
@@ -1438,6 +1839,11 @@ export async function saveMealPlannerCustomItems(
 
         if (validItems.length === 0) {
             revalidatePath('/admin');
+            try {
+                await syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal);
+            } catch (syncErr) {
+                console.error('Error syncing meal planner custom items to orders:', syncErr);
+            }
             return;
         }
 
@@ -1447,11 +1853,11 @@ export async function saveMealPlannerCustomItems(
             calendar_date: dateOnly,
             name: (item.name ?? '').trim(),
             quantity: Math.max(1, item.quantity ?? 1),
-            price: item.price != null && item.price !== '' && !Number.isNaN(Number(item.price)) ? Number(item.price) : null,
+            price: item.price != null && !Number.isNaN(Number(item.price)) ? Number(item.price) : null,
             sort_order: item.sortOrder ?? idx
         }));
 
-        const { error: insertError } = await supabase
+        const { error: insertError } = await supabaseAdmin
             .from('meal_planner_custom_items')
             .insert(rows);
         if (insertError) {
@@ -1459,9 +1865,88 @@ export async function saveMealPlannerCustomItems(
             throw new Error(insertError.message);
         }
         revalidatePath('/admin');
+        try {
+            await syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal);
+        } catch (syncErr) {
+            console.error('Error syncing meal planner custom items to orders:', syncErr);
+        }
     } catch (error) {
         console.error('Error saving meal planner custom items:', error);
         throw error;
+    }
+}
+
+/**
+ * Insert a single meal planner custom item for a client (e.g. when editing quantity of a default template item).
+ * Uses service role so client overrides always save; caller should then sync to meal_planner_orders via syncMealPlanDateToOrderForClient.
+ */
+export async function insertMealPlannerCustomItemForClient(
+    clientId: string,
+    calendarDate: string,
+    name: string,
+    quantity: number
+): Promise<{ ok: boolean; id?: string; error?: string }> {
+    try {
+        const dateOnly = mealPlannerDateOnly(calendarDate);
+        const qty = Math.max(1, Math.floor(Number(quantity)) || 1);
+        const trimName = (name ?? '').trim() || 'Item';
+        const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+        const { data, error } = await supabaseAdmin
+            .from('meal_planner_custom_items')
+            .insert({
+                client_id: clientId,
+                calendar_date: dateOnly,
+                name: trimName,
+                quantity: qty,
+                sort_order: 0
+            })
+            .select('id')
+            .single();
+
+        if (error) {
+            logQueryError(error, 'meal_planner_custom_items', 'insert');
+            return { ok: false, error: error.message };
+        }
+        return { ok: true, id: data?.id };
+    } catch (error) {
+        console.error('Error inserting meal planner custom item for client:', error);
+        return { ok: false, error: String(error) };
+    }
+}
+
+/**
+ * Update a single meal planner custom item's quantity. Only updates if the row belongs to the client.
+ * Used by SavedMealPlanMonth in the client profile dialog for +/- quantity controls.
+ * Uses service role so client overrides always save; caller should then sync to meal_planner_orders via syncMealPlanDateToOrderForClient.
+ */
+export async function updateMealPlannerCustomItemQuantity(
+    clientId: string,
+    itemId: string,
+    quantity: number
+): Promise<{ ok: boolean; error?: string }> {
+    try {
+        const qty = Math.max(1, Math.floor(Number(quantity)) || 1);
+        const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+        const { error } = await supabaseAdmin
+            .from('meal_planner_custom_items')
+            .update({ quantity: qty })
+            .eq('id', itemId)
+            .eq('client_id', clientId);
+
+        if (error) {
+            logQueryError(error, 'meal_planner_custom_items', 'update');
+            return { ok: false, error: error.message };
+        }
+        return { ok: true };
+    } catch (error) {
+        console.error('Error updating meal planner custom item quantity:', error);
+        return { ok: false, error: String(error) };
     }
 }
 
@@ -9186,7 +9671,7 @@ async function syncMealPlannerToOrders(
 
     for (const dateStr of deliveryDates) {
         const id = randomUUID();
-        await supabaseAdmin.from('meal_planner_orders').insert({
+        const { error: insertErr } = await supabaseAdmin.from('meal_planner_orders').insert({
             id,
             client_id: clientId,
             status: 'scheduled',
@@ -9199,6 +9684,10 @@ async function syncMealPlannerToOrders(
             processed_order_id: null,
             processed_at: null
         });
+        if (insertErr) {
+            logQueryError(insertErr, 'meal_planner_orders', 'insert');
+            console.error('[syncMealPlannerToOrders] Failed to insert meal_planner_order:', { clientId, dateStr, message: insertErr.message });
+        }
     }
 }
 
