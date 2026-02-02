@@ -2,19 +2,8 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { CalendarDays, UtensilsCrossed } from 'lucide-react';
-import { getMealPlannerOrders, type MealPlannerOrderResult } from '@/lib/actions';
+import { getSavedMealPlanDatesWithItems, type MealPlannerOrderResult } from '@/lib/actions';
 import styles from './SavedMealPlanMonth.module.css';
-
-/** Date range: start of current month through end of next month. */
-function getDateRange(): { start: string; end: string } {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const start = `${y}-${String(m + 1).padStart(2, '0')}-01`;
-  const endLast = new Date(y, m + 2, 0);
-  const end = `${endLast.getFullYear()}-${String(endLast.getMonth() + 1).padStart(2, '0')}-${String(endLast.getDate()).padStart(2, '0')}`;
-  return { start, end };
-}
 
 function formatDateLabel(iso: string): string {
   if (!iso || typeof iso !== 'string') return iso || '—';
@@ -36,20 +25,28 @@ function isToday(iso: string): boolean {
   return yy === y && mm === m + 1 && dd === d;
 }
 
+function getTodayIso(): string {
+  const t = new Date();
+  const y = t.getFullYear();
+  const m = String(t.getMonth() + 1).padStart(2, '0');
+  const d = String(t.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export interface SavedMealPlanMonthProps {
   /** Current client ID; when null or 'new', no data is loaded. */
   clientId: string | null;
 }
 
 export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
-  const dateRange = useMemo(() => getDateRange(), []);
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
 
-  // Load meal planner orders (saved from client meal selections) for this client
+  // Load all saved meal plan dates from meal_planner_custom_items (grouped by date) for this client.
+  // No date filter so every date that has a saved plan is always shown.
   useEffect(() => {
     if (!effectiveClientId) {
       setOrders([]);
@@ -57,7 +54,7 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
       return;
     }
     setLoadingDates(true);
-    getMealPlannerOrders(effectiveClientId, dateRange.start, dateRange.end)
+    getSavedMealPlanDatesWithItems(effectiveClientId)
       .then((list) => {
         setOrders(list);
         setSelectedDate(null);
@@ -67,15 +64,21 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
         setOrders([]);
       })
       .finally(() => setLoadingDates(false));
-  }, [effectiveClientId, dateRange.start, dateRange.end]);
+  }, [effectiveClientId]);
 
+  const todayIso = useMemo(() => getTodayIso(), []);
+
+  const futureOrders = useMemo(
+    () => orders.filter((o) => o.scheduledDeliveryDate >= todayIso),
+    [orders, todayIso]
+  );
   const datesWithPlans = useMemo(
-    () => orders.map((o) => o.scheduledDeliveryDate).filter(Boolean),
-    [orders]
+    () => futureOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean),
+    [futureOrders]
   );
   const selectedOrder = useMemo(
-    () => (selectedDate ? orders.find((o) => o.scheduledDeliveryDate === selectedDate) : null),
-    [orders, selectedDate]
+    () => (selectedDate ? futureOrders.find((o) => o.scheduledDeliveryDate === selectedDate) : null),
+    [futureOrders, selectedDate]
   );
   const hasDates = datesWithPlans.length > 0;
 
@@ -87,7 +90,7 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
           <h4 className={styles.title}>Saved Meal Plan for the Month</h4>
         </div>
         <p className={styles.subtitle}>
-          Dates with a saved meal plan for this client. Click a date to view its items.
+          Upcoming dates (today and future) with a saved meal plan. Click a date to view its items.
         </p>
       </header>
 
@@ -103,7 +106,7 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
       ) : !hasDates ? (
         <div className={styles.emptyState}>
           <CalendarDays size={32} />
-          <p>No saved meal plans in this date range.</p>
+          <p>No saved meal plans for this client.</p>
         </div>
       ) : (
         <>

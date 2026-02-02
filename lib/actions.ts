@@ -1251,6 +1251,75 @@ export async function getMealPlannerItemCountsByDate(
     }
 }
 
+/**
+ * Fetch saved meal plan dates from meal_planner_custom_items: select records for client (optionally
+ * in date range), group by calendar_date, and return which dates have orders (with their items).
+ * Includes both client-specific rows (client_id = clientId) and default template rows (client_id is null)
+ * so dates with a saved plan from the admin default template (e.g. Feb 1, Feb 3) are always shown.
+ * Used by SavedMealPlanMonth in the client profile dialog.
+ * When startDate/endDate are omitted, fetches all dates so every date with a saved plan is shown.
+ */
+export async function getSavedMealPlanDatesWithItems(
+    clientId: string,
+    startDate?: string,
+    endDate?: string
+): Promise<MealPlannerOrderResult[]> {
+    try {
+        // Include client-specific items and default template (client_id is null) so dates like Feb 1, Feb 3 show
+        let query = supabase
+            .from('meal_planner_custom_items')
+            .select('id, calendar_date, name, quantity')
+            .or(`client_id.eq.${clientId},client_id.is.null`)
+            .order('calendar_date', { ascending: true })
+            .order('sort_order', { ascending: true });
+
+        if (startDate != null && startDate !== '') {
+            query = query.gte('calendar_date', mealPlannerDateOnly(startDate));
+        }
+        if (endDate != null && endDate !== '') {
+            query = query.lte('calendar_date', mealPlannerDateOnly(endDate));
+        }
+
+        const { data: rows, error } = await query;
+
+        if (error) {
+            logQueryError(error, 'meal_planner_custom_items', 'select');
+            return [];
+        }
+        if (!rows || rows.length === 0) return [];
+
+        // Group by date
+        const byDate = new Map<string, MealPlannerOrderDisplayItem[]>();
+        for (const row of rows) {
+            const dateStr = mealPlannerNormalizeDate(
+                row.calendar_date as string | Date | null | undefined
+            );
+            if (!dateStr) continue;
+            const list = byDate.get(dateStr) ?? [];
+            list.push({
+                id: row.id,
+                name: row.name ?? 'Item',
+                quantity: Number(row.quantity) ?? 1
+            });
+            byDate.set(dateStr, list);
+        }
+
+        return Array.from(byDate.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([scheduledDeliveryDate, items]) => ({
+                id: scheduledDeliveryDate,
+                scheduledDeliveryDate,
+                deliveryDay: null as string | null,
+                status: 'saved',
+                totalItems: items.length,
+                items
+            }));
+    } catch (error) {
+        console.error('Error fetching saved meal plan dates from custom items:', error);
+        return [];
+    }
+}
+
 export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: number };
 
 export type MealPlannerOrderResult = {
