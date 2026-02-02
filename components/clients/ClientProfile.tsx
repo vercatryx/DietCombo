@@ -388,7 +388,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setLoading(false);
             });
         }
-    }, [clientId, initialData, isNewClient]);
+    // Use initialData?.client?.id (not initialData) so parent re-renders with same client data
+    // don't retrigger this effect and reload the dialog (e.g. when meal plan +/- is clicked).
+    }, [clientId, initialData?.client?.id ?? null, isNewClient]);
 
     // Sync vendors state when initialVendors prop changes
     useEffect(() => {
@@ -6137,7 +6139,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 )}
                             </section>
 
-                            {!isNewClient && (
+                            {!isNewClient && formData.serviceType === 'Food' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
                                     <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
                                     <SavedMealPlanMonth clientId={clientId} />

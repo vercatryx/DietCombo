@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate } from '@/lib/actions';
-import { Save, Loader2, Plus, Trash2, Package, CalendarDays, ChevronLeft, ChevronRight, X, Check, GripVertical } from 'lucide-react';
+import { Save, Loader2, Plus, Trash2, Package, ChevronLeft, ChevronRight, X, Check, GripVertical } from 'lucide-react';
 import {
     DndContext,
     closestCenter,
@@ -21,8 +21,6 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
-
-type FoodSubTab = 'template' | 'mealPlanner';
 
 type MealPlannerCustomItem = { id: string; name: string; quantity: number; price?: number | null; sortOrder?: number };
 
@@ -124,7 +122,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
-    const [foodSubTab, setFoodSubTab] = useState<FoodSubTab>('template');
     const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
     const [mealPlannerDraftItems, setMealPlannerDraftItems] = useState<MealPlannerCustomItem[]>([]);
     const [mealPlannerPopupLoading, setMealPlannerPopupLoading] = useState(false);
@@ -518,16 +515,16 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const mealPlannerMonthYear = mealPlannerMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-    // Load meal planner item counts for the current month (for calendar indicators)
+    // Load meal planner item counts for the current month when Food service type is selected
     useEffect(() => {
-        if (foodSubTab !== 'mealPlanner') return;
+        if (template.serviceType !== 'Food') return;
         const year = mealPlannerMonth.getFullYear();
         const month = mealPlannerMonth.getMonth();
         const startDate = `${year}-${String(month + 1).padStart(2, '0')}-01`;
         const lastDay = new Date(year, month + 1, 0).getDate();
         const endDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         getMealPlannerItemCountsByDate(startDate, endDate, null).then(setMealPlannerItemCounts);
-    }, [mealPlannerMonth, foodSubTab]);
+    }, [mealPlannerMonth, template.serviceType]);
 
     function getIndicatorForDate(d: Date): number | null {
         const k = formatDateKey(d);
@@ -713,26 +710,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             </div>
 
             {template.serviceType === 'Food' && (
-                <div className={styles.tabBar}>
-                    <button
-                        type="button"
-                        className={foodSubTab === 'template' ? styles.tabActive : styles.tab}
-                        onClick={() => setFoodSubTab('template')}
-                    >
-                        Default Template
-                    </button>
-                    <button
-                        type="button"
-                        className={foodSubTab === 'mealPlanner' ? styles.tabActive : styles.tab}
-                        onClick={() => setFoodSubTab('mealPlanner')}
-                    >
-                        <CalendarDays size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                        Meal Planner
-                    </button>
-                </div>
-            )}
-
-            {template.serviceType === 'Food' && foodSubTab === 'template' && (
                 <div className={styles.formCard}>
                     <h3 className={styles.sectionTitle}>Menu Items</h3>
                     <p className={styles.description}>
@@ -785,7 +762,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 </div>
             )}
 
-            {template.serviceType === 'Food' && foodSubTab === 'mealPlanner' && (
+            {template.serviceType === 'Food' && (
                 <div className={styles.formCard}>
                     <h3 className={styles.sectionTitle}>Meal Planner</h3>
                     <p className={styles.description}>
