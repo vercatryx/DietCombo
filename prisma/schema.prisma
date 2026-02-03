@@ -683,6 +683,7 @@ model MealPlannerCustomItem {
   name          String    @db.VarChar(255)
   quantity      Int       @default(1)
   price         Decimal?  @db.Decimal(10, 2)
+  value         Decimal?  @db.Decimal(10, 2)
   sortOrder     Int?      @default(0) @map("sort_order")
   expirationDate DateTime? @map("expiration_date") @db.Date
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)

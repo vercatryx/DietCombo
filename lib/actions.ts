@@ -1399,6 +1399,7 @@ export type MealPlannerCustomItemInput = {
     name: string;
     quantity: number;
     price?: number | null;
+    value?: number | null;
     sortOrder?: number | null;
     expirationDate?: string | null;
 };
@@ -1408,6 +1409,7 @@ export type MealPlannerCustomItemResult = {
     name: string;
     quantity: number;
     price: number | null;
+    value: number | null;
     sortOrder: number;
 };
 
@@ -1429,7 +1431,7 @@ export async function getMealPlannerCustomItems(
         const dateOnly = mealPlannerDateOnly(calendarDate);
         let query = supabase
             .from('meal_planner_custom_items')
-            .select('id, name, quantity, price, sort_order, expiration_date')
+            .select('id, name, quantity, price, value, sort_order, expiration_date')
             .eq('calendar_date', dateOnly)
             .order('sort_order', { ascending: true });
 
@@ -1456,6 +1458,7 @@ export async function getMealPlannerCustomItems(
             name: row.name,
             quantity: row.quantity ?? 1,
             price: row.price != null ? Number(row.price) : null,
+            value: row.value != null && !Number.isNaN(Number(row.value)) ? Number(row.value) : null,
             sortOrder: row.sort_order ?? 0
         }));
         return { items, expirationDate };
@@ -2236,6 +2239,7 @@ export async function saveMealPlannerCustomItems(
             name: (item.name ?? '').trim(),
             quantity: Math.max(1, item.quantity ?? 1),
             price: item.price != null && !Number.isNaN(Number(item.price)) ? Number(item.price) : null,
+            value: item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : null,
             sort_order: item.sortOrder ?? idx,
             expiration_date: expirationDateVal
         }));

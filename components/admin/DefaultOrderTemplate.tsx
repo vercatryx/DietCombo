@@ -22,11 +22,11 @@ import { CSS } from '@dnd-kit/utilities';
 import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
 
-type MealPlannerCustomItem = { id: string; name: string; quantity: number; price?: number | null; sortOrder?: number };
+type MealPlannerCustomItem = { id: string; name: string; quantity: number; price?: number | null; value?: number | null; sortOrder?: number };
 
 interface SortableMealPlannerRowProps {
     item: MealPlannerCustomItem;
-    onUpdate: (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'sortOrder'>>) => void;
+    onUpdate: (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'value' | 'sortOrder'>>) => void;
     onRemove: (id: string) => void;
     disabled?: boolean;
 }
@@ -71,6 +71,23 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                 min={1}
                 style={{ width: '60px', textAlign: 'center' }}
                 aria-label="Quantity"
+                disabled={disabled}
+            />
+            <input
+                type="number"
+                className="input"
+                placeholder="Value"
+                step="0.01"
+                min="0"
+                value={item.value ?? ''}
+                onChange={(e) => {
+                    const v = e.target.value;
+                    onUpdate(item.id, {
+                        value: v === '' ? null : parseFloat(v) || 0
+                    });
+                }}
+                style={{ width: '70px', textAlign: 'right' }}
+                aria-label="Meal value"
                 disabled={disabled}
             />
             <input
@@ -594,6 +611,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 name: '',
                 quantity: 1,
                 price: null,
+                value: null,
                 sortOrder: maxSort + 1
             }
         ]);
@@ -619,6 +637,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     name: i.name,
                     quantity: i.quantity,
                     price: i.price ?? null,
+                    value: i.value ?? null,
                     sortOrder: i.sortOrder ?? 0
                 })),
                 null,
@@ -665,7 +684,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     );
 
     const handleUpdateMealPlannerDraftItem = useCallback(
-        (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'sortOrder'>>) => {
+        (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'value' | 'sortOrder'>>) => {
             setMealPlannerDraftItems((prev) =>
                 prev.map((item) => (item.id !== id ? item : { ...item, ...patch }))
             );
@@ -940,6 +959,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                         <span className={styles.mealPlannerDragHandleHeader} />
                                         <span className={styles.popupCustomItemName}>Name</span>
                                         <span style={{ width: '60px', textAlign: 'center' }}>Qty</span>
+                                        <span style={{ width: '70px', textAlign: 'right' }}>Value</span>
                                         <span style={{ width: '80px', textAlign: 'right' }}>Price</span>
                                         {!isPast && <span style={{ width: '40px' }} />}
                                     </div>
