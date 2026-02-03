@@ -3013,58 +3013,202 @@ export async function deleteClient(id: string) {
         const dependentIds = dependents.map(d => d.id);
 
         // Delete upcoming orders for all dependents
-        await supabase
+        const { error: depUpcomingErr } = await supabase
             .from('upcoming_orders')
             .delete()
             .in('client_id', dependentIds);
+        handleError(depUpcomingErr, 'deleteClient dependents upcoming_orders');
 
-        // Delete active orders for all dependents
-        await supabase
+        // Delete meal planner data for dependents
+        const { data: depMpo } = await supabase.from('meal_planner_orders').select('id').in('client_id', dependentIds);
+        const depMpoIds = (depMpo ?? []).map((r: { id: string }) => r.id);
+        if (depMpoIds.length > 0) {
+            const { error: em } = await supabase.from('meal_planner_order_items').delete().in('meal_planner_order_id', depMpoIds);
+            handleError(em, 'deleteClient dependents meal_planner_order_items');
+            const { error: em2 } = await supabase.from('meal_planner_orders').delete().in('client_id', dependentIds);
+            handleError(em2, 'deleteClient dependents meal_planner_orders');
+        }
+
+        // Fetch all order IDs for dependents and delete child rows then orders
+        const { data: depOrders } = await supabase
             .from('orders')
-            .delete()
-            .in('client_id', dependentIds)
-            .in('status', ['pending', 'confirmed', 'processing']);
+            .select('id')
+            .in('client_id', dependentIds);
+        const depOrderIds = (depOrders ?? []).map((o: { id: string }) => o.id);
+        if (depOrderIds.length > 0) {
+            const { data: depSelections } = await supabase
+                .from('order_vendor_selections')
+                .select('id')
+                .in('order_id', depOrderIds);
+            const depSelectionIds = (depSelections ?? []).map((s: { id: string }) => s.id);
+            if (depSelectionIds.length > 0) {
+                const { error: e } = await supabase.from('order_items').delete().in('vendor_selection_id', depSelectionIds);
+                handleError(e, 'deleteClient dependents order_items');
+            }
+            const { error: e2 } = await supabase.from('order_box_selections').delete().in('order_id', depOrderIds);
+            handleError(e2, 'deleteClient dependents order_box_selections');
+            const { error: e3 } = await supabase.from('order_vendor_selections').delete().in('order_id', depOrderIds);
+            handleError(e3, 'deleteClient dependents order_vendor_selections');
+        }
+        const { error: depBillingErr } = await supabase.from('billing_records').delete().in('client_id', dependentIds);
+        handleError(depBillingErr, 'deleteClient dependents billing_records');
+        const { error: depOrdersErr } = await supabase.from('orders').delete().in('client_id', dependentIds);
+        handleError(depOrdersErr, 'deleteClient dependents orders');
+
+        // Delete other client-referencing data for dependents
+        const { error: e4 } = await supabase.from('delivery_history').delete().in('client_id', dependentIds);
+        handleError(e4, 'deleteClient dependents delivery_history');
+        const { error: e5 } = await supabase.from('order_history').delete().in('client_id', dependentIds);
+        handleError(e5, 'deleteClient dependents order_history');
+        const { error: e6 } = await supabase.from('navigator_logs').delete().in('client_id', dependentIds);
+        handleError(e6, 'deleteClient dependents navigator_logs');
+        const { error: e7 } = await supabase.from('signatures').delete().in('client_id', dependentIds);
+        handleError(e7, 'deleteClient dependents signatures');
+        const { error: e8 } = await supabase.from('schedules').delete().in('client_id', dependentIds);
+        handleError(e8, 'deleteClient dependents schedules');
+        const { error: e9 } = await supabase.from('stops').delete().in('client_id', dependentIds);
+        handleError(e9, 'deleteClient dependents stops');
+
+        const { error: e10 } = await supabase.from('client_box_orders').delete().in('client_id', dependentIds);
+        handleError(e10, 'deleteClient dependents client_box_orders');
 
         // Delete form submissions for all dependents
-        await supabase
+        const { error: depFormsErr } = await supabase
             .from('form_submissions')
             .delete()
             .in('client_id', dependentIds);
+        handleError(depFormsErr, 'deleteClient dependents form_submissions');
 
         // Delete all dependents
-        await supabase
+        const { error: depClientsErr } = await supabase
             .from('clients')
             .delete()
             .in('id', dependentIds);
+        handleError(depClientsErr, 'deleteClient dependents');
     }
 
     // Delete all upcoming orders for this client
-    await supabase
+    const { error: upcomingErr } = await supabase
         .from('upcoming_orders')
         .delete()
         .eq('client_id', id);
+    handleError(upcomingErr, 'deleteClient upcoming_orders');
 
-    // Delete active orders (pending, confirmed, processing) but preserve order history
-    // Order history includes: completed, waiting_for_proof, billing_pending, cancelled
-    await supabase
+    // Delete meal planner data for this client (items first, then orders)
+    const { data: mpoRows } = await supabase.from('meal_planner_orders').select('id').eq('client_id', id);
+    const mpoIds = (mpoRows ?? []).map((r: { id: string }) => r.id);
+    if (mpoIds.length > 0) {
+        const { error: mpoItemsErr } = await supabase.from('meal_planner_order_items').delete().in('meal_planner_order_id', mpoIds);
+        handleError(mpoItemsErr, 'deleteClient meal_planner_order_items');
+        const { error: mpoErr } = await supabase.from('meal_planner_orders').delete().eq('client_id', id);
+        handleError(mpoErr, 'deleteClient meal_planner_orders');
+    }
+
+    // Fetch all order IDs for this client (all statuses) so we can delete child rows and avoid FK blocks
+    const { data: clientOrders } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('client_id', id);
+    const orderIds = (clientOrders ?? []).map((o: { id: string }) => o.id);
+
+    if (orderIds.length > 0) {
+        // Get order_vendor_selections for these orders (order_items reference these)
+        const { data: selections } = await supabase
+            .from('order_vendor_selections')
+            .select('id')
+            .in('order_id', orderIds);
+        const selectionIds = (selections ?? []).map((s: { id: string }) => s.id);
+        if (selectionIds.length > 0) {
+            const { error: orderItemsErr } = await supabase
+                .from('order_items')
+                .delete()
+                .in('vendor_selection_id', selectionIds);
+            handleError(orderItemsErr, 'deleteClient order_items');
+        }
+        const { error: boxSelErr } = await supabase
+            .from('order_box_selections')
+            .delete()
+            .in('order_id', orderIds);
+        handleError(boxSelErr, 'deleteClient order_box_selections');
+        const { error: vendorSelErr } = await supabase
+            .from('order_vendor_selections')
+            .delete()
+            .in('order_id', orderIds);
+        handleError(vendorSelErr, 'deleteClient order_vendor_selections');
+    }
+
+    // Delete billing_records that reference this client (or their orders)
+    const { error: billingErr } = await supabase
+        .from('billing_records')
+        .delete()
+        .eq('client_id', id);
+    handleError(billingErr, 'deleteClient billing_records');
+
+    // Delete all orders for this client (all statuses) so client row can be removed
+    const { error: ordersErr } = await supabase
         .from('orders')
         .delete()
-        .eq('client_id', id)
-        .in('status', ['pending', 'confirmed', 'processing']);
+        .eq('client_id', id);
+    handleError(ordersErr, 'deleteClient orders');
+
+    // Delete other client-referencing tables so FK does not block client delete
+    const { error: deliveryHistErr } = await supabase
+        .from('delivery_history')
+        .delete()
+        .eq('client_id', id);
+    handleError(deliveryHistErr, 'deleteClient delivery_history');
+
+    const { error: orderHistErr } = await supabase
+        .from('order_history')
+        .delete()
+        .eq('client_id', id);
+    handleError(orderHistErr, 'deleteClient order_history');
+
+    const { error: navLogsErr } = await supabase
+        .from('navigator_logs')
+        .delete()
+        .eq('client_id', id);
+    handleError(navLogsErr, 'deleteClient navigator_logs');
+
+    const { error: sigErr } = await supabase
+        .from('signatures')
+        .delete()
+        .eq('client_id', id);
+    handleError(sigErr, 'deleteClient signatures');
+
+    const { error: schedErr } = await supabase
+        .from('schedules')
+        .delete()
+        .eq('client_id', id);
+    handleError(schedErr, 'deleteClient schedules');
+
+    const { error: stopsErr } = await supabase
+        .from('stops')
+        .delete()
+        .eq('client_id', id);
+    handleError(stopsErr, 'deleteClient stops');
+
+    const { error: boxOrdersErr } = await supabase
+        .from('client_box_orders')
+        .delete()
+        .eq('client_id', id);
+    handleError(boxOrdersErr, 'deleteClient client_box_orders');
 
     // Delete form submissions for this client
-    await supabase
+    const { error: formsErr } = await supabase
         .from('form_submissions')
         .delete()
         .eq('client_id', id);
+    handleError(formsErr, 'deleteClient form_submissions');
 
     // Delete the client
     // Note: Client IDs are generated identifiers (e.g. CLIENT-XXX) which CAN be reused after deletion.
     // We must ensure the local cache is synced to remove any stale data associated with this ID.
-    await supabase
+    const { error: clientErr } = await supabase
         .from('clients')
         .delete()
         .eq('id', id);
+    handleError(clientErr, 'deleteClient clients');
     revalidatePath('/clients');
 
     // Trigger local DB sync in background to remove deleted client data from cache
