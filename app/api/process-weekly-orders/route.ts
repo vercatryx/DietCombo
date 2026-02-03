@@ -320,11 +320,12 @@ async function precheckAndTransferUpcomingOrders() {
     const currentTimeISO = currentTime.toISOString();
 
     try {
-        // Fetch all upcoming orders (excluding 'processed' status)
+        // Fetch all upcoming orders (excluding 'processed' status and meal_planner service type; meal_planner is processed separately)
         const { data: upcomingOrders, error: upcomingError } = await supabase
             .from('upcoming_orders')
             .select('*')
             .neq('status', 'processed')
+            .neq('service_type', 'meal_planner')
             .order('created_at', { ascending: true });
 
         if (upcomingError) {
@@ -593,11 +594,12 @@ export async function GET(request: NextRequest) {
 
         // If orders table is empty, fetch all upcoming orders for each client
         if (ordersCount === 0) {
-            // Fetch ALL upcoming orders (excluding 'processed' status as those are already processed)
+            // Fetch ALL upcoming orders (excluding 'processed' status and meal_planner; meal_planner is processed separately)
             const { data: upcomingOrders, error: upcomingError } = await supabase
                 .from('upcoming_orders')
                 .select('*')
-                .neq('status', 'processed') // Exclude already processed orders
+                .neq('status', 'processed')
+                .neq('service_type', 'meal_planner')
                 .order('created_at', { ascending: true });
 
             if (upcomingError) {

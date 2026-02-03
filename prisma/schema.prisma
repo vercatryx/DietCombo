@@ -146,7 +146,6 @@ model Client {
   updatedBy            String?             @map("updated_by") @db.VarChar(255)
   client_box_orders       client_box_orders[]
   mealPlannerCustomItems  MealPlannerCustomItem[]
-  mealPlannerOrders       MealPlannerOrder[]
   assignedDriver          Driver?             @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
 
   @@index([clientIdExternal], map: "idx_clients_client_id_external")
@@ -278,8 +277,6 @@ model MenuItem {
   updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
   image_url            String?
   sort_order           Int?                  @default(0)
-  mealPlannerOrderItems MealPlannerOrderItem[]
-
   @@index([vendorId], map: "idx_menu_items_vendor_id")
   @@index([categoryId], map: "idx_menu_items_category_id")
   @@map("menu_items")
@@ -555,6 +552,7 @@ model UpcomingOrder {
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   meal_type             String?   @default("Lunch")
   vendorId              String?   @map("vendor_id") @db.VarChar(36)
+  userModified          Boolean?  @default(false) @map("user_modified")
 
   @@index([orderNumber], map: "idx_upcoming_orders_order_number")
   @@index([processedOrderId], map: "idx_upcoming_orders_processed_order_id")
@@ -591,6 +589,7 @@ model UpcomingOrderItem {
   custom_name               String?
   custom_price              Decimal?         @db.Decimal(10, 2)
   meal_item_id              String?          @db.VarChar(36)
+  sortOrder                 Int?             @default(0) @map("sort_order")
   breakfast_items           breakfast_items? @relation(fields: [meal_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([upcomingOrderId], map: "idx_upcoming_order_items_upcoming_order_id")
@@ -655,7 +654,6 @@ model breakfast_items {
   breakfast_categories  breakfast_categories?  @relation(fields: [category_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   order_items           OrderItem[]
   upcoming_order_items  UpcomingOrderItem[]
-  mealPlannerOrderItems MealPlannerOrderItem[]
 
   @@index([category_id])
 }
@@ -695,53 +693,4 @@ model MealPlannerCustomItem {
   @@map("meal_planner_custom_items")
 }
 
-model MealPlannerOrder {
-  id                    String                 @id @default(uuid()) @db.VarChar(36)
-  clientId              String                 @map("client_id") @db.VarChar(36)
-  status                String                 @default("draft") @db.VarChar(50)
-  scheduledDeliveryDate DateTime?              @map("scheduled_delivery_date") @db.Date
-  deliveryDay           String?                @map("delivery_day") @db.VarChar(50)
-  totalValue            Decimal?               @map("total_value") @db.Decimal(10, 2)
-  totalItems            Int?                   @map("total_items")
-  items                 Json?
-  notes                 String?
-  processedOrderId      String?                @map("processed_order_id") @db.VarChar(36)
-  processedAt           DateTime?              @map("processed_at") @db.Timestamp(6)
-  userModified          Boolean                @default(false) @map("user_modified")
-  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt             DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
-
-  client  Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  orderItems MealPlannerOrderItem[]
-
-  @@index([clientId], map: "idx_meal_planner_orders_client_id")
-  @@index([status], map: "idx_meal_planner_orders_status")
-  @@index([scheduledDeliveryDate], map: "idx_meal_planner_orders_scheduled_delivery_date")
-  @@index([processedOrderId], map: "idx_meal_planner_orders_processed_order_id")
-  @@map("meal_planner_orders")
-}
-
-model MealPlannerOrderItem {
-  id                 String   @id @default(uuid()) @db.VarChar(36)
-  mealPlannerOrderId String   @map("meal_planner_order_id") @db.VarChar(36)
-  mealType           String   @map("meal_type") @db.VarChar(50)
-  menuItemId         String?  @map("menu_item_id") @db.VarChar(36)
-  mealItemId         String?  @map("meal_item_id") @db.VarChar(36)
-  quantity           Int      @default(1)
-  notes              String?
-  customName         String?  @map("custom_name") @db.VarChar(255)
-  customPrice        Decimal? @map("custom_price") @db.Decimal(10, 2)
-  sortOrder          Int?     @default(0) @map("sort_order")
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
-
-  mealPlannerOrder MealPlannerOrder @relation(fields: [mealPlannerOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  menuItem         MenuItem?        @relation(fields: [menuItemId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  mealItem         breakfast_items? @relation(fields: [mealItemId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-
-  @@index([mealPlannerOrderId], map: "idx_meal_planner_order_items_order_id")
-  @@index([menuItemId], map: "idx_meal_planner_order_items_menu_item_id")
-  @@index([mealItemId], map: "idx_meal_planner_order_items_meal_item_id")
-  @@index([mealType], map: "idx_meal_planner_order_items_meal_type")
-  @@map("meal_planner_order_items")
-}
+// Meal planner orders now use upcoming_orders with service_type = 'meal_planner' and upcoming_order_items

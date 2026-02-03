@@ -89,7 +89,7 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
-  // Only show today and future dates in the meal planner (from meal_planner_orders + meal_planner_order_items)
+  // Only show today and future dates in the meal planner (from upcoming_orders + upcoming_order_items, service_type = meal_planner)
   const futureOrders = useMemo(
     () => orders.filter((o) => (o.scheduledDeliveryDate || '') >= todayIso),
     [orders, todayIso]
