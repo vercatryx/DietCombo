@@ -124,6 +124,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const [message, setMessage] = useState<string | null>(null);
     const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
     const [mealPlannerDraftItems, setMealPlannerDraftItems] = useState<MealPlannerCustomItem[]>([]);
+    const [mealPlannerExpirationDate, setMealPlannerExpirationDate] = useState<string>('');
     const [mealPlannerPopupLoading, setMealPlannerPopupLoading] = useState(false);
     const [mealPlannerPopupSaving, setMealPlannerPopupSaving] = useState(false);
     const [mealPlannerItemCounts, setMealPlannerItemCounts] = useState<Record<string, number>>({});
@@ -558,8 +559,9 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         setMealPlannerPopupDate(dateKey);
         setMealPlannerPopupLoading(true);
         setMealPlannerDraftItems([]);
+        setMealPlannerExpirationDate('');
         try {
-            const items = await getMealPlannerCustomItems(dateKey, null);
+            const { items, expirationDate } = await getMealPlannerCustomItems(dateKey, null);
             setMealPlannerDraftItems(
                 items.map((i) => ({
                     id: i.id,
@@ -569,6 +571,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     sortOrder: i.sortOrder ?? 0
                 }))
             );
+            setMealPlannerExpirationDate(expirationDate ?? '');
         } catch (e) {
             setMessage('Error loading meal planner items.');
             setTimeout(() => setMessage(null), 3000);
@@ -607,7 +610,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     price: i.price ?? null,
                     sortOrder: i.sortOrder ?? 0
                 })),
-                null
+                null,
+                mealPlannerExpirationDate.trim() || null
             );
             setMealPlannerItemCounts((prev) => {
                 const next = { ...prev };
@@ -630,6 +634,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     function closeMealPlannerPopup() {
         setMealPlannerPopupDate(null);
         setMealPlannerDraftItems([]);
+        setMealPlannerExpirationDate('');
     }
 
     function handleMealPlannerDragEnd(event: DragEndEvent) {
@@ -884,6 +889,21 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                                 ? `${mealPlannerDraftItems.length} saved item(s) for this date. ${isPast ? 'View only.' : 'Edit below or add more.'}`
                                                 : isPast ? 'No items for this date. View only.' : 'Add custom items for this date. Drag rows to reorder.'}
                                         </p>
+                                        <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                                            <label htmlFor="meal-planner-expiration-date" className="label" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>
+                                                Expiration date
+                                            </label>
+                                            <input
+                                                id="meal-planner-expiration-date"
+                                                type="date"
+                                                className="input"
+                                                value={mealPlannerExpirationDate}
+                                                onChange={(e) => setMealPlannerExpirationDate(e.target.value)}
+                                                disabled={isPast}
+                                                style={{ maxWidth: '12rem' }}
+                                                aria-label="Expiration date"
+                                            />
+                                        </div>
                                         {mealPlannerPopupLoading ? (
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 'var(--spacing-lg)', color: 'var(--text-secondary)' }}>
                                                 <Loader2 className="animate-spin" size={18} />

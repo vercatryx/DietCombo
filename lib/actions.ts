@@ -1400,6 +1400,7 @@ export type MealPlannerCustomItemInput = {
     quantity: number;
     price?: number | null;
     sortOrder?: number | null;
+    expirationDate?: string | null;
 };
 
 export type MealPlannerCustomItemResult = {
@@ -1410,6 +1411,11 @@ export type MealPlannerCustomItemResult = {
     sortOrder: number;
 };
 
+export type GetMealPlannerCustomItemsResult = {
+    items: MealPlannerCustomItemResult[];
+    expirationDate: string | null;
+};
+
 /**
  * Fetch meal planner custom items for a given calendar date.
  * @param calendarDate - ISO date string (YYYY-MM-DD)
@@ -1418,12 +1424,12 @@ export type MealPlannerCustomItemResult = {
 export async function getMealPlannerCustomItems(
     calendarDate: string,
     clientId?: string | null
-): Promise<MealPlannerCustomItemResult[]> {
+): Promise<GetMealPlannerCustomItemsResult> {
     try {
         const dateOnly = mealPlannerDateOnly(calendarDate);
         let query = supabase
             .from('meal_planner_custom_items')
-            .select('id, name, quantity, price, sort_order')
+            .select('id, name, quantity, price, sort_order, expiration_date')
             .eq('calendar_date', dateOnly)
             .order('sort_order', { ascending: true });
 
@@ -1436,18 +1442,26 @@ export async function getMealPlannerCustomItems(
         const { data, error } = await query;
         if (error) {
             logQueryError(error, 'meal_planner_custom_items', 'select');
-            return [];
+            return { items: [], expirationDate: null };
         }
-        return (data || []).map((row: any) => ({
+        const rows = data || [];
+        const expirationDate =
+            rows.length > 0 && rows[0].expiration_date != null
+                ? (typeof rows[0].expiration_date === 'string'
+                      ? rows[0].expiration_date.slice(0, 10)
+                      : String(rows[0].expiration_date).slice(0, 10))
+                : null;
+        const items = rows.map((row: any) => ({
             id: row.id,
             name: row.name,
             quantity: row.quantity ?? 1,
             price: row.price != null ? Number(row.price) : null,
             sortOrder: row.sort_order ?? 0
         }));
+        return { items, expirationDate };
     } catch (error) {
         console.error('Error fetching meal planner custom items:', error);
-        return [];
+        return { items: [], expirationDate: null };
     }
 }
 
@@ -2170,7 +2184,8 @@ export async function getMealPlannerOrders(
 export async function saveMealPlannerCustomItems(
     calendarDate: string,
     items: MealPlannerCustomItemInput[],
-    clientId?: string | null
+    clientId?: string | null,
+    expirationDate?: string | null
 ): Promise<void> {
     try {
         const validItems = items.filter(
@@ -2178,6 +2193,10 @@ export async function saveMealPlannerCustomItems(
         );
         const clientIdVal = clientId && clientId !== '' ? clientId : null;
         const dateOnly = mealPlannerDateOnly(calendarDate);
+        const expirationDateVal =
+            expirationDate != null && expirationDate !== ''
+                ? mealPlannerDateOnly(expirationDate)
+                : null;
 
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -2217,7 +2236,8 @@ export async function saveMealPlannerCustomItems(
             name: (item.name ?? '').trim(),
             quantity: Math.max(1, item.quantity ?? 1),
             price: item.price != null && !Number.isNaN(Number(item.price)) ? Number(item.price) : null,
-            sort_order: item.sortOrder ?? idx
+            sort_order: item.sortOrder ?? idx,
+            expiration_date: expirationDateVal
         }));
 
         const { error: insertError } = await supabaseAdmin
