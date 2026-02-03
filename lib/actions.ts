@@ -1670,6 +1670,67 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
     }
 }
 
+/**
+ * Get distinct calendar dates from meal_planner_custom_items for the default template (client_id is null)
+ * that are today or in the future. Used to seed meal_planner_orders for a client when they have none.
+ */
+export async function getDefaultTemplateMealPlanDatesForFuture(): Promise<string[]> {
+    try {
+        const today = mealPlannerDateOnly(new Date().toISOString().slice(0, 10));
+        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            : supabase;
+        const { data: rows, error } = await supabaseClient
+            .from('meal_planner_custom_items')
+            .select('calendar_date')
+            .is('client_id', null)
+            .gte('calendar_date', today)
+            .order('calendar_date', { ascending: true });
+
+        if (error) {
+            logQueryError(error, 'meal_planner_custom_items', 'select');
+            return [];
+        }
+        if (!rows || rows.length === 0) return [];
+        const seen = new Set<string>();
+        const dates: string[] = [];
+        for (const row of rows) {
+            const d = mealPlannerNormalizeDate(row.calendar_date as string | Date | null | undefined);
+            if (d && !seen.has(d)) {
+                seen.add(d);
+                dates.push(d);
+            }
+        }
+        return dates.sort((a, b) => a.localeCompare(b));
+    } catch (err) {
+        console.error('Error fetching default template meal plan dates:', err);
+        return [];
+    }
+}
+
+/**
+ * When a client has no meal_planner_orders (e.g. on first opening the profile), load the default
+ * template from meal_planner_custom_items for today and future dates and create meal_planner_orders
+ * and meal_planner_order_items for this client. Called from ClientProfile/SavedMealPlanMonth when
+ * the meal planner component returns no dates or items.
+ */
+export async function ensureMealPlannerOrdersFromDefaultTemplate(
+    clientId: string
+): Promise<{ ok: boolean; error?: string }> {
+    try {
+        const dates = await getDefaultTemplateMealPlanDatesForFuture();
+        if (dates.length === 0) return { ok: true };
+        for (const dateOnly of dates) {
+            await syncMealPlannerCustomItemsToOrders(mealPlannerDateOnly(dateOnly), clientId);
+        }
+        return { ok: true };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('Error ensuring meal planner orders from default template:', err);
+        return { ok: false, error: message };
+    }
+}
+
 export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: number; clientId?: string | null };
 
 /**
@@ -7589,11 +7650,10 @@ export async function getUpcomingOrderForClient(clientId: string, caseId?: strin
     if (!clientId) return null;
 
     try {
-        // Use local database for fast access
         const { getUpcomingOrderForClientLocal, syncLocalDBFromSupabase } = await import('./local-db');
         let result = await getUpcomingOrderForClientLocal(clientId, caseId);
-        // When local DB is empty or out of sync (e.g. first load, read-only FS), sync from Supabase and retry
-        // so the client profile dialog can load existing upcoming_orders
+        // Reimplemented fix: when local DB is empty or out of sync, sync from Supabase and retry
+        // so the client profile dialog can load existing upcoming_orders records
         if (result === null) {
             await syncLocalDBFromSupabase();
             result = await getUpcomingOrderForClientLocal(clientId, caseId);

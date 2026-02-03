@@ -358,16 +358,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
 
 
-        // If we have initialData AND we have the necessary lookups (passed as props), we can hydrate instantly without loading state.
-        // When initialData.upcomingOrder is missing, run full loadData() so we fetch existing upcoming_orders (e.g. from Supabase after sync).
-        // Generally, ClientList passes everything.
+        // If we have initialData with upcomingOrder, hydrate instantly. Otherwise run full loadData()
+        // so we fetch existing upcoming_orders (reimplemented fix for client profile dialog).
 
         const hasInitialData = initialData && initialData.client.id === clientId;
-        const hasUpcomingOrderInInitial = hasInitialData && initialData!.upcomingOrder != null;
+        const hasUpcomingOrderInInitial = hasInitialData && initialData.upcomingOrder != null;
 
         if (hasInitialData && hasUpcomingOrderInInitial) {
-
-            hydrateFromInitialData(initialData!);
+            hydrateFromInitialData(initialData);
             // If props were passed, we don't need to fetch standard lookups, but we might still need settings/categories/allClients
             // For simplicity, let's just fetch everything missing in background but show content immediately if we have the basics.
             // If we don't have vendors/statuses props, we probably should show loader or fetch fast.
@@ -384,7 +382,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // Still fetch auxiliary data that might not be in props (settings, categories, allClients)
                 // But do NOT block UI
                 setLoading(false);
-                loadAuxiliaryData(initialData!.client);
+                loadAuxiliaryData(initialData.client);
             }
         } else {
             setLoading(true);

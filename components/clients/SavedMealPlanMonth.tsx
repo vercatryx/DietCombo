@@ -5,6 +5,7 @@ import { CalendarDays, UtensilsCrossed } from 'lucide-react';
 import {
   getSavedMealPlanDatesWithItemsFromOrders,
   updateMealPlannerOrderItemQuantity,
+  ensureMealPlannerOrdersFromDefaultTemplate,
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
 } from '@/lib/actions';
@@ -75,8 +76,17 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
     fetchIdRef.current = thisFetchId;
 
     getSavedMealPlanDatesWithItemsFromOrders(effectiveClientId)
-      .then((list) => {
+      .then(async (list) => {
         if (fetchIdRef.current !== thisFetchId) return;
+        // When no dates or items, load default template from meal_planner_custom_items for today and future and create orders
+        if (list.length === 0) {
+          const { ok } = await ensureMealPlannerOrdersFromDefaultTemplate(effectiveClientId);
+          if (ok) {
+            const refetched = await getSavedMealPlanDatesWithItemsFromOrders(effectiveClientId);
+            if (fetchIdRef.current !== thisFetchId) return;
+            list = refetched;
+          }
+        }
         setOrders(list);
         const today = getTodayIso();
         const future = list.filter((o) => (o.scheduledDeliveryDate || '') >= today);
