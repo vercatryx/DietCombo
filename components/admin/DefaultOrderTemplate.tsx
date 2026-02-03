@@ -554,6 +554,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         return selectedDate < today;
     }
 
+    /** Today as YYYY-MM-DD for min expiration date (only allow today or future) */
+    function getTodayDateKey(): string {
+        return formatDateKey(new Date());
+    }
+
     /** Open meal planner dialog for a date. Loads existing records from DB for that date and auto-populates the dialog when they match. */
     async function openMealPlannerPopup(dateKey: string) {
         setMealPlannerPopupDate(dateKey);
@@ -596,6 +601,12 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
 
     async function handleMealPlannerSave() {
         if (!mealPlannerPopupDate) return;
+        const expTrim = mealPlannerExpirationDate.trim();
+        if (expTrim && isDatePast(expTrim)) {
+            setMessage('Expiration date must be today or a future date.');
+            setTimeout(() => setMessage(null), 3000);
+            return;
+        }
         const valid = mealPlannerDraftItems.filter(
             (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
         );
@@ -611,7 +622,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     sortOrder: i.sortOrder ?? 0
                 })),
                 null,
-                mealPlannerExpirationDate.trim() || null
+                expTrim || null
             );
             setMealPlannerItemCounts((prev) => {
                 const next = { ...prev };
@@ -899,6 +910,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                                 className="input"
                                                 value={mealPlannerExpirationDate}
                                                 onChange={(e) => setMealPlannerExpirationDate(e.target.value)}
+                                                min={getTodayDateKey()}
                                                 disabled={isPast}
                                                 style={{ maxWidth: '12rem' }}
                                                 aria-label="Expiration date"
