@@ -7567,8 +7567,15 @@ export async function getUpcomingOrderForClient(clientId: string, caseId?: strin
 
     try {
         // Use local database for fast access
-        const { getUpcomingOrderForClientLocal } = await import('./local-db');
-        return await getUpcomingOrderForClientLocal(clientId, caseId);
+        const { getUpcomingOrderForClientLocal, syncLocalDBFromSupabase } = await import('./local-db');
+        let result = await getUpcomingOrderForClientLocal(clientId, caseId);
+        // When local DB is empty or out of sync (e.g. first load, read-only FS), sync from Supabase and retry
+        // so the client profile dialog can load existing upcoming_orders
+        if (result === null) {
+            await syncLocalDBFromSupabase();
+            result = await getUpcomingOrderForClientLocal(clientId, caseId);
+        }
+        return result;
     } catch (err) {
         console.error('Error in getUpcomingOrderForClient:', err);
         return null;
