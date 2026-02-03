@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, saveClientMealPlannerOrderQuantities, type MealPlannerOrderResult } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -148,6 +148,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const justCreatedClientRef = useRef<boolean>(false);
     // Track if we've already set defaults to prevent infinite loops
     const defaultsSetRef = useRef<{ [key: string]: boolean | string | undefined; lastKey?: string }>({});
+    // Current meal plan orders (from Saved Meal Plan section) for persisting on profile save
+    const mealPlanOrdersRef = useRef<MealPlannerOrderResult[]>([]);
 
     const [client, setClient] = useState<ClientProfile | null>(null);
     const [statuses, setStatuses] = useState<ClientStatus[]>(initialStatuses || []);
@@ -4023,8 +4025,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }, activeOrderAny);
             }
 
-            // Save meal orders only if service type is Meal or mealSelections exists (requires caseId)
-            if (updateData.activeOrder?.caseId && (serviceType === 'Meal' || (updateData.activeOrder as any).mealSelections)) {
+            // Persist meal plan order quantity changes (Saved Meal Plan section) to meal_planner_orders / meal_planner_order_items
+            if (serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
+                const { ok, error: mealPlanErr } = await saveClientMealPlannerOrderQuantities(clientId, mealPlanOrdersRef.current);
+                if (!ok && mealPlanErr) {
+                    console.warn('[ClientProfile] Failed to save meal planner order quantities:', mealPlanErr);
+                }
+            }
+
+            // Save meal orders only when service type is Meal (meal_planner_orders for Food clients
+            // are managed by the Saved Meal Plan section and admin template, not by saveClientMealOrder).
+            if (serviceType === 'Meal' && updateData.activeOrder?.caseId) {
                 await saveClientMealOrder(clientId, {
                     caseId: updateData.activeOrder.caseId,
                     mealSelections: (updateData.activeOrder as any).mealSelections || {}
@@ -6142,7 +6153,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             {!isNewClient && formData.serviceType === 'Food' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
                                     <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
-                                    <SavedMealPlanMonth clientId={clientId} />
+                                    <SavedMealPlanMonth
+                                        clientId={clientId}
+                                        onOrdersChange={(orders) => { mealPlanOrdersRef.current = orders; }}
+                                    />
                                 </section>
                             )}
 

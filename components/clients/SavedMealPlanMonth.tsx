@@ -42,9 +42,11 @@ function getTodayIso(): string {
 export interface SavedMealPlanMonthProps {
   /** Current client ID; when null or 'new', no data is loaded. */
   clientId: string | null;
+  /** Called whenever the current orders (with quantities) change, so the parent can persist them on save. */
+  onOrdersChange?: (orders: MealPlannerOrderResult[]) => void;
 }
 
-export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
+export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -52,6 +54,11 @@ export function SavedMealPlanMonth({ clientId }: SavedMealPlanMonthProps) {
   const fetchIdRef = useRef(0);
 
   const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
+
+  // Report current orders to parent so client profile save can persist meal plan quantity changes.
+  useEffect(() => {
+    if (orders.length > 0) onOrdersChange?.(orders);
+  }, [orders, onOrdersChange]);
 
   // Load meal plan data when the dialog is opened for a client. Always refetch when the client
   // is set so the list of dates with meal plans is always up to date (e.g. after adding a plan

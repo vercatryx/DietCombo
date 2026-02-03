@@ -2279,6 +2279,65 @@ export async function updateMealPlannerOrderItemQuantity(
     }
 }
 
+/**
+ * Persist meal planner order quantities from the client profile dialog.
+ * Called when saving the client profile so that any quantity changes made in the
+ * Saved Meal Plan section (date buttons / quantity controls) are written to
+ * meal_planner_orders and meal_planner_order_items. Only updates existing orders
+ * that belong to the client; sets user_modified on orders so admin template
+ * updates do not overwrite client overrides.
+ */
+export async function saveClientMealPlannerOrderQuantities(
+    clientId: string,
+    orders: MealPlannerOrderResult[]
+): Promise<{ ok: boolean; error?: string }> {
+    if (!clientId || !orders?.length) return { ok: true };
+    try {
+        const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+        const orderIds = orders.map((o) => o.id).filter(Boolean);
+        if (orderIds.length === 0) return { ok: true };
+
+        const { data: allowedOrders, error: fetchErr } = await supabaseAdmin
+            .from('meal_planner_orders')
+            .select('id')
+            .eq('client_id', clientId)
+            .in('id', orderIds);
+
+        if (fetchErr) {
+            logQueryError(fetchErr, 'meal_planner_orders', 'select');
+            return { ok: false, error: fetchErr.message };
+        }
+        const allowedOrderIds = new Set((allowedOrders ?? []).map((r: { id: string }) => r.id));
+
+        for (const order of orders) {
+            if (!allowedOrderIds.has(order.id)) continue;
+            const totalItems = (order.items ?? []).reduce((sum, i) => sum + Math.max(1, Number(i.quantity) || 1), 0);
+            const { error: orderUpdErr } = await supabaseAdmin
+                .from('meal_planner_orders')
+                .update({ total_items: totalItems, user_modified: true, updated_at: new Date().toISOString() })
+                .eq('id', order.id)
+                .eq('client_id', clientId);
+            if (orderUpdErr) logQueryError(orderUpdErr, 'meal_planner_orders', 'update');
+
+            for (const item of order.items ?? []) {
+                const qty = Math.max(1, Math.floor(Number(item.quantity)) || 1);
+                const { error: itemUpdErr } = await supabaseAdmin
+                    .from('meal_planner_order_items')
+                    .update({ quantity: qty, updated_at: new Date().toISOString() })
+                    .eq('id', item.id);
+                if (itemUpdErr) logQueryError(itemUpdErr, 'meal_planner_order_items', 'update');
+            }
+        }
+        return { ok: true };
+    } catch (error) {
+        console.error('Error saving client meal planner order quantities:', error);
+        return { ok: false, error: String(error) };
+    }
+}
+
 // --- NAVIGATOR ACTIONS ---
 
 export async function getNavigators() {
