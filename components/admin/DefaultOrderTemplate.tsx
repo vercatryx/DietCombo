@@ -879,21 +879,24 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 <div className={styles.popupOverlay} onClick={closeMealPlannerPopup} role="dialog" aria-modal="true" aria-labelledby="meal-planner-popup-title">
                     <div className={`${styles.popupContent} ${styles.popupContentMealPlanner}`} onClick={(e) => e.stopPropagation()}>
                         <div className={styles.popupHeader}>
-                            <h3 id="meal-planner-popup-title" className={styles.popupTitle}>
-                                Meal planner default template
-                                {' — '}
-                                {(() => {
-                                    const [y, m, d] = mealPlannerPopupDate.split('-').map(Number);
-                                    return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-                                })()}
-                            </h3>
+                            <div>
+                                <h3 id="meal-planner-popup-title" className={styles.popupTitle}>
+                                    Meal planner default template
+                                </h3>
+                                <span className={styles.popupTitleDate}>
+                                    {(() => {
+                                        const [y, m, d] = mealPlannerPopupDate.split('-').map(Number);
+                                        return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                                    })()}
+                                </span>
+                            </div>
                             <button
                                 type="button"
                                 className={styles.popupClose}
                                 onClick={closeMealPlannerPopup}
                                 aria-label="Close"
                             >
-                                <X size={20} />
+                                <X size={18} />
                             </button>
                         </div>
                         <div className={styles.popupBody}>
@@ -903,13 +906,13 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                     <>
                                         {isPast && (
                                             <div style={{
-                                                padding: 'var(--spacing-sm) var(--spacing-md)',
-                                                marginBottom: 'var(--spacing-md)',
-                                                borderRadius: 'var(--radius-sm)',
-                                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                                padding: 'var(--spacing-md) var(--spacing-lg)',
+                                                marginBottom: 'var(--spacing-lg)',
+                                                borderRadius: 'var(--radius-md)',
+                                                backgroundColor: 'rgba(239, 68, 68, 0.08)',
                                                 color: 'var(--color-danger)',
                                                 fontSize: '0.9rem',
-                                                border: '1px solid rgba(239, 68, 68, 0.3)'
+                                                border: '1px solid rgba(239, 68, 68, 0.25)'
                                             }}>
                                                 This date is in the past. You cannot add, update, or delete items for past dates.
                                             </div>
@@ -919,8 +922,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                                 ? `${mealPlannerDraftItems.length} saved item(s) for this date. ${isPast ? 'View only.' : 'Edit below or add more.'}`
                                                 : isPast ? 'No items for this date. View only.' : 'Add custom items for this date. Drag rows to reorder.'}
                                         </p>
-                                        <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                                            <label htmlFor="meal-planner-expiration-date" className="label" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>
+                                        <div className={styles.popupSection} style={{ marginBottom: 'var(--spacing-lg)' }}>
+                                            <label htmlFor="meal-planner-expiration-date" className={styles.popupSectionLabel}>
                                                 Expiration date
                                             </label>
                                             <input
@@ -943,15 +946,15 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                         ) : (
                                             <>
                             {!isPast && (
-                            <button
-                                type="button"
-                                className={`btn btn-secondary ${styles.popupAddItemBtn}`}
-                                onClick={addMealPlannerDraftItem}
-                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 'var(--spacing-md)' }}
-                            >
-                                <Plus size={16} />
-                                Add item
-                            </button>
+                                <button
+                                    type="button"
+                                    className={`btn btn-secondary ${styles.popupAddItemBtn}`}
+                                    onClick={addMealPlannerDraftItem}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 'var(--spacing-md)' }}
+                                >
+                                    <Plus size={16} />
+                                    Add item
+                                </button>
                             )}
                             <div className={styles.popupItemsList}>
                                 {mealPlannerDraftItems.length > 0 && (

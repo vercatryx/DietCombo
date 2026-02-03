@@ -299,14 +299,34 @@
 }
 
 /* Meal Planner date popup */
+@keyframes mealPlannerOverlayIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes mealPlannerDialogIn {
+    from {
+        opacity: 0;
+        transform: scale(0.96) translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
 .popupOverlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(2, 6, 23, 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    padding: var(--spacing-xl);
+    animation: mealPlannerOverlayIn 0.2s ease-out;
 }
 
 .popupContent {
@@ -320,62 +340,91 @@
 }
 
 .popupContentMealPlanner {
-    width: min(600px, 92vw);
-    min-width: 420px;
-}
-
-.popupCustomItemHeader {
+    width: min(700px, 94vw);
+    min-width: 480px;
+    max-height: 90vh;
     display: flex;
-    align-items: center;
-    gap: var(--spacing-md);
-    padding: var(--spacing-sm) var(--spacing-md);
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    border-bottom: 1px solid var(--border-color);
-    background: var(--bg-surface-hover, rgba(0,0,0,0.03));
+    flex-direction: column;
+    background: var(--bg-surface);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-color-light);
+    box-shadow: 0 24px 48px -12px rgba(2, 6, 23, 0.18), 0 0 0 1px rgba(2, 6, 23, 0.03);
+    animation: mealPlannerDialogIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .popupHeader {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    padding: var(--spacing-md) var(--spacing-lg);
-    border-bottom: 1px solid var(--border-color);
+    gap: var(--spacing-lg);
+    padding: var(--spacing-xl) var(--spacing-xl) var(--spacing-lg);
+    background: linear-gradient(180deg, rgba(72, 190, 133, 0.06) 0%, transparent 100%);
+    border-bottom: 1px solid var(--border-color-light);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
 }
 
 .popupTitle {
     margin: 0;
-    font-size: 1rem;
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+    line-height: 1.35;
+}
+
+.popupTitleDate {
+    display: inline-block;
+    margin-top: 0.35em;
+    padding: 0.35em 0.75em;
+    font-size: 0.875rem;
     font-weight: 600;
+    color: var(--color-primary);
+    background: rgba(72, 190, 133, 0.12);
+    border-radius: var(--radius-md);
+    letter-spacing: 0.01em;
 }
 
 .popupClose {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 4px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
     border: none;
-    background: transparent;
+    background: var(--bg-surface-hover);
     color: var(--text-secondary);
     cursor: pointer;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+    transition: color 0.15s ease, background 0.15s ease;
 }
 
 .popupClose:hover {
     color: var(--text-primary);
-    background: var(--bg-surface-hover);
+    background: var(--border-color);
+}
+
+.popupClose:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
 }
 
 .popupBody {
-    padding: var(--spacing-lg);
+    padding: var(--spacing-xl);
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
 }
 
 .popupDemoNote {
-    margin: 0 0 var(--spacing-md);
+    margin: 0 0 var(--spacing-lg);
+    padding: var(--spacing-md) var(--spacing-lg);
     font-size: 0.875rem;
     color: var(--text-secondary);
+    background: var(--bg-surface-hover);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--color-primary);
 }
 
 .popupSearchWrap {
@@ -398,21 +447,52 @@
     box-sizing: border-box;
 }
 
+.popupSection {
+    margin-bottom: var(--spacing-xl);
+}
+
+.popupSectionLabel {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    margin-bottom: var(--spacing-sm);
+}
+
 .popupItemsList {
-    max-height: 320px;
+    max-height: 280px;
+    overflow-x: auto;
     overflow-y: auto;
     margin-bottom: var(--spacing-lg);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface);
+    border: 1px solid var(--border-color-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-app);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.popupCustomItemHeader {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-color-light);
+    background: var(--bg-surface-hover);
 }
 
 .popupNoItems {
     margin: 0;
-    padding: var(--spacing-lg);
-    font-size: 0.875rem;
-    color: var(--text-secondary);
+    padding: var(--spacing-2xl) var(--spacing-xl);
+    font-size: 0.9rem;
+    color: var(--text-tertiary);
     text-align: center;
+    line-height: 1.5;
 }
 
 .popupItemRow {
@@ -461,18 +541,19 @@
     align-items: center;
     justify-content: center;
     width: 32px;
+    height: 32px;
     flex-shrink: 0;
     cursor: grab;
-    color: var(--text-secondary);
-    padding: 4px;
+    color: var(--text-tertiary);
     border-radius: var(--radius-sm);
+    transition: color 0.15s ease, background 0.15s ease;
 }
 .mealPlannerDragHandle:active {
     cursor: grabbing;
 }
 .mealPlannerDragHandle:hover {
-    color: var(--text-primary);
-    background: var(--bg-surface-hover, rgba(0, 0, 0, 0.04));
+    color: var(--color-primary);
+    background: rgba(72, 190, 133, 0.12);
 }
 .mealPlannerDragHandleHeader {
     display: inline-block;
@@ -483,8 +564,14 @@
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
-    padding: var(--spacing-sm) var(--spacing-md);
-    border-bottom: 1px solid var(--border-color);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    border-bottom: 1px solid var(--border-color-light);
+    background: var(--bg-surface);
+    transition: background 0.15s ease;
+}
+
+.popupCustomItemRow:hover {
+    background: var(--bg-surface-hover);
 }
 
 .popupCustomItemRow:last-child {
@@ -496,28 +583,51 @@
     min-width: 0;
 }
 
+/* Name field: reserve space for longer text */
+.popupCustomItemHeader .popupCustomItemName,
+.popupCustomItemRow .popupCustomItemName {
+    min-width: 200px;
+}
+
+.popupCustomItemRow input.popupCustomItemName {
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    min-width: 180px;
+}
+
+.popupCustomItemRow .input {
+    border-radius: var(--radius-sm);
+}
+
 .popupCustomItemRemove {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 6px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     border: none;
     background: transparent;
-    color: var(--text-secondary);
+    color: var(--text-tertiary);
     cursor: pointer;
     border-radius: var(--radius-sm);
     flex-shrink: 0;
+    transition: color 0.15s ease, background 0.15s ease;
 }
 
 .popupCustomItemRemove:hover {
-    color: var(--color-danger, #dc2626);
-    background: rgba(220, 38, 38, 0.08);
+    color: var(--color-danger);
+    background: rgba(239, 68, 68, 0.1);
 }
 
 .popupFooter {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
     gap: var(--spacing-md);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border-color);
+    padding: var(--spacing-lg) var(--spacing-xl);
+    border-top: 1px solid var(--border-color-light);
+    background: var(--bg-app);
+    border-radius: 0 0 var(--radius-xl) var(--radius-xl);
 }
