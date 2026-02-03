@@ -698,6 +698,7 @@ model MealPlannerCustomItem {
 model MealPlannerOrder {
   id                    String                 @id @default(uuid()) @db.VarChar(36)
   clientId              String                 @map("client_id") @db.VarChar(36)
+  caseId                String?                @map("case_id") @db.VarChar(255)
   status                String                 @default("draft") @db.VarChar(50)
   scheduledDeliveryDate DateTime?              @map("scheduled_delivery_date") @db.Date
   deliveryDay           String?                @map("delivery_day") @db.VarChar(50)
@@ -715,6 +716,7 @@ model MealPlannerOrder {
   orderItems MealPlannerOrderItem[]
 
   @@index([clientId], map: "idx_meal_planner_orders_client_id")
+  @@index([caseId], map: "idx_meal_planner_orders_case_id")
   @@index([status], map: "idx_meal_planner_orders_status")
   @@index([scheduledDeliveryDate], map: "idx_meal_planner_orders_scheduled_delivery_date")
   @@index([processedOrderId], map: "idx_meal_planner_orders_processed_order_id")

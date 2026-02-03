@@ -1219,6 +1219,23 @@ async function getFoodClientIdsAdmin(): Promise<string[]> {
 }
 
 /**
+ * Get case_id from the client's upcoming_orders record where service_type = 'Food'.
+ * Used to link meal_planner_orders to the same case as the viewed client's Food upcoming order.
+ */
+async function getUpcomingOrderCaseIdForFoodClient(supabaseAdmin: any, clientId: string): Promise<string | null> {
+    const { data: row } = (await supabaseAdmin
+        .from('upcoming_orders')
+        .select('case_id')
+        .eq('client_id', clientId)
+        .eq('service_type', 'Food')
+        .order('last_updated', { ascending: false })
+        .limit(1)
+        .maybeSingle()) as { data: { case_id?: string | null } | null };
+    const caseId = row?.case_id;
+    return caseId != null && String(caseId).trim() !== '' ? String(caseId).trim() : null;
+}
+
+/**
  * When a new default order template is saved for Food, create meal_planner_orders and meal_planner_order_items
  * for every client with serviceType = Food, based on the template's vendorSelections (one order per delivery date).
  */
@@ -1290,6 +1307,7 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
     let itemsCreated = 0;
 
     for (const clientId of clientIds) {
+        const caseId = await getUpcomingOrderCaseIdForFoodClient(supabaseAdmin, clientId);
         const { data: existing } = await supabaseAdmin
             .from('meal_planner_orders')
             .select('id')
@@ -1309,6 +1327,7 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
             const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
                 id: orderId,
                 client_id: clientId,
+                case_id: caseId ?? null,
                 status: 'scheduled',
                 scheduled_delivery_date: dateStr,
                 delivery_day: dayNameFromDate(dateStr),
@@ -1740,6 +1759,7 @@ async function syncMealPlannerCustomItemsToOrders(
     };
 
     for (const cid of clientIds) {
+        const caseId = await getUpcomingOrderCaseIdForFoodClient(supabaseAdmin, cid);
         const effectiveItems = await getEffectiveMealPlanItemsForDate(supabaseAdmin, cid, dateOnly);
         const totalItemsCount = effectiveItems.reduce((sum, i) => sum + i.quantity, 0);
 
@@ -1850,6 +1870,7 @@ async function syncMealPlannerCustomItemsToOrders(
             const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
                 id: orderId,
                 client_id: cid,
+                case_id: caseId ?? null,
                 status: 'scheduled',
                 scheduled_delivery_date: dateOnly,
                 delivery_day: dayNameFromDate(dateOnly),
@@ -1916,6 +1937,7 @@ async function syncMealPlannerCustomItemsToMealPlannerOrders(
     };
 
     for (const cid of clientIds) {
+        const caseId = await getUpcomingOrderCaseIdForFoodClient(supabaseAdmin, cid);
         const effectiveItems = await getEffectiveMealPlanItemsForDate(supabaseAdmin, cid, dateOnly);
         const totalItemsCount = effectiveItems.reduce((sum, i) => sum + i.quantity, 0);
 
@@ -1936,6 +1958,7 @@ async function syncMealPlannerCustomItemsToMealPlannerOrders(
         const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
             id: orderId,
             client_id: cid,
+            case_id: caseId ?? null,
             status: 'scheduled',
             scheduled_delivery_date: dateOnly,
             delivery_day: dayNameFromDate(dateOnly),
@@ -10250,6 +10273,7 @@ async function syncMealPlannerToOrders(
         process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
+    const caseId = await getUpcomingOrderCaseIdForFoodClient(supabaseAdmin, clientId);
     const todayStr = formatDateToYYYYMMDD(today);
     const { data: existing } = await supabaseAdmin
         .from('meal_planner_orders')
@@ -10278,6 +10302,7 @@ async function syncMealPlannerToOrders(
         const { error: insertErr } = await supabaseAdmin.from('meal_planner_orders').insert({
             id: orderId,
             client_id: clientId,
+            case_id: caseId ?? null,
             status: 'scheduled',
             scheduled_delivery_date: dateStr,
             delivery_day: dayNameFromDate(dateStr),
