@@ -19,7 +19,7 @@ import { createClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
 
-// Meal planner orders use upcoming_orders with this service type (equivalent to meal_planner_orders)
+// Meal planner orders use meal_planner_orders and meal_planner_order_items (no longer upcoming_orders)
 const MEAL_PLANNER_SERVICE_TYPE = 'meal_planner';
 
 // --- HELPERS ---
@@ -1121,7 +1121,7 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
         
         revalidatePath('/admin');
 
-        // When saving the Food default template, propagate it to all Food clients as upcoming_orders (service_type = meal_planner) + items
+        // When saving the Food default template, propagate it to all Food clients as meal_planner_orders + meal_planner_order_items
         if (targetServiceType === 'Food' && template?.vendorSelections?.length) {
             try {
                 await propagateDefaultTemplateToFoodClients(template);
@@ -1138,7 +1138,7 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
 
 /**
  * Get all client IDs that have serviceType = Food or Meal (including comma-separated service_type).
- * Used when syncing admin meal planner calendar default template to upcoming_orders (service_type = meal_planner).
+ * Used when syncing admin meal planner calendar default template to meal_planner_orders.
  * Uses service role so RLS does not block listing clients when syncing from meal planner.
  */
 async function getMealPlannerClientIds(): Promise<string[]> {
@@ -1184,7 +1184,35 @@ async function getFoodClientIds(): Promise<string[]> {
             const st = (r.service_type || '').trim();
             if (!st) return false;
             const list = st.split(',').map((s: string) => s.trim()).filter(Boolean);
-            return list.includes('Food');
+            return list.some((s) => s.toLowerCase() === 'food');
+        })
+        .map((r: { id: string }) => r.id);
+    return ids;
+}
+
+/**
+ * Get all client IDs that have serviceType = Food (using admin client for server-side sync).
+ */
+async function getFoodClientIdsAdmin(): Promise<string[]> {
+    const supabaseAdmin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data: rows, error } = await supabaseAdmin
+        .from('clients')
+        .select('id, service_type')
+        .not('service_type', 'is', null);
+    if (error) {
+        logQueryError(error, 'clients', 'select');
+        return [];
+    }
+    if (!rows?.length) return [];
+    const ids = rows
+        .filter((r: { service_type: string | null }) => {
+            const st = (r.service_type || '').trim();
+            if (!st) return false;
+            const list = st.split(',').map((s: string) => s.trim()).filter(Boolean);
+            return list.some((s) => s.toLowerCase() === 'food');
         })
         .map((r: { id: string }) => r.id);
     return ids;
@@ -1253,22 +1281,24 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
     }
     itemQuantities.forEach((quantity, menuItemId) => templateItems.push({ menuItemId, quantity }));
     const totalItemsCount = templateItems.reduce((sum, i) => sum + i.quantity, 0);
+    const itemsJson =
+        template.vendorSelections?.length && templateItems.length > 0
+            ? { default: { items: Object.fromEntries(templateItems.map((i) => [i.menuItemId, i.quantity])) } }
+            : null;
 
     let ordersCreated = 0;
     let itemsCreated = 0;
 
     for (const clientId of clientIds) {
         const { data: existing } = await supabaseAdmin
-            .from('upcoming_orders')
+            .from('meal_planner_orders')
             .select('id')
             .eq('client_id', clientId)
-            .eq('service_type', MEAL_PLANNER_SERVICE_TYPE)
             .in('status', ['draft', 'scheduled'])
             .gte('scheduled_delivery_date', todayStr);
         if (existing?.length) {
             for (const row of existing) {
-                await supabaseAdmin.from('upcoming_order_items').delete().eq('upcoming_order_id', row.id);
-                await supabaseAdmin.from('upcoming_orders').delete().eq('id', row.id);
+                await supabaseAdmin.from('meal_planner_orders').delete().eq('id', row.id);
             }
         }
 
@@ -1276,21 +1306,22 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
 
         for (const dateStr of deliveryDates) {
             const orderId = randomUUID();
-            const { error: orderErr } = await supabaseAdmin.from('upcoming_orders').insert({
+            const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
                 id: orderId,
                 client_id: clientId,
-                service_type: MEAL_PLANNER_SERVICE_TYPE,
                 status: 'scheduled',
                 scheduled_delivery_date: dateStr,
                 delivery_day: dayNameFromDate(dateStr),
                 total_items: totalItemsCount,
                 total_value: null,
+                items: itemsJson,
                 notes: null,
                 processed_order_id: null,
-                processed_at: null
+                processed_at: null,
+                user_modified: false
             });
             if (orderErr) {
-                logQueryError(orderErr, 'upcoming_orders', 'insert');
+                logQueryError(orderErr, 'meal_planner_orders', 'insert');
                 continue;
             }
             ordersCreated++;
@@ -1298,9 +1329,10 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
             let sortOrder = 0;
             for (const { menuItemId, quantity } of templateItems) {
                 const itemId = randomUUID();
-                const { error: itemErr } = await supabaseAdmin.from('upcoming_order_items').insert({
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
                     id: itemId,
-                    upcoming_order_id: orderId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'default',
                     menu_item_id: menuItemId,
                     meal_item_id: null,
                     quantity,
@@ -1310,7 +1342,7 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
                     sort_order: sortOrder++
                 });
                 if (!itemErr) itemsCreated++;
-                else logQueryError(itemErr, 'upcoming_order_items', 'insert');
+                else logQueryError(itemErr, 'meal_planner_order_items', 'insert');
             }
         }
     }
@@ -1529,9 +1561,9 @@ export async function getSavedMealPlanDatesWithItems(
 }
 
 /**
- * Fetch saved meal plan dates and items from upcoming_orders (service_type = meal_planner) and upcoming_order_items
+ * Fetch saved meal plan dates and items from meal_planner_orders and meal_planner_order_items
  * for the selected client. Used by SavedMealPlanMonth in the client profile dialog so the
- * calendar shows contents by date from the orders table. Load records for the client upon opening.
+ * calendar shows contents by date. Uses service role so server-side read is not blocked by RLS.
  */
 export async function getSavedMealPlanDatesWithItemsFromOrders(
     clientId: string,
@@ -1539,11 +1571,14 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
     endDate?: string
 ): Promise<MealPlannerOrderResult[]> {
     try {
-        let query = supabase
-            .from('upcoming_orders')
+        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            : supabase;
+
+        let query = supabaseClient
+            .from('meal_planner_orders')
             .select('id, scheduled_delivery_date, delivery_day, status, total_items')
             .eq('client_id', clientId)
-            .eq('service_type', MEAL_PLANNER_SERVICE_TYPE)
             .in('status', ['draft', 'scheduled', 'saved'])
             .order('scheduled_delivery_date', { ascending: true });
 
@@ -1557,20 +1592,20 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
         const { data: orders, error: ordersError } = await query;
 
         if (ordersError) {
-            logQueryError(ordersError, 'upcoming_orders', 'select');
+            logQueryError(ordersError, 'meal_planner_orders', 'select');
             return [];
         }
         if (!orders || orders.length === 0) return [];
 
         const orderIds = orders.map((o: { id: string }) => o.id);
-        const { data: orderItems, error: itemsError } = await supabase
-            .from('upcoming_order_items')
-            .select('id, upcoming_order_id, menu_item_id, meal_item_id, quantity, custom_name, sort_order')
-            .in('upcoming_order_id', orderIds)
+        const { data: orderItems, error: itemsError } = await supabaseClient
+            .from('meal_planner_order_items')
+            .select('id, meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, sort_order')
+            .in('meal_planner_order_id', orderIds)
             .order('sort_order', { ascending: true });
 
         if (itemsError) {
-            logQueryError(itemsError, 'upcoming_order_items', 'select');
+            logQueryError(itemsError, 'meal_planner_order_items', 'select');
             return [];
         }
 
@@ -1581,7 +1616,7 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
 
         const itemsByOrderId = new Map<string, { id: string; name: string; quantity: number }[]>();
         for (const row of orderItems || []) {
-            const orderId = row.upcoming_order_id as string;
+            const orderId = row.meal_planner_order_id as string;
             const name =
                 (row.custom_name && String(row.custom_name).trim()) ||
                 (row.menu_item_id ? menuById.get(row.menu_item_id) : null) ||
@@ -1611,7 +1646,7 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
         }
         return list;
     } catch (error) {
-        console.error('Error fetching saved meal plan dates from upcoming_orders (meal_planner):', error);
+        console.error('Error fetching saved meal plan dates from meal_planner_orders:', error);
         return [];
     }
 }
@@ -1620,7 +1655,7 @@ export type MealPlannerOrderDisplayItem = { id: string; name: string; quantity: 
 
 /**
  * Effective meal plan item (name + quantity + price) for a client on a date.
- * Used when syncing meal_planner_custom_items → upcoming_orders (service_type = meal_planner).
+ * Used when syncing meal_planner_custom_items → meal_planner_orders.
  * quantity and price come from the default meal planner dialog (admin default order template calendar).
  */
 export type EffectiveMealPlanItem = { name: string; quantity: number; sortOrder: number; price: number | null };
@@ -1637,7 +1672,7 @@ type MealPlannerCustomItemRow = {
  * Get the effective list of meal plan items for a client on a calendar date.
  * Reads meal_planner_custom_items for that date (default + client-specific) and merges by name:
  * client-specific row overrides default, so client quantity preference is preserved.
- * Used when creating/updating upcoming_orders (meal_planner) so admin updates don't overwrite client overrides.
+ * Used when creating/updating meal_planner_orders so admin updates don't overwrite client overrides.
  */
 async function getEffectiveMealPlanItemsForDate(
     supabaseClient: any,
@@ -1675,10 +1710,10 @@ async function getEffectiveMealPlanItemsForDate(
 }
 
 /**
- * Sync meal_planner_custom_items for a calendar date to upcoming_orders (service_type = meal_planner) and upcoming_order_items.
- * When admin saves or updates meals for a day in the calendar, this creates/updates upcoming_orders
+ * Sync meal_planner_custom_items for a calendar date to meal_planner_orders and meal_planner_order_items.
+ * When admin saves or updates meals for a day in the calendar, this creates/updates meal_planner_orders
  * for the affected client(s). Effective items are computed with client overrides merged (client quantity
- * preference takes precedence over admin default).
+ * preference takes precedence over admin default). Respects user_modified so client overrides are not overwritten.
  * @param calendarDate - ISO date (YYYY-MM-DD)
  * @param clientId - If null, sync for all Meal/Food clients (default template); else sync only for this client.
  */
@@ -1709,10 +1744,9 @@ async function syncMealPlannerCustomItemsToOrders(
         const totalItemsCount = effectiveItems.reduce((sum, i) => sum + i.quantity, 0);
 
         const { data: existingOrder } = await supabaseAdmin
-            .from('upcoming_orders')
+            .from('meal_planner_orders')
             .select('id, user_modified')
             .eq('client_id', cid)
-            .eq('service_type', MEAL_PLANNER_SERVICE_TYPE)
             .eq('scheduled_delivery_date', dateOnly)
             .in('status', ['draft', 'scheduled'])
             .maybeSingle();
@@ -1720,9 +1754,9 @@ async function syncMealPlannerCustomItemsToOrders(
         if (existingOrder?.id && existingOrder?.user_modified) {
             const orderId = existingOrder.id;
             const { data: existingItems } = await supabaseAdmin
-                .from('upcoming_order_items')
+                .from('meal_planner_order_items')
                 .select('id, custom_name, quantity, sort_order')
-                .eq('upcoming_order_id', orderId)
+                .eq('meal_planner_order_id', orderId)
                 .order('sort_order', { ascending: true });
 
             const norm = (s: string | null) => ((s ?? '').trim() || 'Item').toLowerCase();
@@ -1743,19 +1777,20 @@ async function syncMealPlannerCustomItemsToOrders(
 
             for (const row of toDelete) {
                 const { error: delErr } = await supabaseAdmin
-                    .from('upcoming_order_items')
+                    .from('meal_planner_order_items')
                     .delete()
                     .eq('id', (row as { id: string }).id);
-                if (delErr) logQueryError(delErr, 'upcoming_order_items', 'delete');
+                if (delErr) logQueryError(delErr, 'meal_planner_order_items', 'delete');
             }
 
             const maxSortOrder = (existingItems ?? []).reduce((m, r: { sort_order: number | null }) => Math.max(m, r.sort_order ?? 0), -1);
             let nextSortOrder = maxSortOrder + 1;
             for (const t of toAdd) {
                 const itemId = randomUUID();
-                const { error: itemErr } = await supabaseAdmin.from('upcoming_order_items').insert({
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
                     id: itemId,
-                    upcoming_order_id: orderId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'Lunch',
                     menu_item_id: null,
                     meal_item_id: null,
                     quantity: t.quantity,
@@ -1764,7 +1799,7 @@ async function syncMealPlannerCustomItemsToOrders(
                     custom_price: t.price,
                     sort_order: nextSortOrder++
                 });
-                if (itemErr) logQueryError(itemErr, 'upcoming_order_items', 'insert');
+                if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
             }
 
             const newTotalItems = effectiveItems.reduce((sum, i) => {
@@ -1772,38 +1807,33 @@ async function syncMealPlannerCustomItemsToOrders(
                 return sum + (existing ? existing.quantity : i.quantity);
             }, 0);
             const { error: updErr } = await supabaseAdmin
-                .from('upcoming_orders')
-                .update({
-                    total_items: newTotalItems,
-                    last_updated: new Date().toISOString()
-                })
+                .from('meal_planner_orders')
+                .update({ total_items: newTotalItems, updated_at: new Date().toISOString() })
                 .eq('id', orderId);
-            if (updErr) logQueryError(updErr, 'upcoming_orders', 'update');
+            if (updErr) logQueryError(updErr, 'meal_planner_orders', 'update');
             continue;
         }
         if (existingOrder?.id) {
             const orderId = existingOrder.id;
             const { error: delErr } = await supabaseAdmin
-                .from('upcoming_order_items')
+                .from('meal_planner_order_items')
                 .delete()
-                .eq('upcoming_order_id', orderId);
-            if (delErr) logQueryError(delErr, 'upcoming_order_items', 'delete');
+                .eq('meal_planner_order_id', orderId);
+            if (delErr) logQueryError(delErr, 'meal_planner_order_items', 'delete');
 
             const { error: updErr } = await supabaseAdmin
-                .from('upcoming_orders')
-                .update({
-                    total_items: totalItemsCount,
-                    last_updated: new Date().toISOString()
-                })
+                .from('meal_planner_orders')
+                .update({ total_items: totalItemsCount, updated_at: new Date().toISOString() })
                 .eq('id', orderId);
-            if (updErr) logQueryError(updErr, 'upcoming_orders', 'update');
+            if (updErr) logQueryError(updErr, 'meal_planner_orders', 'update');
 
             let sortOrder = 0;
             for (const item of effectiveItems) {
                 const itemId = randomUUID();
-                const { error: itemErr } = await supabaseAdmin.from('upcoming_order_items').insert({
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
                     id: itemId,
-                    upcoming_order_id: orderId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'Lunch',
                     menu_item_id: null,
                     meal_item_id: null,
                     quantity: item.quantity,
@@ -1812,15 +1842,14 @@ async function syncMealPlannerCustomItemsToOrders(
                     custom_price: item.price,
                     sort_order: sortOrder++
                 });
-                if (itemErr) logQueryError(itemErr, 'upcoming_order_items', 'insert');
+                if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
             }
         } else {
             if (effectiveItems.length === 0) continue;
             const orderId = randomUUID();
-            const { error: orderErr } = await supabaseAdmin.from('upcoming_orders').insert({
+            const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
                 id: orderId,
                 client_id: cid,
-                service_type: MEAL_PLANNER_SERVICE_TYPE,
                 status: 'scheduled',
                 scheduled_delivery_date: dateOnly,
                 delivery_day: dayNameFromDate(dateOnly),
@@ -1828,18 +1857,20 @@ async function syncMealPlannerCustomItemsToOrders(
                 total_value: null,
                 notes: null,
                 processed_order_id: null,
-                processed_at: null
+                processed_at: null,
+                user_modified: false
             });
             if (orderErr) {
-                logQueryError(orderErr, 'upcoming_orders', 'insert');
+                logQueryError(orderErr, 'meal_planner_orders', 'insert');
                 continue;
             }
             let sortOrder = 0;
             for (const item of effectiveItems) {
                 const itemId = randomUUID();
-                const { error: itemErr } = await supabaseAdmin.from('upcoming_order_items').insert({
+                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
                     id: itemId,
-                    upcoming_order_id: orderId,
+                    meal_planner_order_id: orderId,
+                    meal_type: 'Lunch',
                     menu_item_id: null,
                     meal_item_id: null,
                     quantity: item.quantity,
@@ -1848,15 +1879,102 @@ async function syncMealPlannerCustomItemsToOrders(
                     custom_price: item.price,
                     sort_order: sortOrder++
                 });
-                if (itemErr) logQueryError(itemErr, 'upcoming_order_items', 'insert');
+                if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
             }
         }
     }
 }
 
 /**
+ * Sync meal_planner_custom_items for a calendar date to meal_planner_orders and meal_planner_order_items.
+ * When admin saves meal plan items for a day in the meal planner calendar, this creates/updates
+ * meal_planner_orders and meal_planner_order_items for every client with serviceType = food.
+ * Effective items are computed with client overrides merged (client quantity preference takes precedence).
+ * @param calendarDate - ISO date (YYYY-MM-DD)
+ * @param clientId - If null, sync for all Food clients (default template); else sync only for this client.
+ */
+async function syncMealPlannerCustomItemsToMealPlannerOrders(
+    calendarDate: string,
+    clientId?: string | null
+): Promise<void> {
+    const dateOnly = mealPlannerDateOnly(calendarDate);
+    const supabaseAdmin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const clientIds =
+        clientId && clientId !== ''
+            ? [clientId]
+            : await getFoodClientIdsAdmin();
+    if (clientIds.length === 0) return;
+
+    const dayNameFromDate = (dateStr: string) => {
+        const d = new Date(dateStr + 'T12:00:00');
+        const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return names[d.getDay()];
+    };
+
+    for (const cid of clientIds) {
+        const effectiveItems = await getEffectiveMealPlanItemsForDate(supabaseAdmin, cid, dateOnly);
+        const totalItemsCount = effectiveItems.reduce((sum, i) => sum + i.quantity, 0);
+
+        const { data: existingOrders } = await supabaseAdmin
+            .from('meal_planner_orders')
+            .select('id')
+            .eq('client_id', cid)
+            .eq('scheduled_delivery_date', dateOnly)
+            .in('status', ['draft', 'scheduled']);
+
+        for (const row of existingOrders ?? []) {
+            await supabaseAdmin.from('meal_planner_orders').delete().eq('id', row.id);
+        }
+
+        if (effectiveItems.length === 0) continue;
+
+        const orderId = randomUUID();
+        const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
+            id: orderId,
+            client_id: cid,
+            status: 'scheduled',
+            scheduled_delivery_date: dateOnly,
+            delivery_day: dayNameFromDate(dateOnly),
+            total_items: totalItemsCount,
+            total_value: null,
+            items: null,
+            notes: null,
+            processed_order_id: null,
+            processed_at: null,
+            user_modified: false
+        });
+        if (orderErr) {
+            logQueryError(orderErr, 'meal_planner_orders', 'insert');
+            continue;
+        }
+
+        let sortOrder = 0;
+        for (const item of effectiveItems) {
+            const itemId = randomUUID();
+            const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
+                id: itemId,
+                meal_planner_order_id: orderId,
+                meal_type: 'Lunch',
+                menu_item_id: null,
+                meal_item_id: null,
+                quantity: item.quantity,
+                notes: null,
+                custom_name: item.name,
+                custom_price: item.price,
+                sort_order: sortOrder++
+            });
+            if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
+        }
+    }
+}
+
+/**
  * Sync meal planner order for a single client and date (e.g. after client changes quantity in SavedMealPlanMonth).
- * Keeps upcoming_orders (meal_planner) in sync with client preference without waiting for the next admin save.
+ * Keeps meal_planner_orders in sync with client preference without waiting for the next admin save.
  */
 export async function syncMealPlanDateToOrderForClient(
     clientId: string,
@@ -1876,7 +1994,7 @@ export type MealPlannerOrderResult = {
 
 /**
  * Fetch meal planner orders (saved from client meal selections) for a client in a date range.
- * Used by SavedMealPlanMonth to show dates with saved meal plans and their items.
+ * Reads from meal_planner_orders and meal_planner_order_items.
  */
 export async function getMealPlannerOrders(
     clientId: string,
@@ -1884,32 +2002,34 @@ export async function getMealPlannerOrders(
     endDate: string
 ): Promise<MealPlannerOrderResult[]> {
     try {
+        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            : supabase;
         const start = mealPlannerDateOnly(startDate);
         const end = mealPlannerDateOnly(endDate);
-        const { data: orders, error: ordersError } = await supabase
-            .from('upcoming_orders')
+        const { data: orders, error: ordersError } = await supabaseClient
+            .from('meal_planner_orders')
             .select('id, scheduled_delivery_date, delivery_day, status, total_items')
             .eq('client_id', clientId)
-            .eq('service_type', MEAL_PLANNER_SERVICE_TYPE)
             .gte('scheduled_delivery_date', start)
             .lte('scheduled_delivery_date', end)
             .order('scheduled_delivery_date', { ascending: true });
 
         if (ordersError) {
-            logQueryError(ordersError, 'upcoming_orders', 'select');
+            logQueryError(ordersError, 'meal_planner_orders', 'select');
             return [];
         }
         if (!orders || orders.length === 0) return [];
 
         const orderIds = orders.map((o: { id: string }) => o.id);
-        const { data: orderItems, error: itemsError } = await supabase
-            .from('upcoming_order_items')
-            .select('id, upcoming_order_id, menu_item_id, meal_item_id, quantity, custom_name, sort_order')
-            .in('upcoming_order_id', orderIds)
+        const { data: orderItems, error: itemsError } = await supabaseClient
+            .from('meal_planner_order_items')
+            .select('id, meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, sort_order')
+            .in('meal_planner_order_id', orderIds)
             .order('sort_order', { ascending: true });
 
         if (itemsError) {
-            logQueryError(itemsError, 'upcoming_order_items', 'select');
+            logQueryError(itemsError, 'meal_planner_order_items', 'select');
             return [];
         }
 
@@ -1920,7 +2040,7 @@ export async function getMealPlannerOrders(
 
         const itemsByOrderId = new Map<string, { id: string; name: string; quantity: number }[]>();
         for (const row of orderItems || []) {
-            const orderId = row.upcoming_order_id as string;
+            const orderId = row.meal_planner_order_id as string;
             const name =
                 (row.custom_name && String(row.custom_name).trim()) ||
                 (row.menu_item_id ? menuById.get(row.menu_item_id) : null) ||
@@ -1950,7 +2070,7 @@ export async function getMealPlannerOrders(
         }
         return list;
     } catch (error) {
-        console.error('Error fetching meal planner orders from upcoming_orders:', error);
+        console.error('Error fetching meal planner orders from meal_planner_orders:', error);
         return [];
     }
 }
@@ -1958,7 +2078,7 @@ export async function getMealPlannerOrders(
 /**
  * Save meal planner custom items for a given date.
  * Replaces all existing items for that date with the provided list.
- * Uses service role so admin default template and client overrides always save and sync to upcoming_orders (meal_planner).
+ * Uses service role so admin default template and client overrides always save and sync to meal_planner_orders.
  * @param calendarDate - ISO date string (YYYY-MM-DD)
  * @param items - Array of items to save
  * @param clientId - Optional; null = default template (admin)
@@ -2001,7 +2121,7 @@ export async function saveMealPlannerCustomItems(
             try {
                 await syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal);
             } catch (syncErr) {
-                console.error('Error syncing meal planner custom items to orders:', syncErr);
+                console.error('Error syncing meal planner custom items to meal_planner_orders:', syncErr);
             }
             return;
         }
@@ -2027,7 +2147,7 @@ export async function saveMealPlannerCustomItems(
         try {
             await syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal);
         } catch (syncErr) {
-            console.error('Error syncing meal planner custom items to orders:', syncErr);
+            console.error('Error syncing meal planner custom items to meal_planner_orders:', syncErr);
         }
     } catch (error) {
         console.error('Error saving meal planner custom items:', error);
@@ -2037,7 +2157,7 @@ export async function saveMealPlannerCustomItems(
 
 /**
  * Insert a single meal planner custom item for a client (e.g. when editing quantity of a default template item).
- * Uses service role so client overrides always save; caller should then sync to upcoming_orders (meal_planner) via syncMealPlanDateToOrderForClient.
+ * Uses service role so client overrides always save; caller should then sync to meal_planner_orders via syncMealPlanDateToOrderForClient.
  */
 export async function insertMealPlannerCustomItemForClient(
     clientId: string,
@@ -2079,7 +2199,7 @@ export async function insertMealPlannerCustomItemForClient(
 /**
  * Update a single meal planner custom item's quantity. Only updates if the row belongs to the client.
  * Used by SavedMealPlanMonth in the client profile dialog for +/- quantity controls.
- * Uses service role so client overrides always save; caller should then sync to upcoming_orders (meal_planner) via syncMealPlanDateToOrderForClient.
+ * Uses service role so client overrides always save; caller should then sync to meal_planner_orders via syncMealPlanDateToOrderForClient.
  */
 export async function updateMealPlannerCustomItemQuantity(
     clientId: string,
@@ -2110,9 +2230,9 @@ export async function updateMealPlannerCustomItemQuantity(
 }
 
 /**
- * Update a single upcoming_order_item's quantity (meal planner). Used by SavedMealPlanMonth when the
- * client profile meal planner is loaded from upcoming_orders (service_type = meal_planner) / upcoming_order_items.
- * Sets user_modified = true on the parent upcoming_order so admin template updates
+ * Update a single meal_planner_order_item's quantity. Used by SavedMealPlanMonth when the
+ * client profile meal planner is loaded from meal_planner_orders / meal_planner_order_items.
+ * Sets user_modified = true on the parent meal_planner_order so admin template updates
  * won't overwrite client overrides.
  */
 export async function updateMealPlannerOrderItemQuantity(
@@ -2121,36 +2241,36 @@ export async function updateMealPlannerOrderItemQuantity(
 ): Promise<{ ok: boolean; error?: string }> {
     try {
         const qty = Math.max(1, Math.floor(Number(quantity)) || 1);
-        const { data: item, error: fetchErr } = await supabase
-            .from('upcoming_order_items')
-            .select('upcoming_order_id')
-            .eq('id', itemId)
-            .single();
-
-        if (fetchErr || !item?.upcoming_order_id) {
-            logQueryError(fetchErr ?? { message: 'Item not found' }, 'upcoming_order_items', 'select');
-            return { ok: false, error: fetchErr?.message ?? 'Item not found' };
-        }
-
-        const { error } = await supabase
-            .from('upcoming_order_items')
-            .update({ quantity: qty })
-            .eq('id', itemId);
-
-        if (error) {
-            logQueryError(error, 'upcoming_order_items', 'update');
-            return { ok: false, error: error.message };
-        }
-
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
         );
+        const { data: item, error: fetchErr } = await supabaseAdmin
+            .from('meal_planner_order_items')
+            .select('meal_planner_order_id')
+            .eq('id', itemId)
+            .single();
+
+        if (fetchErr || !item?.meal_planner_order_id) {
+            logQueryError(fetchErr ?? { message: 'Item not found' }, 'meal_planner_order_items', 'select');
+            return { ok: false, error: fetchErr?.message ?? 'Item not found' };
+        }
+
+        const { error } = await supabaseAdmin
+            .from('meal_planner_order_items')
+            .update({ quantity: qty })
+            .eq('id', itemId);
+
+        if (error) {
+            logQueryError(error, 'meal_planner_order_items', 'update');
+            return { ok: false, error: error.message };
+        }
+
         const { error: orderErr } = await supabaseAdmin
-            .from('upcoming_orders')
+            .from('meal_planner_orders')
             .update({ user_modified: true })
-            .eq('id', item.upcoming_order_id);
-        if (orderErr) logQueryError(orderErr, 'upcoming_orders', 'update');
+            .eq('id', item.meal_planner_order_id);
+        if (orderErr) logQueryError(orderErr, 'meal_planner_orders', 'update');
 
         return { ok: true };
     } catch (error) {
@@ -3917,6 +4037,17 @@ function calculateTakeEffectDateForDay(deliveryDay: string, vendors: Vendor[], v
 }
 
 /**
+ * Normalize delivery day key to day name for vendor checks and date calculation.
+ * deliveryDayOrders keys are composite (e.g. "Thursday_Food", "Friday_Boxes"); vendors store day names only ("Thursday").
+ */
+function normalizeDeliveryDayForVendor(deliveryDay: string): string {
+    if (!deliveryDay || typeof deliveryDay !== 'string') return deliveryDay;
+    const suffix = /_(Food|Boxes|Custom)$/;
+    const match = deliveryDay.match(suffix);
+    return match ? deliveryDay.slice(0, -match[0].length) : deliveryDay;
+}
+
+/**
  * Helper function to sync a single order configuration for a specific delivery day
  */
 async function syncSingleOrderForDeliveryDay(
@@ -4014,17 +4145,19 @@ async function syncSingleOrderForDeliveryDay(
         }
 
         if (deliveryDay) {
+            // Normalize composite key (e.g. "Thursday_Food") to day name for vendor check and date calc (1-vendor policy)
+            const normalizedDay = normalizeDeliveryDayForVendor(deliveryDay);
             // For client-selected delivery day, get the nearest occurrence of that day
             // First validate that vendor can deliver on that day
             const vendor = vendors.find(v => v.id === vendorIds[0]);
             if (vendor) {
                 const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
-                if (!deliveryDays || !deliveryDays.includes(deliveryDay)) {
+                if (!deliveryDays || !deliveryDays.includes(normalizedDay)) {
                     const vendorName = vendor?.name || vendorIds[0];
-                    const errorMsg = `Cannot save Food order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day or vendor.`;
+                    const errorMsg = `Cannot save Food order: Vendor "${vendorName}" does not deliver on ${normalizedDay}. Please select a different delivery day or vendor.`;
                     console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                         serviceType: orderConfig.serviceType,
-                        deliveryDay,
+                        deliveryDay: normalizedDay,
                         vendorId: vendorIds[0],
                         vendorName
                     });
@@ -4032,14 +4165,14 @@ async function syncSingleOrderForDeliveryDay(
                 }
             }
             
-            // Get the nearest occurrence of the client-selected delivery day
-            scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
+            // Get the nearest occurrence of the client-selected delivery day (use day name for getNextOccurrence)
+            scheduledDeliveryDate = getNextOccurrence(normalizedDay, currentTime);
             
             if (!scheduledDeliveryDate) {
-                const errorMsg = `Cannot save Food order: Could not calculate delivery date for ${deliveryDay}.`;
+                const errorMsg = `Cannot save Food order: Could not calculate delivery date for ${normalizedDay}.`;
                 console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                     serviceType: orderConfig.serviceType,
-                    deliveryDay
+                    deliveryDay: normalizedDay
                 });
                 throw new Error(errorMsg);
             }
@@ -4109,17 +4242,19 @@ async function syncSingleOrderForDeliveryDay(
 
         if (boxVendorId) {
             if (deliveryDay) {
+                // Normalize composite key (e.g. "Thursday_Boxes") to day name for vendor check and date calc (1-vendor policy)
+                const normalizedDay = normalizeDeliveryDayForVendor(deliveryDay);
                 // For client-selected delivery day, get the nearest occurrence of that day
                 // First validate that vendor can deliver on that day
                 const vendor = vendors.find(v => v.id === boxVendorId);
                 if (vendor) {
                     const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
-                    if (!deliveryDays || !deliveryDays.includes(deliveryDay)) {
+                    if (!deliveryDays || !deliveryDays.includes(normalizedDay)) {
                         const vendorName = vendor?.name || boxVendorId;
-                        const errorMsg = `Cannot save Boxes order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day or vendor.`;
+                        const errorMsg = `Cannot save Boxes order: Vendor "${vendorName}" does not deliver on ${normalizedDay}. Please select a different delivery day or vendor.`;
                         console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                             serviceType: orderConfig.serviceType,
-                            deliveryDay,
+                            deliveryDay: normalizedDay,
                             vendorId: boxVendorId,
                             vendorName
                         });
@@ -4127,14 +4262,14 @@ async function syncSingleOrderForDeliveryDay(
                     }
                 }
                 
-                // Get the nearest occurrence of the client-selected delivery day
-                scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
+                // Get the nearest occurrence of the client-selected delivery day (use day name for getNextOccurrence)
+                scheduledDeliveryDate = getNextOccurrence(normalizedDay, currentTime);
                 
                 if (!scheduledDeliveryDate) {
-                    const errorMsg = `Cannot save Boxes order: Could not calculate delivery date for ${deliveryDay}.`;
+                    const errorMsg = `Cannot save Boxes order: Could not calculate delivery date for ${normalizedDay}.`;
                     console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                         serviceType: orderConfig.serviceType,
-                        deliveryDay
+                        deliveryDay: normalizedDay
                     });
                     throw new Error(errorMsg);
                 }
@@ -4244,28 +4379,30 @@ async function syncSingleOrderForDeliveryDay(
         // For Custom orders, try to get delivery day from vendor if available
         const vendor = vendors.find(v => v.id === orderConfig.vendorId);
         if (vendor && deliveryDay) {
+            // Normalize composite key (e.g. "Thursday_Custom") to day name for vendor check and date calc (1-vendor policy)
+            const normalizedDay = normalizeDeliveryDayForVendor(deliveryDay);
             // Validate that vendor can deliver on that day
             const deliveryDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
-            if (deliveryDays && !deliveryDays.includes(deliveryDay)) {
+            if (deliveryDays && !deliveryDays.includes(normalizedDay)) {
                 const vendorName = vendor?.name || orderConfig.vendorId;
-                const errorMsg = `Cannot save Custom order: Vendor "${vendorName}" does not deliver on ${deliveryDay}. Please select a different delivery day or vendor.`;
+                const errorMsg = `Cannot save Custom order: Vendor "${vendorName}" does not deliver on ${normalizedDay}. Please select a different delivery day or vendor.`;
                 console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                     serviceType: orderConfig.serviceType,
-                    deliveryDay,
+                    deliveryDay: normalizedDay,
                     vendorId: orderConfig.vendorId,
                     vendorName
                 });
                 throw new Error(errorMsg);
             }
             
-            // Get the nearest occurrence of the client-selected delivery day
-            scheduledDeliveryDate = getNextOccurrence(deliveryDay, currentTime);
+            // Get the nearest occurrence of the client-selected delivery day (use day name for getNextOccurrence)
+            scheduledDeliveryDate = getNextOccurrence(normalizedDay, currentTime);
             
             if (!scheduledDeliveryDate) {
-                const errorMsg = `Cannot save Custom order: Could not calculate delivery date for ${deliveryDay}.`;
+                const errorMsg = `Cannot save Custom order: Could not calculate delivery date for ${normalizedDay}.`;
                 console.error(`[syncSingleOrderForDeliveryDay] ${errorMsg}`, {
                     serviceType: orderConfig.serviceType,
-                    deliveryDay
+                    deliveryDay: normalizedDay
                 });
                 throw new Error(errorMsg);
             }
@@ -4682,21 +4819,39 @@ async function syncSingleOrderForDeliveryDay(
         vendor_id: vendorId
     };
 
-    // Add delivery_day if provided
-    if (deliveryDay) {
-        upcomingOrderData.delivery_day = deliveryDay;
+    // Delivery day on upcoming_orders: use vendor's delivery day when we have a vendor (so record matches vendors table)
+    let deliveryDayForRecord: string | null = deliveryDay;
+    if (vendorId) {
+        const vendor = vendors.find(v => v.id === vendorId);
+        if (vendor) {
+            const vDays = 'deliveryDays' in vendor ? vendor.deliveryDays : (vendor as any).delivery_days;
+            const arr = Array.isArray(vDays) ? vDays : (typeof vDays === 'string' ? (() => { try { return JSON.parse(vDays); } catch { return []; } })() : []);
+            if (arr.length > 0) {
+                const vendorDays = arr.map((d: unknown) => (typeof d === 'string' ? d : '')).filter(Boolean);
+                // Prefer passed deliveryDay if it's one of the vendor's days; else use vendor's first day
+                const normalizedPassed = deliveryDay ? normalizeDeliveryDayForVendor(deliveryDay) : null;
+                if (normalizedPassed && vendorDays.includes(normalizedPassed)) {
+                    deliveryDayForRecord = normalizedPassed;
+                } else {
+                    deliveryDayForRecord = vendorDays[0];
+                }
+            }
+        }
+    }
+    if (deliveryDayForRecord) {
+        upcomingOrderData.delivery_day = deliveryDayForRecord;
     }
 
     // Check if upcoming order exists for this delivery day
     // IMPORTANT: Must filter by service_type to avoid conflicts between Food and Boxes orders
     let existing;
-    if (deliveryDay) {
+    if (deliveryDayForRecord) {
         const { data: existingData } = await supabase
             .from('upcoming_orders')
             .select('id')
             .eq('client_id', clientId)
             .eq('service_type', serviceTypeForUpcomingOrders)
-            .eq('delivery_day', deliveryDay)
+            .eq('delivery_day', deliveryDayForRecord)
             .maybeSingle();
         existing = existingData;
     } else {
@@ -4712,7 +4867,7 @@ async function syncSingleOrderForDeliveryDay(
     }
 
     console.log('[syncSingleOrderForDeliveryDay] Checking existing', {
-        deliveryDay,
+        deliveryDay: deliveryDayForRecord,
         foundExisting: !!existing,
         existingId: existing?.id,
         willCreateNew: !existing
@@ -9844,7 +9999,7 @@ async function flattenMealSelectionsToItems(
 }
 
 /**
- * Sync client meal selections from active_order to upcoming_orders (service_type = meal_planner) and upcoming_order_items (one row per delivery date).
+ * Sync client meal selections from active_order to meal_planner_orders and meal_planner_order_items (one row per delivery date).
  * Uses main vendor's delivery days to generate dates for the next 8 weeks.
  */
 async function syncMealPlannerToOrders(
@@ -9887,17 +10042,16 @@ async function syncMealPlannerToOrders(
 
     const todayStr = formatDateToYYYYMMDD(today);
     const { data: existing } = await supabaseAdmin
-        .from('upcoming_orders')
+        .from('meal_planner_orders')
         .select('id')
         .eq('client_id', clientId)
-        .eq('service_type', MEAL_PLANNER_SERVICE_TYPE)
         .in('status', ['draft', 'scheduled'])
         .gte('scheduled_delivery_date', todayStr);
 
     if (existing && existing.length > 0) {
         for (const row of existing) {
-            await supabaseAdmin.from('upcoming_order_items').delete().eq('upcoming_order_id', row.id);
-            await supabaseAdmin.from('upcoming_orders').delete().eq('id', row.id);
+            await supabaseAdmin.from('meal_planner_order_items').delete().eq('meal_planner_order_id', row.id);
+            await supabaseAdmin.from('meal_planner_orders').delete().eq('id', row.id);
         }
     }
 
@@ -9911,10 +10065,9 @@ async function syncMealPlannerToOrders(
 
     for (const dateStr of deliveryDates) {
         const orderId = randomUUID();
-        const { error: insertErr } = await supabaseAdmin.from('upcoming_orders').insert({
+        const { error: insertErr } = await supabaseAdmin.from('meal_planner_orders').insert({
             id: orderId,
             client_id: clientId,
-            service_type: MEAL_PLANNER_SERVICE_TYPE,
             status: 'scheduled',
             scheduled_delivery_date: dateStr,
             delivery_day: dayNameFromDate(dateStr),
@@ -9922,25 +10075,27 @@ async function syncMealPlannerToOrders(
             total_value: null,
             notes: null,
             processed_order_id: null,
-            processed_at: null
+            processed_at: null,
+            user_modified: false
         });
         if (insertErr) {
-            logQueryError(insertErr, 'upcoming_orders', 'insert');
-            console.error('[syncMealPlannerToOrders] Failed to insert upcoming_order (meal_planner):', { clientId, dateStr, message: insertErr.message });
+            logQueryError(insertErr, 'meal_planner_orders', 'insert');
+            console.error('[syncMealPlannerToOrders] Failed to insert meal_planner_order:', { clientId, dateStr, message: insertErr.message });
             continue;
         }
         let sortOrder = 0;
         for (const { menuItemId, mealItemId, quantity } of flatItems) {
             const itemId = randomUUID();
-            const { error: itemErr } = await supabaseAdmin.from('upcoming_order_items').insert({
+            const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
                 id: itemId,
-                upcoming_order_id: orderId,
+                meal_planner_order_id: orderId,
+                meal_type: 'Lunch',
                 menu_item_id: menuItemId,
                 meal_item_id: mealItemId,
                 quantity,
                 sort_order: sortOrder++
             });
-            if (itemErr) logQueryError(itemErr, 'upcoming_order_items', 'insert');
+            if (itemErr) logQueryError(itemErr, 'meal_planner_order_items', 'insert');
         }
     }
 }
