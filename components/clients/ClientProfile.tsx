@@ -2917,14 +2917,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     async function handleDelete() {
         setSaving(true);
-        await deleteClient(clientId);
-        setSaving(false);
-        setShowDeleteModal(false);
-
-        if (onClose) {
-            onClose();
-        } else {
-            router.push('/clients');
+        try {
+            await deleteClient(clientId);
+            setShowDeleteModal(false);
+            if (onClose) {
+                onClose();
+            } else {
+                router.push('/clients');
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to delete client. Please try again.';
+            alert(message);
+        } finally {
+            setSaving(false);
         }
     }
 
@@ -6150,7 +6155,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 )}
                             </section>
 
-                            {!isNewClient && formData.serviceType === 'Food' && (
+                            {!isNewClient && formData.serviceType === 'Food' && (orderConfig?.caseId ?? '').trim() !== '' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
                                     <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
                                     <SavedMealPlanMonth
