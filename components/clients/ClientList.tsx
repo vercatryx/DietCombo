@@ -781,15 +781,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             const vendorId = conf.vendorId || box?.vendorId;
             const vendorName = vendors.find(v => v.id === vendorId)?.name || '-';
 
-            console.log('[ClientList.getOrderSummaryText] Box order display:', {
-                clientId: client.id,
-                confVendorId: conf.vendorId,
-                boxTypeId: conf.boxTypeId,
-                boxVendorId: box?.vendorId,
-                resolvedVendorId: vendorId,
-                vendorName
-            });
-
             const itemDetails = Object.entries(conf.items || {}).map(([id, qty]) => {
                 const item = menuItems.find(i => i.id === id);
                 return item ? `${item.name} x${qty}` : null;

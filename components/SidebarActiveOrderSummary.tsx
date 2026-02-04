@@ -53,6 +53,13 @@ export function SidebarActiveOrderSummary() {
         loadData();
     }, [clientId]);
 
+    // useMemo must run unconditionally (before any early returns) - Rules of Hooks
+    const orderSummary = useMemo(
+        () => client ? getOrderSummary(client, vendors, menuItems, boxTypes) : null,
+        [client, vendors, menuItems, boxTypes]
+    );
+    const hasDislikes = client != null && client.dislikes != null && String(client.dislikes).trim() !== '';
+
     if (!clientId || !client) {
         return null;
     }
@@ -64,12 +71,6 @@ export function SidebarActiveOrderSummary() {
             </div>
         );
     }
-
-    const orderSummary = useMemo(
-        () => getOrderSummary(client, vendors, menuItems, boxTypes),
-        [client, vendors, menuItems, boxTypes]
-    );
-    const hasDislikes = client.dislikes != null && String(client.dislikes).trim() !== '';
 
     if (!orderSummary && !hasDislikes) {
         return null;

@@ -706,11 +706,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             item.quantity > 0
         );
 
-        console.log('[ClientProfile] Extracted custom items from previous orders:', {
-            vendorId,
-            customItemsCount: customItems.length,
-            customItems
-        });
+        if (DEBUG_PROFILE) {
+            console.log('[ClientProfile] Extracted custom items from previous orders:', {
+                vendorId,
+                customItemsCount: customItems.length,
+                customItems
+            });
+        }
 
         return { vendorId, customItems };
     }
@@ -725,11 +727,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         try {
             const template = await getDefaultOrderTemplate(serviceType);
             if (!template) {
-                console.log(`[ClientProfile] No default template found for service type: ${serviceType}`);
+                if (DEBUG_PROFILE) console.log(`[ClientProfile] No default template found for service type: ${serviceType}`);
                 return;
             }
 
-            console.log(`[ClientProfile] Loading default template for ${serviceType}:`, template);
+            if (DEBUG_PROFILE) console.log(`[ClientProfile] Loading default template for ${serviceType}:`, template);
 
             if (serviceType === 'Food') {
                 // Apply Food template - copy vendorSelections and items
@@ -759,16 +761,18 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     vendorSelections: vendorSelections
                 };
 
-                console.log('[ClientProfile] Applied Food template:', {
-                    templateServiceType: template.serviceType,
-                    appliedServiceType: newOrderConfig.serviceType,
-                    vendorSelectionsCount: vendorSelections.length,
-                    itemsCount: vendorSelections.reduce((sum, vs) => sum + Object.keys(vs.items || {}).length, 0),
-                    totalQuantities: vendorSelections.reduce((sum, vs) => {
-                        const items = vs.items || {};
-                        return sum + Object.values(items).reduce((qtySum: number, qty: any) => qtySum + (Number(qty) || 0), 0);
-                    }, 0)
-                });
+                if (DEBUG_PROFILE) {
+                    console.log('[ClientProfile] Applied Food template:', {
+                        templateServiceType: template.serviceType,
+                        appliedServiceType: newOrderConfig.serviceType,
+                        vendorSelectionsCount: vendorSelections.length,
+                        itemsCount: vendorSelections.reduce((sum, vs) => sum + Object.keys(vs.items || {}).length, 0),
+                        totalQuantities: vendorSelections.reduce((sum, vs) => {
+                            const items = vs.items || {};
+                            return sum + Object.values(items).reduce((qtySum: number, qty: any) => qtySum + (Number(qty) || 0), 0);
+                        }, 0)
+                    });
+                }
 
                 setOrderConfig((prev: any) => ({
                     ...prev,
