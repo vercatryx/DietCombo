@@ -100,7 +100,7 @@ export async function createComplexStop(options: CreateComplexStopOptions) {
                 paused: false,   // Required for stops
                 complex: isComplex,  // Set to true for complex stops
                 approved_meals_per_week: serviceType === 'Food' ? 21 : null,
-                active_order: {}
+                upcoming_order: {}
             })
             .select()
             .single();

@@ -36,7 +36,7 @@ export async function query<T = any>(sql: string, params?: any[]): Promise<T[]> 
             if (!row || typeof row !== 'object') return row;
             const parsed: any = { ...row };
             // Handle JSON fields that might come as strings or Buffers
-            ['active_order', 'billings', 'visits', 'delivery_days', 'delivery_distribution', 'items', 'options', 'conditional_text_inputs', 'snapshot', 'strokes', 'stop_ids', 'data'].forEach(field => {
+            ['active_order', 'upcoming_order', 'billings', 'visits', 'delivery_days', 'delivery_distribution', 'items', 'options', 'conditional_text_inputs', 'snapshot', 'strokes', 'stop_ids', 'data'].forEach(field => {
                 if (parsed[field] !== null && parsed[field] !== undefined) {
                     if (Buffer.isBuffer(parsed[field])) {
                         try {

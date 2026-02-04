@@ -52,7 +52,7 @@ async function verify() {
     const { error: updateError } = await supabase
         .from('clients')
         .update({
-            active_order: mockActiveOrder,
+            upcoming_order: mockActiveOrder,
             service_type: 'Boxes'
         })
         .eq('id', clientId);
@@ -65,7 +65,7 @@ async function verify() {
     // 3. Fetch back and verify the client table persistence
     const { data: updatedClient, error: fetchError } = await supabase
         .from('clients')
-        .select('active_order, service_type')
+        .select('upcoming_order, service_type')
         .eq('id', clientId)
         .single();
 
@@ -74,7 +74,7 @@ async function verify() {
         return;
     }
 
-    const persistedOrder = updatedClient.active_order;
+    const persistedOrder = updatedClient.upcoming_order;
     console.log('Persisted Active Order:', JSON.stringify(persistedOrder, null, 2));
 
     if (persistedOrder?.caseId === testCaseId && updatedClient.service_type === 'Boxes') {

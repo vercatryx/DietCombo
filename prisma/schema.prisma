@@ -139,7 +139,7 @@ model Client {
   cin                  String?             @db.VarChar(50)
   authorizedAmount     Decimal?            @map("authorized_amount") @db.Decimal(10, 2)
   expirationDate       DateTime?           @map("expiration_date") @db.Date
-  activeOrder          Json?               @map("active_order")
+  activeOrder          Json?               @map("upcoming_order")
   assignedDriverId     String?             @map("assigned_driver_id") @db.VarChar(36)
   createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt            DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)

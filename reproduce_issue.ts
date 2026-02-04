@@ -29,7 +29,7 @@ async function run() {
         .insert([{
             full_name: 'Test Client ' + Date.now(),
             service_type: 'Food',
-            active_order: {}
+            upcoming_order: {}
         }])
         .select()
         .single();

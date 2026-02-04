@@ -20,6 +20,7 @@ import { createClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
 import { composeUniteUsUrl } from './utils';
+import { toStoredUpcomingOrder, fromStoredUpcomingOrder } from './upcoming-order-schema';
 
 // Meal planner orders use meal_planner_orders and meal_planner_order_items (no longer upcoming_orders)
 const MEAL_PLANNER_SERVICE_TYPE = 'meal_planner';
@@ -2584,7 +2585,10 @@ export async function deleteNutritionist(id: string) {
 
 function mapClientFromDB(c: any): ClientProfile {
     // Supabase automatically handles JSON fields, so we can use them directly
-    const activeOrder = c.active_order || {};
+    const rawActiveOrder = c.upcoming_order || {};
+    const serviceType = (c.service_type || 'Food') as ServiceType;
+    // Hydrate stored payload to UI OrderConfiguration shape (handles legacy and schema-only payloads)
+    const activeOrder = fromStoredUpcomingOrder(rawActiveOrder, serviceType) ?? (Object.keys(rawActiveOrder).length > 0 ? rawActiveOrder : undefined);
     const billings = c.billings || null;
     const visits = c.visits || null;
 
@@ -2609,7 +2613,7 @@ function mapClientFromDB(c: any): ClientProfile {
         cin: c.cin ?? null,
         authorizedAmount: c.authorized_amount ?? null,
         expirationDate: c.expiration_date || null,
-        activeOrder: activeOrder, // Metadata matches structure
+        activeOrder: activeOrder ?? undefined,
         // New fields from dietfantasy
         firstName: c.first_name || null,
         lastName: c.last_name || null,
@@ -2805,22 +2809,22 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         sign_token: data.signToken || null
     };
 
-    // Save active_order if provided (ClientProfile component handles validation)
-    // If not provided, try to load default order template for the client's serviceType
+    // Save upcoming_order if provided; sanitize to schema-only shape (UPCOMING_ORDER_SCHEMA)
+    const serviceTypeForOrder = data.serviceType ?? 'Food';
     if (data.activeOrder !== undefined && data.activeOrder !== null) {
-        payload.active_order = data.activeOrder;
+        payload.upcoming_order = toStoredUpcomingOrder(data.activeOrder, serviceTypeForOrder as ServiceType) ?? data.activeOrder;
     } else {
         // Try to load default order template for new clients based on their serviceType
         try {
             const defaultTemplate = await getDefaultOrderTemplate(data.serviceType);
             if (defaultTemplate) {
-                payload.active_order = defaultTemplate;
+                payload.upcoming_order = toStoredUpcomingOrder(defaultTemplate, serviceTypeForOrder as ServiceType) ?? defaultTemplate;
             } else {
-                payload.active_order = {};
+                payload.upcoming_order = {};
             }
         } catch (error) {
             console.error('Error loading default order template:', error);
-            payload.active_order = {};
+            payload.upcoming_order = {};
         }
     }
 
@@ -2842,7 +2846,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         approved_meals_per_week: payload.approved_meals_per_week,
         authorized_amount: payload.authorized_amount,
         expiration_date: payload.expiration_date,
-        active_order: payload.active_order || {},
+        upcoming_order: payload.upcoming_order || {},
         first_name: payload.first_name,
         last_name: payload.last_name,
         apt: payload.apt,
@@ -2928,7 +2932,7 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         approved_meals_per_week: defaultApprovedMeals,
         authorized_amount: null,
         expiration_date: null,
-        active_order: {},
+        upcoming_order: {},
         parent_client_id: parentClientId,
         dob: dob || null,
         cin: cin ?? null
@@ -2952,12 +2956,11 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         approved_meals_per_week: payload.approved_meals_per_week,
         authorized_amount: payload.authorized_amount,
         expiration_date: payload.expiration_date,
-        active_order: payload.active_order || {},
+        upcoming_order: payload.upcoming_order || {},
         parent_client_id: payload.parent_client_id,
         dob: payload.dob,
         cin: payload.cin
     };
-    
     const { data: res, error: insertError } = await supabase
         .from('clients')
         .insert([insertPayload])
@@ -3049,7 +3052,13 @@ export async function updateClient(id: string, data: Partial<ClientProfile>) {
     if (data.cin !== undefined) payload.cin = data.cin ?? null;
     if (data.authorizedAmount !== undefined) payload.authorized_amount = data.authorizedAmount ?? null;
     if (data.expirationDate !== undefined) payload.expiration_date = data.expirationDate || null;
-    if (data.activeOrder) payload.active_order = data.activeOrder;
+    // Sanitize upcoming_order to schema-only fields before persisting (UPCOMING_ORDER_SCHEMA)
+    if (data.activeOrder !== undefined) {
+        const serviceTypeForOrder = data.serviceType ?? (await getClient(id))?.serviceType ?? 'Food';
+        payload.upcoming_order = data.activeOrder == null
+            ? null
+            : (toStoredUpcomingOrder(data.activeOrder, serviceTypeForOrder as ServiceType) ?? null);
+    }
     // New fields from dietfantasy
     if (data.firstName !== undefined) payload.first_name = data.firstName || null;
     if (data.lastName !== undefined) payload.last_name = data.lastName || null;
@@ -3368,9 +3377,9 @@ export async function generateDeliveriesForDate(dateStr: string) {
     if (!clients || !vendors) return 0;
 
     for (const c of clients) {
-        const activeOrder = typeof c.active_order === 'string' 
-            ? JSON.parse(c.active_order) 
-            : (c.active_order || {});
+        const activeOrder = typeof c.upcoming_order === 'string' 
+            ? JSON.parse(c.upcoming_order) 
+            : (c.upcoming_order || {});
         
         if (!activeOrder || !activeOrder.vendorId) continue;
 
@@ -6095,10 +6104,10 @@ async function updateClientActiveOrderFromUpcomingOrder(
     serviceType: string
 ): Promise<void> {
     try {
-        // Get current client's active_order
+        // Get current client's upcoming_order
         const { data: clientData } = await supabase
             .from('clients')
-            .select('active_order')
+            .select('upcoming_order')
             .eq('id', clientId)
             .single();
 
@@ -6107,7 +6116,7 @@ async function updateClientActiveOrderFromUpcomingOrder(
             return;
         }
 
-        const currentActiveOrder: any = clientData.active_order || { serviceType };
+        const currentActiveOrder: any = clientData.upcoming_order || { serviceType };
 
         if (serviceType === 'Food') {
             // Get vendor IDs from upcoming_order_vendor_selections
@@ -6241,7 +6250,7 @@ async function updateClientActiveOrderFromUpcomingOrder(
         const { error: updateError } = await supabase
             .from('clients')
             .update({
-                active_order: currentActiveOrder,
+                upcoming_order: currentActiveOrder,
                 updated_at: currentTime.toISOString()
             })
             .eq('id', clientId);
@@ -6277,11 +6286,9 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
         return;
     }
 
-    // 1. DRAFT PERSISTENCE: Save the raw activeOrder metadata to the clients table.
-    // This ensures Case ID, Vendor, and other selections are persisted even if the 
-    // full sync to upcoming_orders fails (e.g. if the vendor/delivery day isn't fully set yet).
-    const orderConfig = client.activeOrder;
-    
+    // orderConfig is used for sync; may be updated to hydrated shape after draft persistence
+    let orderConfig = client.activeOrder;
+
     console.log('[syncCurrentOrderToUpcoming] orderConfig received:', {
         serviceType: orderConfig?.serviceType,
         vendorId: orderConfig?.vendorId,
@@ -6311,44 +6318,46 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
     const menuItems = await getMenuItems();
     const boxTypes = await getBoxTypes();
 
-    // 1. DRAFT PERSISTENCE: Save the raw activeOrder metadata to the clients table.
-    // This ensures Case ID, Vendor, and other selections are persisted even if the 
-    // full sync to upcoming_orders fails (e.g. if the vendor/delivery day isn't fully set yet).
+    // 1. DRAFT PERSISTENCE: Save schema-only payload to clients.upcoming_order (UPCOMING_ORDER_SCHEMA).
+    // Sanitize so only allowed fields per serviceType are stored; then use hydrated config for sync below.
     if (!skipClientUpdate && client.activeOrder) {
-        // Cache current time at function start to avoid multiple getCurrentTime() calls (triangleorder pattern)
-        const currentTime = await getCurrentTime();
-        const currentTimeISO = currentTime.toISOString();
-        const { error: updateError } = await supabase
-            .from('clients')
-            .update({ 
-                active_order: client.activeOrder,
-                updated_at: currentTimeISO
-            })
-            .eq('id', clientId);
-        
-        if (updateError) {
-            // Check for RLS/permission errors
-            const isRLSError = updateError?.code === 'PGRST301' || 
-                              updateError?.message?.includes('permission denied') || 
-                              updateError?.message?.includes('RLS') ||
-                              updateError?.message?.includes('row-level security');
-            
-            console.error('[syncCurrentOrderToUpcoming] Error updating clients.active_order:', {
-                error: updateError,
-                errorCode: updateError?.code,
-                errorMessage: updateError?.message,
-                isRLSError,
-                clientId
-            });
-            
-            if (isRLSError) {
-                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+        const storedPayload = toStoredUpcomingOrder(client.activeOrder, clientServiceType as ServiceType);
+        if (storedPayload !== null) {
+            const currentTime = await getCurrentTime();
+            const currentTimeISO = currentTime.toISOString();
+            const { error: updateError } = await supabase
+                .from('clients')
+                .update({
+                    upcoming_order: storedPayload,
+                    updated_at: currentTimeISO
+                })
+                .eq('id', clientId);
+
+            if (updateError) {
+                const isRLSError = updateError?.code === 'PGRST301' ||
+                    updateError?.message?.includes('permission denied') ||
+                    updateError?.message?.includes('RLS') ||
+                    updateError?.message?.includes('row-level security');
+
+                console.error('[syncCurrentOrderToUpcoming] Error updating clients.upcoming_order:', {
+                    error: updateError,
+                    errorCode: updateError?.code,
+                    errorMessage: updateError?.message,
+                    isRLSError,
+                    clientId
+                });
+
+                if (isRLSError) {
+                    throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+                }
+
+                throw new Error(`Failed to save order: ${updateError.message || 'Unknown error'}`);
             }
-            
-            throw new Error(`Failed to save order: ${updateError.message || 'Unknown error'}`);
+
+            // Use hydrated config for rest of sync so upcoming_orders table gets consistent shape
+            orderConfig = fromStoredUpcomingOrder(storedPayload, clientServiceType as ServiceType) ?? orderConfig;
+            revalidatePath('/clients');
         }
-        
-        revalidatePath('/clients');
     }
 
     if (!orderConfig) {
@@ -8284,20 +8293,20 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
         if (bs) {
             result.boxSelection = bs;
 
-            // If items field is empty, try to fetch from client's active_order (same source as client profile uses)
+            // If items field is empty, try to fetch from client's upcoming_order (same source as client profile uses)
             if (!bs.items || Object.keys(bs.items).length === 0) {
-                // Get the client's active_order from clients table (this is where client profile gets box items from)
+                // Get the client's upcoming_order from clients table (UPCOMING_ORDER_SCHEMA)
                 const { data: clientData } = await supabase
                     .from('clients')
-                    .select('active_order')
+                    .select('upcoming_order')
                     .eq('id', order.client_id)
                     .maybeSingle();
 
-                if (clientData && clientData.active_order) {
-                    const activeOrder = clientData.active_order;
+                if (clientData && clientData.upcoming_order) {
+                    const activeOrder = clientData.upcoming_order;
                     // Check if this is a box order and has items
                     if (activeOrder.serviceType === 'Boxes' && activeOrder.items && Object.keys(activeOrder.items).length > 0) {
-                        // Use items from client's active_order (same as client profile uses)
+                        // Use items from client's upcoming_order (same as client profile uses)
                         result.boxSelection = {
                             ...bs,
                             items: activeOrder.items
@@ -10125,10 +10134,10 @@ export async function updateMealCategoryOrder(updates: { id: string; sortOrder: 
 // --- INDEPENDENT ORDER ACTIONS ---
 
 export async function getClientFoodOrder(clientId: string): Promise<ClientFoodOrder | null> {
-    // Use clients.active_order JSON field instead of separate table
+    // Use clients.upcoming_order JSON field (UPCOMING_ORDER_SCHEMA)
     const { data, error } = await supabase
         .from('clients')
-        .select('id, active_order, updated_at, updated_by')
+        .select('id, upcoming_order, updated_at, updated_by')
         .eq('id', clientId)
         .maybeSingle();
 
@@ -10136,11 +10145,11 @@ export async function getClientFoodOrder(clientId: string): Promise<ClientFoodOr
         console.error('Error fetching client food order:', error);
         return null;
     }
-    if (!data || !data.active_order) return null;
+    if (!data || !data.upcoming_order) return null;
 
-    const activeOrder = typeof data.active_order === 'string' 
-        ? JSON.parse(data.active_order) 
-        : data.active_order;
+    const activeOrder = typeof data.upcoming_order === 'string' 
+        ? JSON.parse(data.upcoming_order) 
+        : data.upcoming_order;
 
     // Only return if it's a Food service type order with deliveryDayOrders
     if (activeOrder.serviceType !== 'Food' || !activeOrder.deliveryDayOrders) {
@@ -10183,10 +10192,10 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
             vendorSelections: Array.isArray(fullActiveOrder.vendorSelections) ? fullActiveOrder.vendorSelections : []
         };
     } else {
-        // Get current client data to preserve existing active_order structure
+        // Get current client data to preserve existing upcoming_order structure
         const { data: clientData, error: fetchError } = await supabaseAdmin
             .from('clients')
-            .select('active_order')
+            .select('upcoming_order')
             .eq('id', clientId)
             .maybeSingle();
 
@@ -10195,11 +10204,11 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
             return null;
         }
 
-        // Parse existing active_order or create new one
-        activeOrder = clientData?.active_order 
-            ? (typeof clientData.active_order === 'string' 
-                ? JSON.parse(clientData.active_order) 
-                : clientData.active_order)
+        // Parse existing upcoming_order or create new one
+        activeOrder = clientData?.upcoming_order 
+            ? (typeof clientData.upcoming_order === 'string' 
+                ? JSON.parse(clientData.upcoming_order) 
+                : clientData.upcoming_order)
             : {};
     }
 
@@ -10229,12 +10238,12 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
 
     // Prepare update payload
     const updatePayload: any = {
-        active_order: activeOrder,
+        upcoming_order: activeOrder,
         updated_at: new Date().toISOString()
     };
     if (updatedBy) updatePayload.updated_by = updatedBy;
 
-    // Update client's active_order field
+    // Update client's upcoming_order field
     let { data: updated, error } = await supabaseAdmin
         .from('clients')
         .update(updatePayload)
@@ -10272,10 +10281,10 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
 }
 
 export async function getClientMealOrder(clientId: string): Promise<ClientMealOrder | null> {
-    // Use clients.active_order JSON field instead of separate table
+    // Use clients.upcoming_order JSON field (UPCOMING_ORDER_SCHEMA)
     const { data, error } = await supabase
         .from('clients')
-        .select('id, active_order, updated_at, updated_by')
+        .select('id, upcoming_order, updated_at, updated_by')
         .eq('id', clientId)
         .maybeSingle();
 
@@ -10283,11 +10292,11 @@ export async function getClientMealOrder(clientId: string): Promise<ClientMealOr
         console.error('Error fetching client meal order:', error);
         return null;
     }
-    if (!data || !data.active_order) return null;
+    if (!data || !data.upcoming_order) return null;
 
-    const activeOrder = typeof data.active_order === 'string' 
-        ? JSON.parse(data.active_order) 
-        : data.active_order;
+    const activeOrder = typeof data.upcoming_order === 'string' 
+        ? JSON.parse(data.upcoming_order) 
+        : data.upcoming_order;
 
     // Only return if it's a Meal service type order with mealSelections
     if (activeOrder.serviceType !== 'Meal' || !activeOrder.mealSelections) {
@@ -10452,10 +10461,10 @@ export async function saveClientMealOrder(clientId: string, data: Partial<Client
         process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // Get current client data to preserve existing active_order structure
+    // Get current client data to preserve existing upcoming_order structure
     const { data: clientData, error: fetchError } = await supabaseAdmin
         .from('clients')
-        .select('active_order')
+        .select('upcoming_order')
         .eq('id', clientId)
         .maybeSingle();
 
@@ -10464,11 +10473,11 @@ export async function saveClientMealOrder(clientId: string, data: Partial<Client
         return null;
     }
 
-    // Parse existing active_order or create new one
-    let activeOrder: any = clientData?.active_order 
-        ? (typeof clientData.active_order === 'string' 
-            ? JSON.parse(clientData.active_order) 
-            : clientData.active_order)
+    // Parse existing upcoming_order or create new one
+    let activeOrder: any = clientData?.upcoming_order 
+        ? (typeof clientData.upcoming_order === 'string' 
+            ? JSON.parse(clientData.upcoming_order) 
+            : clientData.upcoming_order)
         : {};
 
     // Update with new Meal order data
@@ -10478,12 +10487,12 @@ export async function saveClientMealOrder(clientId: string, data: Partial<Client
 
     // Prepare update payload
     const updatePayload: any = {
-        active_order: activeOrder,
+        upcoming_order: activeOrder,
         updated_at: new Date().toISOString()
     };
     if (updatedBy) updatePayload.updated_by = updatedBy;
 
-    // Update client's active_order field
+    // Update client's upcoming_order field
     let { data: updated, error } = await supabaseAdmin
         .from('clients')
         .update(updatePayload)

@@ -75,6 +75,7 @@ export interface OrderConfiguration {
   vendorSelections?: {
     vendorId: string;
     items: { [itemId: string]: number }; // itemId -> quantity
+    itemNotes?: { [itemId: string]: string };
   }[];
 
   // Multi-day food orders: organized by delivery day
@@ -83,6 +84,7 @@ export interface OrderConfiguration {
       vendorSelections: {
         vendorId: string;
         items: { [itemId: string]: number };
+        itemNotes?: { [itemId: string]: string };
       }[];
     };
   };
@@ -90,8 +92,26 @@ export interface OrderConfiguration {
   lastUpdated?: string;
   updatedBy?: string; // Admin ID or Name
 
-  // For Boxes - NEW: Multiple boxes support
+  // For Boxes - NEW: Multiple boxes support (schema uses boxOrders; UI may use either)
   boxes?: BoxConfiguration[]; // Array of individual box configurations
+  boxOrders?: Array<{
+    boxTypeId?: string;
+    vendorId?: string;
+    quantity?: number;
+    items?: Record<string, number>;
+    itemNotes?: Record<string, string>;
+  }>;
+
+  // General notes (stored in schema for all types)
+  notes?: string;
+
+  // For Custom: schema fields (single item)
+  custom_name?: string;
+  custom_price?: string | number;
+  deliveryDay?: string;
+
+  // For Food/Meal: mealSelections and itemNotes on selections
+  mealSelections?: Record<string, { vendorId?: string; items: Record<string, number>; itemNotes?: Record<string, string> }>;
 
   // For Boxes - LEGACY: Keep for backward compatibility
   /** @deprecated Use boxes[] array instead */
