@@ -61,30 +61,16 @@ async function getMealItems(supabaseClient: SupabaseClient) {
 // ORDERS LIST
 // ---------------------------------------------------------------------------
 
-export async function getAllOrders(): Promise<any[]> {
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const db = serviceRoleKey
-        ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
-        : supabase;
-
-    // Fetch all orders only (no join – same pattern as getOrdersPaginated)
-    const { data: ordersData, error } = await db
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-    if (error) {
-        console.error('Error fetching all orders:', error);
-        return [];
-    }
-
-    const orders = ordersData || [];
+/** Shared helper: enrich a page of orders with client names and vendor names. */
+async function enrichOrdersPage(
+    db: SupabaseClient,
+    orders: any[],
+): Promise<any[]> {
     if (orders.length === 0) return [];
 
     const orderIds = orders.map((o: any) => o.id);
     const clientIds = [...new Set(orders.map((o: any) => o.client_id).filter(Boolean))];
 
-    // Fetch client names separately (no join)
     let clientsMap = new Map<string, string>();
     if (clientIds.length > 0) {
         const { data: clients } = await db.from('clients').select('id, full_name').in('id', clientIds);
@@ -140,6 +126,7 @@ export async function getAllOrders(): Promise<any[]> {
                 addVendor(o.id, notes?.vendorId ?? notes?.vendor_id);
             } catch (_) {}
             }
+        }
     });
 
     return orders.map((o: any) => ({
@@ -149,6 +136,73 @@ export async function getAllOrders(): Promise<any[]> {
         scheduled_delivery_date: o.scheduled_delivery_date || null,
         vendorNames: (vendorNamesByOrderId.get(o.id) || ['Unknown']).sort(),
     }));
+}
+
+/**
+ * Paginated orders list. Fetches one page of orders and total count; client/vendor lookups only for that page.
+ * Returns { orders, total } for the Orders list UI.
+ */
+export async function getOrdersPaginatedBilling(
+    page: number,
+    pageSize: number,
+): Promise<{ orders: any[]; total: number }> {
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const db = serviceRoleKey
+        ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
+        : supabase;
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const countQuery = db
+        .from('orders')
+        .select('*', { count: 'exact', head: true });
+
+    const dataQuery = db
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+    const [countResult, dataResult] = await Promise.all([countQuery, dataQuery]);
+
+    if (countResult.error) {
+        console.error('Error fetching orders count:', countResult.error);
+        return { orders: [], total: 0 };
+    }
+    if (dataResult.error) {
+        console.error('Error fetching orders page:', dataResult.error);
+        return { orders: [], total: countResult.count ?? 0 };
+    }
+
+    const total = countResult.count ?? 0;
+    const orders = dataResult.data || [];
+    const enriched = await enrichOrdersPage(db, orders);
+
+    return { orders: enriched, total };
+}
+
+export async function getAllOrders(): Promise<any[]> {
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const db = serviceRoleKey
+        ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
+        : supabase;
+
+    // Fetch all orders only (no join – same pattern as getOrdersPaginated)
+    const { data: ordersData, error } = await db
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        console.error('Error fetching all orders:', error);
+        return [];
+    }
+
+    const orders = ordersData || [];
+    if (orders.length === 0) return [];
+
+    return enrichOrdersPage(db, orders);
 }
 
 // ---------------------------------------------------------------------------

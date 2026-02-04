@@ -3,13 +3,16 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Search, ChevronRight, ArrowUpDown, Trash2, Loader2 } from 'lucide-react';
-import { getAllOrders, deleteOrder } from '@/lib/actions-orders-billing';
+import { Search, ChevronRight, ArrowUpDown, Trash2, Loader2, ChevronLeft } from 'lucide-react';
+import { getOrdersPaginatedBilling, deleteOrder } from '@/lib/actions-orders-billing';
 import styles from './OrdersList.module.css';
 
 export function OrdersList() {
     const router = useRouter();
     const [orders, setOrders] = useState<any[]>([]);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const PAGE_SIZE = 50;
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [creationIdFilter, setCreationIdFilter] = useState('');
@@ -19,14 +22,15 @@ export function OrdersList() {
     const [isDeleting, setIsDeleting] = useState(false);
 
     useEffect(() => {
-        loadData();
-    }, []);
+        loadData(page);
+    }, [page]);
 
-    async function loadData() {
+    async function loadData(pageNum: number) {
         setIsLoading(true);
         try {
-            const data = await getAllOrders();
+            const { orders: data, total: totalCount } = await getOrdersPaginatedBilling(pageNum, PAGE_SIZE);
             setOrders(data);
+            setTotal(totalCount);
         } catch (error) {
             console.error('Failed to load orders:', error);
         } finally {
@@ -115,7 +119,7 @@ export function OrdersList() {
                 else fail++;
             }
             setSelectedOrders(new Set());
-            await loadData();
+            await loadData(page);
             if (fail === 0) alert(`Deleted ${ok} order(s).`);
             else alert(`Deleted ${ok}. Failed: ${fail}.`);
         } catch (e) {
@@ -249,7 +253,7 @@ export function OrdersList() {
                                 style={{ cursor: 'pointer', width: 18, height: 18 }}
                             />
                         </span>
-                        <span style={{ width: '40px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{index + 1}</span>
+                        <span style={{ width: '40px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{(page - 1) * PAGE_SIZE + index + 1}</span>
                         <span style={{ width: '100px', fontWeight: 600 }}>{order.order_number ?? 'N/A'}</span>
                         <span style={{ flex: 2 }}>{order.clientName}</span>
                         <span style={{ flex: 1 }}>{order.service_type}</span>
@@ -270,6 +274,36 @@ export function OrdersList() {
                 ))}
                 {filteredOrders.length === 0 && <div className={styles.empty}>No orders found.</div>}
             </div>
+
+            {total > 0 && (
+                <div className={styles.pagination} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '1rem', padding: '0.5rem 0', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                        Page {page} of {Math.ceil(total / PAGE_SIZE) || 1} ({total} total)
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <button
+                            type="button"
+                            className="button"
+                            disabled={page <= 1 || isLoading}
+                            onClick={() => setPage((p) => Math.max(1, p - 1))}
+                            aria-label="Previous page"
+                        >
+                            <ChevronLeft size={18} />
+                            Previous
+                        </button>
+                        <button
+                            type="button"
+                            className="button"
+                            disabled={page >= Math.ceil(total / PAGE_SIZE) || isLoading}
+                            onClick={() => setPage((p) => p + 1)}
+                            aria-label="Next page"
+                        >
+                            Next
+                            <ChevronRight size={18} />
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -2643,15 +2643,37 @@ function mapClientFromDB(c: any): ClientProfile {
     };
 }
 
+/** Fetch id->fullName map for given client IDs. Use for parent/dependent lookups instead of loading all clients. */
+export async function getClientNamesByIds(ids: string[]): Promise<Record<string, string>> {
+    const unique = [...new Set(ids)].filter(Boolean);
+    if (unique.length === 0) return {};
+    try {
+        const { data, error } = await supabase
+            .from('clients')
+            .select('id, full_name')
+            .in('id', unique);
+        if (error) {
+            logQueryError(error, 'clients (getClientNamesByIds)');
+            return {};
+        }
+        const map: Record<string, string> = {};
+        for (const row of data || []) {
+            map[row.id] = row.full_name ?? '';
+        }
+        return map;
+    } catch (err) {
+        console.error('getClientNamesByIds error:', err);
+        return {};
+    }
+}
+
 export async function getClients() {
     try {
-        console.log('[getClients] Fetching all clients...');
         const { data, error } = await supabase.from('clients').select('*');
         if (error) {
             logQueryError(error, 'clients');
             return [];
         }
-        console.log('[getClients] Raw data returned:', { count: data?.length, firstClient: data?.[0] ? { id: data[0].id, full_name: data[0].full_name } : null });
         // Map clients with error handling for individual clients
         const mapped = (data || []).map((c: any) => {
             try {
@@ -2661,7 +2683,6 @@ export async function getClients() {
                 return null;
             }
         }).filter((c: any) => c !== null);
-        console.log('[getClients] Mapped clients:', { count: mapped.length });
         return mapped;
     } catch (error) {
         console.error('[getClients] Error fetching clients:', error);
@@ -7788,7 +7809,6 @@ export async function getNavigatorLogs(navigatorId: string) {
 
 export async function getClientsPaginated(page: number, pageSize: number, searchQuery: string = '', filter?: 'needs-vendor') {
     try {
-        console.log('[getClientsPaginated] Called with:', { page, pageSize, query: searchQuery, filter });
         // If filtering for clients needing vendor assignment, get Boxes clients whose vendor is not set
         if (filter === 'needs-vendor') {
             // First, get all clients with service_type = 'Boxes'
@@ -7943,7 +7963,6 @@ export async function getClientsPaginated(page: number, pageSize: number, search
             clientsQuery = clientsQuery.ilike('full_name', `%${searchQuery}%`);
         }
 
-        console.log('[getClientsPaginated] Executing query with searchQuery:', searchQuery);
         const { data, count, error } = await clientsQuery
             .order('full_name')
             .range((page - 1) * pageSize, page * pageSize - 1);
@@ -7955,8 +7974,6 @@ export async function getClientsPaginated(page: number, pageSize: number, search
 
         const total = count || 0;
 
-        console.log('[getClientsPaginated] Raw data returned:', { count: data?.length, total, firstClient: data?.[0] ? { id: data[0].id, full_name: data[0].full_name, active_order_type: typeof data[0].active_order } : null });
-
         // Map clients with error handling for individual clients
         const mappedClients = (data || []).map((c: any) => {
             try {
@@ -7966,8 +7983,6 @@ export async function getClientsPaginated(page: number, pageSize: number, search
                 return null;
             }
         }).filter((c: any) => c !== null);
-
-        console.log('[getClientsPaginated] Mapped clients:', { count: mappedClients.length, total });
 
         return {
             clients: mappedClients,
@@ -9339,67 +9354,71 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
         }
     }
 
-    // Fetch from both tables
-    const ordersQueryFinal = ordersQuery.order('created_at', { ascending: false });
-    const upcomingOrdersQueryFinal = upcomingOrdersQuery.order('created_at', { ascending: false });
-    
-    const [ordersResult, upcomingOrdersResult] = await Promise.all([
-        ordersQueryFinal,
-        upcomingOrdersQueryFinal
-    ]);
+    // Bounded fetch: get total count, then fetch only enough rows to form the requested page.
+    let total: number;
+    let ordersData: any[];
+    let upcomingOrdersData: any[];
 
-    if (ordersResult.error) {
-        console.error('[getOrdersPaginated] Error fetching orders:', {
-            error: ordersResult.error,
-            message: ordersResult.error.message,
-            details: ordersResult.error.details,
-            hint: ordersResult.error.hint
-        });
+    if (filter === 'needs-vendor') {
+        // Already constrained to orderIdsFromOrders / orderIdsFromUpcoming; fetch those rows only.
+        const oRes = orderIdsFromOrders.length > 0 ? await ordersQuery.order('created_at', { ascending: false }) : { data: [] as any[], error: null };
+        const uRes = orderIdsFromUpcoming.length > 0 ? await upcomingOrdersQuery.order('created_at', { ascending: false }) : { data: [] as any[], error: null };
+        if (oRes.error) console.error('[getOrdersPaginated] Error fetching orders:', oRes.error);
+        if (uRes.error) console.error('[getOrdersPaginated] Error fetching upcoming orders:', uRes.error);
+        ordersData = oRes.data || [];
+        upcomingOrdersData = uRes.data || [];
+        total = orderIdsNeedingVendor.length;
+    } else {
+        // No filter: get counts from both tables, then bounded fetch (limit page * pageSize from each).
+        const ordersCountQuery = supabase.from('orders').select('*', { count: 'exact', head: true });
+        const upcomingCountQuery = supabase.from('upcoming_orders').select('*', { count: 'exact', head: true });
+        const ordersLimit = page * pageSize;
+        const ordersDataQuery = supabase
+            .from('orders')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(ordersLimit);
+        const upcomingDataQuery = supabase
+            .from('upcoming_orders')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(ordersLimit);
+
+        const [countOrders, countUpcoming, ordersResult, upcomingOrdersResult] = await Promise.all([
+            ordersCountQuery,
+            upcomingCountQuery,
+            ordersDataQuery,
+            upcomingDataQuery
+        ]);
+
+        const totalOrders = (countOrders as any).count ?? 0;
+        const totalUpcoming = (countUpcoming as any).count ?? 0;
+        total = totalOrders + totalUpcoming;
+
+        if (ordersResult.error) {
+            console.error('[getOrdersPaginated] Error fetching orders:', ordersResult.error);
+        }
+        if (upcomingOrdersResult.error) {
+            console.error('[getOrdersPaginated] Error fetching upcoming orders:', upcomingOrdersResult.error);
+        }
+        ordersData = ordersResult.data || [];
+        upcomingOrdersData = upcomingOrdersResult.data || [];
     }
-    if (upcomingOrdersResult.error) {
-        console.error('[getOrdersPaginated] Error fetching upcoming orders:', {
-            error: upcomingOrdersResult.error,
-            message: upcomingOrdersResult.error.message,
-            details: upcomingOrdersResult.error.details,
-            hint: upcomingOrdersResult.error.hint
-        });
-    }
 
-    const ordersData = ordersResult.data || [];
-    const upcomingOrdersData = upcomingOrdersResult.data || [];
-
-    console.log(`[getOrdersPaginated] Fetched ${ordersData.length} orders and ${upcomingOrdersData.length} upcoming orders`);
-    
-    // If both queries failed, return empty
-    if (ordersResult.error && upcomingOrdersResult.error) {
-        console.error('[getOrdersPaginated] Both queries failed, returning empty result');
-        return { orders: [], total: 0 };
-    }
-
-    // Combine results from both tables
-    // If one query fails, still return results from the other table
+    // Combine and sort by created_at descending, then take the requested page
     const allOrders = [
-        ...(ordersData.map((o: any) => ({
-            ...o,
-            is_upcoming: false
-        }))),
-        ...(upcomingOrdersData.map((o: any) => ({
-            ...o,
-            is_upcoming: true
-        })))
+        ...(ordersData.map((o: any) => ({ ...o, is_upcoming: false }))),
+        ...(upcomingOrdersData.map((o: any) => ({ ...o, is_upcoming: true })))
     ];
-
-    // Sort by created_at descending
     allOrders.sort((a: any, b: any) => {
         const dateA = new Date(a.created_at || 0).getTime();
         const dateB = new Date(b.created_at || 0).getTime();
         return dateB - dateA;
     });
 
-    const total = allOrders.length;
     const startIndex = (page - 1) * pageSize;
     const endIndex = startIndex + pageSize;
-    const paginatedOrders = allOrders.slice(startIndex, endIndex);
+    const paginatedOrders = total === 0 ? [] : allOrders.slice(startIndex, endIndex);
 
     console.log(`[getOrdersPaginated] Total orders: ${total}, Page: ${page}, Page size: ${pageSize}, Showing: ${paginatedOrders.length}`);
 

@@ -1637,6 +1637,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (!configToSet.caseId && c.activeOrder.caseId) {
                     configToSet.caseId = c.activeOrder.caseId;
                 }
+                // For Produce: read bill amount from activeOrder (camelCase or snake_case from DB)
+                if (c.serviceType === 'Produce') {
+                    const fromOrder = configToSet.billAmount ?? (configToSet.bill_amount != null ? parseFloat(String(configToSet.bill_amount)) : undefined);
+                    if (fromOrder !== undefined && fromOrder !== null && !Number.isNaN(fromOrder)) {
+                        configToSet.billAmount = fromOrder;
+                    }
+                }
             }
 
             if (!configToSet) {
@@ -1658,9 +1665,36 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 configToSet.caseId = orderConfig.caseId;
             }
 
-            // Ensure billAmount is preserved for Produce orders from upcoming_orders
-            if (c.serviceType === 'Produce' && upcomingOrderData?.billAmount !== null && upcomingOrderData?.billAmount !== undefined) {
-                configToSet.billAmount = parseFloat(upcomingOrderData.billAmount.toString());
+            // Ensure billAmount is preserved for Produce orders from upcoming_orders (or from totalValue if legacy)
+            if (c.serviceType === 'Produce') {
+                const fromUpcoming = upcomingOrderData?.billAmount ?? upcomingOrderData?.totalValue;
+                if (fromUpcoming !== null && fromUpcoming !== undefined) {
+                    const val = parseFloat(String(fromUpcoming));
+                    if (!Number.isNaN(val)) configToSet.billAmount = val;
+                }
+                // If we have deliveryDayOrders (multi-day), take billAmount from first day's order
+                if ((configToSet.billAmount == null || configToSet.billAmount === undefined) &&
+                    configToSet.deliveryDayOrders && typeof configToSet.deliveryDayOrders === 'object') {
+                    const firstDayKey = Object.keys(configToSet.deliveryDayOrders)[0];
+                    const firstDayOrder = firstDayKey ? (configToSet.deliveryDayOrders as any)[firstDayKey] : null;
+                    const dayBill = firstDayOrder?.billAmount ?? firstDayOrder?.totalValue;
+                    if (dayBill != null && dayBill !== undefined) {
+                        const val = parseFloat(String(dayBill));
+                        if (!Number.isNaN(val)) configToSet.billAmount = val;
+                    }
+                }
+                // When no saved amount (0 or missing), load from admin default order template
+                const currentBill = configToSet.billAmount;
+                if (currentBill == null || currentBill === undefined || Number(currentBill) === 0) {
+                    try {
+                        const produceTemplate = await getDefaultOrderTemplate('Produce');
+                        if (produceTemplate && (produceTemplate.billAmount != null || produceTemplate.billAmount === 0)) {
+                            configToSet.billAmount = parseFloat(String(produceTemplate.billAmount)) || 0;
+                        }
+                    } catch (e) {
+                        console.warn('[ClientProfile] loadData - Could not load default Produce template for bill amount', e);
+                    }
+                }
             }
 
             // Fix for Boxes: Handle boxOrders array and migrate legacy fields if needed
@@ -2991,10 +3025,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
         } else if (type === 'Produce') {
             setOrderConfig({ serviceType: type, billAmount: 0 });
-            // Load default template for new clients
-            if (isNewClient) {
-                await loadAndApplyDefaultTemplate('Produce');
-            }
+            // Always load default template so bill amount reflects admin control (for both new and existing clients)
+            await loadAndApplyDefaultTemplate('Produce');
         } else if (type === 'Custom') {
             // Auto-populate from previous Custom orders if available
             const extracted = extractCustomItemsFromOrders();

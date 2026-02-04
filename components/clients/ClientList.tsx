@@ -16,7 +16,7 @@ import {
     getVendors,
     getBoxTypes,
     getMenuItems,
-    getClients,
+    getClientNamesByIds,
     updateClient,
     getUpcomingOrderForClient as serverGetUpcomingOrderForClient,
     getCompletedOrdersWithDeliveryProof as serverGetCompletedOrdersWithDeliveryProof,
@@ -39,7 +39,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-    const [allClientsForLookup, setAllClientsForLookup] = useState<ClientProfile[]>([]);
+    const [parentNamesMap, setParentNamesMap] = useState<Record<string, string>>({});
     const [search, setSearch] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -48,7 +48,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [page, setPage] = useState(1);
     const [totalClients, setTotalClients] = useState(0);
     const [isFetchingMore, setIsFetchingMore] = useState(false);
-    const PAGE_SIZE = 20;
+    const CLIENT_FETCH_LIMIT = 2000; // Single request loads all clients (avoids many round-trips)
 
     // Prefetching State
     const [detailsCache, setDetailsCache] = useState<Record<string, ClientFullDetails>>({});
@@ -245,15 +245,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         );
     };
 
-    // Progressive Loading Effect
-    useEffect(() => {
-        if (!isLoading && clients.length < totalClients && !isFetchingMore) {
-            // Fetch next page
-            const nextPage = page + 1;
-            fetchMoreClients(nextPage);
-        }
-    }, [clients.length, totalClients, isLoading, isFetchingMore, page, currentView]);
-
     // Background Prefetching Effect - Re-enabled with Batch Fetching
     useEffect(() => {
         if (isLoading || clients.length === 0) return;
@@ -266,7 +257,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
         const missingCache = clients
             .filter(c => !detailsCache[c.id] && !pendingPrefetches.current.has(c.id))
-            .slice(0, 20); // Batch size of 20
+            .slice(0, 5); // Batch size - prefetch fewer to reduce initial load
 
         if (missingCache.length > 0) {
             const idsToFetch = missingCache.map(c => c.id);
@@ -293,6 +284,16 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
     }, [infoShelfClientId, detailsCache]);
 
+    // Fetch parent names when clients list grows (e.g. from progressive loading)
+    useEffect(() => {
+        const parentIds = [...new Set(clients.map(c => c.parentClientId).filter(Boolean))] as string[];
+        const missing = parentIds.filter(id => !parentNamesMap[id]);
+        if (missing.length === 0) return;
+        getClientNamesByIds(missing).then(map =>
+            setParentNamesMap(prev => ({ ...prev, ...map }))
+        );
+    }, [clients, parentNamesMap]);
+
     // Click-outside-to-close filter menus
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
@@ -312,14 +313,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     async function loadInitialData() {
         setIsLoading(true);
         try {
-            const [sData, nData, vData, bData, mData, cRes, allClientsData] = await Promise.all([
+            const [sData, nData, vData, bData, mData, cRes] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, PAGE_SIZE, ''),
-                getClients() // Load all clients for parent client lookup
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '')
             ]);
 
             setStatuses(sData);
@@ -327,10 +327,16 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setVendors(vData);
             setBoxTypes(bData);
             setMenuItems(mData);
-            setClients(cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null));
+            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            setClients(clientList);
             setTotalClients(cRes.total);
-            setAllClientsForLookup(allClientsData.filter((c): c is NonNullable<typeof c> => c !== null));
             setPage(1);
+
+            // Fetch parent names only for dependents on this page (lightweight query)
+            const parentIds = [...new Set(clientList.map(c => c.parentClientId).filter(Boolean))] as string[];
+            if (parentIds.length > 0) {
+                getClientNamesByIds(parentIds).then(map => setParentNamesMap(prev => ({ ...prev, ...map })));
+            }
         } catch (error) {
             console.error("Error loading initial data:", error);
         } finally {
@@ -344,14 +350,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             // Invalidate cache to ensure fresh data
             invalidateClientData();
 
-            // Fetch fresh data
+            // Fetch fresh data (single request for all clients)
             const [sData, nData, vData, bData, mData, cRes] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, PAGE_SIZE, '')
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '')
             ]);
 
             // Update all data
@@ -360,79 +366,24 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setVendors(vData);
             setBoxTypes(bData);
             setMenuItems(mData);
-            setClients(cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null));
+            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            setClients(clientList);
             setTotalClients(cRes.total);
-            // Refresh all clients lookup when refreshing
-            const allClientsData = await getClients();
-            setAllClientsForLookup(allClientsData.filter((c): c is NonNullable<typeof c> => c !== null));
             setPage(1);
+            // Refresh parent names for visible dependents
+            const parentIds = [...new Set(clientList.map(c => c.parentClientId).filter(Boolean))] as string[];
+            if (parentIds.length > 0) {
+                getClientNamesByIds(parentIds).then(map =>
+                    setParentNamesMap(prev => ({ ...prev, ...map }))
+                );
+            }
             
             // Refresh signature counts
             loadSignatureCounts();
-            
-            // After refresh, load all remaining pages progressively in the background
-            // This ensures newly added/updated clients are visible even if they're not in the first page
-            if (cRes.total > PAGE_SIZE) {
-                setIsFetchingMore(true);
-                try {
-                    // Load remaining pages in parallel batches to avoid blocking
-                    const totalPages = Math.ceil(cRes.total / PAGE_SIZE);
-                    const batchSize = 3; // Load 3 pages at a time
-                    
-                    for (let batchStart = 2; batchStart <= totalPages; batchStart += batchSize) {
-                        const batchEnd = Math.min(batchStart + batchSize - 1, totalPages);
-                        const pagePromises = [];
-                        
-                        for (let p = batchStart; p <= batchEnd; p++) {
-                            pagePromises.push(getClientsPaginated(p, PAGE_SIZE, ''));
-                        }
-                        
-                        try {
-                            const batchResults = await Promise.all(pagePromises);
-                            setClients(prev => {
-                                const existingIds = new Set(prev.map(c => c.id));
-                                let updated = [...prev];
-                                batchResults.forEach((res, idx) => {
-                                    const newClients = res.clients.filter((c): c is NonNullable<typeof c> => c !== null && !existingIds.has(c.id));
-                                    updated = [...updated, ...newClients];
-                                    newClients.forEach(c => existingIds.add(c.id));
-                                });
-                                return updated;
-                            });
-                            setPage(batchEnd);
-                        } catch (error) {
-                            console.error(`Error fetching pages ${batchStart}-${batchEnd} during refresh:`, error);
-                            // Continue loading other batches even if one fails
-                        }
-                    }
-                } finally {
-                    setIsFetchingMore(false);
-                }
-            }
         } catch (error) {
             console.error("Error refreshing data:", error);
         } finally {
             setIsRefreshing(false);
-        }
-    }
-
-    async function fetchMoreClients(nextPage: number) {
-        setIsFetchingMore(true);
-        try {
-            const res = await getClientsPaginated(nextPage, PAGE_SIZE, '');
-            setClients(prev => {
-                // Deduplicate just in case
-                const existingIds = new Set(prev.map(c => c.id));
-                const newClients = res.clients.filter((c): c is NonNullable<typeof c> => c !== null && !existingIds.has(c.id));
-                return [...prev, ...newClients];
-            });
-            setPage(nextPage);
-            // Update total just in case it changed
-            setTotalClients(res.total);
-        } catch (error) {
-            console.error(`Error fetching page ${nextPage}:`, error);
-        } finally {
-            setIsFetchingMore(false);
         }
     }
 
@@ -770,8 +721,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     function getParentClientName(client: ClientProfile) {
         if (!client.parentClientId) return null;
-        const parentClient = allClientsForLookup.find(c => c.id === client.parentClientId);
-        return parentClient?.fullName || 'Unknown Parent';
+        return parentNamesMap[client.parentClientId] ?? '...';
     }
 
     function handleSort(column: string) {
@@ -2126,9 +2076,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     setDependentDob(client.dob || '');
                                     setDependentCin(client.cin?.toString() || '');
                                     setSelectedParentClientId(client.parentClientId || '');
-                                    const parentClient = allClientsForLookup.find(c => c.id === client.parentClientId);
-                                    if (parentClient) {
-                                        setParentClientSearch(parentClient.fullName);
+                                    const parentName = parentNamesMap[client.parentClientId!];
+                                    if (parentName) {
+                                        setParentClientSearch(parentName);
+                                    } else {
+                                        getClientNamesByIds([client.parentClientId!]).then(map => {
+                                            const name = map[client.parentClientId!];
+                                            if (name) setParentClientSearch(name);
+                                        });
                                     }
                                     setIsAddingDependent(true);
                                 } else {
@@ -2274,7 +2229,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     navigators={navigators}
                     orderSummary={getOrderSummary(detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId)!, true)}
                     submissions={detailsCache[infoShelfClientId]?.submissions || []}
-                    allClients={allClientsForLookup}
+                    allClients={[]}
                     onClose={() => setInfoShelfClientId(null)}
                     onOpenProfile={(clientId) => {
                         setInfoShelfClientId(null);
