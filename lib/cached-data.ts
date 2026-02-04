@@ -164,6 +164,29 @@ export async function getClient(id: string): Promise<ClientProfile | undefined> 
     return data;
 }
 
+/**
+ * Warm reference caches from a profile page payload so other components (sidebar, etc.) avoid refetching.
+ * Call after getClientProfilePageData() returns on the client.
+ */
+export function warmReferenceCacheFromProfile(payload: {
+    s?: ClientStatus[];
+    n?: Navigator[];
+    v?: Vendor[];
+    m?: MenuItem[];
+    b?: BoxType[];
+    appSettings?: AppSettings | null;
+    catData?: ItemCategory[];
+}) {
+    const ts = Date.now();
+    if (payload.s) referenceCache.set('statuses', { data: payload.s, timestamp: ts });
+    if (payload.n) referenceCache.set('navigators', { data: payload.n, timestamp: ts });
+    if (payload.v) referenceCache.set('vendors', { data: payload.v, timestamp: ts });
+    if (payload.m) referenceCache.set('menuItems', { data: payload.m, timestamp: ts });
+    if (payload.b) referenceCache.set('boxTypes', { data: payload.b, timestamp: ts });
+    if (payload.appSettings) referenceCache.set('settings', { data: payload.appSettings, timestamp: ts });
+    if (payload.catData) referenceCache.set('categories', { data: payload.catData, timestamp: ts });
+}
+
 // Cache invalidation functions
 export function invalidateReferenceData(key?: string) {
     if (key) {

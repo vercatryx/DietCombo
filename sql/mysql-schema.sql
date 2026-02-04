@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS clients (
     cin DECIMAL(10, 0) NULL,
     authorized_amount DECIMAL(10, 2) NULL,
     expiration_date DATE NULL,
-    active_order JSON NULL,
+    upcoming_order JSON NULL,
     assigned_driver_id VARCHAR(36) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

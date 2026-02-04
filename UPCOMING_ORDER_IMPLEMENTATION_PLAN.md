@@ -28,8 +28,8 @@ This plan adapts the app to the **exact schema** described in `UPCOMING_ORDER_SC
    - **Read path**: Continue to support existing data (e.g. legacy `boxes`/`vendorId`/`items`, `customItems`). Normalize on load into the schema shapes where possible and into UI shape for existing code.  
    - **Write path**: Before save, normalize UI state into schema shape, then sanitize (strip disallowed fields) and write.
 
-4. **Optional column rename**  
-   If you want the DB column to match the doc name, add a migration `active_order` → `upcoming_order` and update Prisma + all reads/writes. The plan below assumes we keep `active_order` unless you choose to rename.
+4. **Column rename (done)**  
+   The DB column has been renamed `active_order` → `upcoming_order` to match the schema doc. Prisma maps it as `activeOrder` → `@map("upcoming_order")`. All Supabase and script references use the `upcoming_order` column name.
 
 ---
 

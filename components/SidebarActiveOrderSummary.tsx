@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { ClientProfile, Vendor, MenuItem, BoxType } from '@/lib/types';
-import { getClient, getVendors, getMenuItems, getBoxTypes } from '@/lib/actions';
+import { getClient, getVendors, getMenuItems, getBoxTypes } from '@/lib/cached-data';
 import { Package, Utensils } from 'lucide-react';
 import styles from './Sidebar.module.css';
 
@@ -65,7 +65,10 @@ export function SidebarActiveOrderSummary() {
         );
     }
 
-    const orderSummary = getOrderSummary(client, vendors, menuItems, boxTypes);
+    const orderSummary = useMemo(
+        () => getOrderSummary(client, vendors, menuItems, boxTypes),
+        [client, vendors, menuItems, boxTypes]
+    );
     const hasDislikes = client.dislikes != null && String(client.dislikes).trim() !== '';
 
     if (!orderSummary && !hasDislikes) {
@@ -110,18 +113,6 @@ function getOrderSummary(
 
     const st = client.serviceType;
     const conf = client.activeOrder;
-
-    // Debug logging
-    if (process.env.NODE_ENV === 'development') {
-        console.log('[SidebarActiveOrderSummary] Processing order:', {
-            serviceType: st,
-            hasActiveOrder: !!conf,
-            hasDeliveryDayOrders: !!(conf as any)?.deliveryDayOrders,
-            deliveryDayOrdersKeys: (conf as any)?.deliveryDayOrders ? Object.keys((conf as any).deliveryDayOrders) : [],
-            hasBoxOrders: !!(conf as any)?.boxOrders,
-            boxOrdersLength: Array.isArray((conf as any)?.boxOrders) ? (conf as any).boxOrders.length : 0
-        });
-    }
 
     if (st === 'Food') {
         // Check if it's multi-day format

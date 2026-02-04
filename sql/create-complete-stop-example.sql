@@ -17,7 +17,7 @@ INSERT INTO clients (
     delivery,
     paused,
     approved_meals_per_week,
-    active_order
+    upcoming_order
 ) VALUES (
     UUID(),
     'Complex Stop Test Client',

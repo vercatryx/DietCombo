@@ -3,7 +3,7 @@
 import { ClientProfileDetail } from './ClientProfile';
 import { ClientInfoShelf } from './ClientInfoShelf';
 
-import { useState, useEffect, useRef, ReactElement } from 'react';
+import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem } from '@/lib/types';
 import {
     getClientsPaginated,
@@ -1559,6 +1559,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         return date >= startOfWeek && date <= endOfWeek;
     }
 
+    // Memoize shelf order summary so it only recomputes when shelf client or lookup data changes (hooks must run unconditionally)
+    const shelfOrderSummary = useMemo(() => {
+        if (!infoShelfClientId) return null;
+        const shelfClient = detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId);
+        return shelfClient ? getOrderSummary(shelfClient, true) : null;
+    }, [infoShelfClientId, detailsCache, clients, vendors, boxTypes, menuItems]);
+
     if (isLoading) {
         return (
             <div className={styles.container}>
@@ -2069,6 +2076,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     return (
                         <div
                             key={client.id}
+                            onMouseEnter={() => {
+                                if (!isDependent && !detailsCache[client.id] && !pendingPrefetches.current.has(client.id)) {
+                                    prefetchClient(client.id);
+                                }
+                            }}
                             onClick={() => {
                                 if (isDependent) {
                                     setEditingDependentId(client.id);
@@ -2087,9 +2099,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     }
                                     setIsAddingDependent(true);
                                 } else {
-                                    // Open the info shelf instead of the full profile directly
                                     setInfoShelfClientId(client.id);
-                                    // Prefetch client details if not already cached
                                     if (!detailsCache[client.id]) {
                                         prefetchClient(client.id);
                                     }
@@ -2227,7 +2237,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     client={detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId)!}
                     statuses={statuses}
                     navigators={navigators}
-                    orderSummary={getOrderSummary(detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId)!, true)}
+                    orderSummary={shelfOrderSummary}
                     submissions={detailsCache[infoShelfClientId]?.submissions || []}
                     allClients={[]}
                     onClose={() => setInfoShelfClientId(null)}

@@ -6256,12 +6256,12 @@ async function updateClientActiveOrderFromUpcomingOrder(
             .eq('id', clientId);
 
         if (updateError) {
-            console.error(`[updateClientActiveOrderFromUpcomingOrder] Error updating client ${clientId} active_order:`, updateError);
+            console.error(`[updateClientActiveOrderFromUpcomingOrder] Error updating client ${clientId} upcoming_order:`, updateError);
         } else {
-            console.log(`[updateClientActiveOrderFromUpcomingOrder] Successfully updated client ${clientId} active_order with vendor info from upcoming order ${upcomingOrderId} (deliveryDay: ${deliveryDay || 'none'})`);
+            console.log(`[updateClientActiveOrderFromUpcomingOrder] Successfully updated client ${clientId} upcoming_order with vendor info from upcoming order ${upcomingOrderId} (deliveryDay: ${deliveryDay || 'none'})`);
         }
     } catch (error) {
-        console.error(`[updateClientActiveOrderFromUpcomingOrder] Error updating client active_order:`, error);
+        console.error(`[updateClientActiveOrderFromUpcomingOrder] Error updating client upcoming_order:`, error);
         // Don't throw - this is a non-critical update, but log it for debugging
     }
 }
@@ -8082,6 +8082,86 @@ export async function getClientFullDetails(clientId: string) {
         return null;
     }
 }
+
+/**
+ * Single server action that returns all data needed for the client profile page.
+ * One client→server round-trip instead of 17+ when cache is cold.
+ * Keeps data accurate (same sources and caseId logic as loadData).
+ */
+export async function getClientProfilePageData(clientId: string) {
+    if (!clientId) return null;
+    try {
+        const client = await getClient(clientId);
+        if (!client) return null;
+
+        const caseId = client.serviceType === 'Boxes'
+            ? (client.activeOrder?.caseId ?? null)
+            : null;
+
+        const [
+            statuses,
+            navigators,
+            vendors,
+            menuItems,
+            boxTypes,
+            settings,
+            categories,
+            allClientsData,
+            regularClientsData,
+            activeOrderData,
+            historyData,
+            billingHistoryData,
+            upcomingOrderDataInitial,
+            orderHistoryData,
+            dependentsData,
+            boxOrdersFromDb,
+            submissionsResult
+        ] = await Promise.all([
+            getStatuses(),
+            getNavigators(),
+            getVendors(),
+            getMenuItems(),
+            getBoxTypes(),
+            getSettings(),
+            getCategories(),
+            getClients(),
+            getRegularClients(),
+            getRecentOrdersForClient(clientId),
+            getClientHistory(clientId),
+            getBillingHistory(clientId),
+            getUpcomingOrderForClient(clientId, caseId),
+            getOrderHistory(clientId, caseId),
+            !client.parentClientId ? getDependentsByParentId(client.id) : Promise.resolve([]),
+            client.serviceType === 'Boxes' ? getClientBoxOrder(clientId) : Promise.resolve(null),
+            getClientSubmissions(clientId)
+        ]);
+
+        return {
+            c: client,
+            s: statuses,
+            n: navigators,
+            v: vendors ?? [],
+            m: menuItems ?? [],
+            b: boxTypes ?? [],
+            appSettings: settings,
+            catData: categories ?? [],
+            allClientsData: allClientsData ?? [],
+            regularClientsData: regularClientsData ?? [],
+            activeOrderData,
+            historyData: historyData ?? [],
+            billingHistoryData: billingHistoryData ?? [],
+            upcomingOrderDataInitial,
+            orderHistoryData: orderHistoryData ?? [],
+            dependentsData: dependentsData ?? [],
+            boxOrdersFromDb,
+            submissions: submissionsResult?.success ? (submissionsResult.data ?? []) : []
+        };
+    } catch (error) {
+        console.error('[getClientProfilePageData] Error:', error);
+        return null;
+    }
+}
+
 // --- VENDOR ORDER ACTIONS ---
 
 export async function getOrdersByVendor(vendorId: string) {

@@ -4,9 +4,9 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, saveClientMealPlannerOrderQuantities, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, saveClientMealPlannerOrderQuantities, getClientProfilePageData, type MealPlannerOrderResult } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
-import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient } from '@/lib/cached-data';
+import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
 import {
     getNextDeliveryDate as getNextDeliveryDateUtil,
@@ -39,9 +39,18 @@ interface Props {
     menuItems?: MenuItem[];
     boxTypes?: BoxType[];
     currentUser?: { role: string; id: string } | null;
+    // When provided (e.g. from server getClientProfilePageData), avoids loadAuxiliaryData round-trip
+    initialSettings?: AppSettings | null;
+    initialCategories?: ItemCategory[];
+    initialAllClients?: ClientProfile[];
+    initialRegularClients?: ClientProfile[];
+    initialDependents?: ClientProfile[];
 }
 
 const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes', 'Custom', 'Produce'];
+
+// Set window.__DEBUG_CLIENT_PROFILE = true in dev to enable verbose logging (avoids hot-path cost)
+const DEBUG_PROFILE = typeof window !== 'undefined' && (window as any).__DEBUG_CLIENT_PROFILE === true;
 
 // Min/Max validation for approved meals per week
 const MIN_APPROVED_MEALS_PER_WEEK = 1;
@@ -134,7 +143,7 @@ function DeleteConfirmationModal({
     );
 }
 
-export function ClientProfileDetail({ clientId: propClientId, onClose, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser }: Props): ReactNode {
+export function ClientProfileDetail({ clientId: propClientId, onClose, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }: Props): ReactNode {
     const router = useRouter();
     const params = useParams();
     const propClientIdValue = (params?.id as string) || propClientId;
@@ -366,23 +375,43 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
         if (hasInitialData && hasUpcomingOrderInInitial) {
             hydrateFromInitialData(initialData);
-            // If props were passed, we don't need to fetch standard lookups, but we might still need settings/categories/allClients
-            // For simplicity, let's just fetch everything missing in background but show content immediately if we have the basics.
-            // If we don't have vendors/statuses props, we probably should show loader or fetch fast.
-
+            const hasAuxiliaryFromProps = initialSettings != null && initialCategories && initialAllClients && initialRegularClients && initialDependents;
+            if (hasAuxiliaryFromProps) {
+                setSettings(initialSettings);
+                setCategories(initialCategories);
+                setAllClients(initialAllClients);
+                setRegularClients(initialRegularClients);
+                setDependents(initialDependents);
+            }
             if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
-                // Should hopefully not happen in ClientList usage, but handle it
-                // Also check if vendors array is empty (not just undefined)
                 setLoading(true);
                 loadLookups().then(() => setLoading(false)).catch((error) => {
                     console.error('[ClientProfile] Error loading lookups:', error);
                     setLoading(false);
                 });
             } else {
-                // Still fetch auxiliary data that might not be in props (settings, categories, allClients)
-                // But do NOT block UI
                 setLoading(false);
-                loadAuxiliaryData(initialData.client);
+                if (!hasAuxiliaryFromProps) {
+                    const runAfterPaint = () => {
+                        if (typeof requestIdleCallback !== 'undefined') {
+                            requestIdleCallback(() => loadAuxiliaryData(initialData.client), { timeout: 300 });
+                        } else {
+                            setTimeout(() => loadAuxiliaryData(initialData.client), 0);
+                        }
+                    };
+                    runAfterPaint();
+                }
+            }
+        } else if (hasInitialData && (initialSettings != null && initialCategories && initialAllClients && initialRegularClients && initialDependents)) {
+            hydrateFromInitialData(initialData);
+            setSettings(initialSettings);
+            setCategories(initialCategories);
+            setAllClients(initialAllClients);
+            setRegularClients(initialRegularClients);
+            setDependents(initialDependents);
+            setLoading(false);
+            if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
+                loadLookups().then(() => {}).catch(() => {});
             }
         } else {
             setLoading(true);
@@ -399,27 +428,21 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     useEffect(() => {
         if (initialVendors && initialVendors.length > 0) {
             setVendors(initialVendors);
-            console.log(`[ClientProfile] Updated vendors from prop: ${initialVendors.length} vendors`);
         } else if (vendors.length === 0 && initialVendors !== undefined) {
-            // If vendors are empty and we explicitly got an empty array from props, try to load
-            console.warn('[ClientProfile] Vendors prop is empty, attempting to load vendors');
             getVendors().then(v => {
-                if (v && v.length > 0) {
-                    setVendors(v);
-                    console.log(`[ClientProfile] Loaded ${v.length} vendors after empty prop`);
-                } else {
-                    console.error('[ClientProfile] Failed to load vendors - getVendors returned empty');
-                }
+                if (v && v.length > 0) setVendors(v);
             });
         }
     }, [initialVendors]);
 
     useEffect(() => {
-        // Load submissions for this client
-        if (clientId) {
+        if (!clientId) return;
+        // Defer submissions/signature so main profile content paints first; data remains accurate
+        const t = setTimeout(() => {
             loadSubmissions();
             loadSignatureStatus();
-        }
+        }, 0);
+        return () => clearTimeout(t);
     }, [clientId]);
 
     // Effect: Initialize boxOrders when Boxes service is selected
@@ -1077,10 +1100,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
         // Handle upcoming order logic (reused from loadData)
         let upcomingOrderData = data.upcomingOrder;
-        console.log('[ClientProfile] hydrateFromInitialData - Debugging Boxes Vendor', {
-            upcomingOrderData: JSON.stringify(upcomingOrderData, null, 2),
-            clientActiveOrder: JSON.stringify(data.client.activeOrder, null, 2)
-        });
+        if (DEBUG_PROFILE) {
+            console.log('[ClientProfile] hydrateFromInitialData - Boxes vendor debug');
+        }
         if (upcomingOrderData) {
             // CRITICAL: If client serviceType is 'Food', filter upcomingOrderData to only use Food orders
             if (data.client.serviceType === 'Food') {
@@ -1257,9 +1279,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // First, check if client.activeOrder has boxOrders and use that if conf doesn't have it
                 if (!(conf as any).boxOrders || !Array.isArray((conf as any).boxOrders) || (conf as any).boxOrders.length === 0) {
                     if (data.client.activeOrder && (data.client.activeOrder as any).boxOrders && Array.isArray((data.client.activeOrder as any).boxOrders) && (data.client.activeOrder as any).boxOrders.length > 0) {
-                        console.log('[ClientProfile] hydrateFromInitialData - Using boxOrders from client.activeOrder', {
-                            boxOrdersCount: (data.client.activeOrder as any).boxOrders.length
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] hydrateFromInitialData - Using boxOrders from client.activeOrder');
                         (conf as any).boxOrders = [...(data.client.activeOrder as any).boxOrders];
                     }
                 }
@@ -1307,10 +1327,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (!conf.vendorId && conf.boxTypeId && boxTypes && boxTypes.length > 0) {
                     const boxType = boxTypes.find((bt: any) => bt.id === conf.boxTypeId);
                     if (boxType && boxType.vendorId) {
-                        console.log('[ClientProfile] hydrateFromInitialData - Recovered missing vendorId from boxType', {
-                            boxTypeId: conf.boxTypeId,
-                            recoveredVendorId: boxType.vendorId
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] hydrateFromInitialData - Recovered vendorId from boxType');
                         conf.vendorId = boxType.vendorId;
                         // Also update the first box in boxOrders if it exists
                         if (conf.boxOrders && conf.boxOrders.length > 0) {
@@ -1342,18 +1359,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Ensure vendors array is set (even if empty, to avoid undefined issues)
             const vendorsArray = v || [];
             setVendors(vendorsArray);
-            if (vendorsArray && vendorsArray.length > 0) {
-                console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
-                // Log Food vendors specifically
-                const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
-                console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
-                // Log vendors with empty serviceTypes for debugging
-                const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
-                if (vendorsWithEmptyServiceTypes.length > 0) {
-                    console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
-                }
-            } else {
-                console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
+            if (DEBUG_PROFILE && vendorsArray.length > 0) {
+                console.log(`[ClientProfile] loadLookups - Loaded ${vendorsArray.length} vendors`);
             }
             setMenuItems(m);
             setBoxTypes(b);
@@ -1371,33 +1378,34 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     async function loadData() {
         try {
             setLoadingOrderDetails(true);
-            
-            // Get client first to determine if we need to filter by case_id for Boxes
-            // For Boxes service type, use case_id from orderConfig or client's activeOrder
-            const client = await getClient(clientId);
-            const caseId = client?.serviceType === 'Boxes' 
-                ? (orderConfig?.caseId || client?.activeOrder?.caseId || null)
-                : null;
-            
-            const [c, s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData, upcomingOrderDataInitial, activeOrderData, historyData, orderHistoryData, billingHistoryData] = await Promise.all([
-            Promise.resolve(client),
-            getStatuses(),
-            getNavigators(),
-            getVendors(),
-            getMenuItems(),
-            getBoxTypes(),
-            getSettings(),
-            getCategories(),
-            getClients(),
-            getRegularClients(),
-            // For Boxes service type, filter by case_id to get the latest upcoming order for the selected client
-            getUpcomingOrderForClient(clientId, caseId),
-            getRecentOrdersForClient(clientId),
-            getClientHistory(clientId),
-            // For Boxes service type, filter order history by case_id
-            getOrderHistory(clientId, caseId),
-            getBillingHistory(clientId)
-            ]);
+
+            // Single server round-trip: all profile data in one call (was 17+ when cache cold)
+            const payload = await getClientProfilePageData(clientId);
+            if (!payload) {
+                setLoadingOrderDetails(false);
+                setMessage('Error loading client data. Please refresh the page.');
+                return;
+            }
+            warmReferenceCacheFromProfile(payload);
+            const {
+                c,
+                s,
+                n,
+                v,
+                m,
+                b,
+                appSettings,
+                catData,
+                allClientsData,
+                regularClientsData,
+                activeOrderData,
+                historyData,
+                billingHistoryData,
+                upcomingOrderDataInitial,
+                orderHistoryData,
+                dependentsData,
+                boxOrdersFromDb: boxOrdersFromDbFromPayload
+            } = payload;
 
             if (c) {
                 setClient(c);
@@ -1405,21 +1413,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
             setStatuses(s);
             setNavigators(n);
-            // Ensure vendors array is set (even if empty, to avoid undefined issues)
             const vendorsArray = v || [];
             setVendors(vendorsArray);
-            if (vendorsArray && vendorsArray.length > 0) {
-                console.log(`[ClientProfile] Loaded ${vendorsArray.length} vendors:`, vendorsArray.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes, isActive: v.isActive })));
-                // Log Food vendors specifically
-                const foodVendors = vendorsArray.filter(v => v.serviceTypes && Array.isArray(v.serviceTypes) && v.serviceTypes.includes('Food') && v.isActive);
-                console.log(`[ClientProfile] Active Food vendors: ${foodVendors.length}`, foodVendors.map(v => v.name));
-                // Log vendors with empty serviceTypes for debugging
-                const vendorsWithEmptyServiceTypes = vendorsArray.filter(v => !v.serviceTypes || !Array.isArray(v.serviceTypes) || v.serviceTypes.length === 0);
-                if (vendorsWithEmptyServiceTypes.length > 0) {
-                    console.warn(`[ClientProfile] Found ${vendorsWithEmptyServiceTypes.length} vendors with empty/invalid serviceTypes:`, vendorsWithEmptyServiceTypes.map(v => ({ id: v.id, name: v.name, serviceTypes: v.serviceTypes })));
-                }
-            } else {
-                console.warn('[ClientProfile] No vendors loaded - vendor dropdowns will be empty');
+            if (DEBUG_PROFILE && vendorsArray.length > 0) {
+                console.log(`[ClientProfile] loadData - Loaded ${vendorsArray.length} vendors`);
             }
             setMenuItems(m);
             setBoxTypes(b);
@@ -1431,14 +1428,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setHistory(historyData || []);
             setOrderHistory(orderHistoryData || []);
             setBillingHistory(billingHistoryData || []);
-            setLoadingOrderDetails(false);
-
-            // Load dependents if this is a regular client (not a dependent)
             if (c && !c.parentClientId) {
-                const dependentsData = await getDependentsByParentId(c.id);
                 setDependents(dependentsData);
             }
 
+            const runOrderConfigBuild = async () => {
             // Set order config from upcoming_orders table (Current Order Request)
             // If no upcoming order exists, fall back to active_order from clients table
             // If no active_order exists, initialize with default based on service type
@@ -1446,13 +1440,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // Use let so we can filter upcomingOrderData for Food service type
                 let upcomingOrderData = upcomingOrderDataInitial;
                 
-                console.log('[ClientProfile] loadData - Debugging Boxes Vendor', {
-                    clientId: c.id,
-                    serviceType: c.serviceType,
-                    upcomingOrderData: JSON.stringify(upcomingOrderData, null, 2),
-                    activeOrderData: JSON.stringify(activeOrderData, null, 2),
-                    clientActiveOrder: JSON.stringify(c.activeOrder, null, 2)
-                });
+                if (DEBUG_PROFILE) {
+                    console.log('[ClientProfile] loadData - Boxes vendor debug');
+                }
                 let configToSet: any = null;
                 
                 // If there's a case ID, prioritize loading from upcoming orders
@@ -1608,7 +1598,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
             // Validate Config: If Boxes and missing critical fields, reject it
             if (configToSet && c.serviceType === 'Boxes' && !configToSet.vendorId && !configToSet.boxTypeId) {
-                console.log('[ClientProfile] loadData - Discarding invalid upcoming order config for Boxes', configToSet);
+                if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Discarding invalid Boxes config');
                 configToSet = null;
             }
 
@@ -1703,9 +1693,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // First, check if client.activeOrder has boxOrders and use that if configToSet doesn't have it
                 if (!(configToSet as any).boxOrders || !Array.isArray((configToSet as any).boxOrders) || (configToSet as any).boxOrders.length === 0) {
                     if (c.activeOrder && (c.activeOrder as any).boxOrders && Array.isArray((c.activeOrder as any).boxOrders) && (c.activeOrder as any).boxOrders.length > 0) {
-                        console.log('[ClientProfile] loadData - Using boxOrders from client.activeOrder', {
-                            boxOrdersCount: (c.activeOrder as any).boxOrders.length
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Using boxOrders from client.activeOrder');
                         (configToSet as any).boxOrders = [...(c.activeOrder as any).boxOrders];
                     }
                 }
@@ -1736,14 +1724,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         itemNotes: configToSet.itemNotes || {}
                     };
 
-                    console.log('[ClientProfile] loadData - Creating boxOrders from legacy fields', {
-                        hasItems: !!(legacyBox.items && Object.keys(legacyBox.items).length > 0),
-                        itemsCount: legacyBox.items ? Object.keys(legacyBox.items).length : 0,
-                        items: legacyBox.items,
-                        vendorId: legacyBox.vendorId,
-                        boxTypeId: legacyBox.boxTypeId,
-                        itemsSource: itemsSource === configToSet.items ? 'configToSet.items' : 'upcomingOrderData.items'
-                    });
+                    if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Creating boxOrders from legacy fields');
 
                     // Only add if there is actual data
                     if (legacyBox.boxTypeId || legacyBox.vendorId || (legacyBox.items && Object.keys(legacyBox.items).length > 0)) {
@@ -1769,10 +1750,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 if (!configToSet.vendorId && configToSet.boxTypeId) {
                     const boxType = b.find((bt: any) => bt.id === configToSet.boxTypeId);
                     if (boxType && boxType.vendorId) {
-                        console.log('[ClientProfile] loadData - Recovered missing vendorId from boxType', {
-                            boxTypeId: configToSet.boxTypeId,
-                            recoveredVendorId: boxType.vendorId
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Recovered vendorId from boxType');
                         configToSet.vendorId = boxType.vendorId;
                         // Also update the first box in boxOrders if it exists
                         if (configToSet.boxOrders && configToSet.boxOrders.length > 0) {
@@ -1786,13 +1764,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     ? upcomingOrderData.items 
                     : (configToSet.items && Object.keys(configToSet.items).length > 0 ? configToSet.items : null);
 
-                console.log('[ClientProfile] loadData - Items population check', {
-                    hasUpcomingOrderItems: !!(upcomingOrderData && upcomingOrderData.items),
-                    hasConfigToSetItems: !!(configToSet.items && Object.keys(configToSet.items).length > 0),
-                    itemsToPopulateCount: itemsToPopulate ? Object.keys(itemsToPopulate).length : 0,
-                    hasBoxOrders: !!(configToSet.boxOrders && configToSet.boxOrders.length > 0),
-                    firstBoxItemsCount: configToSet.boxOrders && configToSet.boxOrders.length > 0 ? Object.keys(configToSet.boxOrders[0].items || {}).length : 0
-                });
+                if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Items population check');
 
                 if (itemsToPopulate && configToSet.boxOrders && configToSet.boxOrders.length > 0) {
                     const firstBox = configToSet.boxOrders[0];
@@ -1863,17 +1835,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     const firstBox = configToSet.boxOrders[0];
                     // If box has no items or empty items, populate from configToSet.items
                     if (!firstBox.items || Object.keys(firstBox.items).length === 0) {
-                        console.log('[ClientProfile] loadData - Final safety: Migrating items to boxOrders[0].items', {
-                            itemsCount: Object.keys(configToSet.items).length,
-                            items: configToSet.items
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Final safety: Migrating items to boxOrders[0].items');
                         firstBox.items = { ...configToSet.items };
                     }
                 } else {
                     // If boxOrders doesn't exist, create it with items
-                    console.log('[ClientProfile] loadData - Final safety: Creating boxOrders with items', {
-                        itemsCount: Object.keys(configToSet.items).length
-                    });
+                    if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Final safety: Creating boxOrders with items');
                     configToSet.boxOrders = [{
                         boxTypeId: configToSet.boxTypeId || '',
                         vendorId: configToSet.vendorId || '',
@@ -1884,16 +1851,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
 
-            // Fallback: Load box orders from client_box_orders table if no box orders found
+            // Fallback: Load box orders from client_box_orders table if no box orders found (use prefetched when available)
             if (c.serviceType === 'Boxes' && (!configToSet.boxOrders || configToSet.boxOrders.length === 0 || 
                 (configToSet.boxOrders.length > 0 && !configToSet.boxOrders[0].boxTypeId && !configToSet.boxOrders[0].vendorId && 
                  (!configToSet.boxOrders[0].items || Object.keys(configToSet.boxOrders[0].items).length === 0)))) {
                 try {
-                    const boxOrdersFromDb = await getClientBoxOrder(clientId);
+                    const boxOrdersFromDb = (boxOrdersFromDbFromPayload && boxOrdersFromDbFromPayload.length > 0)
+                        ? boxOrdersFromDbFromPayload
+                        : await getClientBoxOrder(clientId);
                     if (boxOrdersFromDb && boxOrdersFromDb.length > 0) {
-                        console.log('[ClientProfile] loadData - Loading box orders from client_box_orders table (fallback)', {
-                            boxOrdersCount: boxOrdersFromDb.length
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Loading box orders from client_box_orders (fallback)');
                         
                         // Convert ClientBoxOrder[] to boxOrders format
                         const boxOrders = boxOrdersFromDb.map(bo => ({
@@ -1922,10 +1889,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             }
                         }
                         
-                        console.log('[ClientProfile] loadData - Successfully loaded box orders from database', {
-                            boxOrdersCount: boxOrders.length,
-                            firstBox: boxOrders[0]
-                        });
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Loaded box orders from database');
                     }
                 } catch (boxOrderError) {
                     console.error('[ClientProfile] loadData - Error loading box orders from database (fallback):', boxOrderError);
@@ -1933,19 +1897,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
 
-            // Final verification log before setting orderConfig
-            if (c.serviceType === 'Boxes' && configToSet.boxOrders && configToSet.boxOrders.length > 0) {
-                const firstBox = configToSet.boxOrders[0];
-                console.log('[ClientProfile] loadData - Final orderConfig state before setOrderConfig', {
-                    hasBoxOrders: true,
-                    firstBoxVendorId: firstBox.vendorId,
-                    firstBoxBoxTypeId: firstBox.boxTypeId,
-                    firstBoxItemsCount: firstBox.items ? Object.keys(firstBox.items).length : 0,
-                    firstBoxItems: firstBox.items,
-                    configToSetItemsCount: configToSet.items ? Object.keys(configToSet.items).length : 0
-                });
+            if (DEBUG_PROFILE && c.serviceType === 'Boxes' && configToSet.boxOrders?.length) {
+                console.log('[ClientProfile] loadData - Final orderConfig set');
             }
-            
             setOrderConfig(configToSet);
             setOriginalOrderConfig(JSON.parse(JSON.stringify(configToSet))); // Deep copy for comparison
 
@@ -2042,6 +1996,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
             setAllUpcomingOrders(extractedOrders);
+            }
+            setLoadingOrderDetails(false);
+            };
+            if (typeof requestIdleCallback !== 'undefined') {
+                requestIdleCallback(() => { void runOrderConfigBuild(); }, { timeout: 150 });
+            } else {
+                setTimeout(() => { void runOrderConfigBuild(); }, 0);
             }
         } catch (error) {
             console.error('[ClientProfile] Error loading data:', error);
