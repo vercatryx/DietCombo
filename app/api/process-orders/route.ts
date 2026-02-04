@@ -6,12 +6,15 @@ import { createClient } from '@supabase/supabase-js';
  *
  * GET/POST /api/process-orders
  *
- * First step: scans the entire upcoming_orders and meal_planner_orders tables
- * and returns their contents. No authentication required (public access).
+ * First step: scans order data from:
+ * - clients.upcoming_order (JSON field on clients — current order request per client)
+ * - meal_planner_orders table (all rows)
+ * (upcoming_orders table scan disabled for now)
+ * No authentication required (public access).
  *
  * Response includes:
- * - upcoming_orders: all rows
- * - meal_planner_orders: all rows
+ * - from_clients: upcoming order data from clients.upcoming_order (id, full_name, service_type, upcoming_order)
+ * - meal_planner_orders: all rows from meal_planner_orders table
  * - counts and scannedAt timestamp
  */
 async function scanOrderTables() {
@@ -24,23 +27,43 @@ async function scanOrderTables() {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  const [upcomingResult, mealPlannerResult] = await Promise.all([
-    supabase.from('upcoming_orders').select('*').order('created_at', { ascending: false }),
+  const [clientsResult, mealPlannerResult] = await Promise.all([
+    supabase
+      .from('clients')
+      .select('id, full_name, service_type, upcoming_order')
+      .not('upcoming_order', 'is', null)
+      .order('full_name'),
     supabase.from('meal_planner_orders').select('*').order('scheduled_delivery_date', { ascending: false }),
   ]);
 
-  if (upcomingResult.error) {
-    throw new Error(`upcoming_orders scan failed: ${upcomingResult.error.message}`);
+  if (clientsResult.error) {
+    throw new Error(`clients (upcoming_order) scan failed: ${clientsResult.error.message}`);
   }
   if (mealPlannerResult.error) {
     throw new Error(`meal_planner_orders scan failed: ${mealPlannerResult.error.message}`);
   }
 
+  const fromClients = (clientsResult.data ?? []).map((row: { id: string; full_name: string | null; service_type: string | null; upcoming_order: unknown }) => ({
+    client_id: row.id,
+    full_name: row.full_name ?? null,
+    service_type: row.service_type ?? null,
+    upcoming_order:
+        typeof row.upcoming_order === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(row.upcoming_order);
+              } catch {
+                return row.upcoming_order;
+              }
+            })()
+          : row.upcoming_order ?? {},
+  }));
+
   return {
-    upcoming_orders: upcomingResult.data ?? [],
+    from_clients: fromClients,
     meal_planner_orders: mealPlannerResult.data ?? [],
     counts: {
-      upcoming_orders: (upcomingResult.data ?? []).length,
+      from_clients: fromClients.length,
       meal_planner_orders: (mealPlannerResult.data ?? []).length,
     },
     scannedAt: new Date().toISOString(),
@@ -52,7 +75,7 @@ export async function GET(request: NextRequest) {
     const scan = await scanOrderTables();
     return NextResponse.json({
       success: true,
-      message: 'Scan completed (step 1: scan upcoming_orders and meal_planner_orders)',
+      message: 'Scan completed (step 1: scan clients.upcoming_order, meal_planner_orders)',
       ...scan,
     }, { status: 200 });
   } catch (error: unknown) {
@@ -71,7 +94,7 @@ export async function POST(request: NextRequest) {
     const scan = await scanOrderTables();
     return NextResponse.json({
       success: true,
-      message: 'Scan completed (step 1: scan upcoming_orders and meal_planner_orders)',
+      message: 'Scan completed (step 1: scan clients.upcoming_order, meal_planner_orders)',
       ...scan,
     }, { status: 200 });
   } catch (error: unknown) {
