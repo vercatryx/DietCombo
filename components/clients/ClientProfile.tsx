@@ -373,15 +373,22 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         const hasInitialData = initialData && initialData.client.id === clientId;
         const hasUpcomingOrderInInitial = hasInitialData && initialData.upcomingOrder != null;
 
+        // When parent passes preloaded lists (e.g. from ClientList), we avoid loadAuxiliaryData (getClients/getRegularClients are heavy).
+        const hasAuxiliaryFromProps = initialSettings != null && initialCategories && initialAllClients && initialRegularClients;
+
         if (hasInitialData && hasUpcomingOrderInInitial) {
             hydrateFromInitialData(initialData);
-            const hasAuxiliaryFromProps = initialSettings != null && initialCategories && initialAllClients && initialRegularClients && initialDependents;
             if (hasAuxiliaryFromProps) {
                 setSettings(initialSettings);
                 setCategories(initialCategories);
                 setAllClients(initialAllClients);
                 setRegularClients(initialRegularClients);
-                setDependents(initialDependents);
+                if (initialDependents != null) {
+                    setDependents(initialDependents);
+                } else if (initialData.client && !initialData.client.parentClientId) {
+                    // Only fetch dependents (lightweight) instead of full loadAuxiliaryData
+                    getDependentsByParentId(initialData.client.id).then(setDependents).catch(() => setDependents([]));
+                }
             }
             if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
                 setLoading(true);
@@ -402,13 +409,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     runAfterPaint();
                 }
             }
-        } else if (hasInitialData && (initialSettings != null && initialCategories && initialAllClients && initialRegularClients && initialDependents)) {
+        } else if (hasInitialData && hasAuxiliaryFromProps) {
             hydrateFromInitialData(initialData);
             setSettings(initialSettings);
             setCategories(initialCategories);
             setAllClients(initialAllClients);
             setRegularClients(initialRegularClients);
-            setDependents(initialDependents);
+            if (initialDependents != null) {
+                setDependents(initialDependents);
+            } else if (initialData.client && !initialData.client.parentClientId) {
+                getDependentsByParentId(initialData.client.id).then(setDependents).catch(() => setDependents([]));
+            }
             setLoading(false);
             if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
                 loadLookups().then(() => {}).catch(() => {});

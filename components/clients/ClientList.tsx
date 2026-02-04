@@ -4,7 +4,7 @@ import { ClientProfileDetail } from './ClientProfile';
 import { ClientInfoShelf } from './ClientInfoShelf';
 
 import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
-import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory } from '@/lib/types';
 import {
     getClientsPaginated,
     getClientFullDetails,
@@ -13,6 +13,7 @@ import {
     addClient,
     addDependent,
     getRegularClients,
+    getClients,
     getVendors,
     getBoxTypes,
     getMenuItems,
@@ -20,7 +21,9 @@ import {
     updateClient,
     getUpcomingOrderForClient as serverGetUpcomingOrderForClient,
     getCompletedOrdersWithDeliveryProof as serverGetCompletedOrdersWithDeliveryProof,
-    getBatchClientDetails
+    getBatchClientDetails,
+    getSettings,
+    getCategories
 } from '@/lib/actions';
 import { invalidateClientData } from '@/lib/cached-data';
 import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink } from 'lucide-react';
@@ -71,6 +74,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [serviceTypeFilter, setServiceTypeFilter] = useState<string | null>(null);
     const [needsVendorFilter, setNeedsVendorFilter] = useState<boolean>(false);
     const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
+
+    // Preloaded for profile dialog (avoids loadAuxiliaryData round-trip when opening profile)
+    const [allClientsForProfile, setAllClientsForProfile] = useState<ClientProfile[]>([]);
+    const [settingsForProfile, setSettingsForProfile] = useState<AppSettings | null>(null);
+    const [categoriesForProfile, setCategoriesForProfile] = useState<ItemCategory[]>([]);
 
     // Add Dependent Modal state
     const [isAddingDependent, setIsAddingDependent] = useState(false);
@@ -276,6 +284,23 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             });
         }
     }, [clients, detailsCache, isLoading]);
+
+    // Preload profile auxiliary data (allClients, regularClients, settings, categories) so the profile
+    // dialog can open without calling loadAuxiliaryData (getClients/getRegularClients are heavy).
+    useEffect(() => {
+        if (isLoading || clients.length === 0) return;
+        let cancelled = false;
+        Promise.all([getClients(), getRegularClients(), getSettings(), getCategories()])
+            .then(([allClientsData, regularClientsData, settingsData, categoriesData]) => {
+                if (cancelled) return;
+                setAllClientsForProfile(Array.isArray(allClientsData) ? allClientsData.filter((c): c is ClientProfile => c != null) : []);
+                setRegularClients(Array.isArray(regularClientsData) ? regularClientsData.filter((c): c is ClientProfile => c != null) : []);
+                setSettingsForProfile(settingsData ?? null);
+                setCategoriesForProfile(Array.isArray(categoriesData) ? categoriesData : []);
+            })
+            .catch(err => console.error('[ClientList] Preload profile auxiliary failed:', err));
+        return () => { cancelled = true; };
+    }, [isLoading, clients.length]);
 
     // Load client details when info shelf opens
     useEffect(() => {
@@ -2194,6 +2219,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             menuItems={menuItems}
                             boxTypes={boxTypes}
                             currentUser={currentUser}
+                            initialSettings={settingsForProfile}
+                            initialCategories={categoriesForProfile}
+                            initialAllClients={allClientsForProfile}
+                            initialRegularClients={regularClients}
                             onClose={() => {
                                 const closedClientId = selectedClientId;
                                 setSelectedClientId(null);
