@@ -1426,17 +1426,16 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setBoxTypes(b);
             setSettings(appSettings);
             setCategories(catData);
-            setAllClients(allClientsData);
-            setRegularClients(regularClientsData);
+            setAllClients(Array.isArray(allClientsData) ? allClientsData.filter((x): x is ClientProfile => x != null) : []);
+            setRegularClients(Array.isArray(regularClientsData) ? regularClientsData.filter((x): x is ClientProfile => x != null) : []);
             setActiveOrder(activeOrderData);
             setHistory(historyData || []);
             setOrderHistory(orderHistoryData || []);
             setBillingHistory(billingHistoryData || []);
             if (c && !c.parentClientId) {
-                setDependents(dependentsData);
+                setDependents(Array.isArray(dependentsData) ? dependentsData.filter((d): d is ClientProfile => d != null) : []);
             }
 
-            const runOrderConfigBuild = async () => {
             // Set order config from upcoming_orders table (Current Order Request)
             // If no upcoming order exists, fall back to active_order from clients table
             // If no active_order exists, initialize with default based on service type
@@ -2002,12 +2001,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setAllUpcomingOrders(extractedOrders);
             }
             setLoadingOrderDetails(false);
-            };
-            if (typeof requestIdleCallback !== 'undefined') {
-                requestIdleCallback(() => { void runOrderConfigBuild(); }, { timeout: 150 });
-            } else {
-                setTimeout(() => { void runOrderConfigBuild(); }, 0);
-            }
         } catch (error) {
             console.error('[ClientProfile] Error loading data:', error);
             setMessage('Error loading client data. Please refresh the page.');
