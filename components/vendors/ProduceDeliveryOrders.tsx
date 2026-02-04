@@ -141,7 +141,7 @@ export function ProduceDeliveryOrders({ deliveryDate }: Props) {
                 month: 'short',
                 day: 'numeric',
                 year: 'numeric',
-                timeZone: 'UTC'
+                timeZone: 'America/New_York'
             });
         } catch {
             return dateString;

@@ -81,9 +81,11 @@ export async function POST(req: Request) {
             .eq('status', 'scheduled')
             .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null');
 
-        // Import getNextOccurrence for calculating delivery dates from delivery_day
+        // Import getNextOccurrence and timezone helper (Eastern)
         const { getNextOccurrence, formatDateToYYYYMMDD } = await import('@/lib/order-dates');
+        const { getTodayDateInAppTzAsReference } = await import('@/lib/timezone');
         const currentTime = new Date();
+        const refToday = getTodayDateInAppTzAsReference(currentTime);
 
         // Build map of client_id -> Map of delivery_date -> order info
         // This allows multiple stops per client for different delivery dates
@@ -142,7 +144,7 @@ export async function POST(req: Request) {
                 dayOfWeek = getDayOfWeek(order.scheduled_delivery_date);
             } else if (order.delivery_day) {
                 // Calculate next occurrence of delivery_day
-                const nextDate = getNextOccurrence(order.delivery_day, currentTime);
+                const nextDate = getNextOccurrence(order.delivery_day, refToday);
                 if (nextDate) {
                     deliveryDateStr = formatDateToYYYYMMDD(nextDate);
                     dayOfWeek = getDayOfWeek(deliveryDateStr);

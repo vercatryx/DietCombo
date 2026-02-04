@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { logout } from '@/lib/auth-actions';
-import { User, Mail, Phone, MapPin, Package, Truck, Info, CreditCard, LogOut } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Package, Truck, Info, CreditCard, LogOut, UtensilsCrossed } from 'lucide-react';
 import { ClientProfile } from '@/lib/types';
 import styles from './ClientPortal.module.css';
 
@@ -71,6 +71,26 @@ export default function ClientPortalSidebar({ client }: Props) {
                             </div>
                         </div>
                     </div>
+
+                    {/* Dislikes / Dietary Restrictions */}
+                    {(client.dislikes != null && client.dislikes.trim() !== '') && (
+                        <div className="section">
+                            <h3 style={{
+                                fontSize: '0.75rem',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.05em',
+                                color: 'var(--text-tertiary)',
+                                marginBottom: '12px',
+                                fontWeight: 600
+                            }}>
+                                Dislikes / Dietary Restrictions
+                            </h3>
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '0.9rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                <UtensilsCrossed size={16} style={{ marginTop: '2px', flexShrink: 0 }} />
+                                <span>{client.dislikes}</span>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Service Info */}
                     <div className="section">

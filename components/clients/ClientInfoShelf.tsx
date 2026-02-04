@@ -508,6 +508,14 @@ export function ClientInfoShelf({
                                     )}
                                 </div>
                             </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Dislikes / Dietary Restrictions</div>
+                                <div className={styles.value}>
+                                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                                        {client.dislikes && client.dislikes.trim() ? client.dislikes : '-'}
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

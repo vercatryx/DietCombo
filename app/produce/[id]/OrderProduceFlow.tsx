@@ -79,7 +79,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                         {client.full_name}
                     </h2>
                     <p className="text-subtitle">
-                        Scheduled: {new Date(client.deliveryDateLabel).toLocaleDateString('en-US', { timeZone: 'UTC' })}
+                        Scheduled: {new Date(client.deliveryDateLabel).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}
                     </p>
                 </div>
 

@@ -1,6 +1,7 @@
 'use server';
 
 import { getCurrentTime } from './time';
+import { getTodayDateInAppTzAsReference, getTodayInAppTz } from './timezone';
 import { revalidatePath } from 'next/cache';
 import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment, MealCategory, MealItem, ClientFoodOrder, ClientMealOrder, ClientBoxOrder } from './types';
 import { randomUUID } from 'crypto';
@@ -18,6 +19,7 @@ import { supabase } from './supabase';
 import { createClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
+import { composeUniteUsUrl } from './utils';
 
 // Meal planner orders use meal_planner_orders and meal_planner_order_items (no longer upcoming_orders)
 const MEAL_PLANNER_SERVICE_TYPE = 'meal_planner';
@@ -2616,8 +2618,11 @@ function mapClientFromDB(c: any): ClientProfile {
         state: c.state || null,
         zip: c.zip || null,
         county: c.county || null,
-        clientIdExternal: c.client_id_external || null,
-        caseIdExternal: c.case_id_external || null,
+        // Single Unite Us link: store full URL in case_id_external; normalize when reading (legacy had separate case + client ids)
+        clientIdExternal: null,
+        caseIdExternal: (c.case_id_external && String(c.case_id_external).startsWith('http'))
+            ? c.case_id_external
+            : composeUniteUsUrl(c.case_id_external || null, c.client_id_external || null) || c.case_id_external || null,
         medicaid: c.medicaid ?? false,
         paused: c.paused ?? false,
         complex: c.complex ?? false,
@@ -4477,7 +4482,7 @@ async function syncSingleOrderForDeliveryDay(
             }
             
             // Get the nearest occurrence of the client-selected delivery day (use day name for getNextOccurrence)
-            scheduledDeliveryDate = getNextOccurrence(normalizedDay, currentTime);
+            scheduledDeliveryDate = getNextOccurrence(normalizedDay, getTodayDateInAppTzAsReference(currentTime));
             
             if (!scheduledDeliveryDate) {
                 const errorMsg = `Cannot save Food order: Could not calculate delivery date for ${normalizedDay}.`;
@@ -4499,7 +4504,7 @@ async function syncSingleOrderForDeliveryDay(
                     const mainVendorDeliveryDay = deliveryDays[0];
                     
                     // Get the nearest occurrence of the main vendor's delivery day
-                    scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                    scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, getTodayDateInAppTzAsReference(currentTime));
                     
                     if (!scheduledDeliveryDate) {
                         const errorMsg = `Cannot save Food order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
@@ -4515,7 +4520,7 @@ async function syncSingleOrderForDeliveryDay(
             
             // If still no scheduled delivery date, try using getNextDeliveryDate with first vendor
             if (!scheduledDeliveryDate) {
-                scheduledDeliveryDate = getNextDeliveryDate(vendorIds[0], vendors, currentTime);
+                scheduledDeliveryDate = getNextDeliveryDate(vendorIds[0], vendors, getTodayDateInAppTzAsReference(currentTime));
                 
                 if (!scheduledDeliveryDate) {
                     const vendor = vendors.find(v => v.id === vendorIds[0]);
@@ -4574,7 +4579,7 @@ async function syncSingleOrderForDeliveryDay(
                 }
                 
                 // Get the nearest occurrence of the client-selected delivery day (use day name for getNextOccurrence)
-                scheduledDeliveryDate = getNextOccurrence(normalizedDay, currentTime);
+                scheduledDeliveryDate = getNextOccurrence(normalizedDay, getTodayDateInAppTzAsReference(currentTime));
                 
                 if (!scheduledDeliveryDate) {
                     const errorMsg = `Cannot save Boxes order: Could not calculate delivery date for ${normalizedDay}.`;
@@ -4596,7 +4601,7 @@ async function syncSingleOrderForDeliveryDay(
                         const mainVendorDeliveryDay = deliveryDays[0];
                         
                         // Get the nearest occurrence of the main vendor's delivery day
-                        scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                        scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, getTodayDateInAppTzAsReference(currentTime));
                         
                         if (!scheduledDeliveryDate) {
                             const errorMsg = `Cannot save Boxes order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
@@ -4707,7 +4712,7 @@ async function syncSingleOrderForDeliveryDay(
             }
             
             // Get the nearest occurrence of the client-selected delivery day (use day name for getNextOccurrence)
-            scheduledDeliveryDate = getNextOccurrence(normalizedDay, currentTime);
+            scheduledDeliveryDate = getNextOccurrence(normalizedDay, getTodayDateInAppTzAsReference(currentTime));
             
             if (!scheduledDeliveryDate) {
                 const errorMsg = `Cannot save Custom order: Could not calculate delivery date for ${normalizedDay}.`;
@@ -4729,7 +4734,7 @@ async function syncSingleOrderForDeliveryDay(
                     const mainVendorDeliveryDay = deliveryDays[0];
                     
                     // Get the nearest occurrence of the main vendor's delivery day
-                    scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, currentTime);
+                    scheduledDeliveryDate = getNextOccurrence(mainVendorDeliveryDay, getTodayDateInAppTzAsReference(currentTime));
                     
                     if (!scheduledDeliveryDate) {
                         const errorMsg = `Cannot save Custom order: Could not calculate delivery date for main vendor's delivery day (${mainVendorDeliveryDay}).`;
@@ -4808,7 +4813,7 @@ async function syncSingleOrderForDeliveryDay(
                 // Use the vendor's first delivery day from admin settings
                 const vendorDeliveryDay = deliveryDays[0];
                 // Calculate the nearest occurrence of this day
-                scheduledDeliveryDate = getNextOccurrence(vendorDeliveryDay, currentTime);
+                scheduledDeliveryDate = getNextOccurrence(vendorDeliveryDay, getTodayDateInAppTzAsReference(currentTime));
                 
                 if (!scheduledDeliveryDate) {
                     const errorMsg = `Cannot save Produce order: Could not calculate delivery date for vendor's delivery day (${vendorDeliveryDay}).`;
@@ -6775,11 +6780,10 @@ export async function syncCurrentOrderToUpcoming(clientId: string, client: Clien
  * Moves them from upcoming_orders to orders table
  */
 export async function processUpcomingOrders() {
-    const today = await getCurrentTime();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = formatDateToYYYYMMDD(today);
+    const currentTime = await getCurrentTime();
+    const todayStr = getTodayInAppTz(currentTime);
 
-    // Find all upcoming orders where take_effect_date <= today and status is 'scheduled'
+    // Find all upcoming orders where take_effect_date <= today (Eastern) and status is 'scheduled'
     let upcomingOrders;
     try {
         const { data: upcomingOrdersData, error: fetchError } = await supabase
@@ -6816,7 +6820,7 @@ export async function processUpcomingOrders() {
                     upcomingOrder.delivery_day,
                     await getVendors(),
                     undefined,
-                    currentTime,
+                    getTodayDateInAppTzAsReference(currentTime),
                     currentTime
                 );
                 if (calculatedDate) {
@@ -8560,7 +8564,7 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                             upcomingOrder.delivery_day,
                             await getVendors(),
                             undefined,
-                            currentTime,
+                            getTodayDateInAppTzAsReference(currentTime),
                             currentTime
                         );
                         if (calculatedDate) {

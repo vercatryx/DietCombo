@@ -1,44 +1,36 @@
 'use client';
 
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, ShoppingCart, User, Calendar, CreditCard, FileText, PenTool, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Package, ShoppingCart, User, CreditCard, FileText, Trash2, Loader2 } from 'lucide-react';
 import styles from './OrderDetailView.module.css';
-import { formatUniteUsUrl } from '@/lib/utils';
+import { deleteOrder } from '@/lib/actions-orders-billing';
+import type { OrderDetail } from '@/lib/types-orders-billing';
 
 interface OrderDetailViewProps {
-    order: {
-        id: string;
-        orderNumber: number | null;
-        clientId: string;
-        clientName: string;
-        clientAddress: string;
-        clientEmail: string;
-        clientPhone: string;
-        clientSignToken?: string | null;
-        serviceType: string;
-        caseId: string | null;
-        status: string;
-        scheduledDeliveryDate: string | null;
-        actualDeliveryDate: string | null;
-        deliveryProofUrl: string;
-        totalValue: number;
-        totalItems: number | null;
-        notes: string | null;
-        createdAt: string;
-        lastUpdated: string;
-        updatedBy: string | null;
-        orderDetails?: any;
-    };
+    order: OrderDetail;
 }
 
 export function OrderDetailView({ order }: OrderDetailViewProps) {
     const router = useRouter();
+    const [isDeleting, setIsDeleting] = useState(false);
 
-    const formatStatus = (status: string) => {
-        if (!status) return 'UNKNOWN';
-        return status.replace(/_/g, ' ').toUpperCase();
+    const handleDelete = async () => {
+        if (!window.confirm('Delete this order? This cannot be undone.')) return;
+        setIsDeleting(true);
+        try {
+            const result = await deleteOrder(order.id);
+            if (result.success) router.push('/orders');
+            else alert(`Failed: ${result.message}`);
+        } catch (e) {
+            console.error(e);
+            alert('Error deleting order.');
+        } finally {
+            setIsDeleting(false);
+        }
     };
 
+    const formatStatus = (status: string) => (status ? status.replace(/_/g, ' ').toUpperCase() : 'UNKNOWN');
     const getStatusStyle = (status: string) => {
         switch (status) {
             case 'pending': return styles.statusPending;
@@ -52,7 +44,6 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
     };
 
     const renderOrderItems = () => {
-        console.log('[OrderDetailView] Rendering items for order:', order);
         if (!order.orderDetails) return null;
 
         if ((order.orderDetails.serviceType === 'Food' || order.orderDetails.serviceType === 'Meal' || order.orderDetails.serviceType === 'Custom') && order.orderDetails.vendorSelections) {
@@ -64,29 +55,19 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                     </div>
                     {order.orderDetails.vendorSelections.map((vs: any, idx: number) => (
                         <div key={idx} className={styles.vendorSection}>
-                            <div className={styles.vendorName}>
-                                <strong>Vendor:</strong> {vs.vendorName}
-                            </div>
+                            <div className={styles.vendorName}><strong>Vendor:</strong> {vs.vendorName}</div>
                             <table className={styles.itemsTable}>
                                 <thead>
-                                    <tr>
-                                        <th>Item</th>
-                                        <th>Quantity</th>
-                                        <th>Unit Value</th>
-                                        <th>Total</th>
-                                        <th>Notes</th>
-                                    </tr>
+                                    <tr><th>Item</th><th>Quantity</th><th>Unit Value</th><th>Total</th><th>Notes</th></tr>
                                 </thead>
                                 <tbody>
                                     {vs.items.map((item: any, itemIdx: number) => (
                                         <tr key={itemIdx}>
                                             <td>{item.menuItemName}</td>
                                             <td>{item.quantity}</td>
-                                            <td>${item.unitValue.toFixed(2)}</td>
-                                            <td>${item.totalValue.toFixed(2)}</td>
-                                            <td style={{ maxWidth: '200px', fontSize: '0.9rem', color: '#555' }}>
-                                                {item.notes || '-'}
-                                            </td>
+                                            <td>${(item.unitValue ?? 0).toFixed(2)}</td>
+                                            <td>${(item.totalValue ?? 0).toFixed(2)}</td>
+                                            <td style={{ maxWidth: 200, fontSize: '0.9rem', color: '#555' }}>{item.notes || '-'}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -94,48 +75,34 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                         </div>
                     ))}
                     <div className={styles.orderSummary}>
-                        <div><strong>Total Items:</strong> {order.orderDetails.totalItems || 0}</div>
-                        <div><strong>Total Value:</strong> ${order.orderDetails.totalValue.toFixed(2)}</div>
+                        <div><strong>Total Items:</strong> {order.orderDetails.totalItems ?? 0}</div>
+                        <div><strong>Total Value:</strong> ${(order.orderDetails.totalValue ?? 0).toFixed(2)}</div>
                     </div>
                 </div>
             );
-        } else if (order.orderDetails.serviceType === 'Boxes') {
+        }
+
+        if (order.orderDetails.serviceType === 'Boxes') {
             const itemsByCategory = order.orderDetails.itemsByCategory || {};
             const hasItems = Object.keys(itemsByCategory).length > 0;
-
             return (
                 <div className={styles.orderItemsSection}>
-                    <div className={styles.sectionHeader}>
-                        <Package size={20} />
-                        <h2>Box Order Details</h2>
-                    </div>
+                    <div className={styles.sectionHeader}><Package size={20} /><h2>Box Order Details</h2></div>
                     <div className={styles.boxDetails}>
                         <div><strong>Vendor:</strong> {order.orderDetails.vendorName}</div>
-                        <div><strong>Total Value:</strong> ${order.orderDetails.totalValue.toFixed(2)}</div>
+                        <div><strong>Total Value:</strong> ${(order.orderDetails.totalValue ?? 0).toFixed(2)}</div>
                     </div>
                     {hasItems && (
                         <div className={styles.boxContents}>
                             <h3 style={{ marginTop: '1.5rem', marginBottom: '1rem', fontSize: '1rem', fontWeight: 600 }}>Box Contents</h3>
-                            {Object.entries(itemsByCategory).map(([categoryId, categoryData]: [string, any]) => (
-                                <div key={categoryId} className={styles.categorySection}>
-                                    <div className={styles.categoryHeader}>
-                                        <strong>{categoryData.categoryName}</strong>
-                                    </div>
+                            {Object.entries(itemsByCategory).map(([catId, catData]: [string, any]) => (
+                                <div key={catId} className={styles.categorySection}>
+                                    <div className={styles.categoryHeader}><strong>{catData.categoryName}</strong></div>
                                     <table className={styles.itemsTable}>
-                                        <thead>
-                                            <tr>
-                                                <th>Item</th>
-                                                <th>Quantity</th>
-                                                <th>Quota Value</th>
-                                            </tr>
-                                        </thead>
+                                        <thead><tr><th>Item</th><th>Quantity</th><th>Quota Value</th></tr></thead>
                                         <tbody>
-                                            {categoryData.items.map((item: any, itemIdx: number) => (
-                                                <tr key={itemIdx}>
-                                                    <td>{item.itemName}</td>
-                                                    <td>{item.quantity}</td>
-                                                    <td>{item.quotaValue}</td>
-                                                </tr>
+                                            {(catData.items || []).map((item: any, i: number) => (
+                                                <tr key={i}><td>{item.itemName}</td><td>{item.quantity}</td><td>{item.quotaValue}</td></tr>
                                             ))}
                                         </tbody>
                                     </table>
@@ -145,24 +112,17 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                     )}
                 </div>
             );
-        } else if (order.orderDetails.serviceType === 'Equipment') {
+        }
+
+        if (order.orderDetails.serviceType === 'Equipment') {
             return (
                 <div className={styles.orderItemsSection}>
-                    <div className={styles.sectionHeader}>
-                        <Package size={20} />
-                        <h2>Equipment Order Details</h2>
-                    </div>
+                    <div className={styles.sectionHeader}><Package size={20} /><h2>Equipment Order Details</h2></div>
                     <div className={styles.boxDetails}>
-                        {order.orderDetails.vendorName && (
-                            <div><strong>Vendor:</strong> {order.orderDetails.vendorName}</div>
-                        )}
-                        {order.orderDetails.equipmentName && (
-                            <div><strong>Equipment:</strong> {order.orderDetails.equipmentName}</div>
-                        )}
-                        {order.orderDetails.price !== undefined && (
-                            <div><strong>Price:</strong> ${order.orderDetails.price.toFixed(2)}</div>
-                        )}
-                        <div><strong>Total Value:</strong> ${order.orderDetails.totalValue.toFixed(2)}</div>
+                        {order.orderDetails.vendorName && <div><strong>Vendor:</strong> {order.orderDetails.vendorName}</div>}
+                        {order.orderDetails.equipmentName && <div><strong>Equipment:</strong> {order.orderDetails.equipmentName}</div>}
+                        {order.orderDetails.price != null && <div><strong>Price:</strong> ${Number(order.orderDetails.price).toFixed(2)}</div>}
+                        <div><strong>Total Value:</strong> ${(order.orderDetails.totalValue ?? 0).toFixed(2)}</div>
                     </div>
                 </div>
             );
@@ -173,170 +133,50 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
 
     return (
         <div className={styles.container}>
-            <button className={styles.backBtn} onClick={() => router.push('/orders')}>
+            <button type="button" className={styles.backBtn} onClick={() => router.push('/orders')}>
                 <ArrowLeft size={20} /> Back to Orders
             </button>
-
             <div className={styles.header}>
                 <div>
-                    <h1 className={styles.title}>
-                        Order #{order.orderNumber || 'N/A'}
-                    </h1>
+                    <h1 className={styles.title}>Order #{order.orderNumber ?? 'N/A'}</h1>
                     <div className={styles.statusBadge}>
-                        <span className={getStatusStyle(order.status)}>
-                            {formatStatus(order.status)}
-                        </span>
+                        <span className={getStatusStyle(order.status)}>{formatStatus(order.status)}</span>
                     </div>
                 </div>
+                <button type="button" className={styles.deleteBtn} onClick={handleDelete} disabled={isDeleting}>
+                    {isDeleting ? <><Loader2 size={18} className="animate-spin" /> Deleting...</> : <><Trash2 size={18} /> Delete Order</>}
+                </button>
             </div>
-
             <div className={styles.content}>
                 <div className={styles.sections}>
-                    {/* Client Information */}
                     <div className={styles.section}>
-                        <div className={styles.sectionHeader}>
-                            <User size={20} />
-                            <h2>Client Information</h2>
-                        </div>
+                        <div className={styles.sectionHeader}><User size={20} /><h2>Client Information</h2></div>
                         <div className={styles.sectionContent}>
-                            <div className={styles.infoRow}>
-                                <strong>Name:</strong>
-                                <span>{order.clientName}</span>
-                            </div>
-                            {order.clientAddress && (
-                                <div className={styles.infoRow}>
-                                    <strong>Address:</strong>
-                                    <span>{order.clientAddress}</span>
-                                </div>
-                            )}
-                            {order.clientEmail && (
-                                <div className={styles.infoRow}>
-                                    <strong>Email:</strong>
-                                    <span>{order.clientEmail}</span>
-                                </div>
-                            )}
-                            {order.clientPhone && (
-                                <div className={styles.infoRow}>
-                                    <strong>Phone:</strong>
-                                    <span>{order.clientPhone}</span>
-                                </div>
-                            )}
+                            <div className={styles.infoRow}><strong>Name:</strong><span>{order.clientName}</span></div>
+                            {order.clientAddress && <div className={styles.infoRow}><strong>Address:</strong><span>{order.clientAddress}</span></div>}
+                            {order.clientEmail && <div className={styles.infoRow}><strong>Email:</strong><span>{order.clientEmail}</span></div>}
+                            {order.clientPhone && <div className={styles.infoRow}><strong>Phone:</strong><span>{order.clientPhone}</span></div>}
                         </div>
                     </div>
-
-                    {/* Order Information */}
                     <div className={styles.section}>
-                        <div className={styles.sectionHeader}>
-                            <CreditCard size={20} />
-                            <h2>Order Information</h2>
-                        </div>
+                        <div className={styles.sectionHeader}><CreditCard size={20} /><h2>Order Information</h2></div>
                         <div className={styles.sectionContent}>
-                            <div className={styles.infoRow}>
-                                <strong>Service Type:</strong>
-                                <span>{order.serviceType}</span>
-                            </div>
-                            {order.caseId && (
-                                <div className={styles.infoRow}>
-                                    <strong>Case ID:</strong>
-                                    {formatUniteUsUrl(order.caseId) ? (
-                                        <a 
-                                            href={order.caseId} 
-                                            target="_blank" 
-                                            rel="noopener noreferrer" 
-                                            className={styles.link}
-                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-                                        >
-                                            View Case
-                                            <ExternalLink size={14} />
-                                        </a>
-                                    ) : (
-                                        <span>{order.caseId}</span>
-                                    )}
-                                </div>
-                            )}
-                            {order.scheduledDeliveryDate && (
-                                <div className={styles.infoRow}>
-                                    <strong>Scheduled Delivery:</strong>
-                                    <span>{(() => {
-                                        // Parse YYYY-MM-DD as local date to avoid timezone issues
-                                        const [year, month, day] = order.scheduledDeliveryDate.split('-').map(Number);
-                                        const date = new Date(year, month - 1, day);
-                                        return date.toLocaleDateString('en-US');
-                                    })()}</span>
-                                </div>
-                            )}
-                            {order.actualDeliveryDate && (
-                                <div className={styles.infoRow}>
-                                    <strong>Actual Delivery:</strong>
-                                    <span>{(() => {
-                                        // Parse YYYY-MM-DD as local date to avoid timezone issues
-                                        const [year, month, day] = order.actualDeliveryDate.split('-').map(Number);
-                                        const date = new Date(year, month - 1, day);
-                                        return date.toLocaleDateString('en-US');
-                                    })()}</span>
-                                </div>
-                            )}
-                            <div className={styles.infoRow}>
-                                <strong>Total Value:</strong>
-                                <span>${order.totalValue.toFixed(2)}</span>
-                            </div>
-                            {order.notes && (
-                                <div className={styles.infoRow}>
-                                    <strong>Notes:</strong>
-                                    <span>{order.notes}</span>
-                                </div>
-                            )}
-                            {order.deliveryProofUrl && (
-                                <div className={styles.infoRow}>
-                                    <strong>Delivery Proof:</strong>
-                                    <a href={order.deliveryProofUrl} target="_blank" rel="noopener noreferrer" className={styles.link}>
-                                        View Image
-                                    </a>
-                                </div>
-                            )}
-                            {order.clientSignToken && (
-                                <div className={styles.infoRow}>
-                                    <strong>Signature Report:</strong>
-                                    <a 
-                                        href={`/sign/${order.clientSignToken}/view`} 
-                                        target="_blank" 
-                                        rel="noopener noreferrer" 
-                                        className={styles.link}
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-                                    >
-                                        <PenTool size={16} />
-                                        View Signatures
-                                        <ExternalLink size={14} />
-                                    </a>
-                                </div>
-                            )}
+                            <div className={styles.infoRow}><strong>Service Type:</strong><span>{order.serviceType}</span></div>
+                            {order.caseId && <div className={styles.infoRow}><strong>Case ID:</strong><span>{order.caseId}</span></div>}
+                            {order.scheduledDeliveryDate && <div className={styles.infoRow}><strong>Scheduled Delivery:</strong><span>{new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}</span></div>}
+                            {order.actualDeliveryDate && <div className={styles.infoRow}><strong>Actual Delivery:</strong><span>{new Date(order.actualDeliveryDate).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}</span></div>}
+                            <div className={styles.infoRow}><strong>Total Value:</strong><span>${order.totalValue.toFixed(2)}</span></div>
+                            {order.notes && <div className={styles.infoRow}><strong>Notes:</strong><span>{order.notes}</span></div>}
+                            {order.deliveryProofUrl && <div className={styles.infoRow}><strong>Delivery Proof:</strong><a href={order.deliveryProofUrl} target="_blank" rel="noopener noreferrer" className={styles.link}>View Image</a></div>}
                         </div>
                     </div>
-
-                    {/* Order Items */}
                     {renderOrderItems()}
-
-                    {/* Metadata */}
                     <div className={styles.section}>
-                        <div className={styles.sectionHeader}>
-                            <FileText size={20} />
-                            <h2>Metadata</h2>
-                        </div>
+                        <div className={styles.sectionHeader}><FileText size={20} /><h2>Metadata</h2></div>
                         <div className={styles.sectionContent}>
-                            <div className={styles.infoRow}>
-                                <strong>Created:</strong>
-                                <span>{new Date(order.createdAt).toLocaleString()}</span>
-                            </div>
-                            <div className={styles.infoRow}>
-                                <strong>Last Updated:</strong>
-                                <span>{new Date(order.lastUpdated).toLocaleString()}</span>
-                            </div>
-                            {order.updatedBy && (
-                                <div className={styles.infoRow}>
-                                    <strong>Updated By:</strong>
-                                    <span>{order.updatedBy}</span>
-                                </div>
-                            )}
+                            <div className={styles.infoRow}><strong>Created:</strong><span>{new Date(order.createdAt).toLocaleString('en-US', { timeZone: 'America/New_York' })}</span></div>
+                            <div className={styles.infoRow}><strong>Last Updated:</strong><span>{new Date(order.lastUpdated).toLocaleString('en-US', { timeZone: 'America/New_York' })}</span></div>
+                            {order.updatedBy && <div className={styles.infoRow}><strong>Updated By:</strong><span>{order.updatedBy}</span></div>}
                         </div>
                     </div>
                 </div>
@@ -344,4 +184,3 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
         </div>
     );
 }
-

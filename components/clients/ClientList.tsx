@@ -625,6 +625,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 const notesB = b.notes || '';
                 comparison = notesA.localeCompare(notesB);
                 break;
+            case 'dislikes':
+                const dislikesA = a.dislikes || '';
+                const dislikesB = b.dislikes || '';
+                comparison = dislikesA.localeCompare(dislikesB);
+                break;
             case 'authorizedAmount':
                 const amountA = a.authorizedAmount ?? 0;
                 const amountB = b.authorizedAmount ?? 0;
@@ -2098,6 +2103,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 onClick={() => handleSort('notes')}>
                                 Notes {getSortIcon('notes')}
                             </span>
+                            <span style={{ minWidth: '200px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                onClick={() => handleSort('dislikes')}>
+                                Dislikes {getSortIcon('dislikes')}
+                            </span>
                         </>
                     )}
                     <span style={{ width: '40px' }}></span>
@@ -2176,7 +2185,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     </span>
                                     <span style={{ minWidth: '150px', flex: 1.2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                         {client.expirationDate
-                                            ? new Date(client.expirationDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })
+                                            ? new Date(client.expirationDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
                                             : '-'}
                                     </span>
                                 </>
@@ -2196,6 +2205,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     </span>
                                     <span title={isDependent ? undefined : client.notes} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                         {isDependent ? '-' : (client.notes || '-')}
+                                    </span>
+                                    <span title={isDependent ? undefined : (client.dislikes || undefined)} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                        {isDependent ? '-' : (client.dislikes || '-')}
                                     </span>
                                 </>
                             )}

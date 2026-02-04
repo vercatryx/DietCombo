@@ -1,5 +1,6 @@
 import { BillingDetail } from '@/components/clients/BillingDetail';
 
-export default function Page({ params }: { params: { id: string } }) {
-    return <BillingDetail clientId={params.id} />;
+export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params;
+    return <BillingDetail clientId={id} />;
 }

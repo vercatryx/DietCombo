@@ -6,6 +6,8 @@ import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder, getDefaultOrderTemplate, getDefaultVendorId } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
 import { getNextOccurrence } from '@/lib/order-dates';
+import { getCurrentTime } from '@/lib/time';
+import { getTodayDateInAppTzAsReference } from '@/lib/timezone';
 import { randomUUID } from 'crypto';
 
 export async function processProduceProof(formData: FormData) {
@@ -461,19 +463,19 @@ export async function createProduceOrder(clientId: string) {
 
         const mainVendor = vendors?.find(v => v.is_default === true) || vendors?.[0];
         
-        // Calculate scheduled delivery date (use today or next vendor delivery day)
-        let scheduledDeliveryDate = new Date();
-        scheduledDeliveryDate.setHours(0, 0, 0, 0);
+        // Calculate scheduled delivery date in Eastern time (today or next vendor delivery day)
+        const currentTime = await getCurrentTime();
+        const refToday = getTodayDateInAppTzAsReference(currentTime);
+        let scheduledDeliveryDate = new Date(refToday);
 
         if (mainVendor && mainVendor.delivery_days) {
-            const deliveryDays = typeof mainVendor.delivery_days === 'string' 
-                ? JSON.parse(mainVendor.delivery_days) 
+            const deliveryDays = typeof mainVendor.delivery_days === 'string'
+                ? JSON.parse(mainVendor.delivery_days)
                 : mainVendor.delivery_days;
-            
+
             if (Array.isArray(deliveryDays) && deliveryDays.length > 0) {
                 const vendorDeliveryDay = deliveryDays[0];
-                // Use the utility function to get the next occurrence
-                const nextDate = getNextOccurrence(vendorDeliveryDay, new Date());
+                const nextDate = getNextOccurrence(vendorDeliveryDay, refToday);
                 if (nextDate) {
                     scheduledDeliveryDate = nextDate;
                 }

@@ -143,7 +143,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                 month: 'short',
                 day: 'numeric',
                 year: 'numeric',
-                timeZone: 'UTC'
+                timeZone: 'America/New_York'
             });
         } catch {
             return dateString;

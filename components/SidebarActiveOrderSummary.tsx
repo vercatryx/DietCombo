@@ -66,19 +66,30 @@ export function SidebarActiveOrderSummary() {
     }
 
     const orderSummary = getOrderSummary(client, vendors, menuItems, boxTypes);
+    const hasDislikes = client.dislikes != null && String(client.dislikes).trim() !== '';
 
-    if (!orderSummary) {
+    if (!orderSummary && !hasDislikes) {
         return null;
     }
 
     return (
         <div className={styles.orderSummaryContainer}>
-            <div className={styles.orderSummaryHeader}>
-                <h3 className={styles.orderSummaryTitle}>Active Order</h3>
-            </div>
-            <div className={styles.orderSummaryContent}>
-                {orderSummary}
-            </div>
+            {orderSummary && (
+                <>
+                    <div className={styles.orderSummaryHeader}>
+                        <h3 className={styles.orderSummaryTitle}>Active Order</h3>
+                    </div>
+                    <div className={styles.orderSummaryContent}>
+                        {orderSummary}
+                    </div>
+                </>
+            )}
+            {hasDislikes && (
+                <div style={{ marginTop: orderSummary ? '12px' : 0, padding: '10px 12px', backgroundColor: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--color-primary)' }}>
+                    <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', marginBottom: '6px', fontWeight: 600 }}>Dislikes / Dietary</div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{client.dislikes}</div>
+                </div>
+            )}
         </div>
     );
 }

@@ -3,45 +3,75 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Search, ChevronRight, Package, ArrowLeft, Loader2 } from 'lucide-react';
-import { getOrdersPaginated } from '@/lib/actions';
+import { Search, ChevronRight, ArrowUpDown, Trash2, Loader2 } from 'lucide-react';
+import { getAllOrders, deleteOrder } from '@/lib/actions-orders-billing';
 import styles from './OrdersList.module.css';
 
 export function OrdersList() {
     const router = useRouter();
     const [orders, setOrders] = useState<any[]>([]);
     const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [creationIdFilter, setCreationIdFilter] = useState('');
+    const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [page, setPage] = useState(1);
-    const [total, setTotal] = useState(0);
-    const PAGE_SIZE = 20;
+    const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+    const [isDeleting, setIsDeleting] = useState(false);
 
     useEffect(() => {
         loadData();
-    }, [page]);
+    }, []);
 
     async function loadData() {
         setIsLoading(true);
         try {
-            console.log('[OrdersList] Loading orders, page:', page);
-            const { orders, total } = await getOrdersPaginated(page, PAGE_SIZE);
-            console.log('[OrdersList] Received orders:', orders.length, 'total:', total);
-            setOrders(orders);
-            setTotal(total);
+            const data = await getAllOrders();
+            setOrders(data);
         } catch (error) {
-            console.error('[OrdersList] Failed to load orders:', error);
-            setOrders([]);
-            setTotal(0);
+            console.error('Failed to load orders:', error);
         } finally {
             setIsLoading(false);
         }
     }
 
-    const filteredOrders = orders.filter(o => {
+    const handleSort = (key: string) => {
+        const direction = sortConfig?.key === key && sortConfig.direction === 'asc' ? 'desc' : 'asc';
+        setSortConfig({ key, direction });
+    };
+
+    const sortedOrders = [...orders].sort((a, b) => {
+        if (!sortConfig) return 0;
+        let aVal: any = a[sortConfig.key];
+        let bVal: any = b[sortConfig.key];
+        if (sortConfig.key === 'items') {
+            aVal = a.total_items ?? 0;
+            bVal = b.total_items ?? 0;
+        } else if (sortConfig.key === 'deliveryDate') {
+            aVal = new Date(a.scheduled_delivery_date || 0).getTime();
+            bVal = new Date(b.scheduled_delivery_date || 0).getTime();
+        } else if (sortConfig.key === 'order_number') {
+            aVal = Number(a.order_number ?? 0);
+            bVal = Number(b.order_number ?? 0);
+        } else if (sortConfig.key === 'vendors') {
+            aVal = (a.vendorNames || []).join(', ') || '';
+            bVal = (b.vendorNames || []).join(', ') || '';
+        }
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    const filteredOrders = sortedOrders.filter((o) => {
+        const vendorStr = (o.vendorNames || []).join(' ').toLowerCase();
         const matchesSearch =
             (o.clientName || '').toLowerCase().includes(search.toLowerCase()) ||
-            (o.order_number || '').toString().includes(search);
-        return matchesSearch;
+            (o.order_number ?? '').toString().includes(search) ||
+            vendorStr.includes(search.toLowerCase());
+        const matchesStatus = statusFilter === 'all' || o.status === statusFilter;
+        const matchesCreationId =
+            !creationIdFilter ||
+            (o.creation_id != null && o.creation_id.toString() === creationIdFilter.trim());
+        return matchesSearch && matchesStatus && matchesCreationId;
     });
 
     const getStatusStyle = (status: string) => {
@@ -52,17 +82,51 @@ export function OrdersList() {
             case 'waiting_for_proof': return styles.statusWaitProof;
             case 'billing_pending': return styles.statusBilling;
             case 'cancelled': return styles.statusCancelled;
-            case 'scheduled': return styles.statusConfirmed;
             default: return '';
         }
     };
 
-    const formatStatus = (status: string) => {
-        if (!status) return 'UNKNOWN';
-        return status.replace(/_/g, ' ').toUpperCase();
+    const formatStatus = (status: string) => (status ? status.replace(/_/g, ' ').toUpperCase() : 'UNKNOWN');
+
+    const handleSelectOrder = (orderId: string) => {
+        const next = new Set(selectedOrders);
+        if (next.has(orderId)) next.delete(orderId);
+        else next.add(orderId);
+        setSelectedOrders(next);
     };
 
-    if (isLoading && page === 1) {
+    const handleSelectAll = () => {
+        setSelectedOrders(
+            selectedOrders.size === filteredOrders.length ? new Set() : new Set(filteredOrders.map((o) => o.id))
+        );
+    };
+
+    const handleDeleteSelected = async () => {
+        if (selectedOrders.size === 0) return;
+        if (!window.confirm(`Delete ${selectedOrders.size} order(s)? This cannot be undone.`)) return;
+        setIsDeleting(true);
+        try {
+            const ids = Array.from(selectedOrders);
+            let ok = 0,
+                fail = 0;
+            for (const id of ids) {
+                const r = await deleteOrder(id);
+                if (r.success) ok++;
+                else fail++;
+            }
+            setSelectedOrders(new Set());
+            await loadData();
+            if (fail === 0) alert(`Deleted ${ok} order(s).`);
+            else alert(`Deleted ${ok}. Failed: ${fail}.`);
+        } catch (e) {
+            console.error(e);
+            alert('Error deleting orders.');
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    if (isLoading) {
         return (
             <div className={styles.container}>
                 <div className={styles.header}>
@@ -82,34 +146,13 @@ export function OrdersList() {
                 <h1 className={styles.title}>All Orders</h1>
                 <div className={styles.headerActions}>
                     <div className={styles.viewToggle}>
-                        <button
-                            className={styles.viewBtn}
-                            onClick={() => router.push('/clients')}
-                        >
+                        <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients')}>
                             All Clients
                         </button>
-                        <button
-                            className={styles.viewBtn}
-                            onClick={() => router.push('/clients?view=eligible')}
-                        >
-                            Eligible
-                        </button>
-                        <button
-                            className={styles.viewBtn}
-                            onClick={() => router.push('/clients?view=ineligible')}
-                        >
-                            Ineligible
-                        </button>
-                        <button
-                            className={styles.viewBtn}
-                            onClick={() => router.push('/billing')}
-                        >
+                        <button type="button" className={styles.viewBtn} onClick={() => router.push('/billing')}>
                             Billing
                         </button>
-                        <button
-                            className={`${styles.viewBtn} ${styles.viewBtnActive}`}
-                            onClick={() => router.push('/orders')}
-                        >
+                        <button type="button" className={`${styles.viewBtn} ${styles.viewBtnActive}`} onClick={() => router.push('/orders')}>
                             Orders
                         </button>
                     </div>
@@ -121,67 +164,112 @@ export function OrdersList() {
                     <Search size={18} className={styles.searchIcon} />
                     <input
                         className="input"
-                        placeholder="Search by client or order #..."
+                        placeholder="Search by client, order # or vendor..."
                         style={{ paddingLeft: '2.5rem', width: '300px' }}
                         value={search}
-                        onChange={e => setSearch(e.target.value)}
+                        onChange={(e) => setSearch(e.target.value)}
                     />
                 </div>
+                <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '200px' }}>
+                    <option value="all">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="completed">Completed</option>
+                    <option value="cancelled">Cancelled</option>
+                </select>
+                <input
+                    className="input"
+                    type="number"
+                    placeholder="Creation ID"
+                    style={{ width: '180px' }}
+                    value={creationIdFilter}
+                    onChange={(e) => setCreationIdFilter(e.target.value)}
+                    min={1}
+                />
+                <button type="button" className="button" onClick={handleSelectAll} style={{ marginLeft: 'auto' }}>
+                    {selectedOrders.size === filteredOrders.length && filteredOrders.length > 0 ? 'Deselect All' : 'Select All'}
+                </button>
+                {selectedOrders.size > 0 && (
+                    <button
+                        type="button"
+                        className="button"
+                        onClick={handleDeleteSelected}
+                        disabled={isDeleting}
+                        style={{ backgroundColor: 'var(--color-danger)', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                    >
+                        <Trash2 size={16} />
+                        {isDeleting ? 'Deleting...' : `Delete Selected (${selectedOrders.size})`}
+                    </button>
+                )}
             </div>
 
             <div className={styles.list}>
                 <div className={styles.listHeader}>
-                    <span style={{ width: '100px' }}>Order #</span>
-                    <span style={{ flex: 2 }}>Client</span>
-                    <span style={{ flex: 1 }}>Service</span>
-                    <span style={{ flex: 1 }}>Items</span>
-                    <span style={{ flex: 1.5 }}>Status</span>
-                    <span style={{ flex: 1.5 }}>Delivery Date</span>
-                    <span style={{ width: '40px' }}></span>
+                    <span style={{ width: '50px' }} />
+                    <span style={{ width: '40px', fontWeight: 'bold' }}>#</span>
+                    <span style={{ width: '100px', cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('order_number')}>
+                        Order # <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ flex: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('clientName')}>
+                        Client <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('service_type')}>
+                        Service <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ flex: 1.5, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('vendors')}>
+                        Vendors <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('items')}>
+                        Items <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ flex: 1.5, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('status')}>
+                        Status <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ flex: 1.5, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('deliveryDate')}>
+                        Delivery Date <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    </span>
+                    <span style={{ width: '40px' }} />
                 </div>
-                {filteredOrders.map(order => (
-                    <Link key={order.id} href={`/orders/${order.id}`} className={styles.row}>
-                        <span style={{ width: '100px', fontWeight: 600 }}>{order.order_number || 'N/A'}</span>
+                {filteredOrders.map((order, index) => (
+                    <div
+                        key={order.id}
+                        className={styles.row}
+                        onClick={() => router.push(`/orders/${order.id}`)}
+                        style={{ cursor: 'pointer' }}
+                    >
+                        <span
+                            style={{ width: '50px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            onClick={(e) => { e.stopPropagation(); handleSelectOrder(order.id); }}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={selectedOrders.has(order.id)}
+                                onChange={() => handleSelectOrder(order.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ cursor: 'pointer', width: 18, height: 18 }}
+                            />
+                        </span>
+                        <span style={{ width: '40px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{index + 1}</span>
+                        <span style={{ width: '100px', fontWeight: 600 }}>{order.order_number ?? 'N/A'}</span>
                         <span style={{ flex: 2 }}>{order.clientName}</span>
                         <span style={{ flex: 1 }}>{order.service_type}</span>
+                        <span style={{ flex: 1.5, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                            {(order.vendorNames || ['Unknown']).join(', ')}
+                        </span>
                         <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                            {order.total_items !== null && order.total_items !== undefined ? `${order.total_items} item${order.total_items !== 1 ? 's' : ''}` : '-'}
+                            {order.total_items != null ? `${order.total_items} item(s)` : '-'}
                         </span>
                         <span style={{ flex: 1.5 }}>
-                            <span className={getStatusStyle(order.status)}>
-                                {formatStatus(order.status)}
-                            </span>
+                            <span className={getStatusStyle(order.status)}>{formatStatus(order.status)}</span>
                         </span>
                         <span style={{ flex: 1.5, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {(order.actual_delivery_date || order.scheduled_delivery_date) ? new Date(order.actual_delivery_date || order.scheduled_delivery_date).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '-'}
+                            {order.scheduled_delivery_date ? new Date(order.scheduled_delivery_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '-'}
                         </span>
                         <span style={{ width: '40px' }}><ChevronRight size={16} /></span>
-                    </Link>
+                    </div>
                 ))}
-                {filteredOrders.length === 0 && (
-                    <div className={styles.empty}>No orders found.</div>
-                )}
+                {filteredOrders.length === 0 && <div className={styles.empty}>No orders found.</div>}
             </div>
-
-            {total > PAGE_SIZE && (
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '2rem' }}>
-                    <button
-                        className="btn btn-secondary"
-                        disabled={page === 1}
-                        onClick={() => setPage(p => p - 1)}
-                    >
-                        Previous
-                    </button>
-                    <span style={{ alignSelf: 'center', fontSize: '0.9rem' }}>Page {page} of {Math.ceil(total / PAGE_SIZE)}</span>
-                    <button
-                        className="btn btn-secondary"
-                        disabled={page * PAGE_SIZE >= total}
-                        onClick={() => setPage(p => p + 1)}
-                    >
-                        Next
-                    </button>
-                </div>
-            )}
         </div>
     );
 }

@@ -4,6 +4,7 @@ import { getCurrentTime } from '@/lib/time';
 import { getMenuItems, getSettings, getVendors, getStatuses } from '@/lib/actions';
 // import { isDeliveryDateLocked, getLockedWeekDescription, getEarliestEffectiveDate } from '@/lib/weekly-lock';
 import { getNextDeliveryDateForDay, formatDateToYYYYMMDD } from '@/lib/order-dates';
+import { getTodayDateInAppTzAsReference } from '@/lib/timezone';
 import { randomUUID } from 'crypto';
 
 /**
@@ -243,7 +244,7 @@ export async function POST(request: NextRequest) {
                 continue;
             }
 
-            const nextDeliveryDate = getNextOccurrence(deliveryDay || '', currentTime);
+            const nextDeliveryDate = getNextOccurrence(deliveryDay || '', getTodayDateInAppTzAsReference(currentTime));
 
             if (!nextDeliveryDate) {
                 // This should rarely happen if delivery_day is valid, but handle it anyway

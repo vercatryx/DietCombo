@@ -1,12 +1,13 @@
 import { cookies } from 'next/headers';
 
 /**
- * Returns the current time.
+ * Returns the current time (moment in time).
  * On component/server actions (where cookies() is available), it checks for the 'x-fake-time' cookie.
- * On client (if this were used directly, though strictly this uses next/headers so it's server-only),
- * it would fail.
- * 
  * For Client Components, use the TimeContext.
+ *
+ * For "today" in business logic (order creation, delivery dates, cutoffs), use Eastern time
+ * via getTodayDateInAppTzAsReference(currentTime) or getTodayInAppTz(currentTime) from lib/timezone.ts
+ * so that server UTC does not shift the calendar day.
  */
 export async function getCurrentTime(): Promise<Date> {
     try {

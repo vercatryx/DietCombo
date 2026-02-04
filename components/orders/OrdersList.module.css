@@ -1,31 +1,26 @@
-.container {
-    width: 100%;
-}
+/* Orders list – portable styles. Uses CSS variables from your app. */
+
+.container { width: 100%; }
 
 .header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: var(--spacing-lg);
+    margin-bottom: var(--spacing-lg, 1.5rem);
 }
 
-.headerActions {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-lg);
-}
+.headerActions { display: flex; align-items: center; gap: var(--spacing-lg, 1rem); }
 
 .title {
     font-size: 1.875rem;
     font-weight: 700;
-    color: var(--text-primary);
+    color: var(--text-primary, #111);
 }
 
 .viewToggle {
-    display: flex;
-    background-color: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    background-color: var(--bg-surface, #f5f5f5);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: var(--radius-md, 8px);
     padding: 2px;
 }
 
@@ -33,89 +28,73 @@
     background: none;
     border: none;
     padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
+    border-radius: var(--radius-sm, 4px);
+    color: var(--text-secondary, #555);
     font-size: 0.875rem;
     cursor: pointer;
     font-weight: 500;
-    transition: all 0.2s;
 }
 
-.viewBtn:hover {
-    color: var(--text-primary);
-}
+.viewBtn:hover { color: var(--text-primary, #111); }
 
 .viewBtnActive {
-    background-color: var(--color-primary);
-    color: #000000;
-    box-shadow: var(--shadow-sm);
+    background-color: var(--color-primary, #3b82f6);
+    color: #fff;
     font-weight: 600;
 }
 
 .filters {
     display: flex;
-    gap: var(--spacing-md);
-    margin-bottom: var(--spacing-lg);
+    gap: var(--spacing-md, 1rem);
+    margin-bottom: var(--spacing-lg, 1.5rem);
+    align-items: center;
 }
 
-.searchBox {
-    position: relative;
-    max-width: 400px;
-}
+.searchBox { position: relative; max-width: 400px; }
 
 .searchIcon {
     position: absolute;
     left: 12px;
     top: 50%;
     transform: translateY(-50%);
-    color: var(--text-secondary);
+    color: var(--text-secondary, #555);
 }
 
 .list {
-    background-color: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    background-color: var(--bg-surface, #fff);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: var(--radius-md, 8px);
     overflow-x: auto;
 }
 
 .listHeader {
-    display: flex;
-    padding: var(--spacing-md);
-    background-color: var(--bg-surface-hover);
-    border-bottom: 1px solid var(--border-color);
+    display: grid;
+    grid-template-columns: 50px 40px 100px 2fr 1fr 1.5fr 1fr 1.5fr 1.5fr 40px;
+    padding: var(--spacing-md, 1rem);
+    background-color: var(--bg-surface-hover, #f0f0f0);
+    border-bottom: 1px solid var(--border-color, #ddd);
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #555);
     font-size: 0.875rem;
-    min-width: 1000px;
+    min-width: 1050px;
     gap: 1rem;
+    align-items: center;
 }
 
 .row {
-    display: flex;
-    padding: var(--spacing-md);
-    border-bottom: 1px solid var(--border-color);
+    display: grid;
+    grid-template-columns: 50px 40px 100px 2fr 1fr 1.5fr 1fr 1.5fr 1.5fr 40px;
+    padding: var(--spacing-md, 1rem);
+    border-bottom: 1px solid var(--border-color, #ddd);
     align-items: center;
-    color: var(--text-primary);
-    text-decoration: none;
-    transition: background-color 0.2s;
-    min-width: 1000px;
-    white-space: nowrap;
+    min-width: 1050px;
     gap: 1rem;
 }
 
-.row:last-child {
-    border-bottom: none;
-}
+.row:last-child { border-bottom: none; }
+.row:hover { background-color: var(--bg-app, #fafafa); }
 
-.row:hover {
-    background-color: var(--bg-app);
-}
-
-.empty {
-    padding: var(--spacing-xl);
-    text-align: center;
-    color: var(--text-secondary);
-}
+.empty { padding: var(--spacing-xl, 2rem); text-align: center; color: var(--text-secondary, #555); }
 
 .loadingContainer {
     display: flex;
@@ -123,60 +102,13 @@
     align-items: center;
     justify-content: center;
     padding: 4rem;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #555);
     gap: 1rem;
 }
 
-.statusPending {
-    background-color: rgba(217, 119, 6, 0.1);
-    color: var(--color-warning);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.statusConfirmed {
-    background-color: rgba(72, 190, 133, 0.25);
-    color: #14532d;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.statusCompleted {
-    background-color: rgba(22, 163, 74, 0.1);
-    color: var(--color-success);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.statusWaitProof {
-    background-color: rgba(124, 58, 237, 0.1);
-    color: var(--color-accent);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.statusBilling {
-    background-color: rgba(217, 119, 6, 0.1);
-    color: var(--color-warning);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.statusCancelled {
-    background-color: rgba(220, 38, 38, 0.1);
-    color: var(--color-danger);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
+.statusPending { background: rgba(217,119,6,0.1); color: var(--color-warning, #d97706); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.statusConfirmed { background: rgba(253,235,35,0.4); color: #000; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.statusCompleted { background: rgba(22,163,74,0.1); color: var(--color-success, #16a34a); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.statusWaitProof { background: rgba(124,58,237,0.1); color: var(--color-accent, #7c3aed); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.statusBilling { background: rgba(217,119,6,0.1); color: var(--color-warning, #d97706); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.statusCancelled { background: rgba(220,38,38,0.1); color: var(--color-danger, #dc2626); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }

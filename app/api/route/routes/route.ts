@@ -500,10 +500,12 @@ export async function GET(req: Request) {
         
         console.log(`[route/routes] Found ${uniqueUpcomingOrders.length} upcoming orders (${upcomingOrders?.length || 0} general, ${upcomingOrdersByDate.length} matching delivery_date=${deliveryDate || 'none'})`);
 
-        // Import getNextOccurrence for calculating delivery dates from delivery_day
+        // Import getNextOccurrence and timezone helper for delivery dates (Eastern)
         const { getNextOccurrence, formatDateToYYYYMMDD } = await import('@/lib/order-dates');
+        const { getTodayDateInAppTzAsReference } = await import('@/lib/timezone');
         const { getVendors } = await import('@/lib/actions');
         const currentTime = new Date();
+        const refToday = getTodayDateInAppTzAsReference(currentTime);
 
         // Fetch vendors to get delivery days for boxes
         const vendors = await getVendors();
@@ -600,7 +602,7 @@ export async function GET(req: Request) {
                 }
             } else if (order.delivery_day) {
                 // Calculate next occurrence of delivery_day
-                const nextDate = getNextOccurrence(order.delivery_day, currentTime);
+                const nextDate = getNextOccurrence(order.delivery_day, refToday);
                 if (nextDate) {
                     deliveryDateStr = formatDateToYYYYMMDD(nextDate);
                     dayOfWeek = getDayOfWeek(deliveryDateStr);

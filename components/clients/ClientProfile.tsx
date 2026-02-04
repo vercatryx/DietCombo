@@ -25,7 +25,7 @@ import styles from './ClientProfile.module.css';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import MapConfirmDialog from './MapConfirmDialog';
-import { isValidUniteUsUrl, parseUniteUsUrl, formatUniteUsUrl, isMeetingExactTarget } from '@/lib/utils';
+import { parseUniteUsUrl, composeUniteUsUrl, isMeetingExactTarget } from '@/lib/utils';
 
 
 interface Props {
@@ -3180,23 +3180,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
     }
 
-    // Handler for caseIdExternal (UniteUs URL) changes
-    function handleCaseIdExternalChange(e: React.ChangeEvent<HTMLInputElement>) {
-        const url = e.target.value;
-        setFormData({ ...formData, caseIdExternal: url });
-        
-        if (!url || !url.trim()) {
-            setCaseIdExternalError("");
-            return;
+    // When user pastes a full Unite Us URL, use it as the single Unite Us link
+    function handleUniteUsPaste(e: React.ClipboardEvent<HTMLInputElement>) {
+        const pasted = e.clipboardData?.getData('text')?.trim();
+        if (!pasted) return;
+        const parsed = parseUniteUsUrl(pasted);
+        if (parsed) {
+            e.preventDefault();
+            setFormData({
+                ...formData,
+                caseIdExternal: composeUniteUsUrl(parsed.caseId, parsed.clientId),
+                clientIdExternal: null,
+            });
+            setCaseIdExternalError('');
         }
-        
-        const parsed = parseUniteUsUrl(url);
-        if (!parsed) {
-            setCaseIdExternalError("Must match /cases/open/{caseId}/contact/{clientId}");
-            return;
-        }
-        
-        setCaseIdExternalError("");
     }
 
     function addVendorBlock(day: string | null = null) {
@@ -3697,8 +3694,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     state: formData.state ?? null,
                     zip: formData.zip ?? null,
                     county: formData.county ?? null,
-                    clientIdExternal: formData.clientIdExternal ?? null,
-                    caseIdExternal: formData.caseIdExternal ?? null,
+                    clientIdExternal: null,
+                    caseIdExternal: formData.caseIdExternal?.trim() || null,
                     medicaid: formData.medicaid ?? false,
                     paused: formData.paused ?? false,
                     complex: formData.complex ?? false,
@@ -4300,6 +4297,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             <section className={styles.card}>
                                 <h3 className={styles.sectionTitle}>Client Details</h3>
 
+                                {(client?.dislikes != null && String(client.dislikes).trim() !== '') && (
+                                    <div className={styles.formGroup} style={{ marginBottom: '1rem', padding: '12px', backgroundColor: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--color-primary)' }}>
+                                        <label className="label" style={{ marginBottom: '4px' }}>Dislikes / Dietary Restrictions</label>
+                                        <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{client.dislikes}</div>
+                                    </div>
+                                )}
+
                                 <div className={styles.formGroup}>
                                     <label className="label">Full Name</label>
                                     <input className="input" value={formData.fullName || ''} onChange={e => setFormData({ ...formData, fullName: e.target.value })} />
@@ -4509,56 +4513,48 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     <input className="input" value={formData.email || ''} onChange={e => setFormData({ ...formData, email: e.target.value })} />
                                 </div>
 
-                                {/* External IDs from dietfantasy */}
+                                {/* Unite Us: single field = full link (stored in case_id_external) */}
                                 <div className={styles.formGroup}>
-                                    <label className="label">Client ID (External)</label>
-                                    <input className="input" value={formData.clientIdExternal || ''} onChange={e => setFormData({ ...formData, clientIdExternal: e.target.value })} />
-                                    <div style={{ height: '1rem' }} /> {/* Spacer */}
-                                    <label className="label">UniteUs Case URL</label>
-                                    <input 
+                                    <label className="label">Unite Us link</label>
+                                    <input
                                         className="input"
-                                        style={{
-                                            borderColor: caseIdExternalError || (formData.caseIdExternal && !isValidUniteUsUrl(formData.caseIdExternal)) 
-                                                ? 'var(--color-danger, #dc2626)' 
-                                                : undefined
-                                        }}
-                                        value={formData.caseIdExternal || ''} 
-                                        onChange={handleCaseIdExternalChange}
-                                        placeholder="https://app.uniteus.io/dashboard/cases/open/{CASE_ID}/contact/{CLIENT_ID}"
+                                        value={formData.caseIdExternal || ''}
+                                        onChange={e => { setFormData({ ...formData, caseIdExternal: e.target.value, clientIdExternal: null }); setCaseIdExternalError(''); }}
+                                        onPaste={handleUniteUsPaste}
+                                        placeholder="https://app.uniteus.io/dashboard/cases/open/..."
                                     />
                                     {caseIdExternalError && (
                                         <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--color-danger)' }}>
                                             {caseIdExternalError}
                                         </div>
                                     )}
-                                    {formData.caseIdExternal && isValidUniteUsUrl(formData.caseIdExternal) && (() => {
-                                        const parsed = parseUniteUsUrl(formData.caseIdExternal);
-                                        return parsed ? (
-                                            <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--color-success)' }}>
-                                                Parsed ✓ Case ID: <strong>{parsed.caseId}</strong> | Client ID: <strong>{parsed.clientId}</strong>
+                                    {formData.caseIdExternal?.trim() && (() => {
+                                        const url = formData.caseIdExternal.trim();
+                                        const isValid = /^https:\/\/app\.uniteus\.io\/dashboard\/cases\/open\/[^/]+\/contact\/[^/]+/.test(url);
+                                        if (!isValid) return null;
+                                        return (
+                                            <div style={{ marginTop: '0.75rem', fontSize: '0.875rem' }}>
+                                                <a
+                                                    href={url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.5rem',
+                                                        color: 'var(--color-primary)',
+                                                        textDecoration: 'underline',
+                                                    }}
+                                                >
+                                                    Open in Unite Us
+                                                    <ExternalLink size={14} />
+                                                </a>
+                                                <div style={{ marginTop: '0.25rem', color: 'var(--color-text-muted)', wordBreak: 'break-all' }}>
+                                                    {url}
+                                                </div>
                                             </div>
-                                        ) : null;
+                                        );
                                     })()}
-                                    {formData.caseIdExternal && isValidUniteUsUrl(formData.caseIdExternal) && (
-                                        <div style={{ marginTop: '0.5rem' }}>
-                                            <a 
-                                                href={formData.caseIdExternal} 
-                                                target="_blank" 
-                                                rel="noopener noreferrer" 
-                                                style={{ 
-                                                    display: 'inline-flex', 
-                                                    alignItems: 'center', 
-                                                    gap: '0.5rem',
-                                                    color: 'var(--color-primary)',
-                                                    textDecoration: 'underline',
-                                                    fontSize: '0.875rem'
-                                                }}
-                                            >
-                                                Open in UniteUs
-                                                <ExternalLink size={14} />
-                                            </a>
-                                        </div>
-                                    )}
                                 </div>
 
                                 {/* Status Flags from dietfantasy */}

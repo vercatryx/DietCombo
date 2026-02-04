@@ -4,6 +4,7 @@ import { getMenuItems, getVendors, getBoxTypes, getSettings, getClient, getDefau
 import { randomUUID } from 'crypto';
 import { getNextDeliveryDate, getTakeEffectDateLegacy, getNextOccurrence, formatDateToYYYYMMDD } from '@/lib/order-dates';
 import { getCurrentTime } from '@/lib/time';
+import { getTodayDateInAppTzAsReference } from '@/lib/timezone';
 
 /**
  * API Route: Process all current active orders from orders table
@@ -767,7 +768,7 @@ export async function GET(request: NextRequest) {
                 // Priority 2: If from upcoming_orders and has delivery_day, calculate the nearest occurrence
                 else if (isFromUpcomingOrders && (order as any).delivery_day) {
                     const deliveryDay = (order as any).delivery_day;
-                    const nextDate = getNextOccurrence(deliveryDay, currentTime);
+                    const nextDate = getNextOccurrence(deliveryDay, getTodayDateInAppTzAsReference(currentTime));
                     if (nextDate) {
                         scheduledDeliveryDate = nextDate.toISOString().split('T')[0];
                     }

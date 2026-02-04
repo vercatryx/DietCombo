@@ -113,7 +113,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor }: 
                 month: 'short',
                 day: 'numeric',
                 year: 'numeric',
-                timeZone: 'UTC'
+                timeZone: 'America/New_York'
             });
         } catch {
             return dateString;
