@@ -804,10 +804,19 @@ export async function GET(req: Request) {
             }
         }
 
-        // Create missing stops for clients who should have them
+        // Create missing stops for clients who should have them (one stop per order_id)
         if (stopsToCreate.length > 0) {
-            // Batch check: get all order_ids from stops table that already have a stop (avoid repeated creation)
-            const orderIdsToCheck = [...new Set(stopsToCreate.map(s => s.order_id).filter(Boolean))] as string[];
+            // Deduplicate by order_id: only one stop per order (first occurrence wins)
+            const seenOrderIds = new Set<string>();
+            const stopsToCreateDeduped = stopsToCreate.filter((s) => {
+                if (!s.order_id) return true;
+                if (seenOrderIds.has(s.order_id)) return false;
+                seenOrderIds.add(s.order_id);
+                return true;
+            });
+
+            // Batch check: get all order_ids from stops that already have a stop (fresh read to avoid races)
+            const orderIdsToCheck = [...new Set(stopsToCreateDeduped.map(s => s.order_id).filter(Boolean))] as string[];
             let existingOrderIds = new Set<string>();
             if (orderIdsToCheck.length > 0) {
                 const { data: existingStopsByOrderId } = await supabase
@@ -819,58 +828,67 @@ export async function GET(req: Request) {
                     existingOrderIds = new Set(existingStopsByOrderId.map((r: { order_id: string }) => String(r.order_id)));
                 }
             }
-            // Filter out any stop we were about to create if a stop with the same order_id already exists
-            const stopsToInsert = existingOrderIds.size > 0
-                ? stopsToCreate.filter(s => !s.order_id || !existingOrderIds.has(s.order_id))
-                : stopsToCreate;
+            // Filter out any stop if a stop with the same order_id already exists in DB
+            let stopsToInsert = existingOrderIds.size > 0
+                ? stopsToCreateDeduped.filter(s => !s.order_id || !existingOrderIds.has(s.order_id))
+                : stopsToCreateDeduped;
 
             // Add clients who are actually getting stops created to the response for logging
             for (const stopData of stopsToInsert) {
-                usersWithoutStops.push({ 
-                    id: stopData.client_id, 
-                    name: stopData.name, 
-                    reason: "creating stop now" 
+                usersWithoutStops.push({
+                    id: stopData.client_id,
+                    name: stopData.name,
+                    reason: "creating stop now",
                 });
             }
-            
+
             try {
-                // Insert only stops that don't already exist (per-order_id check already done above; repeat check below as safety)
+                // Track order_ids we insert in this request so we never create a second stop for the same order
+                const insertedOrderIdsThisRequest = new Set<string>();
                 for (const stopData of stopsToInsert) {
                     try {
-                        // Skip if a stop already exists for this order_id (avoid duplicate / re-execution)
-                        if (stopData.order_id) {
-                            const { data: existingByOrderId } = await supabase
-                                .from('stops')
-                                .select('id')
-                                .eq('order_id', stopData.order_id)
-                                .maybeSingle();
-                            if (existingByOrderId) continue;
+                        // Precheck: skip if we already inserted a stop for this order_id in this request
+                        if (stopData.order_id && insertedOrderIdsThisRequest.has(stopData.order_id)) {
+                            continue;
+                        }
+                        // Precheck: skip if a stop for this order_id exists in DB (handles concurrent requests)
+                        if (stopData.order_id && existingOrderIds.has(stopData.order_id)) {
+                            continue;
                         }
                         const { error: insertError } = await supabase
                             .from('stops')
-                            .upsert({
-                                id: stopData.id,
-                                day: stopData.day,
-                                delivery_date: stopData.delivery_date,
-                                client_id: stopData.client_id,
-                                order_id: stopData.order_id,
-                                name: stopData.name,
-                                address: stopData.address,
-                                apt: stopData.apt,
-                                city: stopData.city,
-                                state: stopData.state,
-                                zip: stopData.zip,
-                                phone: stopData.phone,
-                                dislikes: stopData.dislikes,
-                                lat: stopData.lat,
-                                lng: stopData.lng,
-                                assigned_driver_id: stopData.assigned_driver_id, // Set from client
-                            }, { onConflict: 'id' });
+                            .upsert(
+                                {
+                                    id: stopData.id,
+                                    day: stopData.day,
+                                    delivery_date: stopData.delivery_date,
+                                    client_id: stopData.client_id,
+                                    order_id: stopData.order_id,
+                                    name: stopData.name,
+                                    address: stopData.address,
+                                    apt: stopData.apt,
+                                    city: stopData.city,
+                                    state: stopData.state,
+                                    zip: stopData.zip,
+                                    phone: stopData.phone,
+                                    dislikes: stopData.dislikes,
+                                    lat: stopData.lat,
+                                    lng: stopData.lng,
+                                    assigned_driver_id: stopData.assigned_driver_id,
+                                },
+                                { onConflict: "id" }
+                            );
                         if (insertError) throw insertError;
+                        if (stopData.order_id) {
+                            insertedOrderIdsThisRequest.add(stopData.order_id);
+                            existingOrderIds.add(stopData.order_id); // so subsequent iteration skips if same id appears
+                        }
                     } catch (createError: any) {
-                        // Skip if stop already exists or other error
-                        if (createError?.code !== "23505" && createError?.message?.includes('duplicate')) {
-                            console.error(`[route/routes] Failed to create stop for client ${stopData.client_id}:`, createError?.message);
+                        if (createError?.code !== "23505" && !createError?.message?.includes("duplicate")) {
+                            console.error(
+                                `[route/routes] Failed to create stop for client ${stopData.client_id}:`,
+                                createError?.message
+                            );
                         }
                     }
                 }
