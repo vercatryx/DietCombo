@@ -22,7 +22,28 @@ function displayName(u = {}) {
     ]
         .map((s) => (typeof s === "string" ? s.trim() : ""))
         .filter(Boolean);
-    return cands[0] || "(Unnamed)";
+    return cands[0] || "Unnamed";
+}
+
+/** Client name for the first line of the label. Use the stop's name field first (from API/stops record), then other name fields. Never use address as name. */
+function clientName(u = {}) {
+    const addressLine = `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim();
+    const cands = [
+        u.name, // stop's name field from API (client name from stops record)
+        u.fullName,
+        u.full_name,
+        `${u.first ?? ""} ${u.last ?? ""}`.trim(),
+        `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim(),
+        `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim(),
+        u?.user?.name,
+        u?.user?.full_name,
+        `${u?.user?.first ?? ""} ${u?.user?.last ?? ""}`.trim(),
+        `${u?.user?.first_name ?? ""} ${u?.user?.last_name ?? ""}`.trim(),
+    ]
+        .map((s) => (typeof s === "string" ? s.trim() : ""))
+        .filter(Boolean);
+    const name = cands.find((s) => s && s !== addressLine);
+    return name || "Unnamed";
 }
 
 const toBool = (v) => {
@@ -263,11 +284,11 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
                 return; // Skip printing in main section
             }
 
-            // Print non-complex stops in route order
+            // Print non-complex stops in route order (first line = client name only, never address)
             const dislikeText = getDislikes(u);
 
             const lines = [
-                displayName(u),
+                clientName(u),
                 `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
                 `${u.city ?? ""} ${u.state ?? ""}`.trim(),
                 (u.phone ? `Phone: ${u.phone}` : "").trim(),
@@ -349,10 +370,10 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
             // Draw badge with driver.stop number
             drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}.${stopNum1}`, colorRGB);
 
-            // Prepare label content
+            // Prepare label content (first line = client name only, never address)
             const dislikeText = getDislikes(u);
             const lines = [
-                displayName(u),
+                clientName(u),
                 `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
                 `${u.city ?? ""} ${u.state ?? ""}`.trim(),
                 (u.phone ? `Phone: ${u.phone}` : "").trim(),

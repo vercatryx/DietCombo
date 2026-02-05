@@ -70,7 +70,7 @@ export async function GET(req: Request) {
         
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
+            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
             .order('id', { ascending: true });
         
         // Filter by delivery_date if provided
@@ -98,7 +98,7 @@ export async function GET(req: Request) {
         if (normalizedDeliveryDate && day !== "all") {
             const { data: nullDateStops } = await supabase
                 .from('stops')
-                .select('id, client_id, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
+                .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
                 .is('delivery_date', null)
                 .eq('day', day);
             
@@ -254,13 +254,15 @@ export async function GET(req: Request) {
 
         for (const s of allStopsCombined) {
             const c = s.client_id ? clientById.get(s.client_id) : undefined;
-            // Priority: full_name, then first+last (or first_name+last_name), then address, then "Client {id}"
+            // Priority: stops.name (from DB), then client full_name/first+last, then address, then "Client {id}"
+            const stopNameRaw = s.name ?? (s as any).Name;
+            const stopName = (stopNameRaw != null && String(stopNameRaw).trim()) ? String(stopNameRaw).trim() : null;
             const rawName =
                 c?.full_name?.trim() ||
                 (c ? `${c.first ?? c.first_name ?? ""} ${c.last ?? c.last_name ?? ""}`.trim() : null) ||
                 null;
             const addressLine = [c?.address ?? s.address, c?.apt ?? s.apt].filter(Boolean).join(" ")?.trim();
-            const name = rawName || addressLine || (s.client_id ? `Client ${s.client_id}` : "Unnamed");
+            const name = stopName || rawName || addressLine || (s.client_id ? `Client ${s.client_id}` : "Unnamed");
 
             // prefer live client value; fall back to stop's denorm
             const dislikes = c?.dislikes ?? s.dislikes ?? "";
@@ -307,7 +309,7 @@ export async function GET(req: Request) {
             stopById.set(sid(s.id), {
                 id: s.id,
                 userId: s.client_id ?? null,
-                name,
+                name: (name && String(name).trim()) ? String(name).trim() : "Unnamed",
 
                 // Preserve first and last name fields for proper client name reconstruction
                 first: c?.first || null,
