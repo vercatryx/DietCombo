@@ -254,11 +254,13 @@ export async function GET(req: Request) {
 
         for (const s of allStopsCombined) {
             const c = s.client_id ? clientById.get(s.client_id) : undefined;
-            // Priority: Use full_name from client record, fallback to constructed name
-            const name =
-                c?.full_name?.trim() || 
-                (c ? `${c.first || ""} ${c.last || ""}`.trim() : null) ||
-                "(Unnamed)";
+            // Priority: full_name, then first+last (or first_name+last_name), then address, then "Client {id}"
+            const rawName =
+                c?.full_name?.trim() ||
+                (c ? `${c.first ?? c.first_name ?? ""} ${c.last ?? c.last_name ?? ""}`.trim() : null) ||
+                null;
+            const addressLine = [c?.address ?? s.address, c?.apt ?? s.apt].filter(Boolean).join(" ")?.trim();
+            const name = rawName || addressLine || (s.client_id ? `Client ${s.client_id}` : "Unnamed");
 
             // prefer live client value; fall back to stop's denorm
             const dislikes = c?.dislikes ?? s.dislikes ?? "";

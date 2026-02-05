@@ -11,10 +11,14 @@ function displayName(u = {}) {
     const cands = [
         u.name,
         u.fullName,
+        u.full_name,
         `${u.first ?? ""} ${u.last ?? ""}`.trim(),
+        `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim(),
         `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim(),
         u?.user?.name,
+        u?.user?.full_name,
         `${u?.user?.first ?? ""} ${u?.user?.last ?? ""}`.trim(),
+        `${u?.user?.first_name ?? ""} ${u?.user?.last_name ?? ""}`.trim(),
     ]
         .map((s) => (typeof s === "string" ? s.trim() : ""))
         .filter(Boolean);
@@ -380,7 +384,21 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
         segregationWorking: complexAll.length > 0 ? "Yes - Complex stops printed in separate section" : "N/A - No complex stops"
     });
 
-    doc.save(`labels (route order) ${tsString()}.pdf`);
+    // Build a safe filename so the browser doesn't show "unnamed"
+    const raw = typeof tsString === "function" ? tsString() : (tsString == null ? "" : String(tsString));
+    const safePart = (raw || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-${String(new Date().getDate()).padStart(2, "0")}`)
+        .replace(/[/\\:*?"<>|]/g, "_")
+        .replace(/\s+/g, "_")
+        .trim() || "labels";
+    const filename = `labels_route_order_${safePart}.pdf`;
+
+    const blob = doc.output("blob");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 export default exportRouteLabelsPDF;

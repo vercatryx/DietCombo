@@ -186,15 +186,21 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         }
     }
 
-    // Generate filename
+    // Generate filename (sanitize so browser uses it instead of "unnamed")
     let filename = `${vendorName || 'vendor'}_labels`;
     if (deliveryDate) {
-        const formattedDate = formatDate(deliveryDate).replace(/\s/g, '_');
+        const formattedDate = formatDate(deliveryDate).replace(/\s/g, '_').replace(/[/\\:*?"<>|]/g, '_');
         filename += `_${formattedDate}`;
     }
     filename += '.pdf';
 
-    doc.save(filename);
+    const blob = doc.output('blob');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 
