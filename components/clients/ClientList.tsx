@@ -1652,6 +1652,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         </button>
                         <button
                             className={styles.viewBtn}
+                            onClick={() => router.push('/clients/completed-deliveries')}
+                        >
+                            Completed Deliveries
+                        </button>
+                        <button
+                            className={styles.viewBtn}
                             onClick={() => router.push('/orders')}
                         >
                             Orders

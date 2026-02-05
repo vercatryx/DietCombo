@@ -114,6 +114,7 @@ export function BillingList() {
                         <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients?view=eligible')}>Eligible</button>
                         <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients?view=ineligible')}>Ineligible</button>
                         <button type="button" className={`${styles.viewBtn} ${styles.viewBtnActive}`} onClick={() => router.push('/billing')}>Billing</button>
+                        <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients/completed-deliveries')}>Completed Deliveries</button>
                         <button type="button" className={styles.viewBtn} onClick={() => router.push('/orders')}>Orders</button>
                     </div>
                     <button type="button" className="btn btn-secondary"><Download size={16} /> Export CSV</button>

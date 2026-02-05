@@ -3855,6 +3855,57 @@ export async function getCompletedOrdersWithDeliveryProof(clientId: string) {
     }
 }
 
+/** Orders that are marked complete (status completed/billing_pending) or have proof_of_delivery_url. For /clients completed-deliveries tab. */
+export type CompletedOrProofOrderRow = {
+    id: string;
+    clientId: string;
+    clientName: string;
+    serviceType: string;
+    status: string;
+    scheduledDeliveryDate: string | null;
+    actualDeliveryDate: string | null;
+    proofOfDeliveryUrl: string | null;
+    orderNumber: number | null;
+    totalValue: number | null;
+    createdAt: string;
+};
+
+export async function getAllCompletedOrWithProofOrders(): Promise<CompletedOrProofOrderRow[]> {
+    try {
+        const { data, error } = await supabase
+            .from('orders')
+            .select('id, client_id, service_type, status, scheduled_delivery_date, actual_delivery_date, proof_of_delivery_url, order_number, total_value, created_at')
+            .or('status.eq.completed,status.eq.billing_pending,proof_of_delivery_url.not.is.null')
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            logQueryError(error, 'orders (getAllCompletedOrWithProofOrders)');
+            return [];
+        }
+        if (!data?.length) return [];
+
+        const clientIds = [...new Set((data as any[]).map((r: any) => r.client_id).filter(Boolean))];
+        const namesMap = await getClientNamesByIds(clientIds);
+
+        return (data as any[]).map((row: any) => ({
+            id: row.id,
+            clientId: row.client_id,
+            clientName: namesMap[row.client_id] ?? 'Unknown',
+            serviceType: row.service_type ?? '',
+            status: row.status ?? '',
+            scheduledDeliveryDate: row.scheduled_delivery_date ?? null,
+            actualDeliveryDate: row.actual_delivery_date ?? null,
+            proofOfDeliveryUrl: row.proof_of_delivery_url ?? null,
+            orderNumber: row.order_number ?? null,
+            totalValue: row.total_value != null ? parseFloat(row.total_value) : null,
+            createdAt: row.created_at ?? '',
+        }));
+    } catch (err) {
+        console.error('getAllCompletedOrWithProofOrders error:', err);
+        return [];
+    }
+}
+
 export async function getBillingHistory(clientId: string) {
     if (!clientId) return [];
 

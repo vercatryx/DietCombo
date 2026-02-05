@@ -275,11 +275,15 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
                     return { vendorId: vs.vendor_id, vendorName: vendor?.name || 'Unknown Vendor', items: itemsWithDetails };
                 })
             );
+            const computedTotal = vendorSelectionsWithItems.reduce(
+                (sum, vs) => sum + (vs.items as any[]).reduce((s, i) => s + (i.totalValue ?? 0), 0),
+                0
+            );
             orderDetails = {
                 serviceType: orderData.service_type,
                 vendorSelections: vendorSelectionsWithItems,
                 totalItems: orderData.total_items,
-                totalValue: parseFloat(orderData.total_value || 0),
+                totalValue: computedTotal > 0 ? computedTotal : parseFloat(orderData.total_value || 0),
             };
         }
     } else if (orderData.service_type === 'Custom') {
@@ -302,11 +306,15 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
                     return { vendorId: vs.vendor_id, vendorName: vendor?.name || 'Unknown Vendor', items: itemsWithDetails };
                 })
             );
+            const computedTotal = vendorSelectionsWithItems.reduce(
+                (sum, vs) => sum + (vs.items as any[]).reduce((s, i) => s + (i.totalValue ?? 0), 0),
+                0
+            );
             orderDetails = {
                 serviceType: 'Custom',
                 vendorSelections: vendorSelectionsWithItems,
                 totalItems: orderData.total_items,
-                totalValue: parseFloat(orderData.total_value || 0),
+                totalValue: computedTotal > 0 ? computedTotal : parseFloat(orderData.total_value || 0),
                 notes: orderData.notes,
             };
         }
@@ -360,12 +368,14 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
             if (notes) {
                 const vendor = vendors.find((v: any) => v.id === notes.vendorId);
                 const equipment = equipmentList.find((e: any) => e.id === notes.equipmentId);
+                const equipmentPrice = notes.price ?? equipment?.price ?? 0;
+                const equipmentTotal = parseFloat(orderData.total_value || 0) || (typeof equipmentPrice === 'number' ? equipmentPrice : parseFloat(equipmentPrice) || 0);
                 orderDetails = {
                     serviceType: 'Equipment',
                     vendorName: vendor?.name || 'Unknown Vendor',
                     equipmentName: notes.equipmentName || equipment?.name || 'Unknown Equipment',
-                    price: notes.price ?? equipment?.price ?? 0,
-                    totalValue: parseFloat(orderData.total_value || 0),
+                    price: equipmentPrice,
+                    totalValue: equipmentTotal,
                 };
             }
         } catch (_) {
@@ -403,7 +413,7 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
         scheduledDeliveryDate: orderData.scheduled_delivery_date,
         actualDeliveryDate: orderData.actual_delivery_date,
         deliveryProofUrl: proofUrl,
-        totalValue: parseFloat(orderData.total_value || 0),
+        totalValue: (orderDetails?.totalValue != null && orderDetails.totalValue > 0) ? orderDetails.totalValue : parseFloat(orderData.total_value || 0),
         totalItems: orderData.total_items,
         notes: orderData.notes,
         createdAt: orderData.created_at,
