@@ -175,7 +175,7 @@ export default function RoutesPage() {
     const [users, setUsers] = React.useState<any[]>([]);
 
     const [busy, setBusy] = React.useState(false);
-    const [activeTab, setActiveTab] = React.useState("map"); // "map" or "clients"
+    const [activeTab, setActiveTab] = React.useState("clients"); // "map" or "clients" — default: Client Assignment
 
 
     // Map API reference (set once via onExpose)
@@ -208,7 +208,7 @@ export default function RoutesPage() {
                 unroutedCount: (data.unrouted || []).length,
                 routes: data.routes || []
             });
-            
+
             if (!data.routes || data.routes.length === 0) {
                 console.warn(`[RoutesPage] ⚠️ No drivers found for day="${selectedDay}". Click "Generate New Route" to create drivers.`);
             }
@@ -241,7 +241,7 @@ export default function RoutesPage() {
                 if (usersRes.ok) {
                     const usersData = await usersRes.json();
                     setUsers(Array.isArray(usersData) ? usersData : []);
-                    
+
                     const missing = usersData.filter((u: any) => (u.lat ?? u.latitude) == null || (u.lng ?? u.longitude) == null);
                     setMissingBatch(missing);
                 }
@@ -263,13 +263,13 @@ export default function RoutesPage() {
                 const data1 = await res1.json();
                 setRoutes(data1.routes || []);
                 setUnrouted(data1.unrouted || []);
-                
+
                 // Debug: Log initial route data
                 console.log(`[RoutesPage] Initial load for day="${selectedDay}":`, {
                     routesCount: (data1.routes || []).length,
                     unroutedCount: (data1.unrouted || []).length
                 });
-                
+
                 if (!data1.routes || data1.routes.length === 0) {
                     console.warn(`[RoutesPage] ⚠️ No drivers found on initial load for day="${selectedDay}". User needs to generate routes.`);
                 }
@@ -415,7 +415,7 @@ export default function RoutesPage() {
             const next = prevRoutes.map(r => ({ ...r, stops: [...(r.stops || [])] }));
             if (stop.__driverId) {
                 const fromIdx = next.findIndex(r => String(r.driverId) === String(stop.__driverId));
-                const toIdx   = next.findIndex(r => String(r.driverId) === String(toId));
+                const toIdx = next.findIndex(r => String(r.driverId) === String(toId));
                 if (fromIdx === -1 || toIdx === -1) return prevRoutes;
                 const sIdx = next[fromIdx].stops.findIndex((s: any) => String(s.id) === String(stop.id));
                 if (sIdx === -1) return prevRoutes;
@@ -551,7 +551,7 @@ export default function RoutesPage() {
             const res = await fetch("/api/route/cleanup", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     day: selectedDay,
                     delivery_date: selectedDeliveryDate || undefined
                 }),
@@ -589,8 +589,8 @@ export default function RoutesPage() {
             const res = await fetch("/api/route/generate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    day: selectedDay, 
+                body: JSON.stringify({
+                    day: selectedDay,
                     driverCount: count,
                     delivery_date: selectedDeliveryDate || undefined
                 }),
@@ -844,8 +844,8 @@ export default function RoutesPage() {
             />
 
             {/* Header */}
-            <div style={{ 
-                padding: 'var(--spacing-md)', 
+            <div style={{
+                padding: 'var(--spacing-md)',
                 borderBottom: '1px solid var(--border-color)',
                 display: 'grid',
                 gridTemplateColumns: '1fr auto 1fr',
@@ -875,19 +875,6 @@ export default function RoutesPage() {
             {/* Tabs */}
             <div style={{ borderBottom: "1px solid #e5e7eb", display: "flex", gap: 0 }}>
                 <Button
-                    onClick={() => setActiveTab("map")}
-                    variant={activeTab === "map" ? "contained" : "text"}
-                    sx={{
-                        borderRadius: 0,
-                        textTransform: "none",
-                        fontWeight: activeTab === "map" ? 600 : 400,
-                        borderBottom: activeTab === "map" ? "2px solid" : "none",
-                        borderColor: activeTab === "map" ? "primary.main" : "transparent",
-                    }}
-                >
-                    Orders View
-                </Button>
-                <Button
                     onClick={() => setActiveTab("clients")}
                     variant={activeTab === "clients" ? "contained" : "text"}
                     sx={{
@@ -900,6 +887,19 @@ export default function RoutesPage() {
                 >
                     Client Assignment
                 </Button>
+                <Button
+                    onClick={() => setActiveTab("map")}
+                    variant={activeTab === "map" ? "contained" : "text"}
+                    sx={{
+                        borderRadius: 0,
+                        textTransform: "none",
+                        fontWeight: activeTab === "map" ? 600 : 400,
+                        borderBottom: activeTab === "map" ? "2px solid" : "none",
+                        borderColor: activeTab === "map" ? "primary.main" : "transparent",
+                    }}
+                >
+                    Orders View
+                </Button>
             </div>
 
             {/* Tab Content */}
@@ -907,10 +907,10 @@ export default function RoutesPage() {
                 {activeTab === "map" ? (
                     <div style={{ height: "100%", width: "100%", position: "relative", display: 'flex', flexDirection: 'column' }}>
                         {/* Date Filter inside Orders View tab */}
-                        <div style={{ 
-                            padding: 'var(--spacing-md)', 
+                        <div style={{
+                            padding: 'var(--spacing-md)',
                             borderBottom: '1px solid var(--border-color)',
-                            display: 'flex', 
+                            display: 'flex',
                             alignItems: 'center',
                             backgroundColor: 'white',
                             position: 'relative'
@@ -949,11 +949,11 @@ export default function RoutesPage() {
                 ) : (
                     <div style={{ height: "100%", width: "100%", position: "relative", minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
                         {/* Generate Route + Driver Management buttons inside Client Assignment tab */}
-                        <div style={{ 
-                            padding: 'var(--spacing-md)', 
+                        <div style={{
+                            padding: 'var(--spacing-md)',
                             borderBottom: '1px solid var(--border-color)',
-                            display: 'flex', 
-                            gap: 'var(--spacing-xs)', 
+                            display: 'flex',
+                            gap: 'var(--spacing-xs)',
                             alignItems: 'center',
                             backgroundColor: 'white',
                             position: 'relative',
@@ -1010,8 +1010,8 @@ export default function RoutesPage() {
             </div>
 
             {/* Footer Actions */}
-            <div style={{ 
-                padding: 'var(--spacing-md)', 
+            <div style={{
+                padding: 'var(--spacing-md)',
                 borderTop: '1px solid var(--border-color)',
                 display: 'flex',
                 gap: 'var(--spacing-xs)',
@@ -1072,11 +1072,11 @@ export default function RoutesPage() {
                             complexMarked.forEach((route: any[]) => route.forEach((s: any) => complexById.set(String(s.id), s)));
 
                             const { enrichedSorted, colorsSorted } = buildSortedForLabels();
-                            
+
                             // Validate enrichedSorted has data
                             if (!enrichedSorted || enrichedSorted.length === 0) {
-                                console.error('[Download Labels] enrichedSorted is empty', { 
-                                    routes, 
+                                console.error('[Download Labels] enrichedSorted is empty', {
+                                    routes,
                                     routesCount: routes.length,
                                     routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length
                                 });
@@ -1086,8 +1086,8 @@ export default function RoutesPage() {
 
                             const totalEnrichedStops = enrichedSorted.reduce((sum, route) => sum + (route?.length || 0), 0);
                             if (totalEnrichedStops === 0) {
-                                console.error('[Download Labels] No stops in enrichedSorted', { 
-                                    enrichedSorted, 
+                                console.error('[Download Labels] No stops in enrichedSorted', {
+                                    enrichedSorted,
                                     routes,
                                     routesCount: routes.length,
                                     routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length
@@ -1095,7 +1095,7 @@ export default function RoutesPage() {
                                 alert('No stops found to export. Please check that routes have stops assigned.');
                                 return;
                             }
-                            
+
                             // Map complex flags from marked stops to enrichedSorted
                             const stampedWithComplex = enrichedSorted.map((route, ri) =>
                                 (route || []).map((s: any, si: number) => {
@@ -1115,12 +1115,12 @@ export default function RoutesPage() {
                             // Final validation - filter out any empty routes
                             const filteredForExport = stampedWithComplex.filter(route => route && route.length > 0);
                             const totalStops = filteredForExport.reduce((sum, route) => sum + (route?.length || 0), 0);
-                            
+
                             // Count complex stops for logging
-                            const complexStopsCount = filteredForExport.reduce((sum, route) => 
+                            const complexStopsCount = filteredForExport.reduce((sum, route) =>
                                 sum + route.filter((s: any) => s?.complex === true).length, 0
                             );
-                            
+
                             console.log('[Download Labels] Exporting:', {
                                 routes: filteredForExport.length,
                                 totalStops,
