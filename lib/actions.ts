@@ -6924,7 +6924,8 @@ export async function processUpcomingOrders() {
                 total_items: upcomingOrder.total_items,
                 bill_amount: upcomingOrder.bill_amount || null,
                 notes: upcomingOrder.notes,
-                order_number: upcomingOrder.order_number // Preserve the assigned 6-digit number
+                order_number: upcomingOrder.order_number, // Preserve the assigned 6-digit number
+                vendor_id: upcomingOrder.vendor_id ?? null // So vendor page (getOrdersByVendor) can find this order
             };
 
             const orderId = randomUUID();
@@ -8225,8 +8226,18 @@ export async function getOrdersByVendor(vendorId: string) {
     }
 
     try {
-        // 1. Fetch completed orders (from orders table)
-        // Include Food, Boxes, and Equipment orders
+        // 1. Primary source: all orders from the database orders table for this vendor
+        const { data: directOrders, error: directErr } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('vendor_id', vendorId)
+            .order('created_at', { ascending: false });
+
+        if (directErr) {
+            console.error('getOrdersByVendor: error fetching orders by vendor_id:', directErr);
+        }
+
+        // 2. Also include orders linked via junction tables (in case vendor_id is null on order)
         const { data: foodOrderIds } = await supabase
             .from('order_vendor_selections')
             .select('order_id')
@@ -8237,51 +8248,50 @@ export async function getOrdersByVendor(vendorId: string) {
             .select('order_id')
             .eq('vendor_id', vendorId);
 
-        // Also fetch orders with vendor_id set directly on orders table
-        // (e.g. from migration, process-orders, or legacy flows that don't populate junction tables)
-        const { data: directVendorOrderIds } = await supabase
-            .from('orders')
-            .select('id')
-            .eq('vendor_id', vendorId);
-
-        // Also get Equipment orders - they use order_vendor_selections too
-        // But we need to filter by service_type='Equipment' in the orders table
-        const orderIds = Array.from(new Set([
-            ...(foodOrderIds?.map(o => o.order_id) || []),
-            ...(boxOrderIds?.map(o => o.order_id) || []),
-            ...(directVendorOrderIds?.map(o => o.id) || [])
+        const junctionOrderIds = Array.from(new Set([
+            ...(foodOrderIds?.map((o: { order_id: string }) => o.order_id) || []),
+            ...(boxOrderIds?.map((o: { order_id: string }) => o.order_id) || [])
         ]));
 
-        let orders: any[] = [];
-        if (orderIds.length > 0) {
-            const { data: ordersData } = await supabase
-                .from('orders')
-                .select('*')
-                .in('id', orderIds)
-                .order('created_at', { ascending: false });
+        // If we got orders directly from orders table, use them and add any from junction not already present
+        const directIdSet = new Set((directOrders || []).map((o: { id: string }) => o.id));
+        const ordersFromTable = directOrders || [];
+        let ordersData = [...ordersFromTable];
 
-            if (ordersData) {
-                // Filter to only include orders for this vendor
-                // For Equipment orders, check if vendor_id matches in notes
-                const filteredOrders = ordersData.filter(order => {
-                    if (order.service_type === 'Equipment') {
-                        try {
-                            const notes = order.notes ? JSON.parse(order.notes) : null;
-                            return notes && notes.vendorId === vendorId;
-                        } catch {
-                            return false;
-                        }
-                    }
-                    // For Food and Boxes, they're already filtered by vendor_selections/box_selections
-                    return true;
-                });
-
-                orders = await Promise.all(filteredOrders.map(async (order) => {
-                    const processed = await processVendorOrderDetails(order, vendorId, false);
-                    return { ...processed, orderType: 'completed' };
-                }));
+        if (junctionOrderIds.length > 0) {
+            const missingIds = junctionOrderIds.filter(id => !directIdSet.has(id));
+            if (missingIds.length > 0) {
+                const { data: extraOrders } = await supabase
+                    .from('orders')
+                    .select('*')
+                    .in('id', missingIds)
+                    .order('created_at', { ascending: false });
+                if (extraOrders?.length) {
+                    ordersData = [...ordersData, ...extraOrders];
+                    ordersData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                }
             }
         }
+
+        // Filter: for Equipment, include if order.vendor_id matches OR notes.vendorId matches
+        const filteredOrders = ordersData.filter((order: any) => {
+            if (order.vendor_id === vendorId) return true;
+            if (order.service_type === 'Equipment') {
+                try {
+                    const notes = order.notes ? JSON.parse(order.notes) : null;
+                    return notes && notes.vendorId === vendorId;
+                } catch {
+                    return false;
+                }
+            }
+            // Food/Boxes: only include if they're in junction tables (we already have them in ordersData)
+            return true;
+        });
+
+        const orders = await Promise.all(filteredOrders.map(async (order: any) => {
+            const processed = await processVendorOrderDetails(order, vendorId, false);
+            return { ...processed, orderType: 'completed' };
+        }));
 
         return orders;
 
@@ -8383,6 +8393,7 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
     const result = {
         ...order,
         orderNumber: order.order_number, // Ensure mapped for UI
+        delivery_proof_url: order.proof_of_delivery_url ?? order.delivery_proof_url, // UI expects delivery_proof_url
         items: [],
         boxSelection: null
     };
@@ -8754,7 +8765,8 @@ export async function saveDeliveryProofUrlAndProcessOrder(
                         bill_amount: upcomingOrder.bill_amount || null,
                         notes: upcomingOrder.notes,
                         actual_delivery_date: currentTime.toISOString(),
-                        order_number: upcomingOrder.order_number // Copy order_number directly from upcoming_orders record
+                        order_number: upcomingOrder.order_number, // Copy order_number directly from upcoming_orders record
+                        vendor_id: upcomingOrder.vendor_id ?? null // So vendor page (getOrdersByVendor) can find this order
                     };
 
                     const { data: newOrder, error: orderError } = await supabase

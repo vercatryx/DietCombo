@@ -122,11 +122,12 @@ async function scanOrderTables() {
     };
   }
 
-  // 2. Fetch related meal_planner_orders for those (date, client) combinations
+  // 2. Fetch related meal_planner_orders for those (date, client) combinations (only unprocessed to avoid duplicates)
   const { data: ordersData, error: ordersError } = await supabase
     .from('meal_planner_orders')
     .select('*')
     .in('scheduled_delivery_date', qualifyingDates)
+    .is('processed_order_id', null)
     .order('scheduled_delivery_date', { ascending: false });
 
   if (ordersError) {
@@ -134,11 +135,15 @@ async function scanOrderTables() {
   }
 
   const allOrders = ordersData ?? [];
-  const mealPlannerOrders = allOrders.filter((order: { scheduled_delivery_date: string | null; client_id: string }) => {
+  const mealPlannerOrders = allOrders.filter((order: { scheduled_delivery_date: string | null; client_id: string; processed_order_id?: string | null }) => {
     const dateStr = order.scheduled_delivery_date ? String(order.scheduled_delivery_date).slice(0, 10) : null;
     if (!dateStr) return false;
     if (datesWithDefault.has(dateStr)) return true;
-    return dateClientPairs.has(`${dateStr}|${order.client_id}`);
+    if (!dateClientPairs.has(`${dateStr}|${order.client_id}`)) return false;
+    // Idempotency: skip already processed — order was already created for this meal planner order
+    const processedId = order.processed_order_id;
+    if (processedId != null && String(processedId).trim() !== '') return false;
+    return true;
   });
 
   if (mealPlannerOrders.length === 0) {
@@ -316,11 +321,12 @@ async function scanOrderTables() {
     };
   }
 
-  const allVsPayload: Array<{ id: string; order_id: string; vendor_id: string | null }> = [];
+  // Build order_vendor_selections (one per order) and order_items so every new order has vendor selections.
+  const allVsPayload: Array<{ id: string; order_id: string; vendor_id: string }> = [];
   const allItemsPayload: Array<{ id: string; vendor_selection_id: string; quantity: number; menu_item_id?: string; meal_item_id?: string; custom_name?: string; custom_price?: number }> = [];
 
   for (const o of toCreate) {
-    const firstVendorId = o.allItems.find((i) => i.vendor_id != null)?.vendor_id ?? defaultVendorId;
+    const firstVendorId = o.allItems.find((i) => i.vendor_id != null)?.vendor_id ?? defaultVendorId!;
     const vsId = randomUUID();
     const itemCounts = o.allItems.reduce((s, i) => s + i.quantity, 0);
     ordersWithItems.push({
@@ -332,7 +338,7 @@ async function scanOrderTables() {
       item_counts: itemCounts,
       items: o.allItems,
     });
-    // Single vendor_selection per order — all merged items under one record
+    // One order_vendor_selection per order — required for every new order
     allVsPayload.push({ id: vsId, order_id: o.orderId, vendor_id: firstVendorId });
     for (const item of o.allItems) {
       const p: { id: string; vendor_selection_id: string; quantity: number; menu_item_id?: string; meal_item_id?: string; custom_name?: string; custom_price?: number } = {
@@ -348,13 +354,34 @@ async function scanOrderTables() {
     }
   }
 
+  // Insert order_vendor_selections for every new order (required for orders to be valid).
   if (allVsPayload.length > 0) {
-    const vsErr = await supabase.from('order_vendor_selections').insert(allVsPayload);
-    if (vsErr.error) errors.push(`order_vendor_selections batch insert failed: ${vsErr.error.message}`);
+    const { error: vsErr } = await supabase.from('order_vendor_selections').insert(allVsPayload);
+    if (vsErr) {
+      errors.push(`order_vendor_selections batch insert failed: ${vsErr.message}`);
+      return {
+        counts: { meal_planner_orders: mealPlannerOrders.length, orders_created: 0 },
+        orders: [],
+        errors,
+        scannedAt: new Date().toISOString(),
+      };
+    }
   }
   if (allItemsPayload.length > 0) {
     const itemsErr = await supabase.from('order_items').insert(allItemsPayload);
     if (itemsErr.error) errors.push(`order_items batch insert failed: ${itemsErr.error.message}`);
+  }
+
+  // Mark meal_planner_orders as processed so re-running this endpoint does not create duplicate orders
+  for (const o of toCreate) {
+    const { error: updateErr } = await supabase
+      .from('meal_planner_orders')
+      .update({
+        processed_order_id: o.orderId,
+        processed_at: new Date().toISOString(),
+      })
+      .eq('id', o.mpo.id);
+    if (updateErr) errors.push(`meal_planner_orders update failed for ${o.mpo.id}: ${updateErr.message}`);
   }
 
   return {

@@ -593,7 +593,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     sortOrder: i.sortOrder ?? 0
                 }))
             );
-            setMealPlannerExpirationDate(expirationDate ?? '');
+            setMealPlannerExpirationDate(expirationDate ?? dateKey);
         } catch (e) {
             setMessage('Error loading meal planner items.');
             setTimeout(() => setMessage(null), 3000);
