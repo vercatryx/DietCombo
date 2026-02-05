@@ -428,21 +428,32 @@ export async function GET(req: Request) {
         // NEW APPROACH: Use orders to determine which clients need stops, not schedules
         // Note: allClientsWithDriver is already fetched above, so we don't need to fetch again
 
-        // Check which clients have stops for delivery dates
-        // We need to check by delivery_date, not just day
+        // Check which clients have stops for delivery dates, and which order_ids already have a stop
+        // Stops are unique by order_id: one stop per order for the driver to handle
         const { data: existingStops } = await supabase
             .from('stops')
-            .select('client_id, delivery_date, day');
+            .select('client_id, delivery_date, day, order_id');
         
-        // Build map of client_id -> Set of delivery dates they already have stops for
+        // Normalize delivery_date to YYYY-MM-DD so we match the format used from orders (avoids duplicate stop creation on every page visit)
+        const normalizeDeliveryDate = (v: string | null | undefined): string | null => {
+            if (v == null || v === undefined) return null;
+            const str = String(v);
+            return str ? str.split('T')[0].split(' ')[0] : null;
+        };
         const clientStopsByDate = new Map<string, Set<string>>();
+        const orderIdsWithStops = new Set<string>();
         for (const s of (existingStops || [])) {
+            if (s.order_id) {
+                orderIdsWithStops.add(String(s.order_id));
+            }
             if (s.client_id && s.delivery_date) {
+                const normalized = normalizeDeliveryDate(s.delivery_date);
+                if (!normalized) continue;
                 const clientId = String(s.client_id);
                 if (!clientStopsByDate.has(clientId)) {
                     clientStopsByDate.set(clientId, new Set());
                 }
-                clientStopsByDate.get(clientId)!.add(s.delivery_date);
+                clientStopsByDate.get(clientId)!.add(normalized);
             }
         }
 
@@ -741,17 +752,19 @@ export async function GET(req: Request) {
                          `${client.first_name || ""} ${client.last_name || ""}`.trim() || 
                          "Unnamed");
             
-            // If client should have stops (no valid reasons), create stops for each delivery date
+            // If client should have stops (no valid reasons), create one stop per order (unique by order_id)
             if (reasons.length === 0) {
-                // Create a stop for each unique delivery date
                 for (const [deliveryDateStr, dateInfo] of datesMap.entries()) {
-                    // Skip if stop already exists for this delivery date
+                    // Skip if no order_id (should not create stop without an order to handle)
+                    const orderId = dateInfo.orderId;
+                    if (!orderId) continue;
+                    // Skip if a stop already exists for this order_id (one stop per order for the driver)
+                    if (orderIdsWithStops.has(orderId)) continue;
+                    // Skip if stop already exists for this client+delivery_date (legacy check)
                     if (existingStopDates.has(deliveryDateStr)) {
+                        orderIdsWithStops.add(orderId); // Mark so we don't create duplicate for same order
                         continue;
                     }
-                    
-                    // NOTE: Removed delivery_date filtering - stops are now created for all dates
-                    // The delivery_date filter is only used for displaying stops in the UI
                     
                     // If filtering by specific day (and not delivery_date), only create stops for that day
                     if (day !== "all" && dateInfo.dayOfWeek !== day.toLowerCase()) {
@@ -761,12 +774,13 @@ export async function GET(req: Request) {
                     // Get client's assigned driver (if any) to automatically assign to stop
                     const assignedDriverId = client.assigned_driver_id || null;
 
+                    orderIdsWithStops.add(orderId); // Ensure we only create one stop per order_id
                     stopsToCreate.push({
                         id: uuidv4(),
                         day: dateInfo.dayOfWeek, // Keep day for backward compatibility
                         delivery_date: deliveryDateStr,
                         client_id: clientId,
-                        order_id: dateInfo.orderId, // Ensure order_id is set from the order
+                        order_id: orderId, // One stop per order for driver to handle
                         name: name,
                         address: s(client.address),
                         apt: client.apt ? s(client.apt) : null,
@@ -802,6 +816,15 @@ export async function GET(req: Request) {
                 // Insert stops one at a time to handle duplicates gracefully
                 for (const stopData of stopsToCreate) {
                     try {
+                        // Skip if a stop already exists for this order_id (avoid duplicate)
+                        if (stopData.order_id) {
+                            const { data: existingByOrderId } = await supabase
+                                .from('stops')
+                                .select('id')
+                                .eq('order_id', stopData.order_id)
+                                .maybeSingle();
+                            if (existingByOrderId) continue;
+                        }
                         const { error: insertError } = await supabase
                             .from('stops')
                             .upsert({

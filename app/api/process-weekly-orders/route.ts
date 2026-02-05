@@ -131,14 +131,6 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                            `${client.first_name || ""} ${client.last_name || ""}`.trim() || 
                            "Unnamed");
 
-        // Check if stop already exists for this client + delivery_date combination
-        const { data: existingStop } = await supabase
-            .from('stops')
-            .select('id')
-            .eq('client_id', clientId)
-            .eq('delivery_date', deliveryDateStr)
-            .maybeSingle();
-
         // Automatically look up the related upcoming_order record for this client and delivery date
         // This ensures stops are always linked to their source upcoming order
         let upcomingOrderId: string | null = null;
@@ -202,6 +194,13 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
             return;
         }
 
+        // One stop per order: check if a stop already exists for this order_id (driver handles one stop per order)
+        const { data: existingStop } = await supabase
+            .from('stops')
+            .select('id')
+            .eq('order_id', finalOrderId)
+            .maybeSingle();
+
         const stopData: any = {
             day: dayOfWeek,
             delivery_date: deliveryDateStr,
@@ -256,14 +255,12 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                 .insert(stopData);
 
             if (insertError) {
-                // If duplicate key error, try to update instead
+                // If duplicate key error, find existing stop by order_id and update it (one stop per order)
                 if (insertError.code === '23505' || insertError.message?.includes('duplicate')) {
-                    // Find existing stop and update it
                     const { data: existingStop2 } = await supabase
                         .from('stops')
                         .select('id')
-                        .eq('client_id', clientId)
-                        .eq('delivery_date', deliveryDateStr)
+                        .eq('order_id', finalOrderId)
                         .maybeSingle();
 
                     if (existingStop2) {
