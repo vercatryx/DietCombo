@@ -415,7 +415,8 @@ export interface Submission {
 export interface ClientFullDetails {
   client: ClientProfile;
   history: DeliveryRecord[];
-  orderHistory: OrderHistoryLog[];
+  /** Full order objects from getOrderHistory (id, clientId, serviceType, items, etc.), not log entries */
+  orderHistory: any[];
   billingHistory: BillingRecord[];
   activeOrder: any; // Using any to match existing usage in ClientProfile, but ideally typed
   upcomingOrder: any;

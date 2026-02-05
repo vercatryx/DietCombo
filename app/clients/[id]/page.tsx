@@ -48,8 +48,8 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
             currentUser={currentUser}
             initialSettings={payload.appSettings ?? null}
             initialCategories={payload.catData}
-            initialAllClients={payload.allClientsData}
-            initialRegularClients={payload.regularClientsData}
+            initialAllClients={payload.allClientsData?.filter((c): c is NonNullable<typeof c> => c != null) ?? []}
+            initialRegularClients={payload.regularClientsData?.filter((c): c is NonNullable<typeof c> => c != null) ?? []}
             initialDependents={payload.dependentsData}
         />
     );

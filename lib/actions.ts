@@ -9360,6 +9360,10 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
             .from('upcoming_orders')
             .select('*');
 
+        let orderIdsFromOrders: string[] = [];
+        let orderIdsFromUpcoming: string[] = [];
+        let orderIdsNeedingVendor: string[] = [];
+
     // If filtering for orders needing vendor assignment, only get Boxes orders with null vendor_id in box_selections
     if (filter === 'needs-vendor') {
         // Get all Boxes orders from orders table
@@ -9414,7 +9418,7 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
             console.error('Error fetching upcoming box selections:', upcomingBoxSelectionsResult.error);
         }
 
-        const orderIdsNeedingVendor = [
+        orderIdsNeedingVendor = [
             ...((orderBoxSelectionsResult.data || []).map((bs: any) => bs.order_id)),
             ...((upcomingBoxSelectionsResult.data || []).map((bs: any) => bs.upcoming_order_id))
         ];
@@ -9424,8 +9428,8 @@ export async function getOrdersPaginated(page: number, pageSize: number, filter?
         }
 
         // Filter orders to only those needing vendor
-        const orderIdsFromOrders = orderIdsNeedingVendor.filter(id => boxesOrderIds.includes(id));
-        const orderIdsFromUpcoming = orderIdsNeedingVendor.filter(id => boxesUpcomingOrderIds.includes(id));
+        orderIdsFromOrders = orderIdsNeedingVendor.filter(id => boxesOrderIds.includes(id));
+        orderIdsFromUpcoming = orderIdsNeedingVendor.filter(id => boxesUpcomingOrderIds.includes(id));
 
         // Only query tables that have orders needing vendors
         if (orderIdsFromOrders.length > 0) {

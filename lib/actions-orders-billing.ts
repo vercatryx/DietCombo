@@ -125,7 +125,6 @@ async function enrichOrdersPage(
                 const notes = typeof o.notes === 'string' ? JSON.parse(o.notes) : o.notes;
                 addVendor(o.id, notes?.vendorId ?? notes?.vendor_id);
             } catch (_) {}
-            }
         }
     });
 
