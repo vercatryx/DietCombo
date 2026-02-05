@@ -432,7 +432,8 @@ export async function GET(req: Request) {
         // Stops are unique by order_id: one stop per order for the driver to handle
         const { data: existingStops } = await supabase
             .from('stops')
-            .select('client_id, delivery_date, day, order_id');
+            .select('client_id, delivery_date, day, order_id')
+            .limit(10000);
         
         // Normalize delivery_date to YYYY-MM-DD so we match the format used from orders (avoids duplicate stop creation on every page visit)
         const normalizeDeliveryDate = (v: string | null | undefined): string | null => {
@@ -803,8 +804,26 @@ export async function GET(req: Request) {
 
         // Create missing stops for clients who should have them
         if (stopsToCreate.length > 0) {
-            // Add clients who are getting stops created to the response for logging
-            for (const stopData of stopsToCreate) {
+            // Batch check: get all order_ids from stops table that already have a stop (avoid repeated creation)
+            const orderIdsToCheck = [...new Set(stopsToCreate.map(s => s.order_id).filter(Boolean))] as string[];
+            let existingOrderIds = new Set<string>();
+            if (orderIdsToCheck.length > 0) {
+                const { data: existingStopsByOrderId } = await supabase
+                    .from('stops')
+                    .select('order_id')
+                    .in('order_id', orderIdsToCheck)
+                    .not('order_id', 'is', null);
+                if (existingStopsByOrderId) {
+                    existingOrderIds = new Set(existingStopsByOrderId.map((r: { order_id: string }) => String(r.order_id)));
+                }
+            }
+            // Filter out any stop we were about to create if a stop with the same order_id already exists
+            const stopsToInsert = existingOrderIds.size > 0
+                ? stopsToCreate.filter(s => !s.order_id || !existingOrderIds.has(s.order_id))
+                : stopsToCreate;
+
+            // Add clients who are actually getting stops created to the response for logging
+            for (const stopData of stopsToInsert) {
                 usersWithoutStops.push({ 
                     id: stopData.client_id, 
                     name: stopData.name, 
@@ -813,10 +832,10 @@ export async function GET(req: Request) {
             }
             
             try {
-                // Insert stops one at a time to handle duplicates gracefully
-                for (const stopData of stopsToCreate) {
+                // Insert only stops that don't already exist (per-order_id check already done above; repeat check below as safety)
+                for (const stopData of stopsToInsert) {
                     try {
-                        // Skip if a stop already exists for this order_id (avoid duplicate)
+                        // Skip if a stop already exists for this order_id (avoid duplicate / re-execution)
                         if (stopData.order_id) {
                             const { data: existingByOrderId } = await supabase
                                 .from('stops')
