@@ -198,6 +198,21 @@ async function scanOrderTables() {
     itemsByMpoId.set(r.meal_planner_order_id, list);
   }
 
+  // Fetch default order template (Food) for when client.upcoming_order is empty
+  let defaultTemplateItems: ConsolidatedItem[] = [];
+  const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'default_order_template').maybeSingle();
+  if (settingsData?.value) {
+    try {
+      const parsed = typeof settingsData.value === 'string' ? JSON.parse(settingsData.value) : settingsData.value;
+      const foodTemplate = parsed?.Food ?? (parsed?.serviceType === 'Food' ? parsed : null);
+      if (foodTemplate) {
+        defaultTemplateItems = extractItemsFromUpcomingOrder(foodTemplate);
+      }
+    } catch {
+      /* ignore parse error */
+    }
+  }
+
   const errors: string[] = [];
   const ordersWithItems: Array<{
     order_id: string;
@@ -216,7 +231,10 @@ async function scanOrderTables() {
   for (const mpo of mealPlannerOrders) {
     const mpoTyped = mpo as { id: string; client_id: string; case_id: string | null; scheduled_delivery_date: string | null; delivery_day: string | null; total_value: number | null; notes: string | null };
     const upcomingOrder = upcomingByClient.get(mpoTyped.client_id);
-    const itemsFromUpcoming = extractItemsFromUpcomingOrder(upcomingOrder);
+    let itemsFromUpcoming = extractItemsFromUpcomingOrder(upcomingOrder);
+    if (itemsFromUpcoming.length === 0 && defaultTemplateItems.length > 0) {
+      itemsFromUpcoming = defaultTemplateItems;
+    }
     const mpoItems = itemsByMpoId.get(mpoTyped.id) ?? [];
     const itemsFromMealPlanner: ConsolidatedItem[] = mpoItems.map((i) => ({
       vendor_id: null,
