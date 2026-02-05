@@ -8186,11 +8186,19 @@ export async function getOrdersByVendor(vendorId: string) {
             .select('order_id')
             .eq('vendor_id', vendorId);
 
+        // Also fetch orders with vendor_id set directly on orders table
+        // (e.g. from migration, process-orders, or legacy flows that don't populate junction tables)
+        const { data: directVendorOrderIds } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('vendor_id', vendorId);
+
         // Also get Equipment orders - they use order_vendor_selections too
         // But we need to filter by service_type='Equipment' in the orders table
         const orderIds = Array.from(new Set([
             ...(foodOrderIds?.map(o => o.order_id) || []),
-            ...(boxOrderIds?.map(o => o.order_id) || [])
+            ...(boxOrderIds?.map(o => o.order_id) || []),
+            ...(directVendorOrderIds?.map(o => o.id) || [])
         ]));
 
         let orders: any[] = [];

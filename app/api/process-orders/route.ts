@@ -77,6 +77,16 @@ async function scanOrderTables() {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
+  // Default vendor (one-vendor app): is_default = true, or first vendor
+  let defaultVendorId: string | null = null;
+  const { data: defaultVendor } = await supabase.from('vendors').select('id').eq('is_default', true).maybeSingle();
+  if (defaultVendor?.id) {
+    defaultVendorId = defaultVendor.id as string;
+  } else {
+    const { data: firstVendor } = await supabase.from('vendors').select('id').limit(1).maybeSingle();
+    if (firstVendor?.id) defaultVendorId = firstVendor.id as string;
+  }
+
   const scanDate = new Date().toISOString().slice(0, 10);
 
   // 1. Query meal_planner_custom_items where expiration_date equals the scan date
@@ -264,22 +274,36 @@ async function scanOrderTables() {
     };
   }
 
+  if (defaultVendorId == null) {
+    errors.push('No vendor found. Add a vendor (or set one as default) in the vendors table.');
+    return {
+      counts: { meal_planner_orders: mealPlannerOrders.length, orders_created: 0 },
+      orders: [],
+      errors,
+      scannedAt: new Date().toISOString(),
+    };
+  }
+
   const orderNumbers = await getNextOrderNumbers(supabase, toCreate.length);
   toCreate.forEach((o, i) => { o.orderNumber = orderNumbers[i]; });
 
-  const ordersPayload = toCreate.map((o) => ({
-    id: o.orderId,
-    client_id: o.mpo.client_id,
-    service_type: 'Food',
-    case_id: o.mpo.case_id ?? null,
-    status: 'pending',
-    scheduled_delivery_date: o.mpo.scheduled_delivery_date ?? null,
-    delivery_day: o.mpo.delivery_day ?? null,
-    total_value: o.mpo.total_value ?? null,
-    total_items: o.allItems.reduce((s, i) => s + i.quantity, 0),
-    notes: o.mpo.notes ?? null,
-    order_number: o.orderNumber,
-  }));
+  const ordersPayload = toCreate.map((o) => {
+    const orderVendorId = o.allItems.find((i) => i.vendor_id != null)?.vendor_id ?? defaultVendorId;
+    return {
+      id: o.orderId,
+      client_id: o.mpo.client_id,
+      service_type: 'Food',
+      case_id: o.mpo.case_id ?? null,
+      status: 'pending',
+      scheduled_delivery_date: o.mpo.scheduled_delivery_date ?? null,
+      delivery_day: o.mpo.delivery_day ?? null,
+      total_value: o.mpo.total_value ?? null,
+      total_items: o.allItems.reduce((s, i) => s + i.quantity, 0),
+      notes: o.mpo.notes ?? null,
+      order_number: o.orderNumber,
+      vendor_id: orderVendorId,
+    };
+  });
 
   const { error: ordersInsertErr } = await supabase.from('orders').insert(ordersPayload);
   if (ordersInsertErr) {
@@ -296,7 +320,7 @@ async function scanOrderTables() {
   const allItemsPayload: Array<{ id: string; vendor_selection_id: string; quantity: number; menu_item_id?: string; meal_item_id?: string; custom_name?: string; custom_price?: number }> = [];
 
   for (const o of toCreate) {
-    const firstVendorId = o.allItems.find((i) => i.vendor_id != null)?.vendor_id ?? null;
+    const firstVendorId = o.allItems.find((i) => i.vendor_id != null)?.vendor_id ?? defaultVendorId;
     const vsId = randomUUID();
     const itemCounts = o.allItems.reduce((s, i) => s + i.quantity, 0);
     ordersWithItems.push({
