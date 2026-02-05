@@ -1124,14 +1124,11 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
         
         revalidatePath('/admin');
 
-        // When saving the Food default template, propagate it to all Food clients as meal_planner_orders + meal_planner_order_items
+        // When saving the Food default template, propagate to Food clients in the background so save returns immediately
         if (targetServiceType === 'Food' && template?.vendorSelections?.length) {
-            try {
-                await propagateDefaultTemplateToFoodClients(template);
-            } catch (propagateError) {
+            propagateDefaultTemplateToFoodClients(template).catch((propagateError) => {
                 console.error('Error propagating default template to Food clients:', propagateError);
-                // Don't throw - template was saved; propagation can be retried
-            }
+            });
         }
     } catch (error) {
         console.error('Error saving default order template:', error);
@@ -1238,6 +1235,26 @@ async function getUpcomingOrderCaseIdForFoodClient(supabaseAdmin: any, clientId:
     return caseId != null && String(caseId).trim() !== '' ? String(caseId).trim() : null;
 }
 
+/** Batch-fetch case_id per client for Food upcoming_orders (latest per client). Returns Map<clientId, caseId>. */
+async function getUpcomingOrderCaseIdsForFoodClients(supabaseAdmin: any, clientIds: string[]): Promise<Map<string, string | null>> {
+    const map = new Map<string, string | null>();
+    if (clientIds.length === 0) return map;
+    const { data: rows } = (await supabaseAdmin
+        .from('upcoming_orders')
+        .select('client_id, case_id, last_updated')
+        .in('client_id', clientIds)
+        .eq('service_type', 'Food')
+        .order('last_updated', { ascending: false })) as { data: Array<{ client_id: string; case_id: string | null; last_updated?: string }> | null };
+    if (!rows?.length) return map;
+    for (const row of rows) {
+        if (!map.has(row.client_id)) {
+            const caseId = row.case_id != null && String(row.case_id).trim() !== '' ? String(row.case_id).trim() : null;
+            map.set(row.client_id, caseId);
+        }
+    }
+    return map;
+}
+
 /**
  * When a new default order template is saved for Food, create meal_planner_orders and meal_planner_order_items
  * for every client with serviceType = Food, based on the template's vendorSelections (one order per delivery date).
@@ -1306,31 +1323,51 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
             ? { default: { items: Object.fromEntries(templateItems.map((i) => [i.menuItemId, i.quantity])) } }
             : null;
 
-    let ordersCreated = 0;
-    let itemsCreated = 0;
+    // Batch-fetch case_id for all clients in one query
+    const caseIdByClient = await getUpcomingOrderCaseIdsForFoodClients(supabaseAdmin, clientIds);
 
-    for (const clientId of clientIds) {
-        const caseId = await getUpcomingOrderCaseIdForFoodClient(supabaseAdmin, clientId);
+    // Bulk delete existing draft/scheduled meal_planner_orders (chunk to avoid URL limits)
+    const deleteChunkSize = 100;
+    for (let i = 0; i < clientIds.length; i += deleteChunkSize) {
+        const chunk = clientIds.slice(i, i + deleteChunkSize);
         const { data: existing } = await supabaseAdmin
             .from('meal_planner_orders')
             .select('id')
-            .eq('client_id', clientId)
+            .in('client_id', chunk)
             .in('status', ['draft', 'scheduled'])
             .gte('scheduled_delivery_date', todayStr);
         if (existing?.length) {
-            for (const row of existing) {
-                await supabaseAdmin.from('meal_planner_orders').delete().eq('id', row.id);
+            const ids = existing.map((r: { id: string }) => r.id);
+            for (let j = 0; j < ids.length; j += deleteChunkSize) {
+                await supabaseAdmin.from('meal_planner_orders').delete().in('id', ids.slice(j, j + deleteChunkSize));
             }
         }
+    }
 
-        if (totalItemsCount === 0) continue;
+    if (totalItemsCount === 0) return { clientIds, ordersCreated: 0, itemsCreated: 0 };
 
+    const BATCH_ORDERS = 80;
+    const BATCH_ITEMS = 400;
+    type OrderRow = {
+        id: string; client_id: string; case_id: string | null; status: string; scheduled_delivery_date: string;
+        delivery_day: string; total_items: number; total_value: null; items: object | null; notes: null;
+        processed_order_id: null; processed_at: null; user_modified: boolean;
+    };
+    type ItemRow = {
+        id: string; meal_planner_order_id: string; meal_type: string; menu_item_id: string; meal_item_id: null;
+        quantity: number; notes: null; custom_name: null; custom_price: null; sort_order: number;
+    };
+    const orderRows: OrderRow[] = [];
+    const itemRows: ItemRow[] = [];
+
+    for (const clientId of clientIds) {
+        const caseId = caseIdByClient.get(clientId) ?? null;
         for (const dateStr of deliveryDates) {
             const orderId = randomUUID();
-            const { error: orderErr } = await supabaseAdmin.from('meal_planner_orders').insert({
+            orderRows.push({
                 id: orderId,
                 client_id: clientId,
-                case_id: caseId ?? null,
+                case_id: caseId,
                 status: 'scheduled',
                 scheduled_delivery_date: dateStr,
                 delivery_day: dayNameFromDate(dateStr),
@@ -1342,17 +1379,10 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
                 processed_at: null,
                 user_modified: false
             });
-            if (orderErr) {
-                logQueryError(orderErr, 'meal_planner_orders', 'insert');
-                continue;
-            }
-            ordersCreated++;
-
             let sortOrder = 0;
             for (const { menuItemId, quantity } of templateItems) {
-                const itemId = randomUUID();
-                const { error: itemErr } = await supabaseAdmin.from('meal_planner_order_items').insert({
-                    id: itemId,
+                itemRows.push({
+                    id: randomUUID(),
                     meal_planner_order_id: orderId,
                     meal_type: 'default',
                     menu_item_id: menuItemId,
@@ -1363,10 +1393,21 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
                     custom_price: null,
                     sort_order: sortOrder++
                 });
-                if (!itemErr) itemsCreated++;
-                else logQueryError(itemErr, 'meal_planner_order_items', 'insert');
             }
         }
+    }
+
+    let ordersCreated = 0;
+    let itemsCreated = 0;
+    for (let i = 0; i < orderRows.length; i += BATCH_ORDERS) {
+        const { error } = await supabaseAdmin.from('meal_planner_orders').insert(orderRows.slice(i, i + BATCH_ORDERS));
+        if (error) logQueryError(error, 'meal_planner_orders', 'insert');
+        else ordersCreated += Math.min(BATCH_ORDERS, orderRows.length - i);
+    }
+    for (let i = 0; i < itemRows.length; i += BATCH_ITEMS) {
+        const { error } = await supabaseAdmin.from('meal_planner_order_items').insert(itemRows.slice(i, i + BATCH_ITEMS));
+        if (error) logQueryError(error, 'meal_planner_order_items', 'insert');
+        else itemsCreated += Math.min(BATCH_ITEMS, itemRows.length - i);
     }
 
     return { clientIds, ordersCreated, itemsCreated };
@@ -2227,11 +2268,9 @@ export async function saveMealPlannerCustomItems(
 
         if (validItems.length === 0) {
             revalidatePath('/admin');
-            try {
-                await syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal);
-            } catch (syncErr) {
+            syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal).catch((syncErr) => {
                 console.error('Error syncing meal planner custom items to meal_planner_orders:', syncErr);
-            }
+            });
             return;
         }
 
@@ -2255,11 +2294,9 @@ export async function saveMealPlannerCustomItems(
             throw new Error(insertError.message);
         }
         revalidatePath('/admin');
-        try {
-            await syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal);
-        } catch (syncErr) {
+        syncMealPlannerCustomItemsToOrders(dateOnly, clientIdVal).catch((syncErr) => {
             console.error('Error syncing meal planner custom items to meal_planner_orders:', syncErr);
-        }
+        });
     } catch (error) {
         console.error('Error saving meal planner custom items:', error);
         throw error;

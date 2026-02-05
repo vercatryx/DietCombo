@@ -61,6 +61,35 @@ function extractItemsFromUpcomingOrder(upcomingOrder: unknown): ConsolidatedItem
   return items;
 }
 
+/** Normalize any date-like value to YYYY-MM-DD for consistent DB comparison. */
+function toDateOnly(value: unknown): string | null {
+  if (value == null) return null;
+  const s = typeof value === 'string' ? value : String(value);
+  const match = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return match[0];
+  try {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Local date YYYY-MM-DD (business "today", not UTC). */
+function getLocalDateString(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 async function getNextOrderNumbers(supabase: any, count: number): Promise<number[]> {
   const { data } = await supabase.from('orders').select('order_number').order('order_number', { ascending: false }).limit(1).maybeSingle();
   const max = (data as { order_number?: number } | null)?.order_number ?? 99999;
@@ -87,9 +116,9 @@ async function scanOrderTables() {
     if (firstVendor?.id) defaultVendorId = firstVendor.id as string;
   }
 
-  const scanDate = new Date().toISOString().slice(0, 10);
+  const scanDate = getLocalDateString();
 
-  // 1. Query meal_planner_custom_items where expiration_date equals the scan date
+  // 1. Query meal_planner_custom_items where expiration_date equals the scan date (local "today")
   const { data: customItems, error: customError } = await supabase
     .from('meal_planner_custom_items')
     .select('calendar_date, client_id')
@@ -103,7 +132,7 @@ async function scanOrderTables() {
   const datesWithDefault = new Set<string>();
   const dateClientPairs = new Set<string>();
   for (const r of rows) {
-    const dateStr = r.calendar_date ? String(r.calendar_date).slice(0, 10) : null;
+    const dateStr = toDateOnly(r.calendar_date);
     if (!dateStr) continue;
     if (r.client_id == null || r.client_id === '') {
       datesWithDefault.add(dateStr);
@@ -122,11 +151,10 @@ async function scanOrderTables() {
     };
   }
 
-  // 2. Fetch related meal_planner_orders for those (date, client) combinations (only unprocessed to avoid duplicates)
+  // 2. Fetch unprocessed meal_planner_orders, then filter by qualifying dates in memory (avoids .in() date format issues)
   const { data: ordersData, error: ordersError } = await supabase
     .from('meal_planner_orders')
     .select('*')
-    .in('scheduled_delivery_date', qualifyingDates)
     .is('processed_order_id', null)
     .order('scheduled_delivery_date', { ascending: false });
 
@@ -134,13 +162,13 @@ async function scanOrderTables() {
     throw new Error(`meal_planner_orders scan failed: ${ordersError.message}`);
   }
 
+  const qualifyingDateSet = new Set(qualifyingDates);
   const allOrders = ordersData ?? [];
   const mealPlannerOrders = allOrders.filter((order: { scheduled_delivery_date: string | null; client_id: string; processed_order_id?: string | null }) => {
-    const dateStr = order.scheduled_delivery_date ? String(order.scheduled_delivery_date).slice(0, 10) : null;
-    if (!dateStr) return false;
+    const dateStr = toDateOnly(order.scheduled_delivery_date);
+    if (!dateStr || !qualifyingDateSet.has(dateStr)) return false;
     if (datesWithDefault.has(dateStr)) return true;
     if (!dateClientPairs.has(`${dateStr}|${order.client_id}`)) return false;
-    // Idempotency: skip already processed — order was already created for this meal planner order
     const processedId = order.processed_order_id;
     if (processedId != null && String(processedId).trim() !== '') return false;
     return true;
@@ -159,32 +187,35 @@ async function scanOrderTables() {
   const mpoIds = mealPlannerOrders.map((o: { id: string }) => o.id);
   const mpoIdSet = new Set(mpoIds);
 
-  // 3 & 4. Fetch clients (upcoming_order, full_name) + meal_planner_order_items in parallel
-  async function fetchClients(): Promise<{ upcomingByClient: Map<string, unknown>; clientNameById: Map<string, string> }> {
+  // 3 & 4. Fetch clients (upcoming_order, full_name, service_type) + meal_planner_order_items in parallel
+  async function fetchClients(): Promise<{ upcomingByClient: Map<string, unknown>; clientNameById: Map<string, string>; foodClientIds: Set<string> }> {
     const upcomingByClient = new Map<string, unknown>();
     const clientNameById = new Map<string, string>();
-    if (clientIds.length === 0) return { upcomingByClient, clientNameById };
+    const foodClientIds = new Set<string>();
+    if (clientIds.length === 0) return { upcomingByClient, clientNameById, foodClientIds };
     const clientIdSet = new Set(clientIds);
-    const r = await supabase.from('clients').select('id, upcoming_order, full_name').in('id', clientIds);
+    const r = await supabase.from('clients').select('id, upcoming_order, full_name, service_type').in('id', clientIds);
     if (!r.error) {
-      const rows = (r.data ?? []) as unknown as Array<{ id: string; upcoming_order?: unknown; full_name?: string | null }>;
+      const rows = (r.data ?? []) as unknown as Array<{ id: string; upcoming_order?: unknown; full_name?: string | null; service_type?: string | null }>;
       rows.forEach((c) => {
         upcomingByClient.set(String(c.id), c.upcoming_order);
         clientNameById.set(String(c.id), c.full_name ?? '');
+        if (String(c.service_type ?? '').trim().toLowerCase() === 'food') foodClientIds.add(String(c.id));
       });
-      return { upcomingByClient, clientNameById };
+      return { upcomingByClient, clientNameById, foodClientIds };
     }
-    const rAll = await supabase.from('clients').select('id, upcoming_order, full_name');
+    const rAll = await supabase.from('clients').select('id, upcoming_order, full_name, service_type');
     if (!rAll.error && rAll.data) {
-      const rows = rAll.data as unknown as Array<{ id: string; upcoming_order?: unknown; full_name?: string | null }>;
+      const rows = rAll.data as unknown as Array<{ id: string; upcoming_order?: unknown; full_name?: string | null; service_type?: string | null }>;
       rows.filter((c) => clientIdSet.has(String(c.id))).forEach((c) => {
         upcomingByClient.set(String(c.id), c.upcoming_order);
         clientNameById.set(String(c.id), c.full_name ?? '');
+        if (String(c.service_type ?? '').trim().toLowerCase() === 'food') foodClientIds.add(String(c.id));
       });
     } else {
       throw new Error(`clients scan failed: ${(rAll as { error?: { message?: string } }).error?.message}`);
     }
-    return { upcomingByClient, clientNameById };
+    return { upcomingByClient, clientNameById, foodClientIds };
   }
 
   async function fetchMpoItems() {
@@ -197,7 +228,7 @@ async function scanOrderTables() {
     throw new Error(`meal_planner_order_items scan failed: ${r.error?.message}`);
   }
 
-  const [{ upcomingByClient, clientNameById }, mpoItemsData] = await Promise.all([fetchClients(), fetchMpoItems()]);
+  const [{ upcomingByClient, clientNameById, foodClientIds }, mpoItemsData] = await Promise.all([fetchClients(), fetchMpoItems()]);
 
   const itemsByMpoId = new Map<string, Array<{ menu_item_id: string | null; meal_item_id: string | null; quantity: number; custom_name: string | null; custom_price: number | null }>>();
   for (const row of mpoItemsData) {
@@ -245,6 +276,7 @@ async function scanOrderTables() {
 
   for (const mpo of mealPlannerOrders) {
     const mpoTyped = mpo as { id: string; client_id: string; case_id: string | null; scheduled_delivery_date: string | null; delivery_day: string | null; total_value: number | null; notes: string | null };
+    if (!foodClientIds.has(mpoTyped.client_id)) continue; // only process clients with serviceType = Food
     const upcomingOrder = upcomingByClient.get(mpoTyped.client_id);
     let itemsFromUpcoming = extractItemsFromUpcomingOrder(upcomingOrder);
     if (itemsFromUpcoming.length === 0 && defaultTemplateItems.length > 0) {
