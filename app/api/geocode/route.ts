@@ -81,13 +81,29 @@ export async function GET(req: Request) {
     const qRaw = searchParams.get("q")?.trim();
     if (!qRaw) return NextResponse.json({ error: "Missing q" }, { status: 400 });
 
+    const provider = searchParams.get("provider")?.toLowerCase() || "auto";
+
     const q = stripUnit(qRaw)
         .replace(/\s+/g, " ")
         .replace(/\s*,\s*/g, ", ")
         .trim();
 
-    const attempts = [tryNominatim, tryGoogle];
     const errors: string[] = [];
+
+    // Determine which providers to try based on provider parameter
+    let attempts: Array<() => Promise<{ lat: number; lng: number; provider: string; formatted?: string; place_id?: string }>> = [];
+    
+    if (provider === "nominatim") {
+        attempts = [tryNominatim];
+    } else if (provider === "google") {
+        attempts = [tryGoogle];
+    } else if (provider === "auto" || provider === "") {
+        attempts = [tryNominatim, tryGoogle];
+    } else if (provider === "none") {
+        return NextResponse.json({ error: "Geocoding skipped" }, { status: 400 });
+    } else {
+        return NextResponse.json({ error: "Invalid provider. Use 'auto', 'nominatim', 'google', or 'none'" }, { status: 400 });
+    }
 
     for (const fn of attempts) {
         try {

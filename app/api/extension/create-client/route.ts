@@ -68,18 +68,35 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const {
             fullName,
+            firstName,
+            lastName,
             statusId,
             navigatorId,
             address,
+            apt,
+            city,
+            state,
+            zip,
+            county,
             phone,
             secondaryPhone,
             email,
             notes,
+            dislikes,
             serviceType,
             caseId,
             approvedMealsPerWeek,
             authorizedAmount,
-            expirationDate
+            expirationDate,
+            latitude,
+            longitude,
+            lat,
+            lng,
+            medicaid,
+            paused,
+            complex,
+            bill,
+            delivery
         } = body;
 
         // Validate required fields
@@ -91,10 +108,11 @@ export async function POST(request: NextRequest) {
         }
 
         // Validate serviceType
-        if (serviceType !== 'Food' && serviceType !== 'Boxes') {
+        const validServiceTypes = ['Food', 'Boxes', 'Meal', 'Equipment', 'Custom', 'Vendor', 'Produce'];
+        if (!validServiceTypes.includes(serviceType)) {
             return NextResponse.json({
                 success: false,
-                error: 'serviceType must be either "Food" or "Boxes"'
+                error: `serviceType must be one of: ${validServiceTypes.join(', ')}`
             }, { status: 400 });
         }
 
@@ -106,11 +124,43 @@ export async function POST(request: NextRequest) {
             }, { status: 400 });
         }
 
+        // Geocode address if coordinates not provided
+        let finalLat = lat ?? latitude ?? null;
+        let finalLng = lng ?? longitude ?? null;
+        
+        if (!finalLat || !finalLng) {
+            // Try to geocode the address
+            try {
+                const { geocodeIfNeeded } = await import('@/lib/geocodeOneClient');
+                const addressInput = {
+                    address: address.trim(),
+                    apt: apt?.trim() || null,
+                    city: city?.trim() || null,
+                    state: state?.trim() || null,
+                    zip: zip?.trim() || null
+                };
+                const geocodeResult = await geocodeIfNeeded(addressInput, true);
+                if (geocodeResult) {
+                    finalLat = geocodeResult.lat;
+                    finalLng = geocodeResult.lng;
+                }
+            } catch (geocodeError) {
+                console.warn('Geocoding failed, continuing without coordinates:', geocodeError);
+            }
+        }
+
         // Create client data
         const clientData = {
             fullName: fullName.trim(),
+            firstName: firstName?.trim() || null,
+            lastName: lastName?.trim() || null,
             email: email?.trim() || null,
             address: address.trim(),
+            apt: apt?.trim() || null,
+            city: city?.trim() || null,
+            state: state?.trim()?.toUpperCase() || null,
+            zip: zip?.trim() || null,
+            county: county?.trim() || null,
             phoneNumber: phone.trim(),
             secondaryPhoneNumber: secondaryPhone?.trim() || null,
             navigatorId: navigatorId,
@@ -118,11 +168,23 @@ export async function POST(request: NextRequest) {
             screeningTookPlace: false,
             screeningSigned: false,
             notes: notes?.trim() || '',
+            dislikes: dislikes?.trim() || null,
             statusId: statusId,
             serviceType: serviceType as ServiceType,
             approvedMealsPerWeek: approvedMealsPerWeek ? parseInt(approvedMealsPerWeek.toString(), 10) : 0,
             authorizedAmount: authorizedAmount !== undefined && authorizedAmount !== null ? parseFloat(authorizedAmount.toString()) : null,
             expirationDate: expirationDate?.trim() || null,
+            latitude: finalLat,
+            longitude: finalLng,
+            lat: finalLat,
+            lng: finalLng,
+            geocodedAt: (finalLat && finalLng) ? new Date().toISOString() : null,
+            medicaid: medicaid ?? false,
+            paused: paused ?? false,
+            complex: complex ?? false,
+            bill: bill ?? true,
+            delivery: delivery ?? true,
+            caseIdExternal: caseId.trim(), // Store Unite Us link in case_id_external
             activeOrder: {
                 serviceType: serviceType as ServiceType,
                 caseId: caseId.trim()

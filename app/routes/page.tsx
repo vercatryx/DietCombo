@@ -690,25 +690,22 @@ export default function RoutesPage() {
 
     // ===== PDF helpers (unchanged but referenced) =====
     const buildSortedForLabels = React.useCallback(() => {
-        // Create meta with route data and stops directly from routes
         const meta = (routes || []).map((r, i) => ({
             i,
             num: rankForRoute(r, i),
             color: r?.color,
             name: r?.driverName || r?.name || `Driver ${i}`,
-            stops: r?.stops || [], // Get stops directly from route
         }));
         meta.sort((a, b) => {
-            const aa = Number.isFinite(a.num) ? a.num : (a.i ?? 0);
-            const bb = Number.isFinite(b.num) ? b.num : (b.i ?? 0);
-            return (aa ?? 0) - (bb ?? 0) || (a.i ?? 0) - (b.i ?? 0);
+            const aa = Number.isFinite(a.num) ? a.num : a.i;
+            const bb = Number.isFinite(b.num) ? b.num : b.i;
+            return aa - bb || a.i - b.i;
         });
         const colorsSorted = meta.map((m, idx) => m.color || driverColors[m.i] || palette[idx % palette.length]);
         const enrichedSorted = meta.map((m, newIdx) => {
             const driverNum = Number.isFinite(m.num) ? m.num : newIdx;
             const driverName = `Driver ${driverNum}`;
-            // Use stops directly from meta (which came from routes)
-            const arr = (m.stops || []);
+            const arr = (routeStops[m.i] || []);
             return arr.map((s: any, si: number) => ({
                 ...s,
                 __driverNumber: driverNum,
@@ -717,7 +714,7 @@ export default function RoutesPage() {
             }));
         });
         return { enrichedSorted, colorsSorted };
-    }, [routes, driverColors]);
+    }, [routes, routeStops, driverColors]);
 
     // Add a new driver
     async function handleAddDriver() {
@@ -1031,123 +1028,101 @@ export default function RoutesPage() {
                     onClick={async () => {
                         setBusy(true);
                         try {
-                            // Validate we have routes with stops
-                            if (!routes || routes.length === 0) {
-                                alert('No routes available. Please generate routes first.');
-                                return;
-                            }
-
-                            // Log route structure for debugging
-                            console.log('[Download Labels] Routes structure:', {
-                                routesCount: routes.length,
-                                routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length,
-                                totalStops: routes.reduce((sum, r) => sum + (r.stops?.length || 0), 0),
-                                sampleRoute: routes[0] ? {
-                                    driverId: routes[0].driverId,
-                                    driverName: routes[0].driverName,
-                                    stopsCount: routes[0].stops?.length || 0,
-                                    sampleStop: routes[0].stops?.[0] || null
-                                } : null,
-                                selectedDate: selectedDeliveryDate
+                            // Fetch all clients (users) to get their assigned_driver_id
+                            const usersRes = await fetch('/api/users', { cache: 'no-store' });
+                            if (!usersRes.ok) throw new Error('Failed to fetch users');
+                            const allClients = await usersRes.json();
+                            
+                            // Fetch routes to get driver info (colors, names, etc.)
+                            const routesRes = await fetch(`/api/route/routes?day=${selectedDay}`, { cache: "no-store" });
+                            const routesData = await routesRes.json();
+                            const labelRoutes = routesData.routes || [];
+                            
+                            // Build driver map: driverId -> { color, name, number }
+                            const driverMap = new Map();
+                            labelRoutes.forEach((r: any, i: number) => {
+                                const driverId = String(r.driverId || r.id || '');
+                                const driverNum = rankForRoute(r, i);
+                                driverMap.set(driverId, {
+                                    color: r.color || palette[i % palette.length],
+                                    name: r.driverName || r.name || `Driver ${driverNum}`,
+                                    number: driverNum,
+                                });
                             });
-
-                            const totalStopsInRoutes = routes.reduce((sum, r) => sum + (r.stops?.length || 0), 0);
-                            if (totalStopsInRoutes === 0) {
-                                alert('No stops found in routes. Please assign stops to drivers first.');
-                                return;
-                            }
-
-                            const idxs = buildComplexIndex(users);
-
-                            // Mark stops as complex using routeStops (with proper indices) before building enrichedSorted
-                            const complexMarked = (routeStops || []).map((stops) =>
-                                (stops || []).map((s: any, si: number) => {
-                                    const marked = markStopComplex(s, si, idxs);
-                                    return marked;
-                                })
-                            );
-
-                            // Build a map of complex-marked stops by ID
-                            const complexById = new Map();
-                            complexMarked.forEach((route: any[]) => route.forEach((s: any) => complexById.set(String(s.id), s)));
-
-                            const { enrichedSorted, colorsSorted } = buildSortedForLabels();
-
-                            // Validate enrichedSorted has data
-                            if (!enrichedSorted || enrichedSorted.length === 0) {
-                                console.error('[Download Labels] enrichedSorted is empty', {
-                                    routes,
-                                    routesCount: routes.length,
-                                    routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length
-                                });
-                                alert('No stops found to export. Please check that routes have stops assigned.');
-                                return;
-                            }
-
-                            const totalEnrichedStops = enrichedSorted.reduce((sum, route) => sum + (route?.length || 0), 0);
-                            if (totalEnrichedStops === 0) {
-                                console.error('[Download Labels] No stops in enrichedSorted', {
-                                    enrichedSorted,
-                                    routes,
-                                    routesCount: routes.length,
-                                    routesWithStops: routes.filter(r => r.stops && r.stops.length > 0).length
-                                });
-                                alert('No stops found to export. Please check that routes have stops assigned.');
-                                return;
-                            }
-
-                            // Map complex flags from marked stops to enrichedSorted
-                            const stampedWithComplex = enrichedSorted.map((route, ri) =>
-                                (route || []).map((s: any, si: number) => {
-                                    if (!s || !s.id) return null;
-                                    // Ensure stop has at least name or address for PDF rendering
-                                    const hasName = s.name || s.fullName || s.first || s.last || s.firstName || s.lastName;
-                                    const hasAddress = s.address;
-                                    if (!hasName && !hasAddress) {
-                                        console.warn('[Download Labels] Skipping stop without name or address:', s.id);
-                                        return null;
+                            
+                            // Build complex index from all clients
+                            const idxs = buildComplexIndex(allClients);
+                            
+                            // Group clients by assigned_driver_id
+                            const clientsByDriver = new Map<string, any[]>();
+                            const clientsWithoutDriver: any[] = [];
+                            
+                            allClients.forEach((client: any) => {
+                                // API returns assignedDriverId (camelCase) but also check assigned_driver_id (snake_case) for compatibility
+                                const assignedDriverId = (client.assignedDriverId || client.assigned_driver_id) ? String(client.assignedDriverId || client.assigned_driver_id) : null;
+                                if (assignedDriverId && driverMap.has(assignedDriverId)) {
+                                    if (!clientsByDriver.has(assignedDriverId)) {
+                                        clientsByDriver.set(assignedDriverId, []);
                                     }
-                                    const cm = complexById.get(String(s.id));
-                                    return { ...s, complex: cm?.complex ?? false, __complexSource: cm?.__complexSource ?? "none" };
-                                }).filter(Boolean)
-                            );
-
-                            // Final validation - filter out any empty routes
-                            const filteredForExport = stampedWithComplex.filter(route => route && route.length > 0);
-                            const totalStops = filteredForExport.reduce((sum, route) => sum + (route?.length || 0), 0);
-
-                            // Count complex stops for logging
-                            const complexStopsCount = filteredForExport.reduce((sum, route) =>
-                                sum + route.filter((s: any) => s?.complex === true).length, 0
-                            );
-
-                            console.log('[Download Labels] Exporting:', {
-                                routes: filteredForExport.length,
-                                totalStops,
-                                complexStops: complexStopsCount,
-                                stopsPerRoute: filteredForExport.map(r => r?.length || 0),
-                                complexPerRoute: filteredForExport.map(r => r.filter((s: any) => s?.complex === true).length),
-                                sampleStop: totalStops > 0 ? filteredForExport[0]?.[0] : null,
-                                sampleComplexStop: complexStopsCount > 0 ? filteredForExport.flat().find((s: any) => s?.complex === true) : null,
-                                selectedDate: selectedDeliveryDate,
+                                    clientsByDriver.get(assignedDriverId)!.push(client);
+                                } else {
+                                    clientsWithoutDriver.push(client);
+                                }
                             });
-
-                            if (totalStops === 0) {
-                                alert('No stops found to export after processing. Please check the console for details.');
-                                console.error('[Download Labels] Debug info:', {
-                                    routesCount: routes.length,
-                                    routeStopsCount: routeStops.length,
-                                    enrichedSortedCount: enrichedSorted.length,
-                                    enrichedSortedStops: enrichedSorted.reduce((sum, r) => sum + (r?.length || 0), 0),
+                            
+                            // Convert clients to stop format and mark complex
+                            const enrichedSorted: any[] = [];
+                            const colorsSorted: string[] = [];
+                            
+                            // Sort drivers by number
+                            const sortedDriverIds = Array.from(clientsByDriver.keys()).sort((a, b) => {
+                                const driverA = driverMap.get(a);
+                                const driverB = driverMap.get(b);
+                                const numA = driverA?.number ?? Number.MAX_SAFE_INTEGER;
+                                const numB = driverB?.number ?? Number.MAX_SAFE_INTEGER;
+                                return numA - numB;
+                            });
+                            
+                            sortedDriverIds.forEach((driverId) => {
+                                const driverInfo = driverMap.get(driverId);
+                                const clients = clientsByDriver.get(driverId) || [];
+                                
+                                // Mark complex and convert to stop format
+                                const stops = clients.map((client: any, si: number) => {
+                                    const marked = markStopComplex(client, si, idxs);
+                                    return {
+                                        id: client.id,
+                                        userId: client.id,
+                                        name: client.name || client.fullName || `${client.first || client.first_name || ''} ${client.last || client.last_name || ''}`.trim() || 'Unnamed',
+                                        first: client.first || client.first_name,
+                                        last: client.last || client.last_name,
+                                        first_name: client.first || client.first_name,
+                                        last_name: client.last || client.last_name,
+                                        fullName: client.name || client.fullName || client.full_name,
+                                        full_name: client.name || client.fullName || client.full_name,
+                                        address: client.address || '',
+                                        apt: client.apt || '',
+                                        city: client.city || '',
+                                        state: client.state || '',
+                                        zip: client.zip || '',
+                                        phone: client.phone || client.phone_number || '',
+                                        lat: client.lat,
+                                        lng: client.lng,
+                                        dislikes: client.dislikes || '',
+                                        assigned_driver_id: driverId,
+                                        complex: marked.complex ?? false,
+                                        __complexSource: marked.__complexSource ?? 'none',
+                                        __driverNumber: driverInfo?.number ?? 0,
+                                        __driverName: driverInfo?.name || `Driver ${driverInfo?.number ?? 0}`,
+                                        __stopIndex: si, // Keep for internal use, but we'll show count instead
+                                    };
                                 });
-                                return;
-                            }
-
-                            // Routes are already filtered by selected date (API). Use those stops = same as map in Orders View.
-                            const filenameFn = () =>
-                                selectedDeliveryDate ? String(selectedDeliveryDate) : tsString();
-
-                            await exportRouteLabelsPDF(filteredForExport, colorsSorted, filenameFn);
+                                
+                                enrichedSorted.push(stops);
+                                colorsSorted.push(driverInfo?.color || palette[0]);
+                            });
+                            
+                            await exportRouteLabelsPDF(enrichedSorted, colorsSorted, tsString);
                         } catch (error) {
                             console.error('[Download Labels] Error:', error);
                             alert('Failed to generate labels: ' + (error instanceof Error ? error.message : String(error)));

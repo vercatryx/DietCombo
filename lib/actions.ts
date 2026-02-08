@@ -15,7 +15,7 @@ import {
     formatDateToYYYYMMDD,
     DAY_NAME_TO_NUMBER
 } from './order-dates';
-import { supabase } from './supabase';
+import { supabase, isConnectionError, getConnectionErrorHelp } from './supabase';
 import { createClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
@@ -37,9 +37,21 @@ function handleError(error: any, context?: string) {
             fullError: error
         });
         
+        // Check for DNS/connection errors first (most critical)
+        if (isConnectionError(error)) {
+            console.error(getConnectionErrorHelp(error));
+            return; // Don't show other error messages if it's a connection issue
+        }
+        
+        // Check for DNS/connection errors first (most critical)
+        if (isConnectionError(error)) {
+            console.error(getConnectionErrorHelp(error));
+            throw new Error(error.message);
+        }
+        
         // Check for RLS/permission errors
         if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS') || error.message?.includes('row-level security')) {
-            console.error('??????  RLS (Row Level Security) may be blocking this query. Consider:');
+            console.error('⚠️  RLS (Row Level Security) may be blocking this query. Consider:');
             console.error('   1. Setting SUPABASE_SERVICE_ROLE_KEY environment variable');
             console.error('   2. Running sql/disable-rls.sql to disable RLS');
             console.error('   3. Running sql/enable-permissive-rls.sql to add permissive policies');
@@ -47,7 +59,7 @@ function handleError(error: any, context?: string) {
         
         // Check for schema permission errors (42501)
         if (error.code === '42501' || (error.message?.includes('permission denied for schema') && error.message?.includes('public'))) {
-            console.error('??????  Database schema permission error (42501) detected!');
+            console.error('⚠️  Database schema permission error (42501) detected!');
             console.error('   This means the database roles don\'t have proper permissions on the public schema.');
             console.error('   SOLUTION: Run the SQL script sql/fix-schema-permissions.sql in your Supabase SQL Editor.');
             console.error('   This will grant the necessary permissions to anon, authenticated, and service_role roles.');

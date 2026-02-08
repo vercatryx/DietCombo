@@ -103,7 +103,10 @@ export async function verifyOtp(email: string, code: string) {
         }
 
         if (type === 'admin') {
-            if (!id && process.env.ADMIN_USERNAME === email) {
+            // Check if this is the env-based super admin (no id means env admin)
+            const envUser = process.env.ADMIN_USERNAME;
+            const trimmedEmail = email.trim(); // Use trimmed email to match checkEmailIdentity logic
+            if (!id && envUser && trimmedEmail === envUser) {
                 await createSession('super-admin', 'Admin', 'super-admin');
                 redirect('/');
             } else if (id) {
@@ -265,23 +268,27 @@ export async function checkEmailIdentity(identifier: string) {
     }
 
     // 2. Check Database Admins (by username - case sensitive)
-    const { data: admins } = await supabase
+    const { data: admins, error: adminsError } = await supabase
         .from('admins')
         .select('id')
         .eq('username', originalTrimmed);
     
-    if (admins && admins.length > 0) {
+    if (adminsError) {
+        console.error('[checkEmailIdentity] Error querying admins:', adminsError);
+    } else if (admins && admins.length > 0) {
         matches.push(...admins.map(a => ({ type: 'admin' as const, id: a.id })));
     }
 
     // 3. Check Vendors (by Email) - fetch all and normalize for comparison
     // This ensures we match emails regardless of spaces or case
-    const { data: vendorsData } = await supabase
+    const { data: vendorsData, error: vendorsError } = await supabase
         .from('vendors')
         .select('id, email, is_active')
         .not('email', 'is', null);
     
-    if (vendorsData && vendorsData.length > 0) {
+    if (vendorsError) {
+        console.error('[checkEmailIdentity] Error querying vendors:', vendorsError);
+    } else if (vendorsData && vendorsData.length > 0) {
         // Normalize both input and database emails (remove all spaces, lowercase)
         const exactMatches = vendorsData.filter(v => 
             v.email && normalizeEmail(v.email) === normalizedInput
@@ -296,12 +303,14 @@ export async function checkEmailIdentity(identifier: string) {
     }
 
     // 4. Check Navigators (by Email)
-    const { data: navigatorsData } = await supabase
+    const { data: navigatorsData, error: navigatorsError } = await supabase
         .from('navigators')
         .select('id, email')
         .not('email', 'is', null);
     
-    if (navigatorsData && navigatorsData.length > 0) {
+    if (navigatorsError) {
+        console.error('[checkEmailIdentity] Error querying navigators:', navigatorsError);
+    } else if (navigatorsData && navigatorsData.length > 0) {
         const exactMatches = navigatorsData.filter(n => 
             n.email && normalizeEmail(n.email) === normalizedInput
         );
@@ -314,12 +323,21 @@ export async function checkEmailIdentity(identifier: string) {
     }
 
     // 5. Check Clients (by Email)
-    const { data: clientsData } = await supabase
+    const { data: clientsData, error: clientsError } = await supabase
         .from('clients')
         .select('id, email')
         .not('email', 'is', null);
     
-    if (clientsData && clientsData.length > 0) {
+    if (clientsError) {
+        console.error('[checkEmailIdentity] Error querying clients:', clientsError);
+        // Log detailed error info for debugging
+        console.error('[checkEmailIdentity] Client query error details:', {
+            message: clientsError.message,
+            code: clientsError.code,
+            details: clientsError.details,
+            hint: clientsError.hint
+        });
+    } else if (clientsData && clientsData.length > 0) {
         const exactMatches = clientsData.filter(c => 
             c.email && normalizeEmail(c.email) === normalizedInput
         );

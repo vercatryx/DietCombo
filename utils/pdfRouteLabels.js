@@ -295,10 +295,9 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
                 dislikeText ? `Dislikes: ${dislikeText}` : "",
             ].filter(Boolean);
 
-            // --- zero-based driver badge ---
+            // --- driver badge: just show driver number (count) ---
             const driverIdx0 = getDriverIdx0(u, di);
-            const stopNum1 = getStopNum1(u, si);
-            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}.${stopNum1}`, colorRGB);
+            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}`, colorRGB);
 
             drawLines(doc, state.x, state.y, colorRGB, lines);
             printed = true;
@@ -363,12 +362,14 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
                 // Continue anyway - it was marked as complex, so print it
             }
             
-            const colorRGB = hexToRgb(palette[driverIdx % palette.length]);
+            // Use the actual driver color from the palette array (which matches driverColors)
+            // driverIdx corresponds to the index in the routes array, which matches colorsSorted
+            const driverColor = palette[driverIdx % palette.length];
+            const colorRGB = hexToRgb(driverColor);
             const driverIdx0 = getDriverIdx0(u, driverIdx);
-            const stopNum1 = getStopNum1(u, stopIdx);
             
-            // Draw badge with driver.stop number
-            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}.${stopNum1}`, colorRGB);
+            // Draw badge with just driver number (count)
+            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}`, colorRGB);
 
             // Prepare label content (first line = client name only, never address)
             const dislikeText = getDislikes(u);

@@ -16,8 +16,27 @@ export async function GET(req: Request) {
 
         if (clientsError) {
             console.error("[/api/users] Error fetching clients:", clientsError);
-            return NextResponse.json({ error: `Failed to fetch clients: ${clientsError.message}` }, { status: 500 });
+            console.error("[/api/users] Error details:", {
+                message: clientsError.message,
+                code: clientsError.code,
+                details: clientsError.details,
+                hint: clientsError.hint
+            });
+            
+            // Check for RLS/permission errors
+            if (clientsError.code === 'PGRST301' || clientsError.message?.includes('permission denied')) {
+                console.error("[/api/users] ⚠️  RLS (Row Level Security) may be blocking this query.");
+                console.error("[/api/users] SOLUTION: Set SUPABASE_SERVICE_ROLE_KEY in your environment variables.");
+            }
+            
+            return NextResponse.json({ 
+                error: `Failed to fetch clients: ${clientsError.message}`,
+                code: clientsError.code,
+                hint: clientsError.hint
+            }, { status: 500 });
         }
+        
+        console.log(`[/api/users] Successfully fetched ${clients?.length || 0} clients`);
 
         // Get schedules for clients
         const { data: schedules, error: schedulesError } = await supabase
