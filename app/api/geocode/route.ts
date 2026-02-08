@@ -91,7 +91,7 @@ export async function GET(req: Request) {
     const errors: string[] = [];
 
     // Determine which providers to try based on provider parameter
-    let attempts: Array<() => Promise<{ lat: number; lng: number; provider: string; formatted?: string; place_id?: string }>> = [];
+    let attempts: Array<(q: string) => Promise<{ lat: number; lng: number; provider: string; formatted?: string; place_id?: string }>> = [];
     
     if (provider === "nominatim") {
         attempts = [tryNominatim];

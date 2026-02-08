@@ -697,8 +697,8 @@ export default function RoutesPage() {
             name: r?.driverName || r?.name || `Driver ${i}`,
         }));
         meta.sort((a, b) => {
-            const aa = Number.isFinite(a.num) ? a.num : a.i;
-            const bb = Number.isFinite(b.num) ? b.num : b.i;
+            const aa: number = Number.isFinite(a.num) ? (a.num ?? 0) : a.i;
+            const bb: number = Number.isFinite(b.num) ? (b.num ?? 0) : b.i;
             return aa - bb || a.i - b.i;
         });
         const colorsSorted = meta.map((m, idx) => m.color || driverColors[m.i] || palette[idx % palette.length]);
