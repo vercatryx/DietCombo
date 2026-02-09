@@ -5735,6 +5735,11 @@ async function syncSingleOrderForDeliveryDay(
             // vendor_selection_id should be NULL for upcoming orders (it's nullable in the schema)
             const itemInsertErrors: string[] = [];
             for (const [itemId, qty] of Object.entries(selection.items)) {
+                // Skip invalid item keys (null/undefined/empty from UI or stale data)
+                if (itemId == null || itemId === '' || String(itemId) === 'null') {
+                    console.warn(`[syncSingleOrderForDeliveryDay] Skipping invalid item key: ${itemId}`);
+                    continue;
+                }
                 const item = menuItems.find(i => i.id === itemId);
                 const quantity = typeof qty === 'number' ? qty : Number(qty) || 0;
                 
@@ -6145,6 +6150,10 @@ async function syncSingleOrderForDeliveryDay(
                     if (boxItemsRaw && Object.keys(boxItemsRaw).length > 0) {
                         const itemInsertErrors: string[] = [];
                         for (const [itemId, qty] of Object.entries(boxItemsRaw)) {
+                            if (itemId == null || itemId === '' || String(itemId) === 'null') {
+                                console.warn(`[syncSingleOrderForDeliveryDay] Skipping invalid box ${boxIndex + 1} item key: ${itemId}`);
+                                continue;
+                            }
                             const item = menuItems.find(i => i.id === itemId);
                             const quantity = typeof qty === 'number' ? qty : Number(qty) || 0;
                             
@@ -6312,6 +6321,10 @@ async function syncSingleOrderForDeliveryDay(
             if (boxItemsRaw && Object.keys(boxItemsRaw).length > 0) {
                 const itemInsertErrors: string[] = [];
                 for (const [itemId, qty] of Object.entries(boxItemsRaw)) {
+                    if (itemId == null || itemId === '' || String(itemId) === 'null') {
+                        console.warn(`[syncSingleOrderForDeliveryDay] Skipping invalid box item key: ${itemId}`);
+                        continue;
+                    }
                     const item = menuItems.find(i => i.id === itemId);
                     const quantity = typeof qty === 'number' ? qty : Number(qty) || 0;
                     
@@ -10624,6 +10637,31 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
     // CRITICAL: Preserve vendorSelections if they exist (old format compatibility)
     // Don't delete vendorSelections just because we're updating deliveryDayOrders
     // This ensures syncCurrentOrderToUpcoming can find the order data in either format
+
+    // Sanitize vendor selection items: remove null/empty item keys that cause "Item null not found in menu items"
+    const sanitizeItems = (items: any): Record<string, number> => {
+        if (!items || typeof items !== 'object') return {};
+        return Object.fromEntries(
+            Object.entries(items).filter(([k]) => k != null && k !== '' && String(k) !== 'null')
+        ) as Record<string, number>;
+    };
+    if (Array.isArray(activeOrder.vendorSelections)) {
+        activeOrder.vendorSelections = activeOrder.vendorSelections.map((vs: any) => ({
+            ...vs,
+            items: sanitizeItems(vs.items)
+        }));
+    }
+    if (activeOrder.deliveryDayOrders && typeof activeOrder.deliveryDayOrders === 'object') {
+        for (const day of Object.keys(activeOrder.deliveryDayOrders)) {
+            const dayOrder = activeOrder.deliveryDayOrders[day];
+            if (dayOrder?.vendorSelections && Array.isArray(dayOrder.vendorSelections)) {
+                dayOrder.vendorSelections = dayOrder.vendorSelections.map((vs: any) => ({
+                    ...vs,
+                    items: sanitizeItems(vs.items)
+                }));
+            }
+        }
+    }
 
     // Prepare update payload
     const updatePayload: any = {
