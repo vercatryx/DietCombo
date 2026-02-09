@@ -46,9 +46,22 @@ export interface SavedMealPlanMonthProps {
   clientId: string | null;
   /** Called whenever the current orders (with quantities) change, so the parent can persist them on save. */
   onOrdersChange?: (orders: MealPlannerOrderResult[]) => void;
+  /** Preloaded orders (from profile payload or parent preload). When provided, skips the initial fetch for faster load. */
+  initialOrders?: MealPlannerOrderResult[] | null;
+  /** When true and clientId is 'new', parent is preloading; show loading and do not fetch (avoids duplicate request). */
+  preloadInProgress?: boolean;
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMonthProps) {
+function applyOrdersAndSelectFirst(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void, setSelectedDate: (d: string | null) => void) {
+  setOrders(orders);
+  const today = getTodayIso();
+  const future = orders.filter((o) => (o.scheduledDeliveryDate || '') >= today);
+  const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
+  const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : (orders[0]?.scheduledDeliveryDate ?? null);
+  setSelectedDate(firstDate);
+}
+
+export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, preloadInProgress }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -62,21 +75,24 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
     if (orders.length > 0) onOrdersChange?.(orders);
   }, [orders, onOrdersChange]);
 
-  // Load default template when clientId is 'new' so the user can see dates and edit quantities before saving.
+  // When initialOrders is provided (existing client from profile payload or new client preload), use it and skip fetch.
   useEffect(() => {
-    if (clientId !== 'new') return;
+    if (initialOrders == null || !Array.isArray(initialOrders)) return;
+    applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
+    setLoadingDates(false);
+  }, [initialOrders]);
+
+  // Load default template when clientId is 'new' and no initialOrders (user opened new client without preload).
+  // When preloadInProgress is true, parent is fetching; don't fetch here to avoid duplicate request.
+  useEffect(() => {
+    if (clientId !== 'new' || preloadInProgress || (initialOrders != null && initialOrders.length > 0)) return;
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
     getDefaultMealPlanTemplateForNewClient()
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
-        setOrders(list);
-        const today = getTodayIso();
-        const future = list.filter((o) => (o.scheduledDeliveryDate || '') >= today);
-        const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
-        const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : (list[0]?.scheduledDeliveryDate ?? null);
-        setSelectedDate(firstDate);
+        applyOrdersAndSelectFirst(list, setOrders, setSelectedDate);
       })
       .catch((err) => {
         if (fetchIdRef.current !== thisFetchId) return;
@@ -86,9 +102,9 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [clientId]);
+  }, [clientId, initialOrders, preloadInProgress]);
 
-  // Load meal plan data when the dialog is opened for an existing client. Always refetch when the client
+  // Load meal plan data when the dialog is opened for an existing client (and no initialOrders). Always refetch when the client
   // is set so the list of dates with meal plans is always up to date (e.g. after adding a plan
   // elsewhere and reopening the dialog).
   useEffect(() => {
@@ -98,6 +114,11 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
         setSelectedDate(null);
         setLoadingDates(false);
       }
+      return;
+    }
+    if (initialOrders != null && initialOrders.length > 0) {
+      applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
+      setLoadingDates(false);
       return;
     }
     setLoadingDates(true);
@@ -116,12 +137,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
             list = refetched;
           }
         }
-        setOrders(list);
-        const today = getTodayIso();
-        const future = list.filter((o) => (o.scheduledDeliveryDate || '') >= today);
-        const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
-        const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : (list[0]?.scheduledDeliveryDate ?? null);
-        setSelectedDate(firstDate);
+        applyOrdersAndSelectFirst(list, setOrders, setSelectedDate);
       })
       .catch((err) => {
         if (fetchIdRef.current !== thisFetchId) return;
@@ -131,7 +147,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [effectiveClientId]);
+  }, [effectiveClientId, initialOrders]);
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
@@ -213,7 +229,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
           <CalendarDays size={32} />
           <p>{clientId === 'new' ? 'No default meal plan template configured, or save the client to load the meal plan.' : 'Save the client first to see saved meal plans.'}</p>
         </div>
-      ) : loadingDates ? (
+      ) : (loadingDates || (clientId === 'new' && preloadInProgress)) ? (
         <div className={styles.emptyState}>
           <p>Loading saved dates…</p>
         </div>

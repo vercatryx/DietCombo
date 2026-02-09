@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerOrderQuantities, createMealPlannerOrdersFromTemplate, getClientProfilePageData, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerOrderQuantities, createMealPlannerOrdersFromTemplate, getClientProfilePageData, getDefaultMealPlanTemplateForNewClient, type MealPlannerOrderResult } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -194,6 +194,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
     const [loading, setLoading] = useState(true);
     const [loadingOrderDetails, setLoadingOrderDetails] = useState(true);
+    /** Preloaded meal plan orders (from profile payload or new-client preload) so SavedMealPlanMonth skips initial fetch. */
+    const [mealPlanInitialOrders, setMealPlanInitialOrders] = useState<MealPlannerOrderResult[]>([]);
+    /** When true (new client with lookups), parent is preloading meal plan; SavedMealPlanMonth should wait and not fetch. */
+    const [mealPlanPreloading, setMealPlanPreloading] = useState(false);
 
     // Form Filler State
     const [isFillingForm, setIsFillingForm] = useState(false);
@@ -358,55 +362,69 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setLoading(false);
                 setLoadingOrderDetails(false);
 
-                // Load default template and approved meals in background (single template fetch, no cache)
+                // Load default template and approved meals in background (parallel fetches for faster load)
+                setMealPlanPreloading(true);
                 (async () => {
                     try {
-                        const lookups = await loadLookups();
-                        const template = await getDefaultOrderTemplate('Food');
+                        const [lookups, template, mealPlanTemplate] = await Promise.all([
+                            loadLookups(),
+                            getDefaultOrderTemplate('Food'),
+                            getDefaultMealPlanTemplateForNewClient()
+                        ]);
                         const defaultMeals = template ? await computeDefaultApprovedMealsFromTemplate(template, lookups.menuItems) : 0;
                         setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals || 0 }));
-                        await loadAndApplyDefaultTemplate('Food', template);
+                        await loadAndApplyDefaultTemplate('Food', template ?? undefined);
+                        if (mealPlanTemplate?.length) setMealPlanInitialOrders(mealPlanTemplate);
                     } catch (error) {
                         console.error('[ClientProfile] Background load for new client:', error);
+                    } finally {
+                        setMealPlanPreloading(false);
                     }
                 })();
             } else {
-                // No lookups from parent - block until we have data (e.g. dialog opened from elsewhere)
+                // No lookups from parent - fetch lookups and order template in parallel for faster load
                 setLoading(true);
-                loadLookups().then(async () => {
-                    const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
-                    const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
-                    const defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
-                    const defaultClient: Partial<ClientProfile> = {
-                        fullName: '',
-                        email: '',
-                        address: '',
-                        phoneNumber: '',
-                        secondaryPhoneNumber: null,
-                        navigatorId: defaultNavigatorId,
-                        endDate: '',
-                        screeningTookPlace: false,
-                        screeningSigned: false,
-                        notes: '',
-                        statusId: initialStatusId,
-                        serviceType: 'Food',
-                        approvedMealsPerWeek: defaultApprovedMeals || 0,
-                        authorizedAmount: null,
-                        expirationDate: null
-                    };
-                    setFormData(defaultClient);
-                    setClient(defaultClient as ClientProfile);
-                    const defaultVendorId = getDefaultVendor('Food') || '';
-                    setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId, items: {} }] });
-                    setOriginalOrderConfig({});
-                    await loadAndApplyDefaultTemplate('Food');
-                    setLoading(false);
-                    setLoadingOrderDetails(false);
-                }).catch((error) => {
-                    console.error('[ClientProfile] Error loading lookups for new client:', error);
-                    setLoading(false);
-                    setLoadingOrderDetails(false);
-                });
+                Promise.all([loadLookups(), getDefaultOrderTemplate('Food')])
+                    .then(async ([lookupsResult, template]) => {
+                        const statusesList = lookupsResult.statuses || [];
+                        const navigatorsList = lookupsResult.navigators || [];
+                        const vendorsList = lookupsResult.vendors || [];
+                        const initialStatusId = statusesList[0]?.id || '';
+                        const defaultNavigatorId = navigatorsList.find((n: any) => n.isActive)?.id || '';
+                        const defaultVendorId = vendorsList.length > 0
+                            ? (vendorsList.find((v: any) => v.isDefault && v.serviceTypes?.includes('Food'))?.id || vendorsList.find((v: any) => v.serviceTypes?.includes('Food'))?.id || vendorsList[0]?.id || '')
+                            : '';
+                        const defaultMeals = template ? await computeDefaultApprovedMealsFromTemplate(template, lookupsResult.menuItems) : 0;
+                        const defaultClient: Partial<ClientProfile> = {
+                            fullName: '',
+                            email: '',
+                            address: '',
+                            phoneNumber: '',
+                            secondaryPhoneNumber: null,
+                            navigatorId: defaultNavigatorId,
+                            endDate: '',
+                            screeningTookPlace: false,
+                            screeningSigned: false,
+                            notes: '',
+                            statusId: initialStatusId,
+                            serviceType: 'Food',
+                            approvedMealsPerWeek: defaultMeals || 0,
+                            authorizedAmount: null,
+                            expirationDate: null
+                        };
+                        setFormData(defaultClient);
+                        setClient(defaultClient as ClientProfile);
+                        setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId, items: {} }] });
+                        setOriginalOrderConfig({});
+                        await loadAndApplyDefaultTemplate('Food', template ?? undefined);
+                        setLoading(false);
+                        setLoadingOrderDetails(false);
+                    })
+                    .catch((error) => {
+                        console.error('[ClientProfile] Error loading lookups for new client:', error);
+                        setLoading(false);
+                        setLoadingOrderDetails(false);
+                    });
             }
             return;
         }
@@ -1440,7 +1458,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
     }
 
-    async function loadLookups(): Promise<{ menuItems: any[] }> {
+    async function loadLookups(): Promise<{ menuItems: any[]; statuses: ClientStatus[]; navigators: Navigator[]; vendors: Vendor[] }> {
         try {
             const [s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
                 getStatuses(),
@@ -1466,7 +1484,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setCategories(catData);
             setAllClients(allClientsData);
             setRegularClients(regularClientsData);
-            return { menuItems: m || [] };
+            return { menuItems: m || [], statuses: s, navigators: n, vendors: vendorsArray };
         } catch (error) {
             console.error('[ClientProfile] Error loading lookups:', error);
             setMessage('Error loading data. Please refresh the page.');
@@ -1503,13 +1521,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 upcomingOrderDataInitial,
                 orderHistoryData,
                 dependentsData,
-                boxOrdersFromDb: boxOrdersFromDbFromPayload
+                boxOrdersFromDb: boxOrdersFromDbFromPayload,
+                mealPlanData: mealPlanDataFromPayload
             } = payload;
 
             if (c) {
                 setClient(c);
                 setFormData(c);
             }
+            setMealPlanInitialOrders(Array.isArray(mealPlanDataFromPayload) ? mealPlanDataFromPayload : []);
             setStatuses(s);
             setNavigators(n);
             const vendorsArray = v || [];
@@ -6297,6 +6317,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     <SavedMealPlanMonth
                                         clientId={clientId}
                                         onOrdersChange={(orders) => { mealPlanOrdersRef.current = orders; }}
+                                        initialOrders={initialData?.mealPlanData ?? mealPlanInitialOrders}
+                                        preloadInProgress={mealPlanPreloading}
                                     />
                                 </section>
                             )}

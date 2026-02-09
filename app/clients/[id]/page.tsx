@@ -33,7 +33,8 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
         billingHistory: payload.billingHistoryData,
         activeOrder: payload.activeOrderData,
         upcomingOrder: payload.upcomingOrderDataInitial,
-        submissions: payload.submissions ?? []
+        submissions: payload.submissions ?? [],
+        mealPlanData: payload.mealPlanData ?? []
     };
 
     return (

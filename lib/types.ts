@@ -421,5 +421,7 @@ export interface ClientFullDetails {
   activeOrder: any; // Using any to match existing usage in ClientProfile, but ideally typed
   upcomingOrder: any;
   submissions?: Submission[];
+  /** Preloaded meal plan orders for Saved Meal Plan section (avoids extra fetch when opening profile) */
+  mealPlanData?: any[];
 }
 

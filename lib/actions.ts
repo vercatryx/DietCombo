@@ -8291,25 +8291,26 @@ export async function getClientFullDetails(clientId: string) {
     if (!clientId) return null;
 
     try {
+        const client = await getClient(clientId);
+        if (!client) return null;
+
         const [
-            client,
             history,
             orderHistory,
             billingHistory,
             activeOrder,
             upcomingOrder,
-            submissionsResult
+            submissionsResult,
+            mealPlanData
         ] = await Promise.all([
-            getClient(clientId),
             getClientHistory(clientId),
             getOrderHistory(clientId),
             getBillingHistory(clientId),
             getActiveOrderForClient(clientId),
             getUpcomingOrderForClient(clientId),
-            getClientSubmissions(clientId)
+            getClientSubmissions(clientId),
+            client.serviceType === 'Food' ? getSavedMealPlanDatesWithItemsFromOrders(clientId) : Promise.resolve([])
         ]);
-
-        if (!client) return null;
 
         // Load box orders from client_box_orders table if service type is Boxes
         // Note: getClient() already loads box orders, but we also merge into activeOrder
@@ -8356,7 +8357,8 @@ export async function getClientFullDetails(clientId: string) {
             billingHistory,
             activeOrder,
             upcomingOrder,
-            submissions: submissionsResult.success ? (submissionsResult.data || []) : []
+            submissions: submissionsResult.success ? (submissionsResult.data || []) : [],
+            mealPlanData: mealPlanData ?? []
         };
     } catch (error) {
         console.error('Error fetching full client details:', error);
@@ -8396,7 +8398,8 @@ export async function getClientProfilePageData(clientId: string) {
             orderHistoryData,
             dependentsData,
             boxOrdersFromDb,
-            submissionsResult
+            submissionsResult,
+            mealPlanData
         ] = await Promise.all([
             getStatuses(),
             getNavigators(),
@@ -8414,7 +8417,8 @@ export async function getClientProfilePageData(clientId: string) {
             getOrderHistory(clientId, caseId),
             !client.parentClientId ? getDependentsByParentId(client.id) : Promise.resolve([]),
             client.serviceType === 'Boxes' ? getClientBoxOrder(clientId) : Promise.resolve(null),
-            getClientSubmissions(clientId)
+            getClientSubmissions(clientId),
+            client.serviceType === 'Food' ? getSavedMealPlanDatesWithItemsFromOrders(clientId) : Promise.resolve([])
         ]);
 
         return {
@@ -8435,7 +8439,8 @@ export async function getClientProfilePageData(clientId: string) {
             orderHistoryData: orderHistoryData ?? [],
             dependentsData: dependentsData ?? [],
             boxOrdersFromDb,
-            submissions: submissionsResult?.success ? (submissionsResult.data ?? []) : []
+            submissions: submissionsResult?.success ? (submissionsResult.data ?? []) : [],
+            mealPlanData: mealPlanData ?? []
         };
     } catch (error) {
         console.error('[getClientProfilePageData] Error:', error);
