@@ -218,19 +218,39 @@ async function scanOrderTables() {
     return { upcomingByClient, clientNameById, foodClientIds };
   }
 
-  async function fetchMpoItems() {
-    const r = await supabase.from('meal_planner_order_items').select('meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, custom_price').in('meal_planner_order_id', mpoIds);
-    if (!r.error) return r.data as unknown as Array<{ meal_planner_order_id: string; menu_item_id: string | null; meal_item_id: string | null; quantity: number; custom_name: string | null; custom_price: unknown }>;
-    const rAll = await supabase.from('meal_planner_order_items').select('meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, custom_price');
-    if (!rAll.error && rAll.data) {
-      return (rAll.data as unknown as Array<{ meal_planner_order_id: string }>).filter((row) => mpoIdSet.has(row.meal_planner_order_id)) as Array<{ meal_planner_order_id: string; menu_item_id: string | null; meal_item_id: string | null; quantity: number; custom_name: string | null; custom_price: unknown }>;
+  // Fetch meal_planner_order_items in chunks so every order gets its items (avoids .in() URL/limit truncation).
+  const IN_CLAUSE_BATCH = 80;
+  type MpoItemRow = { meal_planner_order_id: string; menu_item_id: string | null; meal_item_id: string | null; quantity: number; custom_name: string | null; custom_price: unknown };
+  async function fetchMpoItems(): Promise<MpoItemRow[]> {
+    const allRows: MpoItemRow[] = [];
+    for (let i = 0; i < mpoIds.length; i += IN_CLAUSE_BATCH) {
+      const chunk = mpoIds.slice(i, i + IN_CLAUSE_BATCH);
+      const r = await supabase
+        .from('meal_planner_order_items')
+        .select('meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, custom_price')
+        .in('meal_planner_order_id', chunk);
+      if (r.error) {
+        if (i === 0) {
+          const rAll = await supabase.from('meal_planner_order_items').select('meal_planner_order_id, menu_item_id, meal_item_id, quantity, custom_name, custom_price');
+          if (!rAll.error && rAll.data) {
+            return (rAll.data as unknown as MpoItemRow[]).filter((row) => mpoIdSet.has(row.meal_planner_order_id));
+          }
+        }
+        throw new Error(`meal_planner_order_items scan failed: ${r.error.message}`);
+      }
+      const data = (r.data ?? []) as unknown as MpoItemRow[];
+      allRows.push(...data);
     }
-    throw new Error(`meal_planner_order_items scan failed: ${r.error?.message}`);
+    return allRows;
   }
 
   const [{ upcomingByClient, clientNameById, foodClientIds }, mpoItemsData] = await Promise.all([fetchClients(), fetchMpoItems()]);
 
+  // Ensure every meal_planner_order has an entry (empty or populated) so merge is complete for all orders.
   const itemsByMpoId = new Map<string, Array<{ menu_item_id: string | null; meal_item_id: string | null; quantity: number; custom_name: string | null; custom_price: number | null }>>();
+  for (const id of mpoIds) {
+    itemsByMpoId.set(id, []);
+  }
   for (const row of mpoItemsData) {
     const r = row as { meal_planner_order_id: string; menu_item_id: string | null; meal_item_id: string | null; quantity: number; custom_name: string | null; custom_price: unknown };
     const list = itemsByMpoId.get(r.meal_planner_order_id) ?? [];
