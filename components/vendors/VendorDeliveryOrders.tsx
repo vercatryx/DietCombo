@@ -193,7 +193,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             }
             return items.map((item: any) => {
                 const menuItem = menuItems.find(mi => mi.id === item.menu_item_id);
-                const itemName = menuItem?.name || item.menuItemName || 'Unknown Item';
+                const itemName = menuItem?.name || item.custom_name || item.menuItemName || 'Unknown Item';
                 const quantity = parseInt(item.quantity || 0);
                 return `${itemName} (Qty: ${quantity})`;
             }).join('; ');
@@ -211,7 +211,8 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
 
             for (const [itemId, quantityOrObj] of itemEntries) {
                 const menuItem = menuItems.find(mi => mi.id === itemId);
-                const itemName = menuItem?.name || 'Unknown Item';
+                const customName = quantityOrObj && typeof quantityOrObj === 'object' && (quantityOrObj as any).custom_name ? (quantityOrObj as any).custom_name : undefined;
+                const itemName = menuItem?.name || customName || 'Unknown Item';
 
                 // Handle both formats: { itemId: quantity } or { itemId: { quantity: X, price: Y } }
                 let qty = 0;
@@ -729,10 +730,11 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                                 const menuItem = menuItems.find(mi => mi.id === item.menu_item_id);
                                 const quantity = parseInt(item.quantity || 0);
                                 const itemKey = item.id || `${order.id}-item-${index}`;
+                                const itemDisplayName = menuItem?.name || item.custom_name || item.menuItemName || 'Unknown Item';
 
                                 return (
                                     <tr key={itemKey}>
-                                        <td>{menuItem?.name || item.menuItemName || 'Unknown Item'}</td>
+                                        <td>{itemDisplayName}</td>
                                         <td>{quantity}</td>
                                     </tr>
                                 );
@@ -776,13 +778,23 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                     items = {};
                 }
             } else if (Array.isArray(items)) {
-                // If items is an array, convert to object format { itemId: quantity }
+                // If items is an array, convert to object format { itemId: quantity } or { itemId: { quantity, custom_name? } }
                 const itemsObj: any = {};
                 for (const item of items) {
                     if (item && typeof item === 'object' && 'menu_item_id' in item) {
-                        itemsObj[item.menu_item_id] = item.quantity || 0;
+                        const qty = item.quantity || 0;
+                        if (item.custom_name) {
+                            itemsObj[item.menu_item_id] = { quantity: qty, custom_name: item.custom_name };
+                        } else {
+                            itemsObj[item.menu_item_id] = qty;
+                        }
                     } else if (item && typeof item === 'object' && 'id' in item) {
-                        itemsObj[item.id] = item.quantity || item.qty || 1;
+                        const qty = item.quantity || item.qty || 1;
+                        if (item.custom_name) {
+                            itemsObj[item.id] = { quantity: qty, custom_name: item.custom_name };
+                        } else {
+                            itemsObj[item.id] = qty;
+                        }
                     }
                 }
                 items = itemsObj;
@@ -793,13 +805,14 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             const boxQuantity = boxSelection.quantity || 1;
 
             // Process items and filter out zero-quantity items, group by category
-            const itemsByCategory: { [categoryId: string]: Array<{ itemId: string; menuItem: MenuItem | undefined; qty: number }> } = {};
-            const uncategorizedItems: Array<{ itemId: string; menuItem: MenuItem | undefined; qty: number }> = [];
+            const itemsByCategory: { [categoryId: string]: Array<{ itemId: string; menuItem: MenuItem | undefined; qty: number; customName?: string }> } = {};
+            const uncategorizedItems: Array<{ itemId: string; menuItem: MenuItem | undefined; qty: number; customName?: string }> = [];
             let totalItems = 0;
 
             for (const [itemId, quantityOrObj] of itemEntries) {
-                // Handle both formats: { itemId: quantity } or { itemId: { quantity: X, price: Y } }
+                // Handle both formats: { itemId: quantity } or { itemId: { quantity: X, price?: Y, custom_name?: Z } }
                 let qty = 0;
+                const customName = quantityOrObj && typeof quantityOrObj === 'object' && (quantityOrObj as any).custom_name ? (quantityOrObj as any).custom_name : undefined;
 
                 if (typeof quantityOrObj === 'number') {
                     // Simple format: just a number
@@ -815,7 +828,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                 if (qty > 0) {
                     const menuItem = menuItems.find(mi => mi.id === itemId);
                     const categoryId = menuItem?.categoryId || null;
-                    const itemData = { itemId, menuItem, qty };
+                    const itemData = { itemId, menuItem, qty, customName };
 
                     if (categoryId) {
                         if (!itemsByCategory[categoryId]) {
@@ -883,9 +896,9 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {categoryItems.map(({ itemId, menuItem, qty }) => (
+                                        {categoryItems.map(({ itemId, menuItem, qty, customName }) => (
                                             <tr key={itemId}>
-                                                <td>{menuItem?.name || 'Unknown Item'}</td>
+                                                <td>{menuItem?.name || customName || 'Unknown Item'}</td>
                                                 <td>{qty}</td>
                                             </tr>
                                         ))}
@@ -916,9 +929,9 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {uncategorizedItems.map(({ itemId, menuItem, qty }) => (
+                                    {uncategorizedItems.map(({ itemId, menuItem, qty, customName }) => (
                                         <tr key={itemId}>
-                                            <td>{menuItem?.name || 'Unknown Item'}</td>
+                                            <td>{menuItem?.name || customName || 'Unknown Item'}</td>
                                             <td>{qty}</td>
                                         </tr>
                                     ))}
