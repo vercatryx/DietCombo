@@ -432,11 +432,17 @@ export async function GET(req: Request) {
 
         // Check which clients have stops for delivery dates, and which order_ids already have a stop
         // Stops are unique by order_id: one stop per order for the driver to handle
-        const { data: existingStops } = await supabase
+        // When filtering by delivery_date, load ALL stops for that date so we don't create duplicates (avoid limit(10000) which caused duplicate stops when total stops > 10k)
+        let existingStopsQuery = supabase
             .from('stops')
-            .select('client_id, delivery_date, day, order_id')
-            .limit(10000);
-        
+            .select('client_id, delivery_date, day, order_id');
+        if (normalizedDeliveryDate) {
+            existingStopsQuery = existingStopsQuery.eq('delivery_date', normalizedDeliveryDate);
+        } else {
+            existingStopsQuery = existingStopsQuery.limit(10000);
+        }
+        const { data: existingStops } = await existingStopsQuery;
+
         // Normalize delivery_date to YYYY-MM-DD so we match the format used from orders (avoids duplicate stop creation on every page visit)
         const normalizeDeliveryDate = (v: string | null | undefined): string | null => {
             if (v == null || v === undefined) return null;
