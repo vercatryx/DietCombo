@@ -1006,32 +1006,25 @@ export async function getDefaultOrderTemplate(serviceType?: string): Promise<any
             .select('value')
             .eq('key', 'default_order_template')
             .single();
-        
+
         if (error || !data) {
             return null;
         }
-        
+
         const allTemplates = JSON.parse(data.value);
-        
+
         // If no serviceType specified, return all templates (for backward compatibility)
         if (!serviceType) {
-            // Check if it's the old format (single template with serviceType property)
             if (allTemplates && allTemplates.serviceType) {
-                // Old format - return as-is for backward compatibility
                 return allTemplates;
             }
-            // New format - return all templates
             return allTemplates;
         }
-        
+
         // If serviceType specified, return template for that serviceType
-        // Check if it's the old format (single template)
         if (allTemplates && allTemplates.serviceType) {
-            // Old format - return only if serviceType matches
             return allTemplates.serviceType === serviceType ? allTemplates : null;
         }
-        
-        // New format - return template for specific serviceType
         return allTemplates && allTemplates[serviceType] ? allTemplates[serviceType] : null;
     } catch (error) {
         console.error('Error fetching default order template:', error);
@@ -1044,33 +1037,29 @@ export async function getDefaultOrderTemplate(serviceType?: string): Promise<any
  * in the default order template for Food serviceType.
  * Returns 0 if no template exists or if calculation fails.
  */
+/**
+ * Compute default approved meals per week from a Food template and menu items (no fetch).
+ * Use this when you already have the template to avoid a second getDefaultOrderTemplate call.
+ */
+export async function computeDefaultApprovedMealsFromTemplate(template: any, menuItems: MenuItem[]): Promise<number> {
+    if (!template || template.serviceType !== 'Food' || !menuItems?.length) return 0;
+    let totalValue = 0;
+    const vendorSelections = template.vendorSelections || [];
+    for (const selection of vendorSelections) {
+        const items = selection.items || {};
+        for (const [itemId, quantity] of Object.entries(items)) {
+            const item = menuItems.find(mi => mi.id === itemId);
+            if (item && item.value) totalValue += item.value * (quantity as number);
+        }
+    }
+    return totalValue;
+}
+
 export async function getDefaultApprovedMealsPerWeek(): Promise<number> {
     try {
         const template = await getDefaultOrderTemplate('Food');
-        if (!template || template.serviceType !== 'Food') {
-            return 0;
-        }
-
         const menuItems = await getMenuItems();
-        if (menuItems.length === 0) {
-            return 0;
-        }
-
-        // Calculate total value from vendorSelections
-        let totalValue = 0;
-        const vendorSelections = template.vendorSelections || [];
-        
-        for (const selection of vendorSelections) {
-            const items = selection.items || {};
-            for (const [itemId, quantity] of Object.entries(items)) {
-                const item = menuItems.find(mi => mi.id === itemId);
-                if (item && item.value) {
-                    totalValue += item.value * (quantity as number);
-                }
-            }
-        }
-
-        return totalValue;
+        return await computeDefaultApprovedMealsFromTemplate(template, menuItems);
     } catch (error) {
         console.error('Error calculating default approved meals per week:', error);
         return 0;
@@ -1133,7 +1122,7 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
                 .insert([{ id, key: 'default_order_template', value: templateJson }]);
             handleError(error);
         }
-        
+
         revalidatePath('/admin');
 
         // When saving the Food default template, propagate to Food clients in the background so save returns immediately

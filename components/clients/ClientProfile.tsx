@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, saveClientMealPlannerOrderQuantities, getClientProfilePageData, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerOrderQuantities, getClientProfilePageData, type MealPlannerOrderResult } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -358,13 +358,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setLoading(false);
                 setLoadingOrderDetails(false);
 
-                // Load default template and approved meals in background (no blocking)
+                // Load default template and approved meals in background (single template fetch, no cache)
                 (async () => {
                     try {
-                        await loadLookups();
-                        const defaultMeals = await getDefaultApprovedMealsPerWeek();
+                        const lookups = await loadLookups();
+                        const template = await getDefaultOrderTemplate('Food');
+                        const defaultMeals = template ? await computeDefaultApprovedMealsFromTemplate(template, lookups.menuItems) : 0;
                         setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals || 0 }));
-                        await loadAndApplyDefaultTemplate('Food');
+                        await loadAndApplyDefaultTemplate('Food', template);
                     } catch (error) {
                         console.error('[ClientProfile] Background load for new client:', error);
                     }
@@ -780,15 +781,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         return { vendorId, customItems };
     }
 
-    // Helper: Load and apply default order template for new clients
-    async function loadAndApplyDefaultTemplate(serviceType: string): Promise<void> {
+    // Helper: Load and apply default order template for new clients. Pass providedTemplate to avoid a second fetch when caller already has it.
+    async function loadAndApplyDefaultTemplate(serviceType: string, providedTemplate?: any): Promise<void> {
         // Only apply for Food and Produce service types
         if (serviceType !== 'Food' && serviceType !== 'Produce') {
             return;
         }
 
         try {
-            const template = await getDefaultOrderTemplate(serviceType);
+            const template = (providedTemplate != null && ((serviceType === 'Food' && providedTemplate.serviceType === 'Food') || (serviceType === 'Produce' && providedTemplate.serviceType === 'Produce')))
+                ? providedTemplate
+                : await getDefaultOrderTemplate(serviceType);
             if (!template) {
                 if (DEBUG_PROFILE) console.log(`[ClientProfile] No default template found for service type: ${serviceType}`);
                 return;
@@ -1437,7 +1440,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
     }
 
-    async function loadLookups() {
+    async function loadLookups(): Promise<{ menuItems: any[] }> {
         try {
             const [s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
                 getStatuses(),
@@ -1452,7 +1455,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             ]);
             setStatuses(s);
             setNavigators(n);
-            // Ensure vendors array is set (even if empty, to avoid undefined issues)
             const vendorsArray = v || [];
             setVendors(vendorsArray);
             if (DEBUG_PROFILE && vendorsArray.length > 0) {
@@ -1464,10 +1466,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setCategories(catData);
             setAllClients(allClientsData);
             setRegularClients(regularClientsData);
+            return { menuItems: m || [] };
         } catch (error) {
             console.error('[ClientProfile] Error loading lookups:', error);
             setMessage('Error loading data. Please refresh the page.');
-            throw error; // Re-throw to allow callers to handle it
+            throw error;
         }
     }
 
