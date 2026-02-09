@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerOrderQuantities, getClientProfilePageData, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerOrderQuantities, createMealPlannerOrdersFromTemplate, getClientProfilePageData, type MealPlannerOrderResult } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -3955,6 +3955,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 mealSelections: activeOrder.mealSelections || {}
                             });
                         }
+                    }
+                }
+
+                // For new clients: persist Saved Meal Plan component input (default template + user-edited quantities)
+                // to meal_planner_orders and meal_planner_order_items since they have no existing records yet.
+                if (formData.serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
+                    const { ok, error: mealPlanCreateErr } = await createMealPlannerOrdersFromTemplate(updatedClient.id, mealPlanOrdersRef.current);
+                    if (!ok && mealPlanCreateErr) {
+                        console.warn('[ClientProfile] Failed to create meal planner orders from template:', mealPlanCreateErr);
                     }
                 }
 

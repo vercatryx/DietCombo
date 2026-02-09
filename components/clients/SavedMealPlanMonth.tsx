@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { CalendarDays, UtensilsCrossed } from 'lucide-react';
 import {
   getSavedMealPlanDatesWithItemsFromOrders,
+  getDefaultMealPlanTemplateForNewClient,
   updateMealPlannerOrderItemQuantity,
   ensureMealPlannerOrdersFromDefaultTemplate,
   type MealPlannerOrderResult,
@@ -61,14 +62,42 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
     if (orders.length > 0) onOrdersChange?.(orders);
   }, [orders, onOrdersChange]);
 
-  // Load meal plan data when the dialog is opened for a client. Always refetch when the client
+  // Load default template when clientId is 'new' so the user can see dates and edit quantities before saving.
+  useEffect(() => {
+    if (clientId !== 'new') return;
+    setLoadingDates(true);
+    const thisFetchId = fetchIdRef.current + 1;
+    fetchIdRef.current = thisFetchId;
+    getDefaultMealPlanTemplateForNewClient()
+      .then((list) => {
+        if (fetchIdRef.current !== thisFetchId) return;
+        setOrders(list);
+        const today = getTodayIso();
+        const future = list.filter((o) => (o.scheduledDeliveryDate || '') >= today);
+        const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
+        const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : (list[0]?.scheduledDeliveryDate ?? null);
+        setSelectedDate(firstDate);
+      })
+      .catch((err) => {
+        if (fetchIdRef.current !== thisFetchId) return;
+        console.error('[SavedMealPlanMonth] Error loading default template for new client:', err);
+        setOrders([]);
+      })
+      .finally(() => {
+        if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
+      });
+  }, [clientId]);
+
+  // Load meal plan data when the dialog is opened for an existing client. Always refetch when the client
   // is set so the list of dates with meal plans is always up to date (e.g. after adding a plan
   // elsewhere and reopening the dialog).
   useEffect(() => {
     if (!effectiveClientId) {
-      setOrders([]);
-      setSelectedDate(null);
-      setLoadingDates(false);
+      if (clientId !== 'new') {
+        setOrders([]);
+        setSelectedDate(null);
+        setLoadingDates(false);
+      }
       return;
     }
     setLoadingDates(true);
@@ -126,7 +155,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
   }
 
   async function changeQuantity(item: MealPlannerOrderDisplayItem, delta: number) {
-    if (!effectiveClientId || !selectedDate || !selectedOrder) return;
+    if (!selectedDate || !selectedOrder) return;
     const currentQty = getItemQty(item);
     const newQty = Math.max(1, currentQty + delta);
     if (newQty === currentQty) return;
@@ -134,7 +163,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
   }
 
   async function setQuantityDirect(item: MealPlannerOrderDisplayItem, newQty: number) {
-    if (!effectiveClientId || !selectedDate || !selectedOrder) return;
+    if (!selectedDate || !selectedOrder) return;
     const qty = Math.max(1, Number(newQty) || 1);
     const currentQty = getItemQty(item);
     if (qty === currentQty) return;
@@ -152,6 +181,11 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
           : o
       )
     );
+    // For new client, only update local state; parent will persist on save via createMealPlannerOrdersFromTemplate
+    if (!effectiveClientId) {
+      setUpdatingItemId(null);
+      return;
+    }
     try {
       const { ok } = await updateMealPlannerOrderItemQuantity(item.id, qty);
       if (!ok) {
@@ -174,10 +208,10 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
         </p>
       </header>
 
-      {!effectiveClientId ? (
+      {!effectiveClientId && (clientId !== 'new' || orders.length === 0) ? (
         <div className={styles.emptyState}>
           <CalendarDays size={32} />
-          <p>{clientId === 'new' ? 'Save the client to load the meal plan from the default template.' : 'Save the client first to see saved meal plans.'}</p>
+          <p>{clientId === 'new' ? 'No default meal plan template configured, or save the client to load the meal plan.' : 'Save the client first to see saved meal plans.'}</p>
         </div>
       ) : loadingDates ? (
         <div className={styles.emptyState}>

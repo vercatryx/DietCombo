@@ -1771,6 +1771,43 @@ export async function getDefaultTemplateMealPlanDatesForFuture(): Promise<string
 }
 
 /**
+ * Fetch the default meal plan template (admin default, client_id is null) as a list of dates with
+ * items and quantities. Used by SavedMealPlanMonth when clientId is 'new' so the user can see
+ * dates and default template and edit quantities before saving the client. Returns same shape as
+ * getSavedMealPlanDatesWithItemsFromOrders but with synthetic ids (e.g. new-YYYY-MM-DD-0).
+ */
+export async function getDefaultMealPlanTemplateForNewClient(): Promise<MealPlannerOrderResult[]> {
+    try {
+        const dates = await getDefaultTemplateMealPlanDatesForFuture();
+        if (dates.length === 0) return [];
+        const today = mealPlannerDateOnly(new Date().toISOString().slice(0, 10));
+        const list: MealPlannerOrderResult[] = [];
+        for (const dateOnly of dates) {
+            if (dateOnly < today) continue;
+            const { items } = await getMealPlannerCustomItems(dateOnly, null);
+            if (items.length === 0) continue;
+            const displayItems: MealPlannerOrderDisplayItem[] = items.map((it, idx) => ({
+                id: `new-${dateOnly}-${idx}`,
+                name: it.name ?? 'Item',
+                quantity: Math.max(1, Number(it.quantity) ?? 1)
+            }));
+            list.push({
+                id: `new-${dateOnly}`,
+                scheduledDeliveryDate: dateOnly,
+                deliveryDay: null,
+                status: 'draft',
+                totalItems: displayItems.length,
+                items: displayItems
+            });
+        }
+        return list;
+    } catch (err) {
+        console.error('Error fetching default meal plan template for new client:', err);
+        return [];
+    }
+}
+
+/**
  * When a client has no meal_planner_orders (e.g. on first opening the profile), load the default
  * template from meal_planner_custom_items for today and future dates and create meal_planner_orders
  * and meal_planner_order_items for this client. Called from ClientProfile/SavedMealPlanMonth when
@@ -1789,6 +1826,38 @@ export async function ensureMealPlannerOrdersFromDefaultTemplate(
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('Error ensuring meal planner orders from default template:', err);
+        return { ok: false, error: message };
+    }
+}
+
+/**
+ * Create meal_planner_orders and meal_planner_order_items for a new client from the in-memory
+ * template (e.g. default template with user-edited quantities). Called when saving a new client
+ * who had the Saved Meal Plan component open with default template data. Writes to
+ * meal_planner_custom_items for the client then syncs to meal_planner_orders.
+ */
+export async function createMealPlannerOrdersFromTemplate(
+    clientId: string,
+    orders: MealPlannerOrderResult[]
+): Promise<{ ok: boolean; error?: string }> {
+    try {
+        if (!clientId || orders.length === 0) return { ok: true };
+        for (const order of orders) {
+            const dateOnly = mealPlannerDateOnly(order.scheduledDeliveryDate);
+            const validItems = (order.items ?? []).filter((i) => (i.name ?? '').trim() && (Number(i.quantity) || 0) > 0);
+            if (validItems.length === 0) continue;
+            const customItems: MealPlannerCustomItemInput[] = validItems.map((item, idx) => ({
+                name: (item.name ?? '').trim() || 'Item',
+                quantity: Math.max(1, Number(item.quantity) || 1),
+                sortOrder: idx
+            }));
+            await saveMealPlannerCustomItems(dateOnly, customItems, clientId);
+            await syncMealPlannerCustomItemsToOrders(dateOnly, clientId);
+        }
+        return { ok: true };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('Error creating meal planner orders from template:', err);
         return { ok: false, error: message };
     }
 }

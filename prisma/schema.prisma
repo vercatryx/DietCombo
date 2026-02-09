@@ -520,10 +520,11 @@ model Stop {
   assignedDriverId String?   @map("assigned_driver_id") @db.VarChar(36)
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
-  orderId          String?   @map("order_id") @db.VarChar(36)
+  orderId          String?   @unique @map("order_id") @db.VarChar(36)
   deliveryDate     DateTime? @map("delivery_date") @db.Date
   // Note: orderId can reference either orders.id or upcoming_orders.id
   // Foreign key constraint removed to allow both table references
+  // Unique on order_id ensures at most one stop per order (no duplicates)
 
   @@index([day], map: "idx_stops_day")
   @@index([deliveryDate], map: "idx_stops_delivery_date")
