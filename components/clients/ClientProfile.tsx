@@ -157,6 +157,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const justCreatedClientRef = useRef<boolean>(false);
     // Track if we've already set defaults to prevent infinite loops
     const defaultsSetRef = useRef<{ [key: string]: boolean | string | undefined; lastKey?: string }>({});
+    // Track if we've loaded default Food template for existing Food client with no order (hydrateFromInitialData path)
+    const defaultTemplateLoadedForFoodRef = useRef<boolean>(false);
     // Current meal plan orders (from Saved Meal Plan section) for persisting on profile save
     const mealPlanOrdersRef = useRef<MealPlannerOrderResult[]>([]);
 
@@ -307,17 +309,29 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         setCaseIdExternalError("");
         abortAllGeo();
 
-        // Handle new client case - initialize with defaults
+        // Handle new client case - show form immediately when parent provided lookups, then load template in background
         if (isNewClient) {
-            setLoading(true);
-            // Load lookups but don't load client data
-            loadLookups().then(async () => {
-                // Initialize with default values
-                const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
-                const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
-                
-                // Get default approved meals per week from template
-                const defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
+            const hasLookupsFromParent = (initialStatuses?.length ?? 0) > 0 && (initialNavigators?.length ?? 0) > 0;
+            if (hasLookupsFromParent) {
+                // Open dialog immediately using props (ClientList already has statuses, navigators, vendors)
+                const statusesList = initialStatuses || [];
+                const navigatorsList = initialNavigators || [];
+                const vendorsList = initialVendors || [];
+                setStatuses(statusesList);
+                setNavigators(navigatorsList);
+                if (vendorsList.length > 0) setVendors(vendorsList);
+                if (initialMenuItems?.length) setMenuItems(initialMenuItems);
+                if (initialBoxTypes?.length) setBoxTypes(initialBoxTypes);
+                if (initialSettings) setSettings(initialSettings);
+                if (initialCategories?.length) setCategories(initialCategories);
+                if (initialAllClients?.length) setAllClients(initialAllClients);
+                if (initialRegularClients?.length) setRegularClients(initialRegularClients);
+
+                const initialStatusId = statusesList[0]?.id || '';
+                const defaultNavigatorId = navigatorsList.find((n: any) => n.isActive)?.id || '';
+                const defaultVendorId = (vendorsList.length > 0)
+                    ? (vendorsList.find((v: any) => v.isDefault && v.serviceTypes?.includes('Food'))?.id || vendorsList.find((v: any) => v.serviceTypes?.includes('Food'))?.id || vendorsList[0]?.id || '')
+                    : '';
 
                 const defaultClient: Partial<ClientProfile> = {
                     fullName: '',
@@ -332,29 +346,67 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     notes: '',
                     statusId: initialStatusId,
                     serviceType: 'Food',
-                    approvedMealsPerWeek: defaultApprovedMeals || 0,
+                    approvedMealsPerWeek: 0,
                     authorizedAmount: null,
                     expirationDate: null
                 };
 
                 setFormData(defaultClient);
                 setClient(defaultClient as ClientProfile);
-                
-                // Initialize order config with default template for Food service type
-                const defaultVendorId = getDefaultVendor('Food') || '';
                 setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId, items: {} }] });
                 setOriginalOrderConfig({});
-                
-                // Load and apply default order template for Food
-                await loadAndApplyDefaultTemplate('Food');
-                
                 setLoading(false);
                 setLoadingOrderDetails(false);
-            }).catch((error) => {
-                console.error('[ClientProfile] Error loading lookups for new client:', error);
-                setLoading(false);
-                setLoadingOrderDetails(false);
-            });
+
+                // Load default template and approved meals in background (no blocking)
+                (async () => {
+                    try {
+                        await loadLookups();
+                        const defaultMeals = await getDefaultApprovedMealsPerWeek();
+                        setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals || 0 }));
+                        await loadAndApplyDefaultTemplate('Food');
+                    } catch (error) {
+                        console.error('[ClientProfile] Background load for new client:', error);
+                    }
+                })();
+            } else {
+                // No lookups from parent - block until we have data (e.g. dialog opened from elsewhere)
+                setLoading(true);
+                loadLookups().then(async () => {
+                    const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
+                    const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
+                    const defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
+                    const defaultClient: Partial<ClientProfile> = {
+                        fullName: '',
+                        email: '',
+                        address: '',
+                        phoneNumber: '',
+                        secondaryPhoneNumber: null,
+                        navigatorId: defaultNavigatorId,
+                        endDate: '',
+                        screeningTookPlace: false,
+                        screeningSigned: false,
+                        notes: '',
+                        statusId: initialStatusId,
+                        serviceType: 'Food',
+                        approvedMealsPerWeek: defaultApprovedMeals || 0,
+                        authorizedAmount: null,
+                        expirationDate: null
+                    };
+                    setFormData(defaultClient);
+                    setClient(defaultClient as ClientProfile);
+                    const defaultVendorId = getDefaultVendor('Food') || '';
+                    setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId, items: {} }] });
+                    setOriginalOrderConfig({});
+                    await loadAndApplyDefaultTemplate('Food');
+                    setLoading(false);
+                    setLoadingOrderDetails(false);
+                }).catch((error) => {
+                    console.error('[ClientProfile] Error loading lookups for new client:', error);
+                    setLoading(false);
+                    setLoadingOrderDetails(false);
+                });
+            }
             return;
         }
 
@@ -745,44 +797,46 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (DEBUG_PROFILE) console.log(`[ClientProfile] Loading default template for ${serviceType}:`, template);
 
             if (serviceType === 'Food') {
-                // Apply Food template - copy vendorSelections and items
+                // Apply Food template - copy vendorSelections and/or deliveryDayOrders and items
                 const defaultVendorId = getDefaultVendor('Food') || '';
                 const templateVendorSelections = template.vendorSelections || [];
-                
-                // Use template's vendor selections if available, otherwise create one with default vendor
-                let vendorSelections: any[] = [];
-                
-                if (templateVendorSelections.length > 0) {
-                    // Use template's vendor selections, but ensure vendorId is set to default vendor
-                    // The template may have items configured, so we preserve those
-                    vendorSelections = templateVendorSelections.map((vs: any) => ({
-                        vendorId: defaultVendorId || vs.vendorId || '', // Always use default vendor for new clients, fallback to template vendorId
-                        items: { ...(vs.items || {}) } // Copy items from template - preserve all item quantities as-is
-                    }));
-                } else {
-                    // No vendor selections in template, create default one
-                    vendorSelections = [{ vendorId: defaultVendorId, items: {} }];
+                const templateDeliveryDayOrders = template.deliveryDayOrders && typeof template.deliveryDayOrders === 'object' ? template.deliveryDayOrders : null;
+
+                let newOrderConfig: any = { serviceType: 'Food' };
+
+                if (templateDeliveryDayOrders && Object.keys(templateDeliveryDayOrders).length > 0) {
+                    // Template uses deliveryDayOrders - apply so quantities show in form (getVendorSelectionsForDay uses first day)
+                    const deliveryDayOrders: any = {};
+                    for (const [day, dayOrder] of Object.entries(templateDeliveryDayOrders)) {
+                        const dayVal = dayOrder as { vendorSelections?: any[] };
+                        const selections = (dayVal.vendorSelections || []).map((vs: any) => ({
+                            vendorId: defaultVendorId || vs.vendorId || '',
+                            items: { ...(vs.items || {}) }
+                        }));
+                        if (selections.length > 0) deliveryDayOrders[day] = { vendorSelections: selections };
+                    }
+                    newOrderConfig.deliveryDayOrders = deliveryDayOrders;
                 }
 
-                // CRITICAL: Preserve all template values exactly as they are
-                // This ensures order details are saved as-is from the template, even if values are unchanged
-                // CRITICAL FIX: Always set serviceType to 'Food' to prevent template from overwriting it
-                const newOrderConfig = {
-                    serviceType: 'Food', // Always use 'Food', never use template.serviceType which might be 'order' or 'Meal'
-                    vendorSelections: vendorSelections
-                };
+                if (!newOrderConfig.deliveryDayOrders || Object.keys(newOrderConfig.deliveryDayOrders).length === 0) {
+                    let vendorSelections: any[] = [];
+                    if (templateVendorSelections.length > 0) {
+                        vendorSelections = templateVendorSelections.map((vs: any) => ({
+                            vendorId: defaultVendorId || vs.vendorId || '',
+                            items: { ...(vs.items || {}) }
+                        }));
+                    } else {
+                        vendorSelections = [{ vendorId: defaultVendorId, items: {} }];
+                    }
+                    newOrderConfig.vendorSelections = vendorSelections;
+                }
 
                 if (DEBUG_PROFILE) {
-                    console.log('[ClientProfile] Applied Food template:', {
-                        templateServiceType: template.serviceType,
-                        appliedServiceType: newOrderConfig.serviceType,
-                        vendorSelectionsCount: vendorSelections.length,
-                        itemsCount: vendorSelections.reduce((sum, vs) => sum + Object.keys(vs.items || {}).length, 0),
-                        totalQuantities: vendorSelections.reduce((sum, vs) => {
-                            const items = vs.items || {};
-                            return sum + Object.values(items).reduce((qtySum: number, qty: any) => qtySum + (Number(qty) || 0), 0);
-                        }, 0)
-                    });
+                    const vs = newOrderConfig.vendorSelections || [];
+                    const ddo = newOrderConfig.deliveryDayOrders || {};
+                    const itemsCount = vs.reduce((sum: number, v: any) => sum + Object.keys(v.items || {}).length, 0) +
+                        Object.values(ddo).reduce((s: number, d: any) => s + (d.vendorSelections || []).reduce((s2: number, v: any) => s2 + Object.keys(v.items || {}).length, 0), 0);
+                    console.log('[ClientProfile] Applied Food template:', { serviceType: newOrderConfig.serviceType, vendorSelectionsCount: vs.length, deliveryDaysCount: Object.keys(ddo).length, itemsCount });
                 }
 
                 setOrderConfig((prev: any) => ({
@@ -987,6 +1041,33 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             setOrderConfig({ ...(orderConfig || {}), vendorId: defaultVendorId });
         }
     }, [formData.serviceType, vendors.length, orderConfig?.vendorId]);
+
+    // Reset default Food template ref when opening a different client
+    useEffect(() => {
+        defaultTemplateLoadedForFoodRef.current = false;
+    }, [clientId]);
+
+    // For existing Food clients with no order (e.g. opened via initialData without upcoming order), load default template once
+    useEffect(() => {
+        if (!client?.id || isNewClient || client.serviceType !== 'Food' || vendors.length === 0) return;
+        if (defaultTemplateLoadedForFoodRef.current) return;
+
+        const hasNoOrderData = !(orderConfig?.vendorSelections?.some((vs: any) => vs?.items && typeof vs.items === 'object' && Object.keys(vs.items).length > 0)) &&
+            !(orderConfig?.deliveryDayOrders && typeof orderConfig.deliveryDayOrders === 'object' && Object.values(orderConfig.deliveryDayOrders).some((d: any) => d?.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items).length > 0)));
+        if (!hasNoOrderData) return;
+
+        defaultTemplateLoadedForFoodRef.current = true;
+        loadAndApplyDefaultTemplate('Food').catch((e) => {
+            console.warn('[ClientProfile] Failed to load default Food template for existing client', e);
+            defaultTemplateLoadedForFoodRef.current = false;
+        });
+
+        if (formData.approvedMealsPerWeek == null || formData.approvedMealsPerWeek === undefined) {
+            getDefaultApprovedMealsPerWeek().then((defaultMeals) => {
+                setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals }));
+            }).catch(() => {});
+        }
+    }, [client?.id, client?.serviceType, isNewClient, vendors.length, orderConfig]);
 
     // Don't show anything until all data is loaded
     if (loading || loadingOrderDetails || !client) {
@@ -1663,7 +1744,49 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
                 configToSet = defaultOrder;
             }
-            
+
+            // For existing Food clients with no order data, load default order template (same as new clients)
+            if (configToSet && c.serviceType === 'Food') {
+                const hasNoOrderData = !(configToSet.vendorSelections?.some((vs: any) => vs.items && typeof vs.items === 'object' && Object.keys(vs.items).length > 0)) &&
+                    !(configToSet.deliveryDayOrders && typeof configToSet.deliveryDayOrders === 'object' && Object.values(configToSet.deliveryDayOrders).some((d: any) => d?.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items).length > 0)));
+                if (hasNoOrderData) {
+                    try {
+                        const template = await getDefaultOrderTemplate('Food');
+                        if (template) {
+                            const defaultVendorId = (vendorsArray && vendorsArray.length > 0)
+                                ? (vendorsArray.find((vend: any) => vend.isDefault && vend.serviceTypes?.includes('Food'))?.id || vendorsArray.find((vend: any) => vend.serviceTypes?.includes('Food'))?.id || vendorsArray[0]?.id || '')
+                                : '';
+                            const templateVs = template.vendorSelections || [];
+                            if (template.deliveryDayOrders && typeof template.deliveryDayOrders === 'object' && Object.keys(template.deliveryDayOrders).length > 0) {
+                                configToSet.deliveryDayOrders = {};
+                                for (const [day, dayOrder] of Object.entries(template.deliveryDayOrders)) {
+                                    const dayVal = dayOrder as { vendorSelections?: any[] };
+                                    const selections = (dayVal.vendorSelections || []).map((vs: any) => ({
+                                        vendorId: defaultVendorId || vs.vendorId || '',
+                                        items: { ...(vs.items || {}) }
+                                    }));
+                                    if (selections.length > 0) configToSet.deliveryDayOrders[day] = { vendorSelections: selections };
+                                }
+                                configToSet.vendorSelections = undefined;
+                            }
+                            if (!configToSet.deliveryDayOrders || Object.keys(configToSet.deliveryDayOrders).length === 0) {
+                                configToSet.vendorSelections = templateVs.length > 0
+                                    ? templateVs.map((vs: any) => ({ vendorId: defaultVendorId || vs.vendorId || '', items: { ...(vs.items || {}) } }))
+                                    : [{ vendorId: defaultVendorId || '', items: {} }];
+                            }
+                            configToSet.serviceType = 'Food';
+                            if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Applied default Food template for existing client with no order');
+                            if (c.approvedMealsPerWeek == null || c.approvedMealsPerWeek === undefined) {
+                                const defaultMeals = await getDefaultApprovedMealsPerWeek();
+                                setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals }));
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[ClientProfile] loadData - Could not load default Food template for existing client', e);
+                    }
+                }
+            }
+
             // Ensure caseId is preserved if it exists in orderConfig (from form input)
             if (orderConfig?.caseId && !configToSet.caseId) {
                 configToSet.caseId = orderConfig.caseId;
@@ -2988,10 +3111,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             const defaultVendorId = getDefaultVendor('Food');
             // CRITICAL: Always set serviceType to 'Food' (not 'Meal') when Food tab is selected
             setOrderConfig({ serviceType: 'Food', vendorSelections: [{ vendorId: defaultVendorId || '', items: {} }] });
-            // Load default template for new clients
-            if (isNewClient) {
-                await loadAndApplyDefaultTemplate('Food');
-            }
+            // Load default template for new clients and for existing clients (so they get default items when switching to Food)
+            await loadAndApplyDefaultTemplate('Food');
         } else if (type === 'Produce') {
             setOrderConfig({ serviceType: type, billAmount: 0 });
             // Always load default template so bill amount reflects admin control (for both new and existing clients)
@@ -3916,6 +4037,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // This means we need to restructure a bit.
 
             let updateData: Partial<ClientProfile> = { ...formData };
+
+            // Ensure approvedMealsPerWeek is always sent for Food clients (backend expects it)
+            if (formData.serviceType === 'Food') {
+                updateData.approvedMealsPerWeek = formData.approvedMealsPerWeek ?? client?.approvedMealsPerWeek ?? 0;
+            }
 
             await recordClientChange(clientId, summary, 'Admin');
 
