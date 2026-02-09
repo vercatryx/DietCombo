@@ -5011,14 +5011,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     />
                                 </div>
 
-                                {!orderConfig?.caseId && (
+                                {(orderConfig?.caseId ?? '').trim() === '' && (
                                     <div className={styles.alert} style={{ marginTop: '16px', backgroundColor: 'var(--bg-surface-hover)' }}>
                                         <AlertTriangle size={16} />
                                         Please enter a Case ID to configure the service.
                                     </div>
                                 )}
 
-                                {orderConfig?.caseId && (
+                                {(orderConfig?.caseId ?? '').trim() !== '' && (
                                     <>
                                         {formData.serviceType === 'Food' && (
                                             <div className="animate-fade-in">
@@ -6282,7 +6282,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 )}
                             </section>
 
-                            {!isNewClient && formData.serviceType === 'Food' && (orderConfig?.caseId ?? '').trim() !== '' && (
+                            {formData.serviceType === 'Food' && (orderConfig?.caseId ?? '').trim() !== '' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
                                     <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
                                     <SavedMealPlanMonth

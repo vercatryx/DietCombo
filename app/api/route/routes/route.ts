@@ -651,6 +651,38 @@ export async function GET(req: Request) {
             }
         }
 
+        // Load existing stops for exactly the order_ids we care about (no limit) so we never create duplicates
+        const orderIdsFromDeliveryDates = new Set<string>();
+        for (const datesMap of clientDeliveryDates.values()) {
+            for (const info of datesMap.values()) {
+                if (info.orderId) orderIdsFromDeliveryDates.add(info.orderId);
+            }
+        }
+        if (orderIdsFromDeliveryDates.size > 0) {
+            const orderIdList = [...orderIdsFromDeliveryDates];
+            // Chunk to avoid URL/query size limits (e.g. PostgREST)
+            const chunkSize = 500;
+            for (let i = 0; i < orderIdList.length; i += chunkSize) {
+                const chunk = orderIdList.slice(i, i + chunkSize);
+                const { data: stopsForOrders } = await supabase
+                    .from('stops')
+                    .select('client_id, delivery_date, order_id')
+                    .in('order_id', chunk)
+                    .not('order_id', 'is', null);
+                for (const s of stopsForOrders || []) {
+                    orderIdsWithStops.add(String(s.order_id));
+                    if (s.client_id && s.delivery_date) {
+                        const normalized = normalizeDeliveryDate(s.delivery_date);
+                        if (normalized) {
+                            const cid = String(s.client_id);
+                            if (!clientStopsByDate.has(cid)) clientStopsByDate.set(cid, new Set());
+                            clientStopsByDate.get(cid)!.add(normalized);
+                        }
+                    }
+                }
+            }
+        }
+
         const isDeliverable = (c: any) => {
             const v = c?.delivery;
             return v === undefined || v === null ? true : Boolean(v);
@@ -810,34 +842,39 @@ export async function GET(req: Request) {
             }
         }
 
-        // Create missing stops for clients who should have them (one stop per order_id)
+        // Create missing stops for clients who should have them (one stop per order_id + delivery_date)
         if (stopsToCreate.length > 0) {
-            // Deduplicate by order_id: only one stop per order (first occurrence wins)
-            const seenOrderIds = new Set<string>();
+            // Deduplicate by (order_id, delivery_date): only one stop per order per delivery date
+            const seenOrderIdDeliveryDate = new Set<string>();
             const stopsToCreateDeduped = stopsToCreate.filter((s) => {
-                if (!s.order_id) return true;
-                if (seenOrderIds.has(s.order_id)) return false;
-                seenOrderIds.add(s.order_id);
+                const key = s.order_id && s.delivery_date ? `${s.order_id}|${s.delivery_date}` : null;
+                if (!key) return true;
+                if (seenOrderIdDeliveryDate.has(key)) return false;
+                seenOrderIdDeliveryDate.add(key);
                 return true;
             });
 
-            // Batch check: get all order_ids from stops that already have a stop (fresh read to avoid races)
+            // Batch check: get all order_ids that already have a stop — never create a second stop for the same order_id
             const orderIdsToCheck = [...new Set(stopsToCreateDeduped.map(s => s.order_id).filter(Boolean))] as string[];
-            let existingOrderIds = new Set<string>();
+            let existingOrderIdsWithStop = new Set<string>();
             if (orderIdsToCheck.length > 0) {
-                const { data: existingStopsByOrderId } = await supabase
-                    .from('stops')
-                    .select('order_id')
-                    .in('order_id', orderIdsToCheck)
-                    .not('order_id', 'is', null);
-                if (existingStopsByOrderId) {
-                    existingOrderIds = new Set(existingStopsByOrderId.map((r: { order_id: string }) => String(r.order_id)));
+                const chunkSize = 500;
+                for (let i = 0; i < orderIdsToCheck.length; i += chunkSize) {
+                    const chunk = orderIdsToCheck.slice(i, i + chunkSize);
+                    const { data: existingStopsByOrderId } = await supabase
+                        .from('stops')
+                        .select('order_id')
+                        .in('order_id', chunk)
+                        .not('order_id', 'is', null);
+                    if (existingStopsByOrderId) {
+                        for (const r of existingStopsByOrderId) {
+                            if (r.order_id) existingOrderIdsWithStop.add(String(r.order_id));
+                        }
+                    }
                 }
             }
-            // Filter out any stop if a stop with the same order_id already exists in DB
-            let stopsToInsert = existingOrderIds.size > 0
-                ? stopsToCreateDeduped.filter(s => !s.order_id || !existingOrderIds.has(s.order_id))
-                : stopsToCreateDeduped;
+            // Do not insert any stop for an order_id that already has a stop
+            let stopsToInsert = stopsToCreateDeduped.filter(s => !s.order_id || !existingOrderIdsWithStop.has(s.order_id));
 
             // Add clients who are actually getting stops created to the response for logging
             for (const stopData of stopsToInsert) {
@@ -849,7 +886,7 @@ export async function GET(req: Request) {
             }
 
             try {
-                // Track order_ids we insert in this request so we never create a second stop for the same order
+                // Track order_ids we insert in this request so we never create a second stop for the same order_id
                 const insertedOrderIdsThisRequest = new Set<string>();
                 for (const stopData of stopsToInsert) {
                     try {
@@ -857,8 +894,8 @@ export async function GET(req: Request) {
                         if (stopData.order_id && insertedOrderIdsThisRequest.has(stopData.order_id)) {
                             continue;
                         }
-                        // Precheck: skip if a stop for this order_id exists in DB (handles concurrent requests)
-                        if (stopData.order_id && existingOrderIds.has(stopData.order_id)) {
+                        // Precheck: skip if a stop for this order_id already exists in DB (handles concurrent requests)
+                        if (stopData.order_id && existingOrderIdsWithStop.has(stopData.order_id)) {
                             continue;
                         }
                         const { error: insertError } = await supabase
@@ -887,7 +924,7 @@ export async function GET(req: Request) {
                         if (insertError) throw insertError;
                         if (stopData.order_id) {
                             insertedOrderIdsThisRequest.add(stopData.order_id);
-                            existingOrderIds.add(stopData.order_id); // so subsequent iteration skips if same id appears
+                            existingOrderIdsWithStop.add(stopData.order_id); // so subsequent iteration skips if same id appears
                         }
                     } catch (createError: any) {
                         if (createError?.code !== "23505" && !createError?.message?.includes("duplicate")) {

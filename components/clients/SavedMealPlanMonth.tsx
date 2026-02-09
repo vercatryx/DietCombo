@@ -177,7 +177,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange }: SavedMealPlanMo
       {!effectiveClientId ? (
         <div className={styles.emptyState}>
           <CalendarDays size={32} />
-          <p>Save the client first to see saved meal plans.</p>
+          <p>{clientId === 'new' ? 'Save the client to load the meal plan from the default template.' : 'Save the client first to see saved meal plans.'}</p>
         </div>
       ) : loadingDates ? (
         <div className={styles.emptyState}>

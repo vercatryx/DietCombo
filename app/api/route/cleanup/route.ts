@@ -59,10 +59,12 @@ export async function POST(req: Request) {
             }
             if (s.client_id && s.delivery_date) {
                 const clientId = String(s.client_id);
+                const d = s.delivery_date;
+                const dateStr = typeof d === 'string' ? d.split('T')[0] : String(d).split('T')[0];
                 if (!clientStopsByDate.has(clientId)) {
                     clientStopsByDate.set(clientId, new Set());
                 }
-                clientStopsByDate.get(clientId)!.add(s.delivery_date);
+                clientStopsByDate.get(clientId)!.add(dateStr);
             }
         }
 
@@ -236,7 +238,7 @@ export async function POST(req: Request) {
             for (const [deliveryDateStr, dateInfo] of datesMap.entries()) {
                 const orderId = dateInfo.orderId;
                 if (!orderId) continue;
-                // One stop per order: skip if a stop already exists for this order_id
+                // One stop per order_id: skip if a stop already exists for this order
                 if (orderIdsWithStops.has(orderId)) continue;
                 if (existingStopDates.has(deliveryDateStr)) {
                     orderIdsWithStops.add(orderId);
@@ -278,15 +280,24 @@ export async function POST(req: Request) {
         let stopsCreated = 0;
         if (stopsToCreate.length > 0) {
             try {
+                // Deduplicate by order_id: only one stop per order
+                const seenOrderIds = new Set<string>();
+                const stopsToCreateDeduped = stopsToCreate.filter((s) => {
+                    if (!s.order_id) return true;
+                    if (seenOrderIds.has(s.order_id)) return false;
+                    seenOrderIds.add(s.order_id);
+                    return true;
+                });
                 // Insert stops one at a time to handle duplicates gracefully
-                for (const stopData of stopsToCreate) {
+                for (const stopData of stopsToCreateDeduped) {
                     try {
-                        // Skip if a stop already exists for this order_id (avoid duplicate)
+                        // Skip if a stop already exists for this order_id (never create a second stop per order)
                         if (stopData.order_id) {
                             const { data: existingByOrderId } = await supabase
                                 .from('stops')
                                 .select('id')
                                 .eq('order_id', stopData.order_id)
+                                .limit(1)
                                 .maybeSingle();
                             if (existingByOrderId) continue;
                         }

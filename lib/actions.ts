@@ -2561,25 +2561,46 @@ export async function saveClientMealPlannerOrderQuantities(
             return { ok: false, error: fetchErr.message };
         }
         const allowedOrderIds = new Set((allowedOrders ?? []).map((r: { id: string }) => r.id));
+        const now = new Date().toISOString();
 
+        // Build order updates and item updates, then run in parallel (batched for items)
+        const orderUpdates: Promise<unknown>[] = [];
+        const itemUpdates: Array<() => Promise<unknown>> = [];
         for (const order of orders) {
             if (!allowedOrderIds.has(order.id)) continue;
             const totalItems = (order.items ?? []).reduce((sum, i) => sum + Math.max(1, Number(i.quantity) || 1), 0);
-            const { error: orderUpdErr } = await supabaseAdmin
-                .from('meal_planner_orders')
-                .update({ total_items: totalItems, user_modified: true, updated_at: new Date().toISOString() })
-                .eq('id', order.id)
-                .eq('client_id', clientId);
-            if (orderUpdErr) logQueryError(orderUpdErr, 'meal_planner_orders', 'update');
-
+            const orderId = order.id;
+            orderUpdates.push(
+                (async () => {
+                    const r = await supabaseAdmin
+                        .from('meal_planner_orders')
+                        .update({ total_items: totalItems, user_modified: true, updated_at: now })
+                        .eq('id', orderId)
+                        .eq('client_id', clientId);
+                    if (r.error) logQueryError(r.error, 'meal_planner_orders', 'update');
+                    return r;
+                })()
+            );
             for (const item of order.items ?? []) {
                 const qty = Math.max(1, Math.floor(Number(item.quantity)) || 1);
-                const { error: itemUpdErr } = await supabaseAdmin
-                    .from('meal_planner_order_items')
-                    .update({ quantity: qty, updated_at: new Date().toISOString() })
-                    .eq('id', item.id);
-                if (itemUpdErr) logQueryError(itemUpdErr, 'meal_planner_order_items', 'update');
+                const itemId = item.id;
+                itemUpdates.push(async () => {
+                    const r = await supabaseAdmin
+                        .from('meal_planner_order_items')
+                        .update({ quantity: qty, updated_at: now })
+                        .eq('id', itemId);
+                    if (r.error) logQueryError(r.error, 'meal_planner_order_items', 'update');
+                    return r;
+                });
             }
+        }
+        // Run all order updates in parallel
+        await Promise.all(orderUpdates);
+        // Run item updates in parallel in chunks to avoid overwhelming the DB (e.g. 40 at a time)
+        const ITEM_BATCH = 40;
+        for (let i = 0; i < itemUpdates.length; i += ITEM_BATCH) {
+            const batch = itemUpdates.slice(i, i + ITEM_BATCH).map((fn) => fn());
+            await Promise.all(batch);
         }
         return { ok: true };
     } catch (error) {

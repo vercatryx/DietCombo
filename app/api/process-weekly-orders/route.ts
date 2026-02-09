@@ -194,11 +194,12 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
             return;
         }
 
-        // One stop per order: check if a stop already exists for this order_id (driver handles one stop per order)
+        // One stop per order_id: if any stop exists for this order_id, update it — never create a second stop
         const { data: existingStop } = await supabase
             .from('stops')
             .select('id')
             .eq('order_id', finalOrderId)
+            .limit(1)
             .maybeSingle();
 
         const stopData: any = {
@@ -221,14 +222,15 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
 
         console.log(`[process-weekly-orders] Creating/updating stop with order_id=${finalOrderId} (upcoming order) for client ${clientId}, delivery_date=${deliveryDateStr}`);
 
-        if (existingStop) {
-            // Update existing stop with order_id (upcoming order ID) and latest client information
+            if (existingStop) {
+            // Update existing stop with latest delivery_date and client information (one stop per order_id)
             const { error: updateError } = await supabase
                 .from('stops')
                 .update({
-                    order_id: finalOrderId, // Update with upcoming order ID
+                    delivery_date: deliveryDateStr,
+                    day: dayOfWeek,
+                    order_id: finalOrderId,
                     name: clientName,
-                    // Update address fields in case client info changed
                     address: stopData.address,
                     apt: stopData.apt,
                     city: stopData.city,
@@ -255,12 +257,13 @@ async function createOrUpdateStopForOrder(orderId: string, clientId: string, sch
                 .insert(stopData);
 
             if (insertError) {
-                // If duplicate key error, find existing stop by order_id and update it (one stop per order)
+                // If duplicate key error, find existing stop by order_id and update it
                 if (insertError.code === '23505' || insertError.message?.includes('duplicate')) {
                     const { data: existingStop2 } = await supabase
                         .from('stops')
                         .select('id')
                         .eq('order_id', finalOrderId)
+                        .limit(1)
                         .maybeSingle();
 
                     if (existingStop2) {
