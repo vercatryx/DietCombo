@@ -191,6 +191,12 @@
   white-space: nowrap;
 }
 
+.thValue {
+  width: 5rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .itemRow {
   transition: background 0.15s;
 }
@@ -218,6 +224,13 @@
   color: var(--color-primary);
   text-align: right;
   white-space: nowrap;
+}
+
+.itemValue {
+  text-align: right;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Quantity control (stepper + input) */

@@ -46,6 +46,29 @@
       "meal_type": "Lunch",
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
       "bill_amount": null
+    },
+    {
+      "id": "dfd5b24f-90a9-4acf-97e9-7134a5212ef8",
+      "client_id": "70e5781b-2aba-408e-93ce-cad877662e79",
+      "service_type": "Food",
+      "case_id": "9632b172-3e91-4052-b950-f51f47d85c2a",
+      "status": "scheduled",
+      "scheduled_delivery_date": "2026-02-11",
+      "take_effect_date": "2026-02-15",
+      "delivery_day": "Wednesday",
+      "delivery_distribution": null,
+      "total_value": 0,
+      "total_items": 0,
+      "notes": null,
+      "order_number": 100690,
+      "processed_order_id": null,
+      "processed_at": null,
+      "last_updated": "2026-02-10T15:00:12.43",
+      "updated_by": "Admin",
+      "created_at": "2026-02-10T13:36:40.787885",
+      "meal_type": "Lunch",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "bill_amount": null
     }
   ],
   "orderVendorSelections": [],
@@ -63,6 +86,12 @@
       "upcoming_order_id": "d6701240-1d6a-4a63-9bec-a973f03aa2e2",
       "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
       "created_at": "2026-02-10T01:51:39.427419"
+    },
+    {
+      "id": "a76ddcaa-9d13-4844-8656-6efd88f80f38",
+      "upcoming_order_id": "dfd5b24f-90a9-4acf-97e9-7134a5212ef8",
+      "vendor_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "created_at": "2026-02-10T15:00:14.637912"
     }
   ],
   "upcomingOrderItems": [
@@ -172,5 +201,5 @@
     }
   ],
   "upcomingOrderBoxSelections": [],
-  "lastSynced": "2026-02-10T12:35:48.374Z"
+  "lastSynced": "2026-02-10T15:18:58.746Z"
 }

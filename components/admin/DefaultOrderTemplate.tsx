@@ -145,6 +145,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     const [mealPlannerExpirationDate, setMealPlannerExpirationDate] = useState<string>('');
     const [mealPlannerPopupLoading, setMealPlannerPopupLoading] = useState(false);
     const [mealPlannerPopupSaving, setMealPlannerPopupSaving] = useState(false);
+    /** Message shown inside the meal planner popup (Saving… / Saved / error) so user always sees feedback. */
+    const [mealPlannerPopupStatus, setMealPlannerPopupStatus] = useState<string | null>(null);
     const [mealPlannerItemCounts, setMealPlannerItemCounts] = useState<Record<string, number>>({});
     const [mealPlannerMonth, setMealPlannerMonth] = useState(() => {
         const d = new Date();
@@ -574,6 +576,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     async function openMealPlannerPopup(dateKey: string) {
         setMealPlannerPopupDate(dateKey);
         setMealPlannerPopupLoading(true);
+        setMealPlannerPopupStatus(null);
         setMealPlannerDraftItems([]);
         setMealPlannerExpirationDate('');
         try {
@@ -612,21 +615,33 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     }
 
     async function handleMealPlannerSave() {
-        if (!mealPlannerPopupDate) return;
-        const expTrim = mealPlannerExpirationDate.trim();
-        if (expTrim && isDatePast(expTrim)) {
-            setMessage('Expiration date must be today or a future date.');
-            setTimeout(() => setMessage(null), 3000);
-            return;
-        }
-        const valid = mealPlannerDraftItems.filter(
-            (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
-        );
         setMealPlannerPopupSaving(true);
+        setMessage(null);
+        setMealPlannerPopupStatus('Saving…');
+        if (typeof window !== 'undefined') {
+            console.log('[Meal planner] Save clicked for date:', mealPlannerPopupDate);
+        }
+
         try {
-            await saveMealPlannerCustomItems(
-                mealPlannerPopupDate,
-                valid.map((i) => ({
+            if (!mealPlannerPopupDate) {
+                setMealPlannerPopupStatus('No date selected.');
+                setMessage('No date selected. Close and click a date again.');
+                setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 4000);
+                return;
+            }
+            const expTrim = mealPlannerExpirationDate.trim();
+            if (expTrim && isDatePast(expTrim)) {
+                setMealPlannerPopupStatus('Expiration date must be today or future.');
+                setMessage('Expiration date must be today or a future date.');
+                setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 3000);
+                return;
+            }
+            const valid = mealPlannerDraftItems.filter(
+                (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
+            );
+            const savePayload = {
+                date: mealPlannerPopupDate,
+                items: valid.map((i) => ({
                     id: i.id,
                     name: i.name,
                     quantity: i.quantity,
@@ -634,22 +649,43 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     value: i.value ?? null,
                     sortOrder: i.sortOrder ?? 0
                 })),
+                exp: expTrim || null
+            };
+            if (typeof window !== 'undefined') {
+                console.log('[Meal planner] Calling saveMealPlannerCustomItems...', savePayload.date, 'items:', savePayload.items.length);
+            }
+            const savePromise = saveMealPlannerCustomItems(
+                mealPlannerPopupDate,
+                savePayload.items,
                 null,
-                expTrim || null
+                savePayload.exp
             );
+            const timeoutMs = 20000;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+                setTimeout(() => reject(new Error('Save timed out. Please try again.')), timeoutMs);
+            });
+            await Promise.race([savePromise, timeoutPromise]);
+            if (typeof window !== 'undefined') {
+                console.log('[Meal planner] Save completed successfully.');
+            }
             setMealPlannerItemCounts((prev) => {
                 const next = { ...prev };
                 if (valid.length > 0) next[mealPlannerPopupDate] = valid.length;
                 else delete next[mealPlannerPopupDate];
                 return next;
             });
+            setMealPlannerPopupStatus('Saved!');
             setMessage(`Custom items for ${mealPlannerPopupDate} saved.`);
             setTimeout(() => setMessage(null), 3000);
             setMealPlannerPopupDate(null);
             setMealPlannerDraftItems([]);
+            setMealPlannerPopupStatus(null);
         } catch (e) {
-            setMessage('Error saving meal planner items.');
-            setTimeout(() => setMessage(null), 3000);
+            console.error('[handleMealPlannerSave]', e);
+            const errMsg = e instanceof Error ? e.message : 'Error saving meal planner items.';
+            setMealPlannerPopupStatus(errMsg);
+            setMessage(errMsg);
+            setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 5000);
         } finally {
             setMealPlannerPopupSaving(false);
         }
@@ -872,8 +908,17 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             )}
 
             {mealPlannerPopupDate && (
-                <div className={styles.popupOverlay} onClick={closeMealPlannerPopup} role="dialog" aria-modal="true" aria-labelledby="meal-planner-popup-title">
-                    <div className={`${styles.popupContent} ${styles.popupContentMealPlanner}`} onClick={(e) => e.stopPropagation()}>
+                <div
+                    className={styles.popupOverlay}
+                    onClick={(e) => {
+                        // Only close when clicking the backdrop, not when clicking the dialog content (e.g. Save button)
+                        if (e.target === e.currentTarget) closeMealPlannerPopup();
+                    }}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="meal-planner-popup-title"
+                >
+                    <div className={`${styles.popupContent} ${styles.popupContentMealPlanner}`}>
                         <div className={styles.popupHeader}>
                             <div>
                                 <h3 id="meal-planner-popup-title" className={styles.popupTitle}>
@@ -991,6 +1036,17 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                 )}
                             </div>
                             <div className={styles.popupFooter}>
+                                {mealPlannerPopupStatus && (
+                                    <span
+                                        style={{
+                                            marginRight: 'auto',
+                                            fontSize: '0.875rem',
+                                            color: mealPlannerPopupStatus.startsWith('Error') || mealPlannerPopupStatus.includes('timed out') ? 'var(--color-danger)' : mealPlannerPopupStatus === 'Saved!' ? 'var(--color-success)' : 'var(--text-secondary)'
+                                        }}
+                                    >
+                                        {mealPlannerPopupStatus}
+                                    </span>
+                                )}
                                 <button
                                     type="button"
                                     className="btn btn-secondary"
@@ -1003,7 +1059,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                     <button
                                         type="button"
                                         className="btn btn-primary"
-                                        onClick={handleMealPlannerSave}
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            handleMealPlannerSave();
+                                        }}
                                         disabled={mealPlannerPopupSaving}
                                         style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                                     >

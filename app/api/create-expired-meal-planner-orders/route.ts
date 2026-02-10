@@ -8,8 +8,7 @@ import {
     getDefaultOrderTemplate,
     getMenuItems,
     getDefaultVendorId,
-    generateBatchOrderNumbers,
-    ensureMealPlannerOrdersForDateFromDefaultTemplate
+    generateBatchOrderNumbers
 } from '@/lib/actions';
 
 /**
@@ -103,11 +102,6 @@ export async function POST(request: NextRequest) {
         const expiredDates = [...new Set(expiredItems.map((item: any) => String(item.calendar_date).slice(0, 10)))];
         console.log(`[Create Expired Meal Planner Orders] Found ${expiredItems.length} expired items across ${expiredDates.length} date(s)`);
 
-        // Ensure meal_planner_orders exist for these dates (default template is no longer synced to all clients on save)
-        for (const dateOnly of expiredDates) {
-            await ensureMealPlannerOrdersForDateFromDefaultTemplate(String(dateOnly).slice(0, 10));
-        }
-
         // 2. Pre-fetch all reference data in parallel
         const [allClients, defaultTemplate, menuItems, defaultVendorId] = await Promise.all([
             getClients(),
@@ -137,24 +131,16 @@ export async function POST(request: NextRequest) {
             });
         }
 
-        // 3. Batch fetch meal planner custom items (default + per-client)
-        const [defaultMealItems, clientMealItems] = await Promise.all([
-            supabaseAdmin
-                .from('meal_planner_custom_items')
-                .select('calendar_date, client_id, name, quantity, price')
-                .is('client_id', null)
-                .in('calendar_date', expiredDates)
-                .order('sort_order', { ascending: true }),
-            supabaseAdmin
-                .from('meal_planner_custom_items')
-                .select('calendar_date, client_id, name, quantity, price')
-                .in('client_id', foodClientIds)
-                .in('calendar_date', expiredDates)
-                .order('sort_order', { ascending: true })
-        ]);
+        // 3. Default meal plan items from meal_planner_custom_items (admin template). Client meal plan from clients.meal_planner_data.
+        const { data: defaultMealItems } = await supabaseAdmin
+            .from('meal_planner_custom_items')
+            .select('calendar_date, name, quantity, price')
+            .is('client_id', null)
+            .in('calendar_date', expiredDates)
+            .order('sort_order', { ascending: true });
 
         const defaultByDate = new Map<string, { name: string; quantity: number; price: number | null }[]>();
-        for (const row of defaultMealItems.data || []) {
+        for (const row of defaultMealItems || []) {
             const d = String(row.calendar_date).slice(0, 10);
             if (!defaultByDate.has(d)) defaultByDate.set(d, []);
             defaultByDate.get(d)!.push({
@@ -165,48 +151,34 @@ export async function POST(request: NextRequest) {
         }
 
         const clientByDate = new Map<string, Map<string, { name: string; quantity: number; price: number | null }[]>>();
-        for (const row of clientMealItems.data || []) {
-            const d = String(row.calendar_date).slice(0, 10);
-            const cid = row.client_id;
-            if (!clientByDate.has(cid)) clientByDate.set(cid, new Map());
-            const m = clientByDate.get(cid)!;
-            if (!m.has(d)) m.set(d, []);
-            m.get(d)!.push({
-                name: row.name,
-                quantity: row.quantity ?? 1,
-                price: row.price != null ? Number(row.price) : null
-            });
+        for (const client of foodClients) {
+            if (!client) continue;
+            const raw = (client as any).mealPlannerData;
+            if (!raw || !Array.isArray(raw)) continue;
+            for (const entry of raw) {
+                const d = String(entry?.scheduledDeliveryDate ?? entry?.scheduled_delivery_date ?? '').slice(0, 10);
+                if (!d || !expiredDates.includes(d)) continue;
+                const items = Array.isArray(entry?.items) ? entry.items : [];
+                if (items.length === 0) continue;
+                if (!clientByDate.has(client.id)) clientByDate.set(client.id, new Map());
+                const m = clientByDate.get(client.id)!;
+                m.set(d, items.map((it: any) => ({
+                    name: (it?.name ?? 'Item').trim() || 'Item',
+                    quantity: Math.max(1, Number(it?.quantity) ?? 1),
+                    price: it?.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
+                })));
+            }
         }
 
-        // 4. Batch fetch meal planner orders, existing orders, upcoming orders (for case_id)
-        const [mealPlannerOrdersRes, existingOrdersRes, upcomingOrdersRes] = await Promise.all([
-            supabaseAdmin
-                .from('meal_planner_orders')
-                .select('client_id, scheduled_delivery_date, delivery_day')
-                .in('client_id', foodClientIds)
-                .in('scheduled_delivery_date', expiredDates)
-                .eq('status', 'scheduled'),
+        // 4. Batch fetch existing orders. Case ID from clients.upcoming_order or caseIdExternal.
+        const [existingOrdersRes] = await Promise.all([
             supabaseAdmin
                 .from('orders')
                 .select('client_id, scheduled_delivery_date')
                 .in('client_id', foodClientIds)
                 .in('scheduled_delivery_date', expiredDates)
-                .eq('service_type', 'Food'),
-            supabaseAdmin
-                .from('upcoming_orders')
-                .select('client_id, case_id, last_updated')
-                .in('client_id', foodClientIds)
                 .eq('service_type', 'Food')
-                .order('last_updated', { ascending: false })
         ]);
-
-        const mpoMap = new Map<string, { scheduled_delivery_date: string; delivery_day: string | null }>();
-        for (const r of mealPlannerOrdersRes.data || []) {
-            mpoMap.set(`${r.client_id}:${r.scheduled_delivery_date}`, {
-                scheduled_delivery_date: r.scheduled_delivery_date,
-                delivery_day: r.delivery_day ?? null
-            });
-        }
 
         const existingSet = new Set<string>();
         for (const r of existingOrdersRes.data || []) {
@@ -214,20 +186,15 @@ export async function POST(request: NextRequest) {
         }
 
         const caseIdByClient = new Map<string, string | null>();
-        for (const r of upcomingOrdersRes.data || []) {
-            if (!caseIdByClient.has(r.client_id)) {
-                const cid = r.case_id != null && String(r.case_id).trim() !== '' ? String(r.case_id).trim() : null;
-                caseIdByClient.set(r.client_id, cid);
-            }
-        }
-        // Fallback: case_id from client's UniteUs link (caseIdExternal) when upcoming_orders has none
         for (const client of foodClients) {
             if (!client) continue;
-            if (!caseIdByClient.has(client.id) || !caseIdByClient.get(client.id)) {
-                const ext = (client as any).caseIdExternal;
-                const cid = ext != null && String(ext).trim() !== '' ? String(ext).trim() : null;
-                if (cid) caseIdByClient.set(client.id, cid);
+            const ao = (client as any).activeOrder;
+            let cid: string | null = null;
+            if (ao?.caseId && String(ao.caseId).trim()) cid = String(ao.caseId).trim();
+            if (!cid && (client as any).caseIdExternal && String((client as any).caseIdExternal).trim()) {
+                cid = String((client as any).caseIdExternal).trim();
             }
+            caseIdByClient.set(client.id, cid);
         }
 
         const errors: string[] = [];
@@ -260,14 +227,17 @@ export async function POST(request: NextRequest) {
             }
 
             for (const expiredDateStr of expiredDates) {
-                const mpo = mpoMap.get(`${client.id}:${expiredDateStr}`);
-                // Only create order if client has a scheduled delivery on this date (meal_planner_order exists)
-                if (!mpo) {
-                    skippedReasons.push(`Client ${client.id} (${client.fullName}): No delivery scheduled for ${expiredDateStr}`);
-                    continue;
-                }
-                const scheduledDeliveryDate = mpo.scheduled_delivery_date;
-                const deliveryDay = mpo.delivery_day ?? null;
+                // Dates come from the meal planner (expired default items). Every eligible client gets an order for each such date.
+                const defaultItems = defaultByDate.get(expiredDateStr) || [];
+                const clientItems = clientByDate.get(client.id)?.get(expiredDateStr) || [];
+                const mealPlanMap = new Map<string, { name: string; quantity: number; price: number | null }>();
+                for (const i of defaultItems) mealPlanMap.set(i.name, i);
+                for (const i of clientItems) mealPlanMap.set(i.name, i);
+                const mealPlanItems = Array.from(mealPlanMap.values());
+
+                const scheduledDeliveryDate = expiredDateStr;
+                const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                const deliveryDay = dayNames[new Date(expiredDateStr + 'T12:00:00').getDay()];
 
                 if (existingSet.has(`${client.id}:${scheduledDeliveryDate}`)) {
                     skippedReasons.push(`Client ${client.id} (${client.fullName}): Order already exists for ${scheduledDeliveryDate}`);
@@ -292,14 +262,6 @@ export async function POST(request: NextRequest) {
                     skippedReasons.push(`Client ${client.id} (${client.fullName}): No vendor selections found`);
                     continue;
                 }
-
-                // Meal planner: default template (defaultByDate) + client overrides (clientByDate); client wins by name. Always start from default.
-                const defaultItems = defaultByDate.get(expiredDateStr) || [];
-                const clientItems = clientByDate.get(client.id)?.get(expiredDateStr) || [];
-                const mealPlanMap = new Map<string, { name: string; quantity: number; price: number | null }>();
-                for (const i of defaultItems) mealPlanMap.set(i.name, i);
-                for (const i of clientItems) mealPlanMap.set(i.name, i);
-                const mealPlanItems = Array.from(mealPlanMap.values());
 
                 let totalValue = 0;
                 let totalItems = 0;

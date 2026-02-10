@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { saveClientFoodOrder, syncCurrentOrderToUpcoming, getClientProfilePageData } from '@/lib/actions';
+import { saveClientFoodOrder, getClientProfilePageData } from '@/lib/actions';
 import { ServiceType } from '@/lib/types';
 
 /**
@@ -149,19 +149,13 @@ export async function POST(request: NextRequest) {
             activeOrder.deliveryDayOrders = deliveryDayOrders;
         }
 
-        // Save the order
+        // Save the order (writes to clients.upcoming_order only)
         if (serviceType === 'Food') {
             await saveClientFoodOrder(clientId, {
                 caseId: caseId?.trim() || undefined,
                 ...(deliveryDayOrders && { deliveryDayOrders })
             }, activeOrder);
         }
-
-        // Sync to upcoming_orders table
-        await syncCurrentOrderToUpcoming(clientId, {
-            ...client,
-            activeOrder: activeOrder
-        }, false);
 
         return NextResponse.json({
             success: true,

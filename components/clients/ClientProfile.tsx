@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, Fragment, useMemo, useRef, ReactNode } from 'react';
+import { useState, useEffect, Fragment, useMemo, useRef, ReactNode, forwardRef, useImperativeHandle } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerOrderQuantities, createMealPlannerOrdersFromTemplate, getClientProfilePageData, getDefaultMealPlanTemplateForNewClient, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, getClientProfilePageData, getDefaultMealPlanTemplateForNewClient, type MealPlannerOrderResult } from '@/lib/actions';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -33,6 +33,8 @@ interface Props {
     onClose?: () => void;
     /** When true (e.g. opened from sidebar "Order Details"), hide client info and show only service config */
     serviceConfigOnly?: boolean;
+    /** When true (e.g. sidebar save), only persist client table fields; no order sync or order-related saves */
+    saveDetailsOnly?: boolean;
     initialData?: ClientFullDetails | null;
     // Lookups passed from parent to avoid re-fetching
     statuses?: ClientStatus[];
@@ -168,7 +170,15 @@ function DeleteConfirmationModal({
     );
 }
 
-export function ClientProfileDetail({ clientId: propClientId, onClose, serviceConfigOnly = false, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }: Props): ReactNode {
+export interface ClientProfileDetailHandle {
+    saveAndClose(): Promise<void>;
+    /** Close without saving. Call when user clicks off and there are no unsaved changes. */
+    close(): void;
+    /** True if form or order has unsaved changes (edit mode). Use to decide save-then-close vs close. */
+    hasUnsavedChanges(): boolean;
+}
+
+export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(function ClientProfileDetail({ clientId: propClientId, onClose, serviceConfigOnly = false, saveDetailsOnly = false, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }, ref) {
     const router = useRouter();
     const params = useParams();
     const propClientIdValue = (params?.id as string) || propClientId;
@@ -982,6 +992,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
         return mergedTemplate;
     }
 
+    /** True if client has at least one item in clients.upcoming_order (activeOrder). Only then should we NOT show the admin default. */
+    function clientHasOrderDetailsInUpcomingOrder(clientOrActiveOrder: { activeOrder?: any } | null | undefined): boolean {
+        const order = clientOrActiveOrder && typeof (clientOrActiveOrder as any).activeOrder !== 'undefined'
+            ? (clientOrActiveOrder as any).activeOrder
+            : clientOrActiveOrder;
+        if (!order || typeof order !== 'object') return false;
+        const vs = order.vendorSelections;
+        if (Array.isArray(vs) && vs.some((s: any) => s?.items && typeof s.items === 'object' && Object.keys(s.items).length > 0)) return true;
+        const ddo = order.deliveryDayOrders;
+        if (ddo && typeof ddo === 'object' && Object.values(ddo).some((d: any) => (d?.vendorSelections || []).some((s: any) => s?.items && Object.keys(s.items || {}).length > 0))) return true;
+        return false;
+    }
+
     // Helper: Load and apply default order template for new clients. Pass providedTemplate to avoid a second fetch when caller already has it.
     async function loadAndApplyDefaultTemplate(serviceType: string, providedTemplate?: any): Promise<void> {
         // Only apply for Food and Produce service types
@@ -1045,6 +1068,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                         vendorSelections = [{ vendorId: defaultVendorId, items: {} }];
                     }
                     newOrderConfig.vendorSelections = vendorSelections;
+                    // Clear deliveryDayOrders so UI uses vendorSelections (template quantities). Otherwise
+                    // getVendorSelectionsForDay(null) would still read from existing deliveryDayOrders (e.g. 0s).
+                    newOrderConfig.deliveryDayOrders = undefined;
                 }
 
                 if (DEBUG_PROFILE) {
@@ -1267,10 +1293,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
         defaultTemplateLoadedForFoodRef.current = false;
     }, [clientId]);
 
-    // For existing Food clients with no order (e.g. opened via initialData without upcoming order), load default template once
+    // For existing Food clients with no order details, load default template once (unless client has something in clients.upcoming_order)
     useEffect(() => {
         if (!client?.id || isNewClient || client.serviceType !== 'Food' || vendors.length === 0) return;
         if (defaultTemplateLoadedForFoodRef.current) return;
+        if (clientHasOrderDetailsInUpcomingOrder(client)) return;
 
         const hasNoOrderData = !(orderConfig?.vendorSelections?.some((vs: any) => vs?.items && typeof vs.items === 'object' && Object.keys(vs.items).length > 0)) &&
             !(orderConfig?.deliveryDayOrders && typeof orderConfig.deliveryDayOrders === 'object' && Object.values(orderConfig.deliveryDayOrders).some((d: any) => d?.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items).length > 0)));
@@ -1521,7 +1548,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                 }
             } else if (upcomingOrderData && upcomingOrderData.serviceType === 'Food' && !upcomingOrderData.vendorSelections && !upcomingOrderData.deliveryDayOrders) {
                 if (upcomingOrderData.vendorId) {
-                    upcomingOrderData.vendorSelections = [{ vendorId: upcomingOrderData.vendorId, items: upcomingOrderData.menuSelections || {} }];
+                    const legacyItems = (upcomingOrderData as unknown as Record<string, unknown>).menuSelections as Record<string, number> | undefined;
+                    upcomingOrderData.vendorSelections = [{ vendorId: upcomingOrderData.vendorId, items: legacyItems || {} }];
                 } else {
                     upcomingOrderData.vendorSelections = [{ vendorId: '', items: {} }];
                 }
@@ -1898,7 +1926,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                         return val && (val.serviceType || val.id);
                     });
 
-                if (isMultiDayFormat) {
+                if (isMultiDayFormat && upcomingOrderData && typeof upcomingOrderData === 'object') {
                     // For Custom/Vendor client: use the Custom order from upcoming_orders if present
                     if (c.serviceType === 'Custom' || c.serviceType === 'Vendor') {
                         const customDayKey = Object.keys(upcomingOrderData).find((key: string) => {
@@ -1949,7 +1977,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                             };
                         }
                     }
-                } else if (upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
+                } else if (upcomingOrderData && upcomingOrderData.deliveryDayOrders && typeof upcomingOrderData.deliveryDayOrders === 'object') {
                     // Already in deliveryDayOrders format - use it directly
                     // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
                     const serviceType = c.serviceType === 'Food' ? 'Food' : (upcomingOrderData.serviceType || c.serviceType);
@@ -1958,11 +1986,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                         caseId: upcomingOrderData.caseId || hasCaseId,
                         deliveryDayOrders: upcomingOrderData.deliveryDayOrders
                     };
-                } else if (upcomingOrderData.serviceType === 'Food' && !upcomingOrderData.vendorSelections && !upcomingOrderData.deliveryDayOrders) {
+                } else if (upcomingOrderData && upcomingOrderData.serviceType === 'Food' && !upcomingOrderData.vendorSelections && !upcomingOrderData.deliveryDayOrders) {
                     // Migration/Safety: Ensure vendorSelections exists for Food
                     if (upcomingOrderData.vendorId) {
-                        // Migrate old format
-                        upcomingOrderData.vendorSelections = [{ vendorId: upcomingOrderData.vendorId, items: upcomingOrderData.menuSelections || {} }];
+                        // Migrate old format (menuSelections is legacy, not on OrderConfiguration type)
+                        const legacyItems = (upcomingOrderData as unknown as Record<string, unknown>).menuSelections as Record<string, number> | undefined;
+                        upcomingOrderData.vendorSelections = [{ vendorId: upcomingOrderData.vendorId, items: legacyItems || {} }];
                     } else {
                         upcomingOrderData.vendorSelections = [{ vendorId: '', items: {} }];
                     }
@@ -1970,7 +1999,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                         ...upcomingOrderData,
                         caseId: upcomingOrderData.caseId || hasCaseId
                     };
-                } else {
+                } else if (upcomingOrderData) {
                     // Single order format - ensure caseId is set
                     // CRITICAL: If client serviceType is 'Food', always use 'Food' (not 'Meal')
                     const serviceType = c.serviceType === 'Food' ? 'Food' : (upcomingOrderData.serviceType || c.serviceType);
@@ -2032,12 +2061,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                 configToSet = defaultOrder;
             }
 
-            // For existing Food clients with no order data, load default order template (same as new clients)
-            // Now loads for ALL Food clients to show default template
+            // For existing Food clients with no order details, load default template (unless client has something in clients.upcoming_order)
             if (configToSet && c.serviceType === 'Food') {
                 const hasNoOrderData = !(configToSet.vendorSelections?.some((vs: any) => vs.items && typeof vs.items === 'object' && Object.keys(vs.items).length > 0)) &&
                     !(configToSet.deliveryDayOrders && typeof configToSet.deliveryDayOrders === 'object' && Object.values(configToSet.deliveryDayOrders).some((d: any) => d?.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items).length > 0)));
-                if (hasNoOrderData) {
+                if (hasNoOrderData && !clientHasOrderDetailsInUpcomingOrder(c)) {
                     try {
                         const template = await getDefaultOrderTemplate('Food');
                         if (template) {
@@ -2073,6 +2101,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                                 configToSet.vendorSelections = templateVs.length > 0
                                     ? templateVs.map((vs: any) => ({ vendorId: defaultVendorId || vs.vendorId || '', items: { ...(vs.items || {}) } }))
                                     : [{ vendorId: defaultVendorId || '', items: {} }];
+                                configToSet.deliveryDayOrders = undefined;
                             }
                             configToSet.serviceType = 'Food';
                             if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Applied default Food template (with meal plan) for existing client with no order');
@@ -2090,7 +2119,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
 
             // Ensure billAmount is preserved for Produce orders from upcoming_orders (or from totalValue if legacy)
             if (c.serviceType === 'Produce') {
-                const fromUpcoming = upcomingOrderData?.billAmount ?? upcomingOrderData?.totalValue;
+                const fromUpcoming = upcomingOrderData?.billAmount ?? (upcomingOrderData as unknown as Record<string, unknown> | null)?.totalValue;
                 if (fromUpcoming !== null && fromUpcoming !== undefined) {
                     const val = parseFloat(String(fromUpcoming));
                     if (!Number.isNaN(val)) configToSet.billAmount = val;
@@ -2385,7 +2414,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                                 caseId: upcomingOrderData.caseId || configToSet?.caseId,
                                 vendorSelections: dayOrder.vendorSelections,
                                 deliveryDay: day,
-                                id: upcomingOrderData.id
+                                id: (upcomingOrderData as unknown as Record<string, unknown>).id
                             });
                         }
                     }
@@ -3733,11 +3762,26 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
     }
 
     async function handleSaveAndClose() {
-        const saved = await handleSave();
-        if (saved && onClose) {
-            onClose();
+        try {
+            const saved = await handleSave();
+            if (saved && onClose) {
+                onClose();
+            }
+        } catch (err) {
+            console.error('[handleSaveAndClose]', err);
+            setSaving(false);
+            setErrorModal({
+                show: true,
+                message: err instanceof Error ? err.message : 'An error occurred while saving.',
+            });
         }
     }
+
+    useImperativeHandle(ref, () => ({
+        saveAndClose: () => handleSaveAndClose(),
+        close: () => onClose?.(),
+        hasUnsavedChanges: () => hasUnsavedChanges,
+    }), [onClose, hasUnsavedChanges]);
 
     async function handleCreateDependent() {
         if (!dependentName.trim() || !client?.id) return;
@@ -3950,86 +3994,102 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
     }
 
     async function handleSave(): Promise<boolean> {
+        // Show loading immediately so user sees feedback when Save is clicked (even before validation)
+        setSaving(true);
+        setMessage(null);
 
-        if (!client && !isNewClient) {
-            return false;
-        }
+        try {
+            if (!client && !isNewClient) {
+                setSaving(false);
+                return false;
+            }
 
-        // Validate approvedMealsPerWeek min/max bounds
-        // Allow 0/undefined (can be under min), but if > 0, must be within min/max bounds
-        const approvedMeals = formData.approvedMealsPerWeek ?? 0;
+            // Validate approvedMealsPerWeek min/max bounds
+            // Allow 0/undefined (can be under min), but if > 0, must be within min/max bounds
+            const approvedMeals = formData.approvedMealsPerWeek ?? 0;
 
-        // If value is > 0, validate it's within bounds (0 is always allowed)
-        if (approvedMeals > 0) {
-            if (approvedMeals < MIN_APPROVED_MEALS_PER_WEEK) {
+            // If value is > 0, validate it's within bounds (0 is always allowed)
+            if (approvedMeals > 0) {
+                if (approvedMeals < MIN_APPROVED_MEALS_PER_WEEK) {
+                    setValidationError({
+                        show: true,
+                        messages: [`Approved meals per week (${approvedMeals}) must be at least ${MIN_APPROVED_MEALS_PER_WEEK}.`]
+                    });
+                    setSaving(false);
+                    return false;
+                }
+                if (approvedMeals > MAX_APPROVED_MEALS_PER_WEEK) {
+                    setValidationError({
+                        show: true,
+                        messages: [`Approved meals per week (${approvedMeals}) must be at most ${MAX_APPROVED_MEALS_PER_WEEK}.`]
+                    });
+                    setSaving(false);
+                    return false;
+                }
+            }
+
+            // Validate location (lat/lng) is required
+            const lat = formData.lat ?? formData.latitude;
+            const lng = formData.lng ?? formData.longitude;
+            if (lat == null || lng == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
                 setValidationError({
                     show: true,
-                    messages: [`Approved meals per week (${approvedMeals}) must be at least ${MIN_APPROVED_MEALS_PER_WEEK}.`]
+                    messages: ['Location is required. Please geocode the client address before saving.']
                 });
-
+                setSaving(false);
                 return false;
             }
-            if (approvedMeals > MAX_APPROVED_MEALS_PER_WEEK) {
-                setValidationError({
-                    show: true,
-                    messages: [`Approved meals per week (${approvedMeals}) must be at most ${MAX_APPROVED_MEALS_PER_WEEK}.`]
-                });
 
-                return false;
+            // Validate Order Config before saving (if we have config)
+            // Validate if orderConfig has meaningful data
+            const shouldValidate = orderConfig && (
+                formData.serviceType === 'Boxes' 
+                    ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
+                    : (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) ||
+                      (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0)
+            );
+            if (shouldValidate) {
+                const validation = validateOrder();
+                if (!validation.isValid) {
+                    setValidationError({ show: true, messages: validation.messages });
+                    setSaving(false);
+                    return false;
+                }
             }
-        }
 
-        // Validate location (lat/lng) is required
-        const lat = formData.lat ?? formData.latitude;
-        const lng = formData.lng ?? formData.longitude;
-        if (lat == null || lng == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) {
-            setValidationError({
-                show: true,
-                messages: ['Location is required. Please geocode the client address before saving.']
-            });
-            return false;
-        }
+            // Check for Status Change by Navigator
+            // Only show units modal if the new status requires units on change
+            // Skip this check for new clients
+            if (!isNewClient && client) {
+                if (currentUser?.role === 'navigator' && formData.statusId !== client.statusId) {
+                    const newStatus = statuses.find(s => s.id === formData.statusId);
 
-        // Validate Order Config before saving (if we have config)
-        // Validate if orderConfig has meaningful data
-        const shouldValidate = orderConfig && (
-            formData.serviceType === 'Boxes' 
-                ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
-                : (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) ||
-                  (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0)
-        );
-        if (shouldValidate) {
-            const validation = validateOrder();
-            if (!validation.isValid) {
-                setValidationError({ show: true, messages: validation.messages });
-                return false;
-            }
-        }
-
-        // Check for Status Change by Navigator
-        // Only show units modal if the new status requires units on change
-        // Skip this check for new clients
-        if (!isNewClient && client) {
-            if (currentUser?.role === 'navigator' && formData.statusId !== client.statusId) {
-                const newStatus = statuses.find(s => s.id === formData.statusId);
-
-                // Only show modal if the new status has requiresUnitsOnChange enabled
-                if (newStatus?.requiresUnitsOnChange) {
-                    try {
-                        const oldStatusName = getStatusName(client.statusId);
-                        const newStatusName = getStatusName(formData.statusId!);
-                        setPendingStatusChange({ oldStatus: oldStatusName, newStatus: newStatusName });
-                        setShowUnitsModal(true);
-                        return false; // Intercepted
-                    } catch (e) {
-                        console.error('[handleSave] Error in status change logic:', e);
+                    // Only show units modal if the new status has requiresUnitsOnChange enabled
+                    if (newStatus?.requiresUnitsOnChange) {
+                        try {
+                            const oldStatusName = getStatusName(client.statusId);
+                            const newStatusName = getStatusName(formData.statusId!);
+                            setPendingStatusChange({ oldStatus: oldStatusName, newStatus: newStatusName });
+                            setShowUnitsModal(true);
+                            setSaving(false);
+                            return false; // Intercepted
+                        } catch (e) {
+                            console.error('[handleSave] Error in status change logic:', e);
+                        }
                     }
                 }
             }
+
+            return await executeSave(0);
+        } catch (err) {
+            console.error('[handleSave]', err);
+            setSaving(false);
+            setErrorModal({
+                show: true,
+                message: err instanceof Error ? err.message : 'An error occurred while saving.',
+            });
+            return false;
         }
-
-
-        return await executeSave(0);
     }
 
     async function executeSave(unitsAdded: number = 0): Promise<boolean> {
@@ -4263,12 +4323,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                     }
                 }
 
-                // For new clients: persist Saved Meal Plan component input (default template + user-edited quantities)
-                // to meal_planner_orders and meal_planner_order_items since they have no existing records yet.
+                // For new clients: persist Saved Meal Plan to clients.meal_planner_data
                 if (formData.serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
-                    const { ok, error: mealPlanCreateErr } = await createMealPlannerOrdersFromTemplate(updatedClient.id, mealPlanOrdersRef.current);
-                    if (!ok && mealPlanCreateErr) {
-                        console.warn('[ClientProfile] Failed to create meal planner orders from template:', mealPlanCreateErr);
+                    const { ok, error: mealPlanErr } = await saveClientMealPlannerDataFull(updatedClient.id, mealPlanOrdersRef.current);
+                    if (!ok && mealPlanErr) {
+                        console.warn('[ClientProfile] Failed to save meal planner data:', mealPlanErr);
                     }
                 }
 
@@ -4355,6 +4414,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
 
             let updateData: Partial<ClientProfile> = { ...formData };
 
+            // When saving details only (e.g. sidebar), never include activeOrder so we only update the client table.
+            if (saveDetailsOnly) {
+                delete updateData.activeOrder;
+            }
+
             // Ensure approvedMealsPerWeek is always sent for Food clients (backend expects it)
             if (formData.serviceType === 'Food') {
                 updateData.approvedMealsPerWeek = formData.approvedMealsPerWeek ?? client?.approvedMealsPerWeek ?? 0;
@@ -4362,10 +4426,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
 
             await recordClientChange(clientId, summary, 'Admin');
 
-            // Sync Current Order Request
-            const hasOrderConfigChanges = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
+            // Sync Current Order Request (skip when saveDetailsOnly - we only persist client table fields)
+            const hasOrderConfigChanges = !saveDetailsOnly && JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
             
             console.log('[ClientProfile] Order save check:', {
+                saveDetailsOnly,
                 serviceType: formData.serviceType,
                 hasOrderConfigChanges,
                 hasOrderChanges,
@@ -4375,7 +4440,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
             
             // Match triangleorder approach: Save if there are order config changes OR order changes
             // Don't check hasValidOrderData - let the backend handle validation
-            if (hasOrderConfigChanges || hasOrderChanges) {
+            // When saveDetailsOnly we never add activeOrder (already deleted above).
+            if (!saveDetailsOnly && (hasOrderConfigChanges || hasOrderChanges)) {
                 // Add activeOrder to updateData so updateClient handles the full save + sync efficiently
                 // efficiently with only ONE revalidation
                 // For Food tab: use canonical active_order structure (caseId, serviceType, mealSelections, vendorSelections, deliveryDayOrders)
@@ -4413,9 +4479,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                 }
             }
 
-            // CRITICAL: Execute the single update call
+            // CRITICAL: Execute the single update call (skip order sync when saveDetailsOnly)
             try {
-                await updateClient(clientId, updateData);
+                await updateClient(clientId, updateData, saveDetailsOnly ? { skipOrderSync: true } : undefined);
             } catch (error) {
                 console.error('[ClientProfile] Error updating client:', error);
                 const errorMessage = error instanceof Error ? error.message : 'An error occurred while saving the client.';
@@ -4424,79 +4490,82 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                 return false;
             }
 
-            // Sync to new independent tables if there's order data
-            // Sync to new independent tables if there's order data OR if we need to clear data
-            const serviceType = formData.serviceType;
-            
-            // For Boxes service, save even without caseId (caseId is optional for boxes)
-            if (serviceType === 'Boxes' && updateData.activeOrder) {
-                const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
-                console.log('[ClientProfile] Saving box orders:', {
-                    serviceType,
-                    hasCaseId: !!updateData.activeOrder.caseId,
-                    caseId: updateData.activeOrder.caseId,
-                    boxesCount: boxesToSave.length,
-                    boxes: boxesToSave.map((box: any) => ({
-                        boxTypeId: box.boxTypeId,
-                        vendorId: box.vendorId,
-                        quantity: box.quantity,
-                        itemsCount: Object.keys(box.items || {}).length,
-                        hasItems: Object.keys(box.items || {}).length > 0
-                    }))
-                });
-                if (boxesToSave.length > 0) {
-                    await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
-                        ...box,
-                        caseId: updateData.activeOrder?.caseId
-                    })));
+            // When saveDetailsOnly we only updated the client table; skip all order sync and order-related saves.
+            if (!saveDetailsOnly) {
+                // Sync to new independent tables if there's order data
+                // Sync to new independent tables if there's order data OR if we need to clear data
+                const serviceType = formData.serviceType;
+                
+                // For Boxes service, save even without caseId (caseId is optional for boxes)
+                if (serviceType === 'Boxes' && updateData.activeOrder) {
+                    const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
+                    console.log('[ClientProfile] Saving box orders:', {
+                        serviceType,
+                        hasCaseId: !!updateData.activeOrder.caseId,
+                        caseId: updateData.activeOrder.caseId,
+                        boxesCount: boxesToSave.length,
+                        boxes: boxesToSave.map((box: any) => ({
+                            boxTypeId: box.boxTypeId,
+                            vendorId: box.vendorId,
+                            quantity: box.quantity,
+                            itemsCount: Object.keys(box.items || {}).length,
+                            hasItems: Object.keys(box.items || {}).length > 0
+                        }))
+                    });
+                    if (boxesToSave.length > 0) {
+                        await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
+                            ...box,
+                            caseId: updateData.activeOrder?.caseId
+                        })));
+                    }
                 }
-            }
-            
-            // Custom orders are handled by syncCurrentOrderToUpcoming (called by updateClient)
-            // No separate save needed - syncCurrentOrderToUpcoming will save customItems array to upcoming_order_items
+                
+                // Custom orders are handled by syncCurrentOrderToUpcoming (called by updateClient)
+                // No separate save needed - syncCurrentOrderToUpcoming will save customItems array to upcoming_order_items
 
-            // Save food orders: ALWAYS when service type is Food and we have activeOrder (even without caseId).
-            // CRITICAL: Pass the entire activeOrder so vendorSelections are preserved for syncCurrentOrderToUpcoming.
-            // Without this, upcoming_orders sync can miss vendorSelections and Food orders may not save.
-            if (serviceType === 'Food' && updateData.activeOrder) {
-                const activeOrderAny = updateData.activeOrder as any;
-                const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && 
-                    typeof activeOrderAny.deliveryDayOrders === 'object' &&
-                    Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
-                // Extract caseId from UniteUs link if available
-                const extractedCaseId = formData.caseIdExternal 
+                // Save food orders: ALWAYS when service type is Food and we have activeOrder (even without caseId).
+                // CRITICAL: Pass the entire activeOrder so vendorSelections are preserved for syncCurrentOrderToUpcoming.
+                // Without this, upcoming_orders sync can miss vendorSelections and Food orders may not save.
+                if (serviceType === 'Food' && updateData.activeOrder) {
+                    const activeOrderAny = updateData.activeOrder as any;
+                    const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && 
+                        typeof activeOrderAny.deliveryDayOrders === 'object' &&
+                        Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
+                    // Extract caseId from UniteUs link if available
+                    const extractedCaseId = formData.caseIdExternal 
+                        ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
+                        : null;
+                    await saveClientFoodOrder(clientId, {
+                        caseId: extractedCaseId,
+                        ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
+                    }, activeOrderAny);
+                }
+
+                // Persist meal plan to clients.meal_planner_data (full snapshot, clears >7 days old)
+                if (serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
+                    const { ok, error: mealPlanErr } = await saveClientMealPlannerDataFull(clientId, mealPlanOrdersRef.current);
+                    if (!ok && mealPlanErr) {
+                        console.warn('[ClientProfile] Failed to save meal planner data:', mealPlanErr);
+                    }
+                }
+
+                // Save meal orders only when service type is Meal (meal_planner_orders for Food clients
+                // are managed by the Saved Meal Plan section and admin template, not by saveClientMealOrder).
+                const extractedCaseIdForMealSave = formData.caseIdExternal 
                     ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
                     : null;
-                await saveClientFoodOrder(clientId, {
-                    caseId: extractedCaseId,
-                    ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
-                }, activeOrderAny);
-            }
-
-            // Persist meal plan order quantity changes (Saved Meal Plan section) to meal_planner_orders / meal_planner_order_items
-            if (serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
-                const { ok, error: mealPlanErr } = await saveClientMealPlannerOrderQuantities(clientId, mealPlanOrdersRef.current);
-                if (!ok && mealPlanErr) {
-                    console.warn('[ClientProfile] Failed to save meal planner order quantities:', mealPlanErr);
+                if (serviceType === 'Meal' && extractedCaseIdForMealSave) {
+                    await saveClientMealOrder(clientId, {
+                        caseId: extractedCaseIdForMealSave,
+                        mealSelections: (updateData.activeOrder as any).mealSelections || {}
+                    });
                 }
-            }
-
-            // Save meal orders only when service type is Meal (meal_planner_orders for Food clients
-            // are managed by the Saved Meal Plan section and admin template, not by saveClientMealOrder).
-            const extractedCaseIdForMealSave = formData.caseIdExternal 
-                ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
-                : null;
-            if (serviceType === 'Meal' && extractedCaseIdForMealSave) {
-                await saveClientMealOrder(clientId, {
-                    caseId: extractedCaseIdForMealSave,
-                    mealSelections: (updateData.activeOrder as any).mealSelections || {}
-                });
-            }
-            // IMPORTANT: For existing clients with Food service, updates must be shown in active_orders
-            // updateClient already synced to upcoming_orders (and skips Produce). We sync again here so
-            // saveClientFoodOrder's active_order updates are reflected. Do NOT sync Produce to upcoming_orders.
-            if (serviceType !== 'Produce') {
-                await syncCurrentOrderToUpcoming(clientId, { ...client, ...updateData } as ClientProfile, true);
+                // IMPORTANT: For existing clients with Food service, updates must be shown in active_orders
+                // updateClient already synced to upcoming_orders (and skips Produce). We sync again here so
+                // saveClientFoodOrder's active_order updates are reflected. Do NOT sync Produce to upcoming_orders.
+                if (serviceType !== 'Produce') {
+                    await syncCurrentOrderToUpcoming(clientId, { ...client, ...updateData } as ClientProfile, true);
+                }
             }
 
             // Reload upcoming order if we had order changes
@@ -4513,9 +4582,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
             }
             */
 
-            // Show cutoff-aware confirmation message if order was saved
+            // Show cutoff-aware confirmation message if order was saved (not when saveDetailsOnly)
             let confirmationMessage = 'Changes saved successfully.';
-            if (hasOrderChanges && orderConfig) {
+            if (!saveDetailsOnly && hasOrderChanges && orderConfig) {
                 const cutoffPassed = isCutoffPassed();
                 const takeEffectDate = getEarliestTakeEffectDateForOrder();
 
@@ -4632,7 +4701,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                                 <Trash2 size={16} /> Delete {isDependent ? 'Dependent' : 'Client'}
                             </button>
                             {!onClose && (
-                                <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                                <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
                                     <Save size={16} /> Save Changes
                                 </button>
                             )}
@@ -5621,8 +5690,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                                                             }
                                                         });
                                                     }
-                                                    
+                                                    const vendorMenuItemIds = new Set((effectiveVendorId ? getVendorMenuItems(effectiveVendorId) : []).map(i => i.id));
                                                     const vendorMealCount = Object.entries(items).reduce((sum: number, [itemId, qty]: [string, any]) => {
+                                                        if (!vendorMenuItemIds.has(itemId)) return sum;
                                                         const item = menuItems.find(i => i.id === itemId);
                                                         const quotaValue = item?.quotaValue || 1;
                                                         return sum + (Number(qty) || 0) * quotaValue;
@@ -6952,8 +7022,13 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
                                 Discard Changes
                             </button>
                             <button
+                                type="button"
                                 className="btn btn-primary"
-                                onClick={handleSaveAndClose}
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleSaveAndClose();
+                                }}
                                 disabled={saving}
                                 style={{
                                     width: '200px',
@@ -6993,8 +7068,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
         <>
             {onClose ? (
                 <div className={styles.modalOverlay} onClick={() => {
-                    // Try to save and close when clicking overlay
-                    handleSaveAndClose();
+                    // If in edit mode (unsaved changes), save then close; otherwise just close
+                    if (hasUnsavedChanges) {
+                        handleSaveAndClose();
+                    } else {
+                        onClose?.();
+                    }
                 }}>
                     <div className={styles.modalContent} onClick={e => e.stopPropagation()} style={{ position: 'relative' }}>
                         {saving && (
@@ -7118,4 +7197,4 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, serviceCo
             />
         </>
     );
-}
+});

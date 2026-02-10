@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "DietCombo Client Manager",
-  "version": "1.0.0",
-  "description": "Add clients to DietCombo system",
+  "name": "New DF Client Import",
+  "version": "1.0.1",
+  "description": "Add clients to the new Diet Fantasy system",
   "permissions": [
     "storage",
     "sidePanel",

@@ -3,6 +3,12 @@ export type OrderStatus = 'pending' | 'confirmed' | 'completed' | 'waiting_for_p
 
 export type ServiceType = 'Food' | 'Meal' | 'Boxes' | 'Equipment' | 'Custom' | 'Vendor' | 'Produce';
 
+/** One date's items in clients.meal_planner_data */
+export interface MealPlannerDateItem {
+  scheduledDeliveryDate: string; // YYYY-MM-DD
+  items: { id: string; name: string; quantity: number; value?: number | null }[];
+}
+
 export interface ClientProfile {
   id: string;
   fullName: string;
@@ -61,6 +67,9 @@ export interface ClientProfile {
   visits?: any; // JSON data
   signToken?: string | null;
   assignedDriverId?: string | null;
+
+  /** Meal planner data: [{ scheduledDeliveryDate, items: [{ id, name, quantity, value? }] }]. Single source of truth. */
+  mealPlannerData?: MealPlannerDateItem[] | null;
 
   createdAt: string;
   updatedAt: string;

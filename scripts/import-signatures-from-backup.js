@@ -1,8 +1,8 @@
 /**
  * Import all signatures from backup JSON into Supabase.
- * Use this when the full backup import only brought in a subset of signatures
- * (e.g. 200 of 3828). This script maps backup userId -> existing client id
- * and upserts every signature (existing ones are updated by conflict, new ones inserted).
+ * Maps each backup USER (userId) to the correct Supabase client so signatures
+ * don't collapse onto the same client. Uses client_id_external + first/last name
+ * to resolve duplicates (backup has 790 users but only 690 unique clientIds).
  *
  * Backup has 3828 signatures across 766 users. Clients must already exist in DB
  * (from a prior run of import-five-clients.js --clear --all or equivalent).
@@ -13,6 +13,7 @@
  * Options:
  *   --dry-run    Log counts and mapping only; no DB writes.
  *   --limit N    Only process first N signatures (for testing).
+ *   --clear      Delete all existing signatures before importing (use when re-importing with fixed mapping).
  *
  * Requires .env.local with NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
  */
@@ -49,9 +50,11 @@ function main() {
   const args = process.argv.slice(2);
   let dryRun = false;
   let limit = null;
+  let clearFirst = false;
   let filePath = null;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--dry-run") dryRun = true;
+    else if (args[i] === "--clear") clearFirst = true;
     else if (args[i] === "--limit") {
       limit = parseInt(args[i + 1], 10);
       if (Number.isNaN(limit) || limit < 1) {
@@ -66,7 +69,7 @@ function main() {
   }
 
   if (!filePath) {
-    console.error("Usage: node scripts/import-signatures-from-backup.js [--dry-run] [--limit N] <path-to-backup.json>");
+    console.error("Usage: node scripts/import-signatures-from-backup.js [--dry-run] [--clear] [--limit N] <path-to-backup.json>");
     process.exit(1);
   }
 
@@ -78,6 +81,7 @@ function main() {
 
   console.log("Reading backup from:", absPath);
   if (dryRun) console.log("DRY RUN – no database writes.");
+  if (clearFirst && !dryRun) console.log("Will clear existing signatures before import.");
   const raw = fs.readFileSync(absPath, "utf8");
   let backup;
   try {
@@ -111,35 +115,83 @@ function main() {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   (async () => {
-    // Build backup userId -> backup clientId (UUID from backup user)
-    const backupUserIdToClientId = new Map(
-      allUsers.filter((u) => u.clientId && /^[0-9a-f-]{36}$/i.test(u.clientId)).map((u) => [u.id, u.clientId])
-    );
+    if (clearFirst) {
+      console.log("\n--- Clearing signatures ---");
+      const { error: clearErr } = await supabase.from("signatures").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (clearErr) {
+        console.error("Clear signatures error:", clearErr.message);
+        process.exit(1);
+      }
+      console.log("  Cleared.\n");
+    }
 
-    // Fetch all existing clients: id and client_id_external
-    const { data: clients, error: fetchErr } = await supabase.from("clients").select("id, client_id_external");
+    // Fetch all existing clients (need name to resolve duplicate clientIds)
+    const { data: clients, error: fetchErr } = await supabase
+      .from("clients")
+      .select("id, client_id_external, first_name, last_name, full_name");
     if (fetchErr) {
       console.error("Failed to fetch clients:", fetchErr.message);
       process.exit(1);
     }
-    const clientsById = new Map((clients || []).map((c) => [c.id, c]));
-    const clientIdByExternal = new Map(
-      (clients || []).filter((c) => c.client_id_external).map((c) => [c.client_id_external, c.id])
-    );
-
-    // Resolve backup userId -> Supabase client_id
-    function resolveClientId(backupUserId) {
-      const backupClientId = backupUserIdToClientId.get(backupUserId);
-      if (!backupClientId) return null;
-      if (clientsById.has(backupClientId)) return backupClientId;
-      return clientIdByExternal.get(backupClientId) || null;
+    const clientList = clients || [];
+    console.log("Supabase clients loaded:", clientList.length);
+    const withExt = clientList.filter((c) => c.client_id_external).length;
+    console.log("  with client_id_external:", withExt);
+    // Normalize UUIDs to lowercase for reliable lookup (Postgres may return different case)
+    const clientsById = new Map(clientList.map((c) => [c.id ? String(c.id).toLowerCase() : "", c]));
+    const byExternal = new Map();
+    for (const c of clientList) {
+      if (!c.client_id_external) continue;
+      const ext = String(c.client_id_external).trim().toLowerCase();
+      if (!byExternal.has(ext)) byExternal.set(ext, []);
+      byExternal.get(ext).push(c);
     }
 
+    // Resolve backup userId -> Supabase client_id (1:1 so each user's sigs go to the right client)
+    function resolveClientId(backupUserId) {
+      const u = userById.get(backupUserId);
+      if (!u) return null;
+      const raw = u.clientId && /^[0-9a-f-]{36}$/i.test(u.clientId) ? u.clientId : null;
+      if (!raw) return null;
+      const backupClientId = String(raw).trim().toLowerCase();
+      const first = (u.first && String(u.first).trim()) || "";
+      const last = (u.last && String(u.last).trim()) || "";
+      // 1) Client whose id IS the backup clientId (the one who "won" that UUID during import)
+      if (clientsById.has(backupClientId)) return clientsById.get(backupClientId).id;
+      // 2) Among clients with this client_id_external, pick the one that matches this user's name (case-insensitive)
+      const candidates = byExternal.get(backupClientId) || [];
+      const firstLower = first.toLowerCase();
+      const lastLower = last.toLowerCase();
+      const fullBackup = [first, last].filter(Boolean).join(" ").trim().toLowerCase();
+      let nameMatch = candidates.find(
+        (c) =>
+          ((c.first_name || "").trim().toLowerCase() === firstLower) &&
+          ((c.last_name || "").trim().toLowerCase() === lastLower)
+      );
+      if (!nameMatch && fullBackup)
+        nameMatch = candidates.find(
+          (c) => (c.full_name || "").trim().toLowerCase() === fullBackup
+        );
+      if (nameMatch) return nameMatch.id;
+      if (candidates.length === 1) return candidates[0].id;
+      if (candidates.length > 1) return candidates[0].id; // fallback: first
+      return null;
+    }
+
+    const resolvedUsers = new Set();
+    for (const s of signatures) {
+      const cid = resolveClientId(s.userId);
+      if (cid) resolvedUsers.add(cid);
+    }
+    console.log("Resolved to", resolvedUsers.size, "distinct Supabase clients (of", signatures.length, "signature records).");
+
     const noClient = new Set();
+    const writtenClientIds = new Set();
     let stats = { ok: 0, fail: 0, skipped: 0 };
 
-    console.log("--- Importing signatures ---");
-    for (const s of signatures) {
+    console.log("--- Importing signatures (total:", signatures.length, ") ---");
+    for (let i = 0; i < signatures.length; i++) {
+      const s = signatures[i];
       const clientId = resolveClientId(s.userId);
       if (!clientId) {
         noClient.add(s.userId);
@@ -164,8 +216,10 @@ function main() {
         continue;
       }
       stats.ok++;
-      if (stats.ok <= 10 || stats.ok % 500 === 0) {
-        console.log("  Imported signature for", name, "(slot", s.slot + ")", "— total ok:", stats.ok);
+      writtenClientIds.add(clientId);
+      // Progress: first 10, then every 100, then final
+      if (stats.ok <= 10 || stats.ok % 100 === 0 || i === signatures.length - 1) {
+        console.log("  ", stats.ok, "/", signatures.length, "—", name, "(slot", s.slot + ")");
       }
     }
 
@@ -173,6 +227,7 @@ function main() {
       console.log("\nSkipped", stats.skipped, "signatures (no matching client for backup userIds):", [...noClient].slice(0, 20).join(", ") + (noClient.size > 20 ? "…" : ""));
     }
     console.log("--- Signatures done:", stats.ok, "ok,", stats.fail, "failed,", stats.skipped, "skipped (no client) ---");
+    console.log("Distinct clients that now have signatures:", writtenClientIds.size);
     console.log("Done.");
   })().catch((e) => {
     console.error(e);

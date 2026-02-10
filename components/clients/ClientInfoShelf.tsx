@@ -26,7 +26,8 @@ interface ClientInfoShelfProps {
     allClients?: ClientProfile[];
     onClose: () => void;
     onOpenProfile: (clientId: string) => void;
-    onClientUpdated?: () => void;
+    /** Called after save; pass updated client to update list for that client only. */
+    onClientUpdated?: (updatedClient?: ClientProfile) => void;
     onClientDeleted?: () => void;
 }
 
@@ -134,7 +135,7 @@ export function ClientInfoShelf({
         try {
             const a = await geocodeOneClient(q);
             await updateClient(client.id, { lat: a.lat, lng: a.lng });
-            onClientUpdated?.();
+            onClientUpdated?.(undefined);
         } catch {
             setGeoErr('Address not found');
         } finally {
@@ -145,46 +146,49 @@ export function ClientInfoShelf({
     const handleSave = async () => {
         setIsSaving(true);
         try {
-            const updatedActiveOrder = {
-                ...(client.activeOrder || { serviceType: client.serviceType }),
-                caseId: editForm.caseId,
-                serviceType: client.activeOrder?.serviceType || client.serviceType
-            };
-
-            await updateClient(client.id, {
-                fullName: editForm.fullName,
-                statusId: editForm.statusId,
-                navigatorId: editForm.navigatorId,
-                phoneNumber: editForm.phoneNumber,
-                secondaryPhoneNumber: editForm.secondaryPhoneNumber || null,
-                email: editForm.email || null,
-                address: editForm.address,
-                apt: editForm.apt || null,
-                city: editForm.city || null,
-                state: editForm.state || null,
-                zip: editForm.zip || null,
-                county: editForm.county || null,
-                notes: editForm.notes,
-                dislikes: editForm.dislikes || null,
-                caseIdExternal: editForm.caseIdExternal || null,
-                authorizedAmount: editForm.authorizedAmount,
-                expirationDate: editForm.expirationDate || null,
-                approvedMealsPerWeek: editForm.approvedMealsPerWeek,
-                serviceType: editForm.serviceType,
-                paused: editForm.paused,
-                complex: editForm.complex,
-                bill: editForm.bill,
-                delivery: editForm.delivery,
-                activeOrder: updatedActiveOrder
-            });
+            // Sidebar saves only client table fields; no order sync (avoids "Item not found" errors from draft data).
+            const updated = await updateClient(
+                client.id,
+                {
+                    fullName: editForm.fullName,
+                    statusId: editForm.statusId,
+                    navigatorId: editForm.navigatorId,
+                    phoneNumber: editForm.phoneNumber,
+                    secondaryPhoneNumber: editForm.secondaryPhoneNumber || null,
+                    email: editForm.email || null,
+                    address: editForm.address,
+                    apt: editForm.apt || null,
+                    city: editForm.city || null,
+                    state: editForm.state || null,
+                    zip: editForm.zip || null,
+                    county: editForm.county || null,
+                    notes: editForm.notes,
+                    dislikes: editForm.dislikes || null,
+                    caseIdExternal: editForm.caseIdExternal || null,
+                    authorizedAmount: editForm.authorizedAmount,
+                    expirationDate: editForm.expirationDate || null,
+                    approvedMealsPerWeek: editForm.approvedMealsPerWeek,
+                    serviceType: editForm.serviceType,
+                    paused: editForm.paused,
+                    complex: editForm.complex,
+                    bill: editForm.bill,
+                    delivery: editForm.delivery,
+                },
+                { skipOrderSync: true }
+            );
             setIsEditing(false);
-            if (onClientUpdated) onClientUpdated();
+            if (onClientUpdated) onClientUpdated(updated ?? undefined);
         } catch (error) {
             console.error('Failed to update client:', error);
             alert('Failed to save changes. Please try again.');
         } finally {
             setIsSaving(false);
         }
+    };
+
+    const handleSaveAndClose = async () => {
+        await handleSave();
+        onClose();
     };
 
     const handleDelete = async () => {
@@ -220,7 +224,7 @@ export function ClientInfoShelf({
                 setDependentCin('');
                 setShowAddDependentForm(false);
                 // Notify parent
-                if (onClientUpdated) onClientUpdated();
+                if (onClientUpdated) onClientUpdated(undefined);
             }
         } catch (error) {
             console.error('Error creating dependent:', error);
@@ -251,12 +255,12 @@ export function ClientInfoShelf({
     const handleCloseScreeningForm = () => {
         setIsFillingForm(false);
         setFormSchema(null);
-        if (onClientUpdated) onClientUpdated();
+        if (onClientUpdated) onClientUpdated(undefined);
     };
 
     return (
         <>
-            <div className={styles.shelfOverlay} onClick={onClose} />
+            <div className={styles.shelfOverlay} onClick={() => (isEditing ? handleSaveAndClose() : onClose())} />
             <div className={styles.shelf}>
                 <div className={styles.header}>
                     <div className={styles.titleSection}>

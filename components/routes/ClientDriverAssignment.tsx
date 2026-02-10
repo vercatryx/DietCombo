@@ -52,6 +52,8 @@ export default function ClientDriverAssignment({
     const [isBulkSaving, setIsBulkSaving] = useState(false);
     const [previewStop, setPreviewStop] = useState<any | null>(null);
     const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
+    const [totalCustomers, setTotalCustomers] = useState<number>(0);
+    const [skippedPausedOrDeliveryOff, setSkippedPausedOrDeliveryOff] = useState<number>(0);
 
     // Extract drivers from routes
     const drivers = useMemo(() => {
@@ -74,14 +76,18 @@ export default function ClientDriverAssignment({
                 throw new Error('Failed to load clients');
             }
             const usersData = await res.json();
-            
+            const allUsers = usersData || [];
+
             // Exclude paused and delivery-off clients (routes page should not show them)
-            const activeUsers = (usersData || []).filter((user: any) => {
+            const activeUsers = allUsers.filter((user: any) => {
                 if (user.paused) return false;
                 const delivery = user.delivery;
                 if (delivery !== undefined && delivery !== null && !delivery) return false;
                 return true;
             });
+
+            setTotalCustomers(allUsers.length);
+            setSkippedPausedOrDeliveryOff(allUsers.length - activeUsers.length);
             
             // Map users to clients format
             const clientsList: Client[] = activeUsers.map((user: any) => {
@@ -435,6 +441,12 @@ export default function ClientDriverAssignment({
                 </Typography>
                 <Typography variant="body2" sx={{ color: '#6b7280', mb: 1 }}>
                     Showing {mapStops.length} of {filteredClients.length} clients with geolocation
+                    {totalCustomers > 0 && (
+                        <> • {totalCustomers} total customer{totalCustomers !== 1 ? 's' : ''}</>
+                    )}
+                    {skippedPausedOrDeliveryOff > 0 && (
+                        <> • {skippedPausedOrDeliveryOff} skipped (paused or delivery off)</>
+                    )}
                     {selectedClientIds.size > 0 && ` • ${selectedClientIds.size} selected`}
                 </Typography>
                 {clientsWithoutGeo > 0 && (

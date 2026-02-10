@@ -1,6 +1,6 @@
 'use client';
 
-import { ClientProfileDetail } from './ClientProfile';
+import { ClientProfileDetail, type ClientProfileDetailHandle } from './ClientProfile';
 import { ClientInfoShelf } from './ClientInfoShelf';
 
 import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
@@ -98,6 +98,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     // Selected Client for Modal
     const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
     const [profileServiceConfigOnly, setProfileServiceConfigOnly] = useState(false);
+    const profileDetailRef = useRef<ClientProfileDetailHandle>(null);
 
     // Info Shelf State
     const [infoShelfClientId, setInfoShelfClientId] = useState<string | null>(null);
@@ -2204,8 +2205,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 <div className={styles.profileModal}>
                     <div className={styles.profileCard}>
                         <ClientProfileDetail
+                            ref={profileDetailRef}
                             clientId={selectedClientId}
                             serviceConfigOnly={profileServiceConfigOnly}
+                            saveDetailsOnly={true}
                             initialData={detailsCache[selectedClientId]}
                             statuses={statuses}
                             navigators={navigators}
@@ -2233,17 +2236,23 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         />
                     </div>
                     <div className={styles.overlay} onClick={() => {
-                        const closedClientId = selectedClientId;
-                        setProfileServiceConfigOnly(false);
-                        setSelectedClientId(null);
-                        // Clear the cache for this client
-                        setDetailsCache(prev => {
-                            const next = { ...prev };
-                            delete next[closedClientId];
-                            return next;
-                        });
-                        // Trigger background refresh to update the list with any changes
-                        refreshDataInBackground();
+                        // When clicking off: if in edit mode (unsaved changes), save then close; otherwise just close
+                        const ref = profileDetailRef.current;
+                        if (ref?.hasUnsavedChanges?.()) {
+                            ref.saveAndClose?.();
+                        } else {
+                            ref?.close?.() ?? (() => {
+                                const closedClientId = selectedClientId;
+                                setProfileServiceConfigOnly(false);
+                                setSelectedClientId(null);
+                                setDetailsCache(prev => {
+                                    const next = { ...prev };
+                                    delete next[closedClientId];
+                                    return next;
+                                });
+                                refreshDataInBackground();
+                            })();
+                        }
                     }}></div>
                 </div>
             )}
@@ -2261,17 +2270,24 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         setProfileServiceConfigOnly(true);
                         setSelectedClientId(clientId);
                     }}
-                    onClientUpdated={() => {
-                        // Clear cache for this client to force re-fetch
-                        const updatedClientId = infoShelfClientId;
-                        if (updatedClientId) {
+                    onClientUpdated={(updatedClient) => {
+                        const id = infoShelfClientId;
+                        if (updatedClient && id && updatedClient.id === id) {
+                            // Update only this client in the list and cache (no full reload)
+                            setClients(prev => prev.map(c => (c.id === id ? updatedClient : c)));
+                            setDetailsCache(prev => ({
+                                ...prev,
+                                [id]: { ...(prev[id] || {}), client: updatedClient } as any,
+                            }));
+                        } else if (id) {
+                            // No updated client (e.g. dependent added): clear cache and refresh
                             setDetailsCache(prev => {
-                                const newCache = { ...prev };
-                                delete newCache[updatedClientId];
-                                return newCache;
+                                const next = { ...prev };
+                                delete next[id];
+                                return next;
                             });
+                            refreshDataInBackground();
                         }
-                        refreshDataInBackground();
                     }}
                     onClientDeleted={() => {
                         setInfoShelfClientId(null);
