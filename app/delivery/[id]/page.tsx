@@ -1,10 +1,40 @@
 import { createClient } from '@supabase/supabase-js';
 import { OrderDeliveryFlow } from './OrderDeliveryFlow';
 import { notFound } from 'next/navigation';
-import '../delivery.css';
+import type { Metadata } from 'next';
 import '../delivery.css';
 
-export default async function OrderDeliveryPage({ params }: { params: Promise<{ id: string }> }) {
+type Props = { params: Promise<{ id: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  const supabaseAdmin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  let query = supabaseAdmin.from('orders').select('order_number').limit(1);
+  if (isUuid) query = query.eq('id', id);
+  else {
+    const n = parseInt(id, 10);
+    query = Number.isNaN(n) ? query.eq('order_number', id) : query.eq('order_number', n);
+  }
+  const { data: order } = await query.maybeSingle();
+  if (!order) {
+    let q2 = supabaseAdmin.from('upcoming_orders').select('order_number').limit(1);
+    if (isUuid) q2 = q2.eq('id', id);
+    else {
+      const n = parseInt(id, 10);
+      q2 = Number.isNaN(n) ? q2.eq('order_number', id) : q2.eq('order_number', n);
+    }
+    const { data: up } = await q2.maybeSingle();
+    const num = up?.order_number ?? id;
+    return { title: `Delivery #${num}` };
+  }
+  return { title: `Delivery #${order.order_number ?? id}` };
+}
+
+export default async function OrderDeliveryPage({ params }: Props) {
     const { id } = await params;
 
     // Use Service Role to bypass RLS for public delivery page

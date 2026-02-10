@@ -202,35 +202,7 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
         setCacheVersion(v => v + 1);
     }, []);
     
-    // Background refresh for stale cache entries (runs silently)
-    useEffect(() => {
-        const interval = setInterval(() => {
-            // Refresh stale reference data in background without blocking
-            const keys: (keyof typeof referenceCacheRef.current)[] = ['statuses', 'navigators', 'vendors', 'menuItems', 'boxTypes', 'categories', 'settings'];
-            const refreshFns: { [key: string]: () => Promise<any> } = {
-                statuses: () => serverActions.getStatuses(),
-                navigators: () => serverActions.getNavigators(),
-                vendors: () => serverActions.getVendors(),
-                menuItems: () => serverActions.getMenuItems(),
-                boxTypes: () => serverActions.getBoxTypes(),
-                categories: () => serverActions.getCategories(),
-                settings: () => serverActions.getSettings()
-            };
-            
-            keys.forEach(key => {
-                const cached = referenceCacheRef.current[key] as any;
-                if (isStale(cached, CACHE_DURATION.REFERENCE_DATA * 1.5)) {
-                    // If cache is getting stale, refresh in background
-                    refreshFns[key]().then((data: any) => {
-                        (referenceCacheRef.current[key] as any) = { data, timestamp: Date.now() };
-                        setCacheVersion(v => v + 1);
-                    }).catch(console.error);
-                }
-            });
-        }, 60000); // Check every minute
-        
-        return () => clearInterval(interval);
-    }, []);
+    // Background refresh removed - data should only be fetched on demand, not constantly in background
     
     const value: DataCacheContextType = {
         getStatuses,

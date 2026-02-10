@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Create Extension Icons</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+    }
+    .icon-preview {
+      display: inline-block;
+      margin: 10px;
+      text-align: center;
+    }
+    canvas {
+      border: 1px solid #ddd;
+      margin: 10px;
+    }
+    button {
+      background: #3498db;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #2980b9;
+    }
+    .instructions {
+      background: #e8f5e9;
+      padding: 15px;
+      border-radius: 4px;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>DietCombo Extension Icon Generator</h1>
+    
+    <div class="instructions">
+      <p><strong>Instructions:</strong></p>
+      <ol>
+        <li>Click "Generate Icons" to create placeholder icons</li>
+        <li>Right-click each canvas and "Save image as..."</li>
+        <li>Save as:
+          <ul>
+            <li><code>icon16.png</code> (16x16)</li>
+            <li><code>icon48.png</code> (48x48)</li>
+            <li><code>icon128.png</code> (128x128)</li>
+          </ul>
+        </li>
+        <li>Place all three files in the <code>chrome-extension/icons/</code> directory</li>
+      </ol>
+    </div>
+
+    <button onclick="generateIcons()">Generate Icons</button>
+    
+    <div id="preview"></div>
+  </div>
+
+  <script>
+    function generateIcons() {
+      const sizes = [16, 48, 128];
+      const preview = document.getElementById('preview');
+      preview.innerHTML = '';
+
+      sizes.forEach(size => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Background
+        ctx.fillStyle = '#3498db';
+        ctx.fillRect(0, 0, size, size);
+
+        // Text
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${size * 0.4}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('DC', size / 2, size / 2);
+
+        // Border
+        ctx.strokeStyle = '#2980b9';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0, 0, size, size);
+
+        const div = document.createElement('div');
+        div.className = 'icon-preview';
+        div.innerHTML = `<canvas id="canvas${size}"></canvas><br><strong>${size}x${size}</strong>`;
+        preview.appendChild(div);
+
+        // Copy to the new canvas
+        const newCanvas = div.querySelector('canvas');
+        newCanvas.width = size;
+        newCanvas.height = size;
+        const newCtx = newCanvas.getContext('2d');
+        newCtx.drawImage(canvas, 0, 0);
+      });
+    }
+  </script>
+</body>
+</html>

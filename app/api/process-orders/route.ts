@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
+import { ensureMealPlannerOrdersForDateFromDefaultTemplate } from '@/lib/actions';
 
 /**
  * Public API: Process orders
  *
  * GET/POST /api/process-orders
  *
+ * Uses same contract as create-expired-meal-planner-orders: defaults from settings (food) and meal_planner_custom_items (meal plan); client overrides from clients.upcoming_order. Created orders are immutable snapshots (orders + order_items); they do not change when defaults or client data change later.
+ *
  * 1. Queries meal_planner_custom_items where expiration_date equals the scan date
  * 2. Fetches related meal_planner_orders
  * 3. Queries clients.upcoming_order for each client_id
  * 4. Fetches meal_planner_order_items for each meal_planner_order
- * 5. Consolidates items from upcoming_order + meal_planner_order_items and creates orders records
+ * 5. Consolidates items from upcoming_order + meal_planner_order_items and creates orders records (snapshot only)
  *
  * Response includes:
  * - counts (meal_planner_orders, orders_created)
@@ -149,6 +152,11 @@ async function scanOrderTables() {
       errors: [],
       scannedAt: new Date().toISOString(),
     };
+  }
+
+  // Ensure meal_planner_orders exist for qualifying dates (default template is no longer synced to all clients on save)
+  for (const dateOnly of qualifyingDates) {
+    await ensureMealPlannerOrdersForDateFromDefaultTemplate(dateOnly);
   }
 
   // 2. Fetch unprocessed meal_planner_orders, then filter by qualifying dates in memory (avoids .in() date format issues)

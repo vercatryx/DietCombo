@@ -504,7 +504,12 @@ async function handleSubmit(e) {
             latitude: window.geocodeLat || null,
             longitude: window.geocodeLng || null,
             lat: window.geocodeLat || null,
-            lng: window.geocodeLng || null
+            lng: window.geocodeLng || null,
+            // Client flags (defaults: paused false, complex false, bill true, delivery true)
+            paused: document.getElementById('flag-paused').checked,
+            complex: document.getElementById('flag-complex').checked,
+            bill: document.getElementById('flag-bill').checked,
+            delivery: document.getElementById('flag-delivery').checked
         };
 
         // Validate case URL format
@@ -570,9 +575,14 @@ async function handleSubmit(e) {
             } else {
                 navigatorSelect.selectedIndex = 0;
             }
-            // Hide auth units field if not Food
+            // Show auth units field when default is Food
             const authUnitsGroup = document.getElementById('auth-units-group');
-            authUnitsGroup.style.display = 'block'; // Default to Food
+            authUnitsGroup.style.display = 'block';
+            // Reset flags to defaults (Paused off, Complex off, Bill on, Delivery on)
+            document.getElementById('flag-paused').checked = false;
+            document.getElementById('flag-complex').checked = false;
+            document.getElementById('flag-bill').checked = true;
+            document.getElementById('flag-delivery').checked = true;
             // Re-validate form (will disable submit button)
             setupFormValidation();
         } else {

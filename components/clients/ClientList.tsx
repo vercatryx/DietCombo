@@ -26,7 +26,8 @@ import {
     getCategories
 } from '@/lib/actions';
 import { invalidateClientData } from '@/lib/cached-data';
-import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink } from 'lucide-react';
+import { hasNonDefaultFlags, getNonDefaultFlagLabels, clientMatchesFlagFilter, FLAGS_FILTER_OPTIONS, type FlagsFilterValue } from '@/lib/client-flags';
+import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag } from 'lucide-react';
 import styles from './ClientList.module.css';
 import { useRouter } from 'next/navigation';
 
@@ -73,6 +74,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [screeningFilter, setScreeningFilter] = useState<string | null>(null);
     const [serviceTypeFilter, setServiceTypeFilter] = useState<string | null>(null);
     const [needsVendorFilter, setNeedsVendorFilter] = useState<boolean>(false);
+    const [flagsFilter, setFlagsFilter] = useState<FlagsFilterValue>('all');
     const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
 
     // Preloaded for profile dialog (avoids loadAuxiliaryData round-trip when opening profile)
@@ -95,6 +97,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     // Selected Client for Modal
     const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+    const [profileServiceConfigOnly, setProfileServiceConfigOnly] = useState(false);
 
     // Info Shelf State
     const [infoShelfClientId, setInfoShelfClientId] = useState<string | null>(null);
@@ -532,7 +535,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         // Filter by Dependents visibility
         const matchesDependentsFilter = showDependents || !c.parentClientId;
 
-        return matchesSearch && matchesView && matchesStatusFilter && matchesNavigatorFilter && matchesScreeningFilter && matchesServiceTypeFilter && matchesNeedsVendorFilter && matchesDependentsFilter;
+        // Filter by Flags (all, non-default only, or specific flag)
+        const matchesFlagsFilter = clientMatchesFlagFilter(c, flagsFilter);
+
+        return matchesSearch && matchesView && matchesStatusFilter && matchesNavigatorFilter && matchesScreeningFilter && matchesServiceTypeFilter && matchesNeedsVendorFilter && matchesDependentsFilter && matchesFlagsFilter;
     });
 
     // Group dependents under their parent clients
@@ -633,6 +639,20 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     comparison = nameA.localeCompare(nameB);
                 }
                 break;
+            case 'clientType':
+                const typeA = a.serviceType === 'Produce' ? 'Produce' : 'Food';
+                const typeB = b.serviceType === 'Produce' ? 'Produce' : 'Food';
+                comparison = typeA.localeCompare(typeB);
+                break;
+            case 'flags':
+                const nonDefaultA = hasNonDefaultFlags(a) ? 1 : 0;
+                const nonDefaultB = hasNonDefaultFlags(b) ? 1 : 0;
+                if (nonDefaultA !== nonDefaultB) {
+                    comparison = nonDefaultB - nonDefaultA; // Non-default first
+                } else {
+                    comparison = (getNonDefaultFlagLabels(a).join(', ') || '').localeCompare(getNonDefaultFlagLabels(b).join(', ') || '');
+                }
+                break;
             default:
                 comparison = a.fullName.localeCompare(b.fullName);
         }
@@ -683,6 +703,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     function handleCreate() {
         // Open the modal immediately with "new" as a special clientId
         // The modal will handle creating the client when the user clicks save
+        setProfileServiceConfigOnly(false);
         setSelectedClientId('new');
     }
 
@@ -1575,13 +1596,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         return date >= startOfWeek && date <= endOfWeek;
     }
 
-    // Memoize shelf order summary so it only recomputes when shelf client or lookup data changes (hooks must run unconditionally)
-    const shelfOrderSummary = useMemo(() => {
-        if (!infoShelfClientId) return null;
-        const shelfClient = detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId);
-        return shelfClient ? getOrderSummary(shelfClient, true) : null;
-    }, [infoShelfClientId, detailsCache, clients, vendors, boxTypes, menuItems]);
-
     if (isLoading) {
         return (
             <div className={styles.container}>
@@ -1649,12 +1663,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             onClick={() => router.push('/billing')}
                         >
                             Billing
-                        </button>
-                        <button
-                            className={styles.viewBtn}
-                            onClick={() => router.push('/clients/completed-deliveries')}
-                        >
-                            Completed Deliveries
                         </button>
                         <button
                             className={styles.viewBtn}
@@ -1859,6 +1867,43 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         SIGN {getSortIcon('signatures')}
                     </span>
 
+                    {/* Type (Food / Produce) column - sortable */}
+                    <span style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        onClick={() => handleSort('clientType')}>
+                        Type {getSortIcon('clientType')}
+                    </span>
+
+                    {/* Flags (non-default) column - sortable + filter */}
+                    <span style={{ minWidth: '120px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                        <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('flags')}>
+                            <Flag size={14} /> Flags {getSortIcon('flags')}
+                        </span>
+                        <Filter
+                            size={14}
+                            style={{ cursor: 'pointer', opacity: flagsFilter !== 'all' ? 1 : 0.5, color: flagsFilter !== 'all' ? 'var(--color-primary)' : 'inherit', filter: flagsFilter !== 'all' ? 'drop-shadow(0 0 3px var(--color-primary))' : 'none' }}
+                            onClick={(e) => { e.stopPropagation(); setOpenFilterMenu(openFilterMenu === 'flags' ? null : 'flags'); }}
+                        />
+                        {openFilterMenu === 'flags' && (
+                            <div style={{
+                                position: 'absolute', top: '100%', left: 0, marginTop: '4px',
+                                backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
+                                zIndex: 1000, minWidth: '180px', maxHeight: '320px', overflowY: 'auto'
+                            }}>
+                                {FLAGS_FILTER_OPTIONS.map(({ value, label }) => (
+                                    <div key={value} onClick={() => { setFlagsFilter(value); setOpenFilterMenu(null); }}
+                                        style={{
+                                            padding: '8px 12px', cursor: 'pointer',
+                                            backgroundColor: flagsFilter === value ? 'var(--bg-surface-hover)' : 'transparent',
+                                            fontWeight: flagsFilter === value ? 600 : 400
+                                        }}>
+                                        {label}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </span>
+
                     {/* Status column with filter */}
                     <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('status')}>
@@ -1981,67 +2026,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 )}
                             </span>
 
-                            {/* Active Order column with filter */}
-                            <span style={{ minWidth: '350px', flex: 3, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }} data-filter-dropdown>
-                                Active Order
-                                <span
-                                    onClick={(e) => { e.stopPropagation(); setShowOrderDetails(!showOrderDetails); }}
-                                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--text-secondary)' }}
-                                    title={showOrderDetails ? "Hide Details" : "Show Details"}
-                                >
-                                    {showOrderDetails ? <EyeOff size={14} /> : <Eye size={14} />}
-                                </span>
-                                <Filter
-                                    size={14}
-                                    style={{ cursor: 'pointer', opacity: (serviceTypeFilter || needsVendorFilter) ? 1 : 0.5, color: (serviceTypeFilter || needsVendorFilter) ? 'var(--color-primary)' : 'inherit', filter: (serviceTypeFilter || needsVendorFilter) ? 'drop-shadow(0 0 3px var(--color-primary))' : 'none' }}
-                                    onClick={(e) => { e.stopPropagation(); setOpenFilterMenu(openFilterMenu === 'serviceType' ? null : 'serviceType'); }}
-                                />
-                                {openFilterMenu === 'serviceType' && (
-                                    <div style={{
-                                        position: 'absolute', top: '100%', left: 0, marginTop: '4px',
-                                        backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)',
-                                        borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
-                                        zIndex: 1000, minWidth: '200px'
-                                    }}>
-                                        <div onClick={() => { setServiceTypeFilter(null); setNeedsVendorFilter(false); setOpenFilterMenu(null); }}
-                                            style={{
-                                                padding: '8px 12px', cursor: 'pointer',
-                                                backgroundColor: !serviceTypeFilter ? 'var(--bg-surface-hover)' : 'transparent',
-                                                fontWeight: !serviceTypeFilter ? 600 : 400
-                                            }}>
-                                            All Types
-                                        </div>
-                                        <div onClick={() => { setServiceTypeFilter('Food'); setOpenFilterMenu(null); }}
-                                            style={{
-                                                padding: '8px 12px', cursor: 'pointer',
-                                                backgroundColor: serviceTypeFilter === 'Food' ? 'var(--bg-surface-hover)' : 'transparent',
-                                                fontWeight: serviceTypeFilter === 'Food' ? 600 : 400
-                                            }}>
-                                            Food
-                                        </div>
-                                        <div onClick={() => { setServiceTypeFilter('Boxes'); setOpenFilterMenu(null); }}
-                                            style={{
-                                                padding: '8px 12px', cursor: 'pointer',
-                                                backgroundColor: serviceTypeFilter === 'Boxes' ? 'var(--bg-surface-hover)' : 'transparent',
-                                                fontWeight: serviceTypeFilter === 'Boxes' ? 600 : 400
-                                            }}>
-                                            Boxes
-                                        </div>
-                                        <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '4px 0' }}></div>
-                                        <div onClick={() => { setNeedsVendorFilter(!needsVendorFilter); setOpenFilterMenu(null); }}
-                                            style={{
-                                                padding: '8px 12px', cursor: 'pointer',
-                                                backgroundColor: needsVendorFilter ? 'var(--bg-surface-hover)' : 'transparent',
-                                                fontWeight: needsVendorFilter ? 600 : 400,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '8px'
-                                            }}>
-                                            <AlertCircle size={14} />
-                                            Needs Vendor Assignment
-                                        </div>
-                                    </div>
-                                )}
+                            <span style={{ minWidth: '200px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                onClick={() => handleSort('dislikes')}>
+                                Dislikes {getSortIcon('dislikes')}
                             </span>
                         </>
                     )}
@@ -2081,10 +2068,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             <span style={{ minWidth: '200px', flex: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('notes')}>
                                 Notes {getSortIcon('notes')}
-                            </span>
-                            <span style={{ minWidth: '200px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                                onClick={() => handleSort('dislikes')}>
-                                Dislikes {getSortIcon('dislikes')}
                             </span>
                         </>
                     )}
@@ -2140,6 +2123,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             <span style={{ minWidth: '100px', flex: 0.8, paddingRight: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 {isDependent ? '-' : <SignCell client={client} />}
                             </span>
+                            <span title={client.serviceType} style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', fontSize: '0.9rem' }}>
+                                {isDependent ? '-' : (client.serviceType === 'Produce' ? 'Produce' : 'Food')}
+                            </span>
+                            <span title={isDependent ? '' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : 'All default')} style={{ minWidth: '120px', flex: 1, fontSize: '0.85rem', color: hasNonDefaultFlags(client) ? 'var(--color-primary)' : 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                {isDependent ? '-' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : '—')}
+                            </span>
                             <span title={client.parentClientId ? `Parent: ${getParentClientName(client)}` : getStatusName(client.statusId)} style={{ minWidth: '140px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                 {client.parentClientId ? (
                                     <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
@@ -2155,8 +2144,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 <>
                                     <span title={isDependent ? '' : getNavigatorName(client.navigatorId)} style={{ minWidth: '160px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getNavigatorName(client.navigatorId)}</span>
                                     <span style={{ minWidth: '140px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getScreeningStatus(client)}</span>
-                                    <span style={{ minWidth: '350px', flex: 3, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
-                                        {isDependent ? '-' : getOrderSummary(client)}
+                                    <span title={isDependent ? undefined : (client.dislikes || undefined)} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                        {isDependent ? '-' : (client.dislikes || '-')}
                                     </span>
                                 </>
                             )}
@@ -2193,9 +2182,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     <span title={isDependent ? undefined : client.notes} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                         {isDependent ? '-' : (client.notes || '-')}
                                     </span>
-                                    <span title={isDependent ? undefined : (client.dislikes || undefined)} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
-                                        {isDependent ? '-' : (client.dislikes || '-')}
-                                    </span>
                                 </>
                             )}
                             <span style={{ width: '40px' }}><ChevronRight size={16} /></span>
@@ -2204,11 +2190,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 })}
                 {filteredClients.length === 0 && !isLoading && (
                     <div className={styles.empty}>
-                        {needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
-                            currentView === 'ineligible' ? 'No ineligible clients found.' :
-                                currentView === 'eligible' ? 'No eligible clients found.' :
-                                    currentView === 'needs-attention' ? 'No clients need attention.' :
-                                        'No clients found.'}
+                        {flagsFilter !== 'all' ? `No clients with "${FLAGS_FILTER_OPTIONS.find(o => o.value === flagsFilter)?.label ?? flagsFilter}".` :
+                            needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
+                                currentView === 'ineligible' ? 'No ineligible clients found.' :
+                                    currentView === 'eligible' ? 'No eligible clients found.' :
+                                        currentView === 'needs-attention' ? 'No clients need attention.' :
+                                            'No clients found.'}
                     </div>
                 )}
             </div>
@@ -2218,6 +2205,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     <div className={styles.profileCard}>
                         <ClientProfileDetail
                             clientId={selectedClientId}
+                            serviceConfigOnly={profileServiceConfigOnly}
                             initialData={detailsCache[selectedClientId]}
                             statuses={statuses}
                             navigators={navigators}
@@ -2231,6 +2219,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             initialRegularClients={regularClients}
                             onClose={() => {
                                 const closedClientId = selectedClientId;
+                                setProfileServiceConfigOnly(false);
                                 setSelectedClientId(null);
                                 // Clear the cache for this client
                                 setDetailsCache(prev => {
@@ -2245,6 +2234,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     </div>
                     <div className={styles.overlay} onClick={() => {
                         const closedClientId = selectedClientId;
+                        setProfileServiceConfigOnly(false);
                         setSelectedClientId(null);
                         // Clear the cache for this client
                         setDetailsCache(prev => {
@@ -2263,12 +2253,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     client={detailsCache[infoShelfClientId]?.client || clients.find(c => c.id === infoShelfClientId)!}
                     statuses={statuses}
                     navigators={navigators}
-                    orderSummary={shelfOrderSummary}
                     submissions={detailsCache[infoShelfClientId]?.submissions || []}
                     allClients={[]}
                     onClose={() => setInfoShelfClientId(null)}
                     onOpenProfile={(clientId) => {
                         setInfoShelfClientId(null);
+                        setProfileServiceConfigOnly(true);
                         setSelectedClientId(clientId);
                     }}
                     onClientUpdated={() => {

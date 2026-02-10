@@ -75,8 +75,16 @@ export default function ClientDriverAssignment({
             }
             const usersData = await res.json();
             
+            // Exclude paused and delivery-off clients (routes page should not show them)
+            const activeUsers = (usersData || []).filter((user: any) => {
+                if (user.paused) return false;
+                const delivery = user.delivery;
+                if (delivery !== undefined && delivery !== null && !delivery) return false;
+                return true;
+            });
+            
             // Map users to clients format
-            const clientsList: Client[] = (usersData || []).map((user: any) => {
+            const clientsList: Client[] = activeUsers.map((user: any) => {
                 // Build full name: prefer first+last, fallback to full_name, then 'Unnamed'
                 const fullName = `${user.first || ''} ${user.last || ''}`.trim() || user.name || user.full_name || 'Unnamed';
                 

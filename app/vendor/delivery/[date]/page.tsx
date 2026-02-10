@@ -1,13 +1,16 @@
-
 import { VendorDeliveryOrders } from '@/components/vendors/VendorDeliveryOrders';
 import { getSession } from '@/lib/session';
 import { redirect } from 'next/navigation';
+import type { Metadata } from 'next';
 
-export default async function VendorDeliveryPage({
-    params
-}: {
-    params: Promise<{ date: string }>
-}) {
+type Props = { params: Promise<{ date: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { date } = await params;
+  return { title: `Delivery – ${date}` };
+}
+
+export default async function VendorDeliveryPage({ params }: Props) {
     const session = await getSession();
     if (!session || session.role !== 'vendor') {
         redirect('/login');

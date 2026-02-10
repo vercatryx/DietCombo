@@ -154,7 +154,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 } else {
                     configToSet = {
                         serviceType: firstDayOrder?.serviceType || client.serviceType,
-                        caseId: firstDayOrder?.caseId,
                         deliveryDayOrders
                     };
                 }
@@ -236,7 +235,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
 
 
     // Extract dependencies for auto-save
-    const caseId = useMemo(() => orderConfig?.caseId ?? null, [orderConfig?.caseId]);
     const vendorSelections = useMemo(() => orderConfig?.vendorSelections ?? [], [orderConfig?.vendorSelections]);
     const vendorId = useMemo(() => orderConfig?.vendorId ?? null, [orderConfig?.vendorId]);
     const boxTypeId = useMemo(() => orderConfig?.boxTypeId ?? null, [orderConfig?.boxTypeId]);
@@ -256,7 +254,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
 
         // Check if orderConfig is effectively empty (no meaningful data)
         const hasOrderData = 
-            (orderConfig.caseId && orderConfig.caseId.trim() !== '') ||
             (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) ||
             (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0) ||
             (orderConfig.vendorId && orderConfig.vendorId.trim() !== '') ||
@@ -266,13 +263,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         
         if (!hasOrderData) {
             setMessage('Error: Please configure your order (select vendors, items, or boxes) before saving.');
-            setTimeout(() => setMessage(null), 5000);
-            return;
-        }
-
-        // For Food clients, caseId is required. For Boxes, it's optional
-        if (serviceType === 'Food' && !caseId) {
-            setMessage('Error: Case ID is required for Food orders. Please enter a Case ID before saving.');
             setTimeout(() => setMessage(null), 5000);
             return;
         }
@@ -483,8 +473,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             // Ensure structure is correct and convert per-vendor delivery days to deliveryDayOrders format
             const cleanedOrderConfig = { ...orderConfig };
 
-            // CRITICAL: Always preserve caseId at the top level for both Food and Boxes
-            cleanedOrderConfig.caseId = orderConfig.caseId;
 
             if (serviceType === 'Food') {
                 if (cleanedOrderConfig.deliveryDayOrders) {
@@ -582,11 +570,9 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     cleanedOrderConfig.items = orderConfig.items || {};
                     cleanedOrderConfig.itemPrices = orderConfig.itemPrices || {};
                 }
-                cleanedOrderConfig.caseId = orderConfig.caseId; // Also set above
             } else if (serviceType === 'Custom') {
                 // For Custom: Preserve vendorId and customItems
                 cleanedOrderConfig.vendorId = orderConfig.vendorId;
-                cleanedOrderConfig.caseId = orderConfig.caseId; // Also set above
                 // Preserve customItems array, filtering out items with empty names
                 cleanedOrderConfig.customItems = (orderConfig.customItems || [])
                     .filter((item: any) => item.name && item.name.trim() !== '')
@@ -1546,16 +1532,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     </div>
 
                     {client.serviceType === 'Food' && (
-                        <>
-                            {!orderConfig.caseId ? (
-                                <div className={styles.alert} style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--color-danger)' }}>
-                                    <AlertTriangle size={16} />
-                                    No active Case ID found. Please contact support.
-                                </div>
-                            ) : (
-                                renderFoodOrderSection()
-                            )}
-                        </>
+                        renderFoodOrderSection()
                     )}
 
                     {client.serviceType === 'Boxes' && (() => {
@@ -1599,22 +1576,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
 
                         return (
                             <div style={{ marginTop: '1rem' }}>
-                                {/* Case ID Field */}
-                                <div className={styles.formGroup} style={{ marginBottom: '1rem' }}>
-                                    <label className="label">Case ID (Required)</label>
-                                    <input
-                                        type="text"
-                                        className="input"
-                                        value={orderConfig.caseId || ''}
-                                        onChange={(e) => {
-                                            setOrderConfig({
-                                                ...orderConfig,
-                                                caseId: e.target.value
-                                            });
-                                        }}
-                                        placeholder="Enter Case ID"
-                                    />
-                                </div>
 
                                 {/* Max Boxes Authorized - Editable Input Field */}
                                 <div className={styles.formGroup} style={{ marginBottom: '1rem' }}>

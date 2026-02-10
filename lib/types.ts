@@ -68,8 +68,7 @@ export interface ClientProfile {
 
 export interface OrderConfiguration {
   serviceType: ServiceType;
-  // Case ID for the specific service request (required to proceed)
-  caseId?: string;
+  caseId?: string; // Case ID for Boxes service type
 
   // Previously single vendor/menuSelections, now supporting multi-vendor for Food
   vendorSelections?: {

@@ -10,35 +10,30 @@ import {
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
 } from '@/lib/actions';
+import { getTodayInAppTz } from '@/lib/timezone';
 import styles from './SavedMealPlanMonth.module.css';
 import clientProfileStyles from './ClientProfile.module.css';
+
+const APP_TZ = 'America/New_York';
 
 function formatDateLabel(iso: string): string {
   if (!iso || typeof iso !== 'string') return iso || '—';
   const normalized = iso.trim().slice(0, 10);
   const d = new Date(normalized + 'T12:00:00');
   if (Number.isNaN(d.getTime())) return normalized || '—';
-  const month = d.toLocaleDateString('en-US', { month: 'short' });
-  const day = d.getDate();
-  const weekday = d.toLocaleDateString('en-US', { weekday: 'short' });
+  const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: APP_TZ });
+  const day = d.toLocaleDateString('en-US', { day: 'numeric', timeZone: APP_TZ });
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: APP_TZ });
   return `${month} ${day} (${weekday})`;
 }
 
 function isToday(iso: string): boolean {
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = today.getMonth();
-  const d = today.getDate();
-  const [yy, mm, dd] = iso.split('-').map(Number);
-  return yy === y && mm === m + 1 && dd === d;
+  const todayStr = getTodayInAppTz();
+  return iso.trim().slice(0, 10) === todayStr;
 }
 
 function getTodayIso(): string {
-  const t = new Date();
-  const y = t.getFullYear();
-  const m = String(t.getMonth() + 1).padStart(2, '0');
-  const d = String(t.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return getTodayInAppTz();
 }
 
 export interface SavedMealPlanMonthProps {

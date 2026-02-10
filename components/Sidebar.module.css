@@ -335,3 +335,110 @@
     text-align: center;
     padding: var(--spacing-sm);
 }
+
+/* Client Info block (address, unit, phone, email, Unite Us link) */
+.orderSummaryClientInfo {
+    margin-bottom: var(--spacing-sm);
+    padding-bottom: var(--spacing-sm);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.orderSummaryInfoRow {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-xs);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 4px;
+    word-break: break-word;
+}
+
+.orderSummaryInfoRow:last-child {
+    margin-bottom: 0;
+}
+
+.orderSummaryInfoIcon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--text-tertiary);
+}
+
+.orderSummaryLink {
+    color: var(--color-primary);
+    text-decoration: none;
+}
+
+.orderSummaryLink:hover {
+    text-decoration: underline;
+}
+
+.orderSummaryNotes {
+    font-style: italic;
+    color: var(--text-tertiary);
+}
+
+.orderSummaryFlags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.orderSummaryFlagLabel {
+    font-size: 0.7rem;
+    color: var(--text-tertiary);
+    margin-right: 2px;
+}
+
+.orderSummaryFlag {
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+}
+
+.orderSummaryGeocode {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.orderSummaryGeocodeOk {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.orderSummaryGeocodeBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    padding: 4px 8px;
+    background: var(--bg-surface-hover);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.orderSummaryGeocodeBtn:hover:not(:disabled) {
+    background: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}
+
+.orderSummaryGeocodeBtn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.orderSummaryGeoErr {
+    font-size: 0.7rem;
+    color: var(--color-danger, #dc2626);
+}

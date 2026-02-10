@@ -28,7 +28,10 @@ function PageFallback() {
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Client Food Service Admin',
+  title: {
+    default: 'Client Food Service Admin',
+    template: '%s | Client Food Service Admin',
+  },
   description: 'Admin portal for managing client food services.',
   icons: {
     icon: '/favicon.ico',

@@ -8,6 +8,14 @@ import {
     Button,
     Box,
     Typography,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    FormControl,
+    InputLabel,
+    Select,
+    MenuItem,
 } from "@mui/material";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -607,87 +615,6 @@ export default function RoutesPage() {
         }
     }
 
-    // UPDATED: when resetting, also run a cleanup pass afterward
-    async function resetAllRoutes() {
-        if (!routes.length) return;
-        const ok = window.confirm(
-            `Reset ALL routes for "${selectedDay}"?\n\nNote: This will also run Cleanup (remove deleted users, paused users, or users with Delivery = false).`
-        );
-        if (!ok) return;
-
-        const driverIds = Array.from(new Set(routes.map(r => r.driverId).filter(Boolean)));
-        setBusy(true);
-        try {
-            await Promise.all(driverIds.map(id =>
-                fetch("/api/route/reset", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ driverId: id, day: selectedDay, clearProof: false }),
-                })
-            ));
-
-            // Immediately follow with a cleanup pass
-            await cleanUpNow({ silent: true });
-
-            await loadRoutes();
-
-            // Persist snapshot after bulk change
-            saveCurrentRun(true);
-            alert("Routes reset and cleaned.");
-        } catch (e) {
-            console.error(e);
-            alert("Failed to reset routes.");
-        } finally {
-            setBusy(false);
-        }
-    }
-
-    async function optimizeAllRoutes() {
-        if (!routes.length) return;
-
-        setBusy(true);
-        try {
-            const driverIds = Array.from(new Set(routes.map(r => r.driverId).filter(Boolean)));
-
-            // STEP A: pre-pass to consolidate duplicates across drivers
-            {
-                const res = await fetch("/api/route/optimize", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        day: selectedDay,
-                        useDietFantasyStart: true,
-                        consolidateDuplicates: true,
-                    }),
-                });
-                if (!res.ok) throw new Error(await res.text());
-            }
-
-            // STEP B: per-driver local reordering only (no cross-driver moves)
-            await Promise.all(
-                driverIds.map(id =>
-                    fetch("/api/route/optimize", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            driverId: id,
-                            day: selectedDay,
-                            useDietFantasyStart: true,
-                        }),
-                    })
-                )
-            );
-
-            await loadRoutes();
-            saveCurrentRun(true);
-        } catch (e) {
-            console.error(e);
-            alert("Failed to optimize routes.");
-        } finally {
-            setBusy(false);
-        }
-    }
-
     // ===== PDF helpers (unchanged but referenced) =====
     const buildSortedForLabels = React.useCallback(() => {
         const meta = (routes || []).map((r, i) => ({
@@ -748,6 +675,45 @@ export default function RoutesPage() {
             console.error("Add driver failed:", e);
             const errorMessage = e instanceof Error ? e.message : String(e);
             alert("Failed to add driver: " + errorMessage);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    // Set driver color (manual)
+    const [colorDialogOpen, setColorDialogOpen] = React.useState(false);
+    const [colorDriverId, setColorDriverId] = React.useState<string | "">("");
+    const [colorValue, setColorValue] = React.useState("#1f77b4");
+
+    const openColorDialog = React.useCallback(() => {
+        const first = routes.find(r => r.driverId);
+        if (first) {
+            setColorDriverId(String(first.driverId));
+            setColorValue((first.color && /^#[0-9A-Fa-f]{3,6}$/.test(first.color)) ? first.color : "#1f77b4");
+        } else {
+            setColorDriverId("");
+            setColorValue("#1f77b4");
+        }
+        setColorDialogOpen(true);
+    }, [routes]);
+
+    async function handleSaveDriverColor() {
+        if (!colorDriverId) return;
+        setBusy(true);
+        try {
+            const res = await fetch("/api/route/driver-color", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ driverId: colorDriverId, color: colorValue }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Failed to set driver color");
+            await loadRoutes();
+            saveCurrentRun(true);
+            setColorDialogOpen(false);
+        } catch (e: any) {
+            console.error("Set driver color failed:", e);
+            alert("Failed to set driver color: " + (e?.message || "Unknown error"));
         } finally {
             setBusy(false);
         }
@@ -983,6 +949,57 @@ export default function RoutesPage() {
                             >
                                 ➖ Remove Driver
                             </Button>
+                            <Button
+                                onClick={openColorDialog}
+                                variant="outlined"
+                                size="small"
+                                disabled={busy || routes.length === 0}
+                                sx={{ borderRadius: 2 }}
+                            >
+                                🎨 Set Driver Color
+                            </Button>
+                            <Dialog open={colorDialogOpen} onClose={() => setColorDialogOpen(false)} maxWidth="xs" fullWidth>
+                                <DialogTitle>Set driver color</DialogTitle>
+                                <DialogContent>
+                                    <FormControl fullWidth sx={{ mt: 1, mb: 2 }}>
+                                        <InputLabel id="driver-color-driver-label">Driver</InputLabel>
+                                        <Select
+                                            labelId="driver-color-driver-label"
+                                            value={colorDriverId}
+                                            label="Driver"
+                                            onChange={(e) => {
+                                                const id = e.target.value as string;
+                                                setColorDriverId(id);
+                                                const r = routes.find((x: any) => String(x.driverId) === String(id));
+                                                if (r?.color && /^#[0-9A-Fa-f]{3,6}$/.test(r.color)) setColorValue(r.color);
+                                            }}
+                                        >
+                                            {routes.filter((r: any) => r.driverId).map((r: any) => (
+                                                <MenuItem key={r.driverId} value={r.driverId}>
+                                                    {r.driverName || r.name || `Driver ${r.driverId}`}
+                                                </MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                    <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                                        <input
+                                            type="color"
+                                            value={colorValue}
+                                            onChange={(e) => setColorValue(e.target.value)}
+                                            style={{ width: 48, height: 36, padding: 0, border: "1px solid #ccc", borderRadius: 4, cursor: "pointer" }}
+                                        />
+                                        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                                            {colorValue}
+                                        </Typography>
+                                    </Box>
+                                </DialogContent>
+                                <DialogActions>
+                                    <Button onClick={() => setColorDialogOpen(false)}>Cancel</Button>
+                                    <Button onClick={handleSaveDriverColor} variant="contained" disabled={busy}>
+                                        Save
+                                    </Button>
+                                </DialogActions>
+                            </Dialog>
                             <div style={{ fontSize: 13, color: "#6b7280", marginLeft: 'var(--spacing-xs)' }}>
                                 Drivers: {routes.filter(r => {
                                     const driverName = r.driverName || r.name || "";
@@ -1033,6 +1050,14 @@ export default function RoutesPage() {
                             if (!usersRes.ok) throw new Error('Failed to fetch users');
                             const allClients = await usersRes.json();
                             
+                            // Exclude paused and delivery-off clients (same as routes map / client assignment)
+                            const activeClients = (allClients || []).filter((c: any) => {
+                                if (c.paused) return false;
+                                const d = c.delivery;
+                                if (d !== undefined && d !== null && !d) return false;
+                                return true;
+                            });
+                            
                             // Fetch routes to get driver info (colors, names, etc.)
                             const routesRes = await fetch(`/api/route/routes?day=${selectedDay}`, { cache: "no-store" });
                             const routesData = await routesRes.json();
@@ -1050,14 +1075,14 @@ export default function RoutesPage() {
                                 });
                             });
                             
-                            // Build complex index from all clients
-                            const idxs = buildComplexIndex(allClients);
+                            // Build complex index from active clients only
+                            const idxs = buildComplexIndex(activeClients);
                             
-                            // Group clients by assigned_driver_id
+                            // Group clients by assigned_driver_id (only active clients)
                             const clientsByDriver = new Map<string, any[]>();
                             const clientsWithoutDriver: any[] = [];
                             
-                            allClients.forEach((client: any) => {
+                            activeClients.forEach((client: any) => {
                                 // API returns assignedDriverId (camelCase) but also check assigned_driver_id (snake_case) for compatibility
                                 const assignedDriverId = (client.assignedDriverId || client.assigned_driver_id) ? String(client.assignedDriverId || client.assigned_driver_id) : null;
                                 if (assignedDriverId && driverMap.has(assignedDriverId)) {
@@ -1136,13 +1161,6 @@ export default function RoutesPage() {
                     Download Labels
                 </Button>
 
-                <Button onClick={resetAllRoutes} variant="outlined" disabled={busy || !hasRoutes}>
-                    Reset All Routes
-                </Button>
-
-                <Button onClick={optimizeAllRoutes} variant="outlined" disabled={busy || !hasRoutes}>
-                    Optimize All Routes
-                </Button>
             </div>
         </div>
     );

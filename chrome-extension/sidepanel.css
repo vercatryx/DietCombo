@@ -234,6 +234,36 @@ body {
     cursor: pointer;
 }
 
+.flags-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 24px;
+    margin-top: 8px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: normal;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+
+.field-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
 .btn {
     padding: 0.6rem 1.2rem;
     border: none;

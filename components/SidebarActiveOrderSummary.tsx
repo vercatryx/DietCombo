@@ -1,10 +1,14 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { ClientProfile, Vendor, MenuItem, BoxType } from '@/lib/types';
-import { getClient, getVendors, getMenuItems, getBoxTypes } from '@/lib/cached-data';
-import { Package, Utensils } from 'lucide-react';
+import { ClientProfile, Vendor, MenuItem, BoxType, ClientStatus, Navigator } from '@/lib/types';
+import { getClient, getVendors, getMenuItems, getBoxTypes, getStatuses, getNavigators, invalidateClientData } from '@/lib/cached-data';
+import { updateClient } from '@/lib/actions';
+import { buildGeocodeQuery } from '@/lib/addressHelpers';
+import { geocodeOneClient } from '@/lib/geocodeOneClient';
+import { hasNonDefaultFlags, getNonDefaultFlagLabels } from '@/lib/client-flags';
+import { Package, Utensils, MapPin, Phone, Mail, ExternalLink, User, MapPinned, Loader2, StickyNote, Flag } from 'lucide-react';
 import styles from './Sidebar.module.css';
 
 export function SidebarActiveOrderSummary() {
@@ -13,11 +17,22 @@ export function SidebarActiveOrderSummary() {
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
+    const [statuses, setStatuses] = useState<ClientStatus[]>([]);
+    const [navigators, setNavigators] = useState<Navigator[]>([]);
     const [loading, setLoading] = useState(false);
+    const [geoBusy, setGeoBusy] = useState(false);
+    const [geoErr, setGeoErr] = useState('');
 
     // Extract client ID from pathname (only for /clients/[id] since sidebar is hidden on client-portal)
     const clientIdMatch = pathname.match(/\/clients\/([^\/]+)/);
     const clientId = clientIdMatch ? clientIdMatch[1] : null;
+
+    const refreshClient = useCallback(async () => {
+        if (!clientId) return;
+        invalidateClientData(clientId);
+        const data = await getClient(clientId);
+        if (data) setClient(data);
+    }, [clientId]);
 
     useEffect(() => {
         if (!clientId) {
@@ -30,11 +45,13 @@ export function SidebarActiveOrderSummary() {
             
             setLoading(true);
             try {
-                const [clientData, vendorsData, menuItemsData, boxTypesData] = await Promise.all([
+                const [clientData, vendorsData, menuItemsData, boxTypesData, statusesData, navigatorsData] = await Promise.all([
                     getClient(clientId),
                     getVendors(),
                     getMenuItems(),
-                    getBoxTypes()
+                    getBoxTypes(),
+                    getStatuses(),
+                    getNavigators()
                 ]);
 
                 if (clientData) {
@@ -43,6 +60,8 @@ export function SidebarActiveOrderSummary() {
                 setVendors(vendorsData || []);
                 setMenuItems(menuItemsData || []);
                 setBoxTypes(boxTypesData || []);
+                setStatuses(statusesData || []);
+                setNavigators(navigatorsData || []);
             } catch (error) {
                 console.error('Error loading client order summary:', error);
             } finally {
@@ -72,13 +91,146 @@ export function SidebarActiveOrderSummary() {
         );
     }
 
-    if (!orderSummary && !hasDislikes) {
-        return null;
+    const status = statuses.find(s => s.id === client.statusId);
+    const navigator = navigators.find(n => n.id === client.navigatorId);
+    const hasGeocode = client.lat != null && client.lng != null && Number.isFinite(Number(client.lat)) && Number.isFinite(Number(client.lng));
+
+    async function handleAutoGeocode() {
+        if (!clientId || !client || geoBusy) return;
+        const q = buildGeocodeQuery({
+            address: client.address || '',
+            city: client.city || '',
+            state: client.state || '',
+            zip: client.zip || '',
+        });
+        if (!q?.trim()) {
+            setGeoErr('Add address / city / state to geocode');
+            return;
+        }
+        setGeoBusy(true);
+        setGeoErr('');
+        try {
+            const a = await geocodeOneClient(q);
+            await updateClient(clientId, {
+                lat: a.lat,
+                lng: a.lng,
+            });
+            await refreshClient();
+        } catch {
+            setGeoErr('Address not found');
+        } finally {
+            setGeoBusy(false);
+        }
     }
 
     return (
         <div className={styles.orderSummaryContainer}>
-            {orderSummary && (
+            <div className={styles.orderSummaryClientInfo}>
+                <div className={styles.orderSummaryHeader}>
+                    <h3 className={styles.orderSummaryTitle}>Client Info</h3>
+                </div>
+                <div className={styles.orderSummaryContent}>
+                    {(client.address?.trim() || client.apt?.trim()) && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <MapPin size={12} className={styles.orderSummaryInfoIcon} />
+                            <span>
+                                {client.address?.trim()}
+                                {client.apt?.trim() ? (client.address?.trim() ? `, Unit: ${client.apt.trim()}` : `Unit: ${client.apt.trim()}`) : ''}
+                            </span>
+                        </div>
+                    )}
+                    {(client.city?.trim() || client.state?.trim() || client.zip?.trim() || client.county?.trim()) && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <MapPin size={12} className={styles.orderSummaryInfoIcon} />
+                            <span>
+                                {[client.city?.trim(), client.state?.trim(), client.zip?.trim(), client.county?.trim() && `County: ${client.county.trim()}`].filter(Boolean).join(', ')}
+                            </span>
+                        </div>
+                    )}
+                    {client.phoneNumber?.trim() && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <Phone size={12} className={styles.orderSummaryInfoIcon} />
+                            <a href={`tel:${client.phoneNumber.replace(/\s/g, '')}`} className={styles.orderSummaryLink}>
+                                {client.phoneNumber}
+                            </a>
+                        </div>
+                    )}
+                    {client.secondaryPhoneNumber?.trim() && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <Phone size={12} className={styles.orderSummaryInfoIcon} />
+                            <a href={`tel:${client.secondaryPhoneNumber.replace(/\s/g, '')}`} className={styles.orderSummaryLink}>
+                                {client.secondaryPhoneNumber} (alt)
+                            </a>
+                        </div>
+                    )}
+                    {client.email?.trim() && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <Mail size={12} className={styles.orderSummaryInfoIcon} />
+                            <a href={`mailto:${client.email}`} className={styles.orderSummaryLink} title={client.email}>
+                                {client.email.length > 28 ? client.email.slice(0, 25) + '…' : client.email}
+                            </a>
+                        </div>
+                    )}
+                    <div className={styles.orderSummaryInfoRow}>
+                        <Flag size={12} className={styles.orderSummaryInfoIcon} />
+                        <span>{status?.name ?? '—'}</span>
+                    </div>
+                    <div className={styles.orderSummaryInfoRow}>
+                        <User size={12} className={styles.orderSummaryInfoIcon} />
+                        <span>{navigator?.name ?? '—'}</span>
+                    </div>
+                    {client.notes?.trim() && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <StickyNote size={12} className={styles.orderSummaryInfoIcon} />
+                            <span className={styles.orderSummaryNotes} title={client.notes}>
+                                {client.notes.length > 60 ? client.notes.slice(0, 57) + '…' : client.notes}
+                            </span>
+                        </div>
+                    )}
+                    {hasNonDefaultFlags(client) && (
+                        <div className={styles.orderSummaryFlags}>
+                            <span className={styles.orderSummaryFlagLabel}>Flags:</span>
+                            {getNonDefaultFlagLabels(client).map((label) => (
+                                <span key={label} className={styles.orderSummaryFlag}>{label}</span>
+                            ))}
+                        </div>
+                    )}
+                    {client.caseIdExternal?.trim() && (
+                        <div className={styles.orderSummaryInfoRow}>
+                            <ExternalLink size={12} className={styles.orderSummaryInfoIcon} />
+                            <a
+                                href={client.caseIdExternal.startsWith('http') ? client.caseIdExternal : `https://${client.caseIdExternal}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={styles.orderSummaryLink}
+                            >
+                                Unite Us
+                            </a>
+                        </div>
+                    )}
+                    <div className={styles.orderSummaryGeocode}>
+                        {hasGeocode ? (
+                            <span className={styles.orderSummaryGeocodeOk}>
+                                ✓ {Number(client.lat).toFixed(4)}, {Number(client.lng).toFixed(4)}
+                            </span>
+                        ) : (
+                            <>
+                                <button
+                                    type="button"
+                                    className={styles.orderSummaryGeocodeBtn}
+                                    onClick={handleAutoGeocode}
+                                    disabled={geoBusy}
+                                >
+                                    {geoBusy ? <Loader2 size={12} className="spin" /> : <MapPinned size={12} />}
+                                    {geoBusy ? ' Geocoding…' : ' Auto Geocode'}
+                                </button>
+                                {geoErr && <span className={styles.orderSummaryGeoErr}>{geoErr}</span>}
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+            {orderSummary ? (
                 <>
                     <div className={styles.orderSummaryHeader}>
                         <h3 className={styles.orderSummaryTitle}>Active Order</h3>
@@ -87,9 +239,9 @@ export function SidebarActiveOrderSummary() {
                         {orderSummary}
                     </div>
                 </>
-            )}
+            ) : null}
             {hasDislikes && (
-                <div style={{ marginTop: orderSummary ? '12px' : 0, padding: '10px 12px', backgroundColor: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--color-primary)' }}>
+                <div style={{ marginTop: (orderSummary || !!client) ? '12px' : 0, padding: '10px 12px', backgroundColor: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--color-primary)' }}>
                     <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', marginBottom: '6px', fontWeight: 600 }}>Dislikes / Dietary</div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{client.dislikes}</div>
                 </div>

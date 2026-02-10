@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate } from '@/lib/actions';
+import { getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
 import { Save, Loader2, Plus, Trash2, Package, ChevronLeft, ChevronRight, X, Check, GripVertical } from 'lucide-react';
 import {
     DndContext,
@@ -544,36 +545,29 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         getMealPlannerItemCountsByDate(startDate, endDate, null).then(setMealPlannerItemCounts);
     }, [mealPlannerMonth, template.serviceType]);
 
-    function getIndicatorForDate(d: Date): number | null {
-        const k = formatDateKey(d);
-        return mealPlannerItemCounts[k] ?? null;
+    /** Calendar date key (YYYY-MM-DD). For calendar cells we use (year, month, day) so the displayed day number always matches the stored date in EST. */
+    function dateKeyForCalendarDay(year: number, month: number, day: number): string {
+        return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
 
+    /** Date key from a Date (EST). Use for "today" and other single dates. */
     function formatDateKey(d: Date): string {
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${y}-${m}-${day}`;
+        return toDateStringInAppTz(d);
     }
 
     function isToday(d: Date): boolean {
-        const t = new Date();
-        return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
+        return toDateStringInAppTz(d) === getTodayInAppTz();
     }
 
-    /** Check if a date is in the past (before today) */
+    /** Check if a date is in the past (before today in EST) */
     function isDatePast(dateKey: string): boolean {
-        const [y, m, d] = dateKey.split('-').map(Number);
-        const selectedDate = new Date(y, m - 1, d);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        selectedDate.setHours(0, 0, 0, 0);
-        return selectedDate < today;
+        const todayStr = getTodayInAppTz();
+        return dateKey.trim().slice(0, 10) < todayStr;
     }
 
-    /** Today as YYYY-MM-DD for min expiration date (only allow today or future) */
+    /** Today as YYYY-MM-DD in EST for min expiration date (only allow today or future) */
     function getTodayDateKey(): string {
-        return formatDateKey(new Date());
+        return getTodayInAppTz();
     }
 
     /** Open meal planner dialog for a date. Loads existing records from DB for that date and auto-populates the dialog when they match. */
@@ -830,20 +824,22 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         </div>
                         <div className={styles.calendarGrid}>
                             {mealPlannerDays.map((date, index) => {
-                                const indicator = date ? getIndicatorForDate(date) : null;
+                                const dateKey = date ? dateKeyForCalendarDay(date.getFullYear(), date.getMonth(), date.getDate()) : null;
+                                const indicator = dateKey != null ? (mealPlannerItemCounts[dateKey] ?? null) : null;
                                 const hasPlan = indicator != null;
+                                const isTodayCell = dateKey === getTodayInAppTz();
                                 return (
                                     <div
-                                        key={date ? formatDateKey(date) : `empty-${index}`}
+                                        key={dateKey ?? `empty-${index}`}
                                         className={[
                                             date ? styles.calendarDay : styles.calendarDayEmpty,
                                             date && hasPlan && styles.calendarDayHasPlan,
-                                            date && isToday(date) && styles.calendarDayToday,
+                                            date && isTodayCell && styles.calendarDayToday,
                                         ].filter(Boolean).join(' ')}
-                                        onClick={date ? () => openMealPlannerPopup(formatDateKey(date)) : undefined}
+                                        onClick={dateKey ? () => openMealPlannerPopup(dateKey) : undefined}
                                         role={date ? 'button' : undefined}
                                         tabIndex={date ? 0 : undefined}
-                                        onKeyDown={date ? (e) => { if (e.key === 'Enter' || e.key === ' ') openMealPlannerPopup(formatDateKey(date)); } : undefined}
+                                        onKeyDown={dateKey ? (e) => { if (e.key === 'Enter' || e.key === ' ') openMealPlannerPopup(dateKey); } : undefined}
                                         title={date && hasPlan ? `Meal plan saved · ${indicator} item${indicator !== 1 ? 's' : ''}` : undefined}
                                     >
                                         {date && (

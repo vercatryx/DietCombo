@@ -1,8 +1,18 @@
 import { OrderProduceFlow } from './OrderProduceFlow';
 import { getClientForProduce } from '../actions';
+import type { Metadata } from 'next';
 import '../produce.css';
 
-export default async function OrderProducePage({ params }: { params: Promise<{ id: string }> }) {
+type Props = { params: Promise<{ id: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  const result = await getClientForProduce(id);
+  const name = result.success && result.client ? result.client.full_name : 'Produce Order';
+  return { title: `${name} – Produce` };
+}
+
+export default async function OrderProducePage({ params }: Props) {
     const { id } = await params;
 
     // Verify if it is a UUID (client_id)

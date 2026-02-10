@@ -1,8 +1,19 @@
 import { ClientProfileDetail } from '@/components/clients/ClientProfile';
 import { getSession } from '@/lib/session';
-import { getClientProfilePageData } from '@/lib/actions';
+import { getClientProfilePageData, getClient } from '@/lib/actions';
+import type { Metadata } from 'next';
 
-export default async function ClientProfilePage({ params }: { params: Promise<{ id: string }> }) {
+type Props = { params: Promise<{ id: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  if (id === 'new') return { title: 'New Client' };
+  const client = await getClient(id);
+  const name = client?.fullName ?? 'Client';
+  return { title: name };
+}
+
+export default async function ClientProfilePage({ params }: Props) {
     const { id } = await params;
     const session = await getSession();
     const currentUser = session ? { role: session.role, id: session.userId } : null;

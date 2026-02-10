@@ -185,6 +185,23 @@
     font-weight: 500;
 }
 
+.value a {
+    color: var(--color-primary);
+    text-decoration: none;
+}
+
+.value a:hover {
+    text-decoration: underline;
+}
+
+.flagChip {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+}
+
 .orderSummaryBox {
     background-color: var(--bg-surface);
     border: 1px solid var(--border-color);

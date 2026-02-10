@@ -1,8 +1,12 @@
-
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/session';
 import { getVendor } from '@/lib/actions';
 import { VendorDetail } from '@/components/vendors/VendorDetail';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'Vendor Portal',
+};
 
 export default async function VendorPage() {
     const session = await getSession();

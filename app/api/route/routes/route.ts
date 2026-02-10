@@ -134,6 +134,18 @@ export async function GET(req: Request) {
             assigned_driver_id: c.assigned_driver_id
         }]));
 
+        // Exclude stops for clients who are paused or have delivery turned off (profile)
+        const isDeliverableClient = (c: any) => {
+            const v = c?.delivery;
+            return v === undefined || v === null ? true : Boolean(v);
+        };
+        const shouldShowStop = (stop: any) => {
+            const client = stop?.userId != null ? clientById.get(String(stop.userId)) : clientById.get(String((stop as any).client_id));
+            if (!client) return true; // no client record → show (legacy)
+            if (client.paused) return false;
+            return isDeliverableClient(client);
+        };
+
         // 4) Sort drivers so Driver 0,1,2… are in that order
         const drivers = [...allDriversRaw].sort(
             (a, b) => driverRankByName(a.name) - driverRankByName(b.name)
@@ -381,7 +393,7 @@ export async function GET(req: Request) {
             for (const raw of ids) {
                 const stopId = sid(raw);
                 const hyd = stopById.get(stopId);
-                if (hyd && !stopIdSet.has(stopId)) {
+                if (hyd && !stopIdSet.has(stopId) && shouldShowStop(hyd)) {
                     stops.push(hyd);
                     stopIdSet.add(stopId);
                 }
@@ -390,7 +402,7 @@ export async function GET(req: Request) {
             // Then, add stops that have assigned_driver_id matching this driver (new method)
             for (const [stopId, stop] of stopById.entries()) {
                 const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
-                if (assignedDriverId === driverId && !stopIdSet.has(stopId)) {
+                if (assignedDriverId === driverId && !stopIdSet.has(stopId) && shouldShowStop(stop)) {
                     stops.push(stop);
                     stopIdSet.add(stopId);
                 }
@@ -417,6 +429,7 @@ export async function GET(req: Request) {
         const driverIds = new Set(drivers.map(d => String(d.id)));
         const unrouted: any[] = [];
         for (const [k, v] of stopById.entries()) {
+            if (!shouldShowStop(v)) continue; // exclude paused / delivery-off clients
             // A stop is unrouted if:
             // 1. It's not in any driver's route (claimed set)
             // 2. It doesn't have an assigned_driver_id that matches a driver

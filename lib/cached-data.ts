@@ -41,6 +41,51 @@ const CACHE_DURATION = {
     ORDER_DATA: 1 * 60 * 1000, // 1 minute for order-related data (changes frequently)
 };
 
+// localStorage keys
+const STORAGE_KEYS = {
+    VENDORS: 'dietcombo_cache_vendors',
+    STATUSES: 'dietcombo_cache_statuses',
+    NAVIGATORS: 'dietcombo_cache_navigators',
+    MENU_ITEMS: 'dietcombo_cache_menuItems',
+    BOX_TYPES: 'dietcombo_cache_boxTypes',
+    CATEGORIES: 'dietcombo_cache_categories',
+    SETTINGS: 'dietcombo_cache_settings',
+};
+
+// Helper to load from localStorage
+function loadFromStorage<T>(key: string): CacheEntry<T> | undefined {
+    if (typeof window === 'undefined') return undefined;
+    try {
+        const stored = localStorage.getItem(key);
+        if (stored) {
+            return JSON.parse(stored);
+        }
+    } catch (error) {
+        console.warn(`[cached-data] Failed to load ${key} from localStorage:`, error);
+    }
+    return undefined;
+}
+
+// Helper to save to localStorage
+function saveToStorage<T>(key: string, entry: CacheEntry<T>): void {
+    if (typeof window === 'undefined') return;
+    try {
+        localStorage.setItem(key, JSON.stringify(entry));
+    } catch (error) {
+        console.warn(`[cached-data] Failed to save ${key} to localStorage:`, error);
+    }
+}
+
+// Helper to clear from localStorage
+function clearFromStorage(key: string): void {
+    if (typeof window === 'undefined') return;
+    try {
+        localStorage.removeItem(key);
+    } catch (error) {
+        console.warn(`[cached-data] Failed to clear ${key} from localStorage:`, error);
+    }
+}
+
 // In-memory cache stores (shared across all calls)
 const referenceCache: Map<string, CacheEntry<any>> = new Map();
 let clientsCache: CacheEntry<ClientProfile[]> | undefined;
@@ -82,12 +127,27 @@ export async function getNavigators(): Promise<Navigator[]> {
 }
 
 export async function getVendors(): Promise<Vendor[]> {
-    const cached = referenceCache.get('vendors');
-    if (!isStale(cached, CACHE_DURATION.REFERENCE_DATA)) {
-        return cached!.data;
+    // Check in-memory cache first
+    let cached = referenceCache.get('vendors');
+    
+    // If not in memory, check localStorage
+    if (!cached) {
+        cached = loadFromStorage<Vendor[]>(STORAGE_KEYS.VENDORS);
+        if (cached) {
+            referenceCache.set('vendors', cached);
+        }
     }
+    
+    // Return cached data if still fresh
+    if (cached && !isStale(cached, CACHE_DURATION.REFERENCE_DATA)) {
+        return cached.data;
+    }
+    
+    // Fetch fresh data
     const data = await serverGetVendors();
-    referenceCache.set('vendors', { data, timestamp: Date.now() });
+    const entry = { data, timestamp: Date.now() };
+    referenceCache.set('vendors', entry);
+    saveToStorage(STORAGE_KEYS.VENDORS, entry);
     return data;
 }
 
@@ -191,8 +251,24 @@ export function warmReferenceCacheFromProfile(payload: {
 export function invalidateReferenceData(key?: string) {
     if (key) {
         referenceCache.delete(key);
+        // Clear corresponding localStorage entry
+        const storageKeyMap: { [k: string]: string } = {
+            'vendors': STORAGE_KEYS.VENDORS,
+            'statuses': STORAGE_KEYS.STATUSES,
+            'navigators': STORAGE_KEYS.NAVIGATORS,
+            'menuItems': STORAGE_KEYS.MENU_ITEMS,
+            'boxTypes': STORAGE_KEYS.BOX_TYPES,
+            'categories': STORAGE_KEYS.CATEGORIES,
+            'settings': STORAGE_KEYS.SETTINGS,
+        };
+        const storageKey = storageKeyMap[key];
+        if (storageKey) {
+            clearFromStorage(storageKey);
+        }
     } else {
         referenceCache.clear();
+        // Clear all localStorage cache entries
+        Object.values(STORAGE_KEYS).forEach(clearFromStorage);
     }
 }
 

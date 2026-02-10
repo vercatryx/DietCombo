@@ -3,8 +3,18 @@ import { ClientPortalInterface } from '@/components/clients/ClientPortalInterfac
 import { notFound } from 'next/navigation';
 import { logout } from '@/lib/auth-actions';
 import { LogOut } from 'lucide-react';
+import type { Metadata } from 'next';
 
-export default async function ClientPortalPage({ params }: { params: { id: string } }) {
+type Props = { params: Promise<{ id: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { id } = await params;
+  const client = await getPublicClient(id);
+  if (!client) return { title: 'Client Portal' };
+  return { title: `${client.fullName} – Portal` };
+}
+
+export default async function ClientPortalPage({ params }: Props) {
     const { id } = await params;
 
     // Fetch all data in parallel - matching ClientProfile pattern

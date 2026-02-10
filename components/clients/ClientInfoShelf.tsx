@@ -5,11 +5,14 @@ import {
     X, ExternalLink, MapPin, Phone, Mail, User, Info,
     Calendar, DollarSign, StickyNote, Square, CheckSquare,
     Users, FileText, CheckCircle, XCircle, Clock, Download,
-    MessageSquare, Pencil, Trash2, Check, Save, Trash, Loader2, Plus
+    MessageSquare, Pencil, Trash2, Check, Save, Trash, Loader2, Plus,
+    MapPinned
 } from 'lucide-react';
 import { ClientProfile, ClientStatus, Navigator, Submission } from '@/lib/types';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { addDependent, getDependentsByParentId, updateClient, deleteClient } from '@/lib/actions';
+import { buildGeocodeQuery } from '@/lib/addressHelpers';
+import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { getSingleForm } from '@/lib/form-actions';
 import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
@@ -19,7 +22,6 @@ interface ClientInfoShelfProps {
     client: ClientProfile;
     statuses: ClientStatus[];
     navigators: Navigator[];
-    orderSummary: React.ReactNode;
     submissions?: Submission[];
     allClients?: ClientProfile[];
     onClose: () => void;
@@ -32,7 +34,6 @@ export function ClientInfoShelf({
     client,
     statuses,
     navigators,
-    orderSummary,
     submissions = [],
     allClients = [],
     onClose,
@@ -42,21 +43,35 @@ export function ClientInfoShelf({
 }: ClientInfoShelfProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const [editForm, setEditForm] = useState({
-        fullName: client.fullName,
-        statusId: client.statusId,
-        navigatorId: client.navigatorId,
-        phoneNumber: client.phoneNumber,
-        secondaryPhoneNumber: client.secondaryPhoneNumber || '',
-        email: client.email || '',
-        address: client.address,
-        notes: client.notes,
-        authorizedAmount: client.authorizedAmount || 0,
-        expirationDate: client.expirationDate || '',
-        approvedMealsPerWeek: client.approvedMealsPerWeek || 0,
-        caseId: client.activeOrder?.caseId || '',
-        serviceType: client.serviceType
-    });
+
+    const getInitialEditForm = useCallback((c: ClientProfile) => ({
+        fullName: c.fullName,
+        statusId: c.statusId,
+        navigatorId: c.navigatorId,
+        phoneNumber: c.phoneNumber,
+        secondaryPhoneNumber: c.secondaryPhoneNumber || '',
+        email: c.email || '',
+        address: c.address,
+        apt: c.apt || '',
+        city: c.city || '',
+        state: c.state || '',
+        zip: c.zip || '',
+        county: c.county || '',
+        notes: c.notes,
+        dislikes: c.dislikes || '',
+        caseIdExternal: c.caseIdExternal || '',
+        authorizedAmount: c.authorizedAmount || 0,
+        expirationDate: c.expirationDate || '',
+        approvedMealsPerWeek: c.approvedMealsPerWeek || 0,
+        caseId: c.activeOrder?.caseId || '',
+        serviceType: c.serviceType,
+        paused: c.paused ?? false,
+        complex: c.complex ?? false,
+        bill: c.bill ?? true,
+        delivery: c.delivery ?? true,
+    }), []);
+
+    const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
 
     // Dependent State
     const [showAddDependentForm, setShowAddDependentForm] = useState(false);
@@ -70,6 +85,14 @@ export function ClientInfoShelf({
     const [loadingForm, setLoadingForm] = useState(false);
     const [isFillingForm, setIsFillingForm] = useState(false);
     const [formSchema, setFormSchema] = useState<FormSchema | null>(null);
+
+    // Geocode State
+    const [geoBusy, setGeoBusy] = useState(false);
+    const [geoErr, setGeoErr] = useState('');
+
+    useEffect(() => {
+        if (!isEditing) setEditForm(getInitialEditForm(client));
+    }, [client, isEditing, getInitialEditForm]);
 
     useEffect(() => {
         if (allClients.length > 0) {
@@ -91,10 +114,37 @@ export function ClientInfoShelf({
     const status = statuses.find(s => s.id === (isEditing ? editForm.statusId : client.statusId));
     const navigator = navigators.find(n => n.id === (isEditing ? editForm.navigatorId : client.navigatorId));
 
+    const hasGeocode = client.lat != null && client.lng != null && Number.isFinite(Number(client.lat)) && Number.isFinite(Number(client.lng));
+
+    const handleAutoGeocode = useCallback(async () => {
+        if (!client?.id || geoBusy) return;
+        const source = isEditing ? editForm : client;
+        const q = buildGeocodeQuery({
+            address: source.address || '',
+            city: source.city || '',
+            state: source.state || '',
+            zip: source.zip || '',
+        });
+        if (!q?.trim()) {
+            setGeoErr('Add address / city / state to geocode');
+            return;
+        }
+        setGeoBusy(true);
+        setGeoErr('');
+        try {
+            const a = await geocodeOneClient(q);
+            await updateClient(client.id, { lat: a.lat, lng: a.lng });
+            onClientUpdated?.();
+        } catch {
+            setGeoErr('Address not found');
+        } finally {
+            setGeoBusy(false);
+        }
+    }, [client?.id, isEditing, editForm.address, editForm.city, editForm.state, editForm.zip, geoBusy, onClientUpdated]);
+
     const handleSave = async () => {
         setIsSaving(true);
         try {
-            // Include caseId in activeOrder if it was modified
             const updatedActiveOrder = {
                 ...(client.activeOrder || { serviceType: client.serviceType }),
                 caseId: editForm.caseId,
@@ -102,7 +152,29 @@ export function ClientInfoShelf({
             };
 
             await updateClient(client.id, {
-                ...editForm,
+                fullName: editForm.fullName,
+                statusId: editForm.statusId,
+                navigatorId: editForm.navigatorId,
+                phoneNumber: editForm.phoneNumber,
+                secondaryPhoneNumber: editForm.secondaryPhoneNumber || null,
+                email: editForm.email || null,
+                address: editForm.address,
+                apt: editForm.apt || null,
+                city: editForm.city || null,
+                state: editForm.state || null,
+                zip: editForm.zip || null,
+                county: editForm.county || null,
+                notes: editForm.notes,
+                dislikes: editForm.dislikes || null,
+                caseIdExternal: editForm.caseIdExternal || null,
+                authorizedAmount: editForm.authorizedAmount,
+                expirationDate: editForm.expirationDate || null,
+                approvedMealsPerWeek: editForm.approvedMealsPerWeek,
+                serviceType: editForm.serviceType,
+                paused: editForm.paused,
+                complex: editForm.complex,
+                bill: editForm.bill,
+                delivery: editForm.delivery,
                 activeOrder: updatedActiveOrder
             });
             setIsEditing(false);
@@ -207,21 +279,7 @@ export function ClientInfoShelf({
                                 </button>
                                 <button className={styles.cancelBtn} onClick={() => {
                                     setIsEditing(false);
-                                    setEditForm({
-                                        fullName: client.fullName,
-                                        statusId: client.statusId,
-                                        navigatorId: client.navigatorId,
-                                        phoneNumber: client.phoneNumber,
-                                        secondaryPhoneNumber: client.secondaryPhoneNumber || '',
-                                        email: client.email || '',
-                                        address: client.address,
-                                        notes: client.notes,
-                                        authorizedAmount: client.authorizedAmount || 0,
-                                        expirationDate: client.expirationDate || '',
-                                        approvedMealsPerWeek: client.approvedMealsPerWeek || 0,
-                                        caseId: client.activeOrder?.caseId || '',
-                                        serviceType: client.serviceType
-                                    });
+                                    setEditForm(getInitialEditForm(client));
                                 }}>
                                     <X size={18} />
                                 </button>
@@ -263,6 +321,265 @@ export function ClientInfoShelf({
                 )}
 
                 <div className={styles.content}>
+                    {/* Contact & Address - first so it's visible when panel opens; no Status/Navigator here (only in Service Information with dropdown) */}
+                    <div className={styles.section}>
+                        <h3>Contact & Address</h3>
+                        <div className={styles.infoGrid}>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Address</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.address}
+                                            onChange={e => setEditForm({ ...editForm, address: e.target.value })}
+                                            placeholder="Street address"
+                                        />
+                                    ) : (
+                                        (client.address?.trim() || client.apt?.trim())
+                                            ? `${client.address?.trim() || ''}${client.apt?.trim() ? (client.address?.trim() ? `, Unit: ${client.apt.trim()}` : `Unit: ${client.apt.trim()}`) : ''}`
+                                            : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Unit</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.apt}
+                                            onChange={e => setEditForm({ ...editForm, apt: e.target.value })}
+                                            placeholder="Apt / Unit"
+                                        />
+                                    ) : (
+                                        client.apt?.trim() || '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>City</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.city}
+                                            onChange={e => setEditForm({ ...editForm, city: e.target.value })}
+                                            placeholder="City"
+                                        />
+                                    ) : (
+                                        client.city?.trim() || '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>State</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.state}
+                                            onChange={e => setEditForm({ ...editForm, state: e.target.value })}
+                                            placeholder="State"
+                                        />
+                                    ) : (
+                                        client.state?.trim() || '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Zip</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.zip}
+                                            onChange={e => setEditForm({ ...editForm, zip: e.target.value })}
+                                            placeholder="Zip"
+                                        />
+                                    ) : (
+                                        client.zip?.trim() || '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>County</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.county}
+                                            onChange={e => setEditForm({ ...editForm, county: e.target.value })}
+                                            placeholder="County"
+                                        />
+                                    ) : (
+                                        client.county?.trim() || '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Phone</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.phoneNumber}
+                                            onChange={e => setEditForm({ ...editForm, phoneNumber: e.target.value })}
+                                            placeholder="Primary"
+                                        />
+                                    ) : (
+                                        client.phoneNumber?.trim() ? (
+                                            <a href={`tel:${client.phoneNumber.replace(/\s/g, '')}`}>{client.phoneNumber}</a>
+                                        ) : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Secondary Phone</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.secondaryPhoneNumber}
+                                            onChange={e => setEditForm({ ...editForm, secondaryPhoneNumber: e.target.value })}
+                                            placeholder="Secondary"
+                                        />
+                                    ) : (
+                                        client.secondaryPhoneNumber?.trim() ? (
+                                            <a href={`tel:${client.secondaryPhoneNumber.replace(/\s/g, '')}`}>{client.secondaryPhoneNumber}</a>
+                                        ) : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Email</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.email}
+                                            onChange={e => setEditForm({ ...editForm, email: e.target.value })}
+                                            placeholder="Email"
+                                        />
+                                    ) : (
+                                        client.email?.trim() ? (
+                                            <a href={`mailto:${client.email}`}>{client.email}</a>
+                                        ) : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Notes</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <textarea
+                                            className={styles.editTextarea}
+                                            value={editForm.notes}
+                                            onChange={e => setEditForm({ ...editForm, notes: e.target.value })}
+                                            rows={2}
+                                            placeholder="General notes"
+                                        />
+                                    ) : (
+                                        <span style={{ whiteSpace: 'pre-wrap' }}>{client.notes?.trim() || '—'}</span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Dislikes / Dietary</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <textarea
+                                            className={styles.editTextarea}
+                                            value={editForm.dislikes}
+                                            onChange={e => setEditForm({ ...editForm, dislikes: e.target.value })}
+                                            rows={2}
+                                            placeholder="Dislikes / dietary restrictions"
+                                        />
+                                    ) : (
+                                        <span style={{ whiteSpace: 'pre-wrap' }}>{client.dislikes?.trim() || '—'}</span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Flags</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.paused}
+                                                    onChange={e => setEditForm({ ...editForm, paused: e.target.checked })}
+                                                />
+                                                <span>Paused</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.complex}
+                                                    onChange={e => setEditForm({ ...editForm, complex: e.target.checked })}
+                                                />
+                                                <span>Complex</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.bill}
+                                                    onChange={e => setEditForm({ ...editForm, bill: e.target.checked })}
+                                                />
+                                                <span>Bill</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.delivery}
+                                                    onChange={e => setEditForm({ ...editForm, delivery: e.target.checked })}
+                                                />
+                                                <span>Delivery</span>
+                                            </label>
+                                        </div>
+                                    ) : (
+                                        (client.paused || client.complex || client.bill || client.delivery) ? (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                {client.paused && <span className={styles.flagChip}>Paused</span>}
+                                                {client.complex && <span className={styles.flagChip}>Complex</span>}
+                                                {client.bill && <span className={styles.flagChip}>Bill</span>}
+                                                {client.delivery && <span className={styles.flagChip}>Delivery</span>}
+                                            </div>
+                                        ) : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Geocode</div>
+                                <div className={styles.value}>
+                                    <span style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        {hasGeocode && (
+                                            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                                ✓ {Number(client.lat).toFixed(4)}, {Number(client.lng).toFixed(4)}
+                                            </span>
+                                        )}
+                                        {(isEditing || !hasGeocode) && (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-sm"
+                                                    onClick={handleAutoGeocode}
+                                                    disabled={geoBusy}
+                                                    style={{ alignSelf: 'flex-start' }}
+                                                >
+                                                    {geoBusy ? <Loader2 size={14} className="animate-spin" /> : <MapPinned size={14} />}
+                                                    {' '}{geoBusy ? 'Geocoding…' : 'Auto Geocode'}
+                                                </button>
+                                                {geoErr && <span style={{ fontSize: '0.8rem', color: 'var(--color-danger, #dc2626)' }}>{geoErr}</span>}
+                                            </>
+                                        )}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className={styles.section}>
                         <h3>Service Information</h3>
                         <div className={styles.infoGrid}>
@@ -310,38 +627,35 @@ export function ClientInfoShelf({
                                             onChange={e => setEditForm({ ...editForm, serviceType: e.target.value as any })}
                                         >
                                             <option value="Food">Food</option>
-                                            <option value="Boxes">Boxes</option>
-                                            <option value="Equipment">Equipment</option>
+                                            <option value="Produce">Produce</option>
                                         </select>
                                     ) : (
                                         client.serviceType || '-'
                                     )}
                                 </div>
                             </div>
-                            <div className={styles.infoItem}>
-                                <div className={styles.label}>Case ID</div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Unite Us</div>
                                 <div className={styles.value}>
                                     {isEditing ? (
                                         <input
                                             className={styles.editInput}
-                                            value={editForm.caseId}
-                                            onChange={e => setEditForm({ ...editForm, caseId: e.target.value })}
-                                            placeholder="Case ID"
+                                            value={editForm.caseIdExternal}
+                                            onChange={e => setEditForm({ ...editForm, caseIdExternal: e.target.value })}
+                                            placeholder="https://app.uniteus.io/dashboard/cases/open/..."
                                         />
+                                    ) : client.caseIdExternal?.trim() ? (
+                                        <a
+                                            href={client.caseIdExternal.startsWith('http') ? client.caseIdExternal : `https://${client.caseIdExternal}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                        >
+                                            Open in Unite Us <ExternalLink size={14} />
+                                        </a>
                                     ) : (
-                                        client.activeOrder?.caseId || '-'
+                                        '—'
                                     )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                <div className={styles.label}>Active Order Summary</div>
-                                <div
-                                    className={styles.orderSummaryBox}
-                                    onClick={() => onOpenProfile(client.id)}
-                                    style={{ cursor: 'pointer', transition: 'background-color 0.2s' }}
-                                    title="Click to view full order details"
-                                >
-                                    {orderSummary || 'No active order'}
                                 </div>
                             </div>
                         </div>
@@ -424,101 +738,6 @@ export function ClientInfoShelf({
                             </div>
                         </div>
                     </div>
-
-                    <div className={styles.section}>
-                        <h3>Contact Details</h3>
-                        <div className={styles.infoGrid}>
-                            <div className={styles.infoItem}>
-                                <div className={styles.label}>Phone Number</div>
-                                <div className={styles.value}>
-                                    {isEditing ? (
-                                        <input
-                                            className={styles.editInput}
-                                            value={editForm.phoneNumber}
-                                            onChange={e => setEditForm({ ...editForm, phoneNumber: e.target.value })}
-                                            placeholder="Primary Phone"
-                                        />
-                                    ) : (
-                                        client.phoneNumber || '-'
-                                    )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem}>
-                                <div className={styles.label}>Secondary Phone</div>
-                                <div className={styles.value}>
-                                    {isEditing ? (
-                                        <input
-                                            className={styles.editInput}
-                                            value={editForm.secondaryPhoneNumber}
-                                            onChange={e => setEditForm({ ...editForm, secondaryPhoneNumber: e.target.value })}
-                                            placeholder="Secondary Phone"
-                                        />
-                                    ) : (
-                                        client.secondaryPhoneNumber || '-'
-                                    )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                <div className={styles.label}>Email Address</div>
-                                <div className={styles.value}>
-                                    {isEditing ? (
-                                        <input
-                                            className={styles.editInput}
-                                            value={editForm.email}
-                                            onChange={e => setEditForm({ ...editForm, email: e.target.value })}
-                                        />
-                                    ) : (
-                                        client.email || '-'
-                                    )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                <div className={styles.label}>Address</div>
-                                <div className={styles.value}>
-                                    {isEditing ? (
-                                        <input
-                                            className={styles.editInput}
-                                            value={editForm.address}
-                                            onChange={e => setEditForm({ ...editForm, address: e.target.value })}
-                                        />
-                                    ) : (
-                                        client.address || '-'
-                                    )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                <div className={styles.label}>General Notes</div>
-                                <div className={styles.value}>
-                                    {isEditing ? (
-                                        <textarea
-                                            className={styles.editTextarea}
-                                            value={editForm.notes}
-                                            onChange={e => setEditForm({ ...editForm, notes: e.target.value })}
-                                            rows={3}
-                                        />
-                                    ) : (
-                                        <div style={{ fontSize: '0.9rem', fontStyle: 'italic', color: 'var(--text-secondary)' }}>
-                                            {client.notes ? (
-                                                <>
-                                                    <StickyNote size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} />
-                                                    {client.notes}
-                                                </>
-                                            ) : '-'}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                <div className={styles.label}>Dislikes / Dietary Restrictions</div>
-                                <div className={styles.value}>
-                                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
-                                        {client.dislikes && client.dislikes.trim() ? client.dislikes : '-'}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
 
                     {/* Dependents Section */}
                     {!client.parentClientId && (

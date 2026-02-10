@@ -21,7 +21,7 @@ import { MealSelectionManagement } from '@/components/admin/MealSelectionManagem
 type Tab = 'vendors' | 'menus' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'settings' | 'admins' | 'form' | 'meals' | 'template';
 
 export default function AdminPage() {
-    const [activeTab, setActiveTab] = useState<Tab>('menus');
+    const [activeTab, setActiveTab] = useState<Tab>('template');
     const { getVendors, getMenuItems } = useDataCache();
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -53,17 +53,25 @@ export default function AdminPage() {
 
             <div className={styles.tabs}>
                 <button
+                    className={`${styles.tab} ${activeTab === 'template' ? styles.activeTab : ''}`}
+                    onClick={() => setActiveTab('template')}
+                >
+                    Default Order Template
+                </button>
+                <button
                     className={`${styles.tab} ${activeTab === 'menus' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('menus')}
                 >
                     Menus
                 </button>
+                {/* Hidden: Box Categories
                 <button
                     className={`${styles.tab} ${activeTab === 'boxes' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('boxes')}
                 >
                     Box Categories
                 </button>
+                */}
                 <button
                     className={`${styles.tab} ${activeTab === 'vendors' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('vendors')}
@@ -106,18 +114,14 @@ export default function AdminPage() {
                 >
                     Admins
                 </button>
+                {/* Hidden: Meal Selection
                 <button
                     className={`${styles.tab} ${activeTab === 'meals' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('meals')}
                 >
                     Meal Selection
                 </button>
-                <button
-                    className={`${styles.tab} ${activeTab === 'template' ? styles.activeTab : ''}`}
-                    onClick={() => setActiveTab('template')}
-                >
-                    Default Order Template
-                </button>
+                */}
             </div>
 
             <div className={styles.content}>

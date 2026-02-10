@@ -153,6 +153,15 @@ export function OrdersList() {
                         <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients')}>
                             All Clients
                         </button>
+                        <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients?view=eligible')}>
+                            Eligible
+                        </button>
+                        <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients?view=ineligible')}>
+                            Ineligible
+                        </button>
+                        <button type="button" className={styles.viewBtn} onClick={() => router.push('/clients?view=needs-attention')}>
+                            Needs Attention
+                        </button>
                         <button type="button" className={styles.viewBtn} onClick={() => router.push('/billing')}>
                             Billing
                         </button>

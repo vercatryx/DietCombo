@@ -16,7 +16,7 @@ export default async function proxy(req: NextRequest) {
         return NextResponse.next();
     }
 
-    const isPublicRoute = publicRoutes.includes(path) || path.startsWith('/verify-order/') || path.startsWith('/client-portal') || path.startsWith('/delivery/') || path.startsWith('/drivers/') || path.startsWith('/produce/') || path.startsWith('/api/extension') || path.startsWith('/api/mobile');
+    const isPublicRoute = publicRoutes.includes(path) || path.startsWith('/verify-order/') || path.startsWith('/client-portal') || path.startsWith('/delivery/') || path.startsWith('/drivers/') || path.startsWith('/produce/') || path.startsWith('/vendors/produce') || path.startsWith('/api/');
     const isVendorRoute = vendorRoutes.some(route => path.startsWith(route));
     // Check protected routes - handle root path separately to avoid matching all paths
     const isProtectedRoute = protectedRoutes.some(route =>

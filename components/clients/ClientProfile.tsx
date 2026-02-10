@@ -31,6 +31,8 @@ import { parseUniteUsUrl, composeUniteUsUrl, isMeetingExactTarget } from '@/lib/
 interface Props {
     clientId: string;
     onClose?: () => void;
+    /** When true (e.g. opened from sidebar "Order Details"), hide client info and show only service config */
+    serviceConfigOnly?: boolean;
     initialData?: ClientFullDetails | null;
     // Lookups passed from parent to avoid re-fetching
     statuses?: ClientStatus[];
@@ -51,6 +53,29 @@ const SERVICE_TYPES: ServiceType[] = ['Food', 'Boxes', 'Custom', 'Produce'];
 
 // Set window.__DEBUG_CLIENT_PROFILE = true in dev to enable verbose logging (avoids hot-path cost)
 const DEBUG_PROFILE = typeof window !== 'undefined' && (window as any).__DEBUG_CLIENT_PROFILE === true;
+
+const PRODUCE_BILL_AMOUNT_CACHE_KEY = 'dietcombo_produce_default_bill_amount';
+
+function getProduceBillAmountFromCache(): number | null {
+    if (typeof window === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(PRODUCE_BILL_AMOUNT_CACHE_KEY);
+        if (raw == null) return null;
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : null;
+    } catch {
+        return null;
+    }
+}
+
+function setProduceBillAmountCache(amount: number): void {
+    if (typeof window === 'undefined') return;
+    try {
+        localStorage.setItem(PRODUCE_BILL_AMOUNT_CACHE_KEY, String(amount));
+    } catch {
+        // ignore
+    }
+}
 
 // Min/Max validation for approved meals per week
 const MIN_APPROVED_MEALS_PER_WEEK = 1;
@@ -143,7 +168,7 @@ function DeleteConfirmationModal({
     );
 }
 
-export function ClientProfileDetail({ clientId: propClientId, onClose, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }: Props): ReactNode {
+export function ClientProfileDetail({ clientId: propClientId, onClose, serviceConfigOnly = false, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }: Props): ReactNode {
     const router = useRouter();
     const params = useParams();
     const propClientIdValue = (params?.id as string) || propClientId;
@@ -198,6 +223,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     const [mealPlanInitialOrders, setMealPlanInitialOrders] = useState<MealPlannerOrderResult[]>([]);
     /** When true (new client with lookups), parent is preloading meal plan; SavedMealPlanMonth should wait and not fetch. */
     const [mealPlanPreloading, setMealPlanPreloading] = useState(false);
+
+    /** When true, Produce default template (bill amount) is being loaded after switching to Produce. */
+    const [produceBillAmountLoading, setProduceBillAmountLoading] = useState(false);
 
     // Form Filler State
     const [isFillingForm, setIsFillingForm] = useState(false);
@@ -352,7 +380,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     serviceType: 'Food',
                     approvedMealsPerWeek: 0,
                     authorizedAmount: null,
-                    expirationDate: null
+                    expirationDate: null,
+                    paused: false,
+                    complex: false,
+                    bill: true,
+                    delivery: true
                 };
 
                 setFormData(defaultClient);
@@ -363,15 +395,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 setLoadingOrderDetails(false);
 
                 // Load default template and approved meals in background (parallel fetches for faster load)
+                // Use lightweight loader - skip heavy getClients() and getRegularClients() calls
                 setMealPlanPreloading(true);
                 (async () => {
                     try {
-                        const [lookups, template, mealPlanTemplate] = await Promise.all([
-                            loadLookups(),
+                        const menuItemsList = initialMenuItems || [];
+                        const [template, mealPlanTemplate] = await Promise.all([
                             getDefaultOrderTemplate('Food'),
-                            getDefaultMealPlanTemplateForNewClient()
+                            getDefaultMealPlanTemplateForNewClient(),
+                            loadLookupsForNewClient(false) // Only load settings and categories, lookups already provided
                         ]);
-                        const defaultMeals = template ? await computeDefaultApprovedMealsFromTemplate(template, lookups.menuItems) : 0;
+                        const defaultMeals = template ? await computeDefaultApprovedMealsFromTemplate(template, menuItemsList) : 0;
                         setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals || 0 }));
                         await loadAndApplyDefaultTemplate('Food', template ?? undefined);
                         if (mealPlanTemplate?.length) setMealPlanInitialOrders(mealPlanTemplate);
@@ -382,9 +416,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     }
                 })();
             } else {
-                // No lookups from parent - fetch lookups and order template in parallel for faster load
+                // No lookups from parent - fetch lookups (but skip heavy client lists) and order template in parallel for faster load
                 setLoading(true);
-                Promise.all([loadLookups(), getDefaultOrderTemplate('Food')])
+                Promise.all([loadLookupsForNewClient(true), getDefaultOrderTemplate('Food')])
                     .then(async ([lookupsResult, template]) => {
                         const statusesList = lookupsResult.statuses || [];
                         const navigatorsList = lookupsResult.navigators || [];
@@ -410,7 +444,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             serviceType: 'Food',
                             approvedMealsPerWeek: defaultMeals || 0,
                             authorizedAmount: null,
-                            expirationDate: null
+                            expirationDate: null,
+                            paused: false,
+                            complex: false,
+                            bill: true,
+                            delivery: true
                         };
                         setFormData(defaultClient);
                         setClient(defaultClient as ClientProfile);
@@ -446,6 +484,47 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
         // When parent passes preloaded lists (e.g. from ClientList), we avoid loadAuxiliaryData (getClients/getRegularClients are heavy).
         const hasAuxiliaryFromProps = initialSettings != null && initialCategories && initialAllClients && initialRegularClients;
+
+        // FAST PATH: serviceConfigOnly only needs client (clients.upcoming_order has order config). Skip all heavy fetches.
+        if (serviceConfigOnly) {
+            const runLightweightLoad = async () => {
+                try {
+                    if (hasInitialData) {
+                        hydrateFromInitialData(initialData!);
+                    } else {
+                        const c = await getClient(clientId);
+                        if (!c) {
+                            setMessage('Error loading client data. Please refresh the page.');
+                            setLoading(false);
+                            setLoadingOrderDetails(false);
+                            return;
+                        }
+                        hydrateFromInitialData({
+                            client: c,
+                            history: [],
+                            orderHistory: [],
+                            billingHistory: [],
+                            activeOrder: null,
+                            upcomingOrder: null
+                        });
+                    }
+                    if (initialStatuses?.length) setStatuses(initialStatuses);
+                    if (initialNavigators?.length) setNavigators(initialNavigators);
+                    if (initialVendors?.length) setVendors(initialVendors);
+                    if (initialMenuItems?.length) setMenuItems(initialMenuItems);
+                    if (initialBoxTypes?.length) setBoxTypes(initialBoxTypes);
+                    setLoading(false);
+                    setLoadingOrderDetails(false);
+                } catch (error) {
+                    console.error('[ClientProfile] Lightweight load failed:', error);
+                    setMessage('Error loading client data. Please refresh the page.');
+                    setLoading(false);
+                    setLoadingOrderDetails(false);
+                }
+            };
+            runLightweightLoad();
+            return;
+        }
 
         if (hasInitialData && hasUpcomingOrderInInitial) {
             hydrateFromInitialData(initialData);
@@ -496,15 +575,47 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 loadLookups().then(() => {}).catch(() => {});
             }
         } else {
+            // No initialData: load minimal (client + upcomingOrder) so profile shows near-instant, then full payload in background
             setLoading(true);
-            loadData().then(() => setLoading(false)).catch((error) => {
-                console.error('[ClientProfile] Error loading data:', error);
-                setLoading(false);
-            });
+            setLoadingOrderDetails(true);
+            (async () => {
+                try {
+                    const c = await getClient(clientId);
+                    if (!c) {
+                        setMessage('Error loading client data. Please refresh the page.');
+                        setLoading(false);
+                        setLoadingOrderDetails(false);
+                        return;
+                    }
+                    const caseId = c.serviceType === 'Boxes' ? (c.activeOrder?.caseId ?? null) : null;
+                    const upcomingOrder = await getUpcomingOrderForClient(clientId, caseId);
+                    const minimalData: ClientFullDetails = {
+                        client: c,
+                        history: [],
+                        orderHistory: [],
+                        billingHistory: [],
+                        activeOrder: null,
+                        upcomingOrder: upcomingOrder ?? null
+                    };
+                    hydrateFromInitialData(minimalData);
+                    setLoading(false);
+                    // Load full payload in background (history, lookups, etc.)
+                    getClientProfilePageData(clientId).then((payload) => {
+                        if (payload) applyFullProfilePayload(payload);
+                    }).catch((err) => {
+                        console.error('[ClientProfile] Background full load failed:', err);
+                    });
+                } catch (error) {
+                    console.error('[ClientProfile] Error loading minimal data:', error);
+                    setMessage('Error loading client data. Please refresh the page.');
+                    setLoading(false);
+                    setLoadingOrderDetails(false);
+                }
+            })();
         }
     // Use initialData?.client?.id (not initialData) so parent re-renders with same client data
     // don't retrigger this effect and reload the dialog (e.g. when meal plan +/- is clicked).
-    }, [clientId, initialData?.client?.id ?? null, isNewClient]);
+    }, [clientId, initialData?.client?.id ?? null, isNewClient, serviceConfigOnly]);
 
     // Sync vendors state when initialVendors prop changes
     useEffect(() => {
@@ -518,14 +629,14 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }, [initialVendors]);
 
     useEffect(() => {
-        if (!clientId) return;
+        if (!clientId || serviceConfigOnly) return; // Skip submissions/signature for serviceConfigOnly - not displayed
         // Defer submissions/signature so main profile content paints first; data remains accurate
         const t = setTimeout(() => {
             loadSubmissions();
             loadSignatureStatus();
         }, 0);
         return () => clearTimeout(t);
-    }, [clientId]);
+    }, [clientId, serviceConfigOnly]);
 
     // Effect: Initialize boxOrders when Boxes service is selected
     // Only initialize if boxOrders is empty AND there's no existing data (items, vendorId, boxTypeId)
@@ -570,7 +681,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }, [formData.serviceType, boxTypes, orderConfig?.vendorId, orderConfig?.boxTypeId, orderConfig?.items]);
 
     // Extract dependencies with defaults to ensure consistent array size
-    const caseId = useMemo(() => orderConfig?.caseId ?? null, [orderConfig?.caseId]);
     const vendorSelections = useMemo(() => orderConfig?.vendorSelections ?? [], [orderConfig?.vendorSelections]);
     const vendorId = useMemo(() => orderConfig?.vendorId ?? null, [orderConfig?.vendorId]);
     const boxTypeId = useMemo(() => orderConfig?.boxTypeId ?? null, [orderConfig?.boxTypeId]);
@@ -799,6 +909,79 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         return { vendorId, customItems };
     }
 
+    // Helper: Merge meal plan items into food order template
+    // Matches meal plan items to menu items by name and adds them to vendor selections
+    function mergeMealPlanIntoFoodOrder(
+        foodTemplate: any,
+        mealPlanTemplate: MealPlannerOrderResult[],
+        vendors: Vendor[],
+        menuItems: MenuItem[]
+    ): any {
+        if (!foodTemplate || foodTemplate.serviceType !== 'Food') return foodTemplate;
+        if (!mealPlanTemplate || mealPlanTemplate.length === 0) return foodTemplate;
+
+        const defaultVendorId = getDefaultVendor('Food') || (vendors.find(v => v.serviceTypes?.includes('Food'))?.id || '');
+        const mergedTemplate = JSON.parse(JSON.stringify(foodTemplate)); // Deep copy
+
+        // Create a map of menu items by name (case-insensitive)
+        const menuItemsByName = new Map<string, MenuItem>();
+        menuItems.forEach(item => {
+            const key = item.name.toLowerCase().trim();
+            if (!menuItemsByName.has(key)) {
+                menuItemsByName.set(key, item);
+            }
+        });
+
+        // Aggregate meal plan items by name across all dates
+        const mealPlanItemsByName = new Map<string, number>();
+        mealPlanTemplate.forEach(order => {
+            order.items?.forEach(item => {
+                const name = item.name?.toLowerCase().trim() || '';
+                if (name) {
+                    const currentQty = mealPlanItemsByName.get(name) || 0;
+                    mealPlanItemsByName.set(name, currentQty + (item.quantity || 0));
+                }
+            });
+        });
+
+        // Merge meal plan items into food template
+        if (mergedTemplate.deliveryDayOrders && Object.keys(mergedTemplate.deliveryDayOrders).length > 0) {
+            // Multi-day format: add meal plan items to first delivery day (or distribute evenly)
+            const firstDay = Object.keys(mergedTemplate.deliveryDayOrders)[0];
+            const firstDayOrder = mergedTemplate.deliveryDayOrders[firstDay];
+            if (firstDayOrder && firstDayOrder.vendorSelections) {
+                const firstVendorSelection = firstDayOrder.vendorSelections[0] || { vendorId: defaultVendorId, items: {} };
+                if (!firstDayOrder.vendorSelections[0]) {
+                    firstDayOrder.vendorSelections = [firstVendorSelection];
+                }
+                
+                mealPlanItemsByName.forEach((quantity, itemName) => {
+                    const menuItem = menuItemsByName.get(itemName);
+                    if (menuItem) {
+                        const currentQty = firstVendorSelection.items[menuItem.id] || 0;
+                        firstVendorSelection.items[menuItem.id] = currentQty + quantity;
+                    }
+                });
+            }
+        } else {
+            // Single-day format: add to first vendor selection
+            if (!mergedTemplate.vendorSelections || mergedTemplate.vendorSelections.length === 0) {
+                mergedTemplate.vendorSelections = [{ vendorId: defaultVendorId, items: {} }];
+            }
+            const firstVendorSelection = mergedTemplate.vendorSelections[0];
+            
+            mealPlanItemsByName.forEach((quantity, itemName) => {
+                const menuItem = menuItemsByName.get(itemName);
+                if (menuItem) {
+                    const currentQty = firstVendorSelection.items[menuItem.id] || 0;
+                    firstVendorSelection.items[menuItem.id] = currentQty + quantity;
+                }
+            });
+        }
+
+        return mergedTemplate;
+    }
+
     // Helper: Load and apply default order template for new clients. Pass providedTemplate to avoid a second fetch when caller already has it.
     async function loadAndApplyDefaultTemplate(serviceType: string, providedTemplate?: any): Promise<void> {
         // Only apply for Food and Produce service types
@@ -818,10 +1001,22 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (DEBUG_PROFILE) console.log(`[ClientProfile] Loading default template for ${serviceType}:`, template);
 
             if (serviceType === 'Food') {
+                // Load meal plan template and merge with food template
+                let finalTemplate = template;
+                try {
+                    const mealPlanTemplate = await getDefaultMealPlanTemplateForNewClient();
+                    if (mealPlanTemplate && mealPlanTemplate.length > 0) {
+                        finalTemplate = mergeMealPlanIntoFoodOrder(template, mealPlanTemplate, vendors, menuItems);
+                        if (DEBUG_PROFILE) console.log('[ClientProfile] Merged meal plan into food template');
+                    }
+                } catch (mealPlanError) {
+                    console.warn('[ClientProfile] Error loading meal plan template, using food template only:', mealPlanError);
+                }
+
                 // Apply Food template - copy vendorSelections and/or deliveryDayOrders and items
                 const defaultVendorId = getDefaultVendor('Food') || '';
-                const templateVendorSelections = template.vendorSelections || [];
-                const templateDeliveryDayOrders = template.deliveryDayOrders && typeof template.deliveryDayOrders === 'object' ? template.deliveryDayOrders : null;
+                const templateVendorSelections = finalTemplate.vendorSelections || [];
+                const templateDeliveryDayOrders = finalTemplate.deliveryDayOrders && typeof finalTemplate.deliveryDayOrders === 'object' ? finalTemplate.deliveryDayOrders : null;
 
                 let newOrderConfig: any = { serviceType: 'Food' };
 
@@ -869,15 +1064,19 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 // This ensures that order details from the template are persisted even if unchanged
             } else if (serviceType === 'Produce') {
                 // Apply Produce template - copy billAmount
+                const billAmount = template.billAmount != null && template.billAmount !== '' ? parseFloat(String(template.billAmount)) : 0;
+                const amount = Number.isFinite(billAmount) ? billAmount : 0;
                 const newOrderConfig = {
                     serviceType: 'Produce',
-                    billAmount: template.billAmount || 0
+                    billAmount: amount
                 };
 
                 setOrderConfig((prev: any) => ({
                     ...prev,
                     ...newOrderConfig
                 }));
+
+                setProduceBillAmountCache(amount);
 
                 // Keep originalOrderConfig empty so that the first save will always save the template values
                 // This ensures that order details from the template are persisted even if unchanged
@@ -887,15 +1086,15 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
     }
 
-    // Effect: Auto-set default vendor when caseId is set and vendor selections are empty
+    // Effect: Auto-set default vendor when vendor selections are empty (for Food and Boxes)
     useEffect(() => {
-        if (!orderConfig?.caseId || vendors.length === 0) {
+        if (vendors.length === 0) {
             defaultsSetRef.current = {};
             return;
         }
 
-        const configKey = `${formData.serviceType}-${orderConfig?.caseId}`;
-        // Reset ref if caseId or serviceType changed (new config)
+        const configKey = `${formData.serviceType}`;
+        // Reset ref if serviceType changed (new config)
         const lastConfigKey = defaultsSetRef.current.lastKey;
         if (lastConfigKey && lastConfigKey !== configKey) {
             defaultsSetRef.current = {};
@@ -988,7 +1187,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Mark as checked even if no update needed
             defaultsSetRef.current[configKey] = true;
         }
-    }, [orderConfig?.caseId, vendors.length, formData.serviceType]);
+    }, [vendors.length, formData.serviceType, orderConfig]);
 
     // Effect: Auto-set default vendor when vendor selection is disabled (read-only) and no vendor is selected
     // This ensures users can still add items even when vendor/day selection is read-only
@@ -1458,6 +1657,32 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
     }
 
+    /** Apply full profile payload from getClientProfilePageData (used after minimal load so profile shows immediately). */
+    function applyFullProfilePayload(payload: NonNullable<Awaited<ReturnType<typeof getClientProfilePageData>>>) {
+        const fullInitialData: ClientFullDetails = {
+            client: payload.c,
+            history: payload.historyData ?? [],
+            orderHistory: payload.orderHistoryData ?? [],
+            billingHistory: payload.billingHistoryData ?? [],
+            activeOrder: payload.activeOrderData ?? null,
+            upcomingOrder: payload.upcomingOrderDataInitial ?? null,
+            submissions: payload.submissions ?? [],
+            mealPlanData: payload.mealPlanData ?? []
+        };
+        hydrateFromInitialData(fullInitialData);
+        setStatuses(payload.s ?? []);
+        setNavigators(payload.n ?? []);
+        setVendors(payload.v ?? []);
+        setMenuItems(payload.m ?? []);
+        setBoxTypes(payload.b ?? []);
+        setSettings(payload.appSettings ?? null);
+        setCategories(payload.catData ?? []);
+        setAllClients((payload.allClientsData ?? []).filter((c): c is NonNullable<typeof c> => c != null));
+        setRegularClients((payload.regularClientsData ?? []).filter((c): c is NonNullable<typeof c> => c != null));
+        if (payload.dependentsData != null) setDependents(payload.dependentsData);
+        warmReferenceCacheFromProfile(payload);
+    }
+
     async function loadLookups(): Promise<{ menuItems: any[]; statuses: ClientStatus[]; navigators: Navigator[]; vendors: Vendor[] }> {
         try {
             const [s, n, v, m, b, appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
@@ -1487,6 +1712,48 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             return { menuItems: m || [], statuses: s, navigators: n, vendors: vendorsArray };
         } catch (error) {
             console.error('[ClientProfile] Error loading lookups:', error);
+            setMessage('Error loading data. Please refresh the page.');
+            throw error;
+        }
+    }
+
+    // Lightweight version for new clients - only loads essential data, skips heavy getClients() and getRegularClients()
+    async function loadLookupsForNewClient(includeLookups: boolean = false): Promise<{ menuItems: any[]; statuses: ClientStatus[]; navigators: Navigator[]; vendors: Vendor[] }> {
+        try {
+            if (includeLookups) {
+                // Need lookups (statuses, navigators, vendors, menuItems, boxTypes) but skip heavy client lists
+                const [s, n, v, m, b, appSettings, catData] = await Promise.all([
+                    getStatuses(),
+                    getNavigators(),
+                    getVendors(),
+                    getMenuItems(),
+                    getBoxTypes(),
+                    getSettings(),
+                    getCategories()
+                ]);
+                setStatuses(s);
+                setNavigators(n);
+                const vendorsArray = v || [];
+                setVendors(vendorsArray);
+                setMenuItems(m);
+                setBoxTypes(b);
+                setSettings(appSettings);
+                setCategories(catData);
+                // Skip setAllClients and setRegularClients - not needed for new clients
+                return { menuItems: m || [], statuses: s, navigators: n, vendors: vendorsArray };
+            } else {
+                // Lookups already provided, only need settings and categories
+                const [appSettings, catData] = await Promise.all([
+                    getSettings(),
+                    getCategories()
+                ]);
+                setSettings(appSettings);
+                setCategories(catData);
+                // Return empty lookups since they're already provided via props
+                return { menuItems: initialMenuItems || [], statuses: initialStatuses || [], navigators: initialNavigators || [], vendors: initialVendors || [] };
+            }
+        } catch (error) {
+            console.error('[ClientProfile] Error loading lookups for new client:', error);
             setMessage('Error loading data. Please refresh the page.');
             throw error;
         }
@@ -1537,7 +1804,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             if (DEBUG_PROFILE && vendorsArray.length > 0) {
                 console.log(`[ClientProfile] loadData - Loaded ${vendorsArray.length} vendors`);
             }
-            setMenuItems(m);
+            const menuItemsArray = m || [];
+            setMenuItems(menuItemsArray);
             setBoxTypes(b);
             setSettings(appSettings);
             setCategories(catData);
@@ -1741,10 +2009,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     // Fallback: use client's serviceType normalized
                     configToSet.serviceType = normalizeServiceTypeForActiveOrder(c.serviceType);
                 }
-                // Ensure caseId is set if it exists in activeOrder
-                if (!configToSet.caseId && c.activeOrder.caseId) {
-                    configToSet.caseId = c.activeOrder.caseId;
-                }
                 // For Produce: read bill amount from activeOrder (camelCase or snake_case from DB)
                 if (c.serviceType === 'Produce') {
                     const fromOrder = configToSet.billAmount ?? (configToSet.bill_amount != null ? parseFloat(String(configToSet.bill_amount)) : undefined);
@@ -1769,6 +2033,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             }
 
             // For existing Food clients with no order data, load default order template (same as new clients)
+            // Now loads for ALL Food clients to show default template
             if (configToSet && c.serviceType === 'Food') {
                 const hasNoOrderData = !(configToSet.vendorSelections?.some((vs: any) => vs.items && typeof vs.items === 'object' && Object.keys(vs.items).length > 0)) &&
                     !(configToSet.deliveryDayOrders && typeof configToSet.deliveryDayOrders === 'object' && Object.values(configToSet.deliveryDayOrders).some((d: any) => d?.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items).length > 0)));
@@ -1776,13 +2041,25 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     try {
                         const template = await getDefaultOrderTemplate('Food');
                         if (template) {
+                            // Load and merge meal plan template
+                            let finalTemplate = template;
+                            try {
+                                const mealPlanTemplate = await getDefaultMealPlanTemplateForNewClient();
+                                if (mealPlanTemplate && mealPlanTemplate.length > 0) {
+                                    finalTemplate = mergeMealPlanIntoFoodOrder(template, mealPlanTemplate, vendorsArray, menuItemsArray);
+                                    if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Merged meal plan into food template');
+                                }
+                            } catch (mealPlanError) {
+                                console.warn('[ClientProfile] loadData - Error loading meal plan template, using food template only:', mealPlanError);
+                            }
+
                             const defaultVendorId = (vendorsArray && vendorsArray.length > 0)
                                 ? (vendorsArray.find((vend: any) => vend.isDefault && vend.serviceTypes?.includes('Food'))?.id || vendorsArray.find((vend: any) => vend.serviceTypes?.includes('Food'))?.id || vendorsArray[0]?.id || '')
                                 : '';
-                            const templateVs = template.vendorSelections || [];
-                            if (template.deliveryDayOrders && typeof template.deliveryDayOrders === 'object' && Object.keys(template.deliveryDayOrders).length > 0) {
+                            const templateVs = finalTemplate.vendorSelections || [];
+                            if (finalTemplate.deliveryDayOrders && typeof finalTemplate.deliveryDayOrders === 'object' && Object.keys(finalTemplate.deliveryDayOrders).length > 0) {
                                 configToSet.deliveryDayOrders = {};
-                                for (const [day, dayOrder] of Object.entries(template.deliveryDayOrders)) {
+                                for (const [day, dayOrder] of Object.entries(finalTemplate.deliveryDayOrders)) {
                                     const dayVal = dayOrder as { vendorSelections?: any[] };
                                     const selections = (dayVal.vendorSelections || []).map((vs: any) => ({
                                         vendorId: defaultVendorId || vs.vendorId || '',
@@ -1798,7 +2075,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                     : [{ vendorId: defaultVendorId || '', items: {} }];
                             }
                             configToSet.serviceType = 'Food';
-                            if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Applied default Food template for existing client with no order');
+                            if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Applied default Food template (with meal plan) for existing client with no order');
                             if (c.approvedMealsPerWeek == null || c.approvedMealsPerWeek === undefined) {
                                 const defaultMeals = await getDefaultApprovedMealsPerWeek();
                                 setFormData((prev) => ({ ...prev, approvedMealsPerWeek: defaultMeals }));
@@ -1810,10 +2087,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
             }
 
-            // Ensure caseId is preserved if it exists in orderConfig (from form input)
-            if (orderConfig?.caseId && !configToSet.caseId) {
-                configToSet.caseId = orderConfig.caseId;
-            }
 
             // Ensure billAmount is preserved for Produce orders from upcoming_orders (or from totalValue if legacy)
             if (c.serviceType === 'Produce') {
@@ -1833,13 +2106,17 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                         if (!Number.isNaN(val)) configToSet.billAmount = val;
                     }
                 }
-                // When no saved amount (0 or missing), load from admin default order template
+                // When no saved amount (0 or missing), use cache for instant display then load from admin default order template
                 const currentBill = configToSet.billAmount;
                 if (currentBill == null || currentBill === undefined || Number(currentBill) === 0) {
+                    const cached = getProduceBillAmountFromCache();
+                    if (cached != null) configToSet.billAmount = cached;
                     try {
                         const produceTemplate = await getDefaultOrderTemplate('Produce');
                         if (produceTemplate && (produceTemplate.billAmount != null || produceTemplate.billAmount === 0)) {
-                            configToSet.billAmount = parseFloat(String(produceTemplate.billAmount)) || 0;
+                            const val = parseFloat(String(produceTemplate.billAmount)) || 0;
+                            configToSet.billAmount = val;
+                            setProduceBillAmountCache(val);
                         }
                     } catch (e) {
                         console.warn('[ClientProfile] loadData - Could not load default Produce template for bill amount', e);
@@ -1980,14 +2257,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 configToSet = mergeActiveOrderIntoOrderConfig(configToSet, activeOrderData);
             }
 
-            // Ensure caseId is set in orderConfig if it exists in any source
-            if (!configToSet.caseId) {
-                if (orderConfig?.caseId) {
-                    configToSet.caseId = orderConfig.caseId;
-                } else if (c.activeOrder?.caseId) {
-                    configToSet.caseId = c.activeOrder.caseId;
-                }
-            }
 
             // Final safety check: If Boxes and we have items in configToSet.items but not in boxOrders[0].items, migrate them
             if (c.serviceType === 'Boxes' && configToSet.items && Object.keys(configToSet.items).length > 0) {
@@ -2527,7 +2796,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
      * Uses centralized function from order-dates.ts
      */
     function getAllDeliveryDatesForOrderLocal(): Date[] {
-        if (!orderConfig || !orderConfig.caseId || !formData.serviceType) return [];
+        if (!orderConfig || !formData.serviceType) return [];
         return getAllDeliveryDatesForOrder(orderConfig, vendors, formData.serviceType as "Food" | "Boxes");
     }
 
@@ -2545,7 +2814,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
      * Uses weekly locking logic - always returns a Sunday.
      */
     function getEarliestTakeEffectDateForOrder(): Date | null {
-        if (!orderConfig || !orderConfig.caseId) return null;
+        if (!orderConfig) return null;
         if (!settings) return null;
 
         // Use centralized function from order-dates.ts which uses weekly locking logic
@@ -2558,7 +2827,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
      */
     function isCutoffPassed(): boolean {
         if (!settings) return false;
-        if (!orderConfig || !orderConfig.caseId) return false;
+        if (!orderConfig) return false;
 
         const deliveryDates = getAllDeliveryDatesForOrderLocal();
         if (deliveryDates.length === 0) return false;
@@ -3116,9 +3385,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         if (formData.serviceType === type) return;
 
         // Check if there is existing configuration to warn about
-        const hasConfig = orderConfig?.caseId ||
-            orderConfig?.vendorSelections?.some((s: any) => s.vendorId) ||
-            orderConfig?.vendorId;
+        const hasConfig = orderConfig?.vendorSelections?.some((s: any) => s.vendorId) ||
+            orderConfig?.vendorId ||
+            (orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0);
 
         if (hasConfig) {
             const confirmSwitch = window.confirm(
@@ -3137,9 +3406,20 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             // Load default template for new clients and for existing clients (so they get default items when switching to Food)
             await loadAndApplyDefaultTemplate('Food');
         } else if (type === 'Produce') {
-            setOrderConfig({ serviceType: type, billAmount: 0 });
-            // Always load default template so bill amount reflects admin control (for both new and existing clients)
-            await loadAndApplyDefaultTemplate('Produce');
+            const cached = getProduceBillAmountFromCache();
+            if (cached != null) {
+                setOrderConfig({ serviceType: type, billAmount: cached });
+                setProduceBillAmountLoading(false);
+            } else {
+                setOrderConfig({ serviceType: type, billAmount: 0 });
+                setProduceBillAmountLoading(true);
+            }
+            try {
+                // Always load default template so bill amount reflects admin control (updates cache for next time)
+                await loadAndApplyDefaultTemplate('Produce');
+            } finally {
+                setProduceBillAmountLoading(false);
+            }
         } else if (type === 'Custom') {
             // Auto-populate from previous Custom orders if available
             const extracted = extractCustomItemsFromOrders();
@@ -3176,11 +3456,10 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
     }
 
     /** Normalize orderConfig to canonical Food active_order structure when Food tab is selected.
-     * Structure: { caseId, serviceType: 'Food', mealSelections: {}, vendorSelections: [{ items: {}, vendorId }], deliveryDayOrders?: { [day]: { vendorSelections } } }
+     * Structure: { serviceType: 'Food', mealSelections: {}, vendorSelections: [{ items: {}, vendorId }], deliveryDayOrders?: { [day]: { vendorSelections } } }
      */
     function normalizeFoodActiveOrder(orderConfig: any): any {
         const defaultVendorId = getDefaultVendor('Food') || '';
-        const caseId = orderConfig?.caseId ?? '';
         const mealSelections = orderConfig?.mealSelections && typeof orderConfig.mealSelections === 'object'
             ? { ...orderConfig.mealSelections }
             : {};
@@ -3226,7 +3505,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             : (defaultVendorId ? [{ vendorId: defaultVendorId, items: {} as Record<string, number> }] : []);
 
         return {
-            caseId,
             serviceType: 'Food',
             mealSelections,
             vendorSelections: topLevelVendorSelections,
@@ -3713,12 +3991,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
         }
 
         // Validate Order Config before saving (if we have config)
-        // For Boxes, validate even without caseId (caseId is optional for boxes)
-        // For other services, require caseId
+        // Validate if orderConfig has meaningful data
         const shouldValidate = orderConfig && (
             formData.serviceType === 'Boxes' 
                 ? (orderConfig.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0)
-                : orderConfig.caseId
+                : (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) ||
+                  (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0)
         );
         if (shouldValidate) {
             const validation = validateOrder();
@@ -3771,9 +4049,8 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 }
 
                 // Determine if orderConfig has meaningful data to save (before creating client)
-                const hasCaseId = orderConfig?.caseId && orderConfig.caseId.trim() !== '';
                 // CRITICAL FIX: Check if vendorSelections has items with quantities > 0, not just vendorId
-                // This ensures template items are preserved even without caseId
+                // This ensures template items are preserved
                 const hasVendorSelections = orderConfig?.vendorSelections &&
                     Array.isArray(orderConfig.vendorSelections) &&
                     orderConfig.vendorSelections.some((s: any) => {
@@ -3794,12 +4071,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const hasBoxConfig = (orderConfig?.vendorId && orderConfig.vendorId.trim() !== '') ||
                     (orderConfig?.boxTypeId && orderConfig.boxTypeId.trim() !== '') ||
                     (orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0);
-                const hasOrderData = hasCaseId || hasVendorSelections || hasDeliveryDayOrders || hasBoxConfig;
+                const hasOrderData = hasVendorSelections || hasDeliveryDayOrders || hasBoxConfig;
 
                 // Use orderConfig directly without additional processing. For Food tab, normalize to canonical active_order structure.
                 const preparedActiveOrder = hasOrderData
                     ? (formData.serviceType === 'Food' ? normalizeFoodActiveOrder(orderConfig) : orderConfig)
-                    : (formData.serviceType === 'Food' ? normalizeFoodActiveOrder({ serviceType: 'Food', caseId: '' }) : undefined);
+                    : (formData.serviceType === 'Food' ? normalizeFoodActiveOrder({ serviceType: 'Food' }) : undefined);
 
                 const initialStatusId = (initialStatuses || statuses)[0]?.id || '';
                 const defaultNavigatorId = (initialNavigators || navigators).find(n => n.isActive)?.id || '';
@@ -3960,18 +4237,26 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 typeof activeOrder.deliveryDayOrders === 'object' &&
                                 Object.keys(activeOrder.deliveryDayOrders).length > 0;
                             
+                            // Extract caseId from UniteUs link if available
+                            const extractedCaseId = formData.caseIdExternal 
+                                ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
+                                : null;
                             await saveClientFoodOrder(updatedClient.id, {
-                                caseId: activeOrder.caseId || null,
+                                caseId: extractedCaseId,
                                 ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrder.deliveryDayOrders })
                             }, activeOrder); // Pass full activeOrder to preserve structure
                         }
                     }
-                    if (activeOrder.caseId) {
+                    // Extract caseId from UniteUs link if available
+                    const extractedCaseIdForMeal = formData.caseIdExternal 
+                        ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
+                        : null;
+                    if (extractedCaseIdForMeal) {
                         // Custom orders are handled by syncCurrentOrderToUpcoming (called by addClient)
                         // No separate save needed - syncCurrentOrderToUpcoming will save customItems array to upcoming_order_items
                         if (serviceType === 'Meal' || activeOrder.mealSelections) {
                             await saveClientMealOrder(updatedClient.id, {
-                                caseId: activeOrder.caseId,
+                                caseId: extractedCaseIdForMeal,
                                 mealSelections: activeOrder.mealSelections || {}
                             });
                         }
@@ -4084,8 +4369,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 serviceType: formData.serviceType,
                 hasOrderConfigChanges,
                 hasOrderChanges,
-                hasCaseId: !!orderConfig?.caseId,
-                caseId: orderConfig?.caseId,
                 hasBoxOrders: !!(orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0),
                 boxOrdersCount: orderConfig?.boxOrders?.length || 0
             });
@@ -4109,7 +4392,6 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                     updateData.activeOrder = activeOrderToSave;
                     console.log('[ClientProfile] Saving order with activeOrder:', {
                         serviceType: activeOrderToSave.serviceType,
-                        hasCaseId: !!activeOrderToSave.caseId,
                         caseId: activeOrderToSave.caseId,
                         hasVendorSelections: !!(activeOrderToSave as any).vendorSelections,
                         vendorSelectionsCount: (activeOrderToSave as any).vendorSelections?.length || 0,
@@ -4181,8 +4463,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && 
                     typeof activeOrderAny.deliveryDayOrders === 'object' &&
                     Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
+                // Extract caseId from UniteUs link if available
+                const extractedCaseId = formData.caseIdExternal 
+                    ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
+                    : null;
                 await saveClientFoodOrder(clientId, {
-                    caseId: activeOrderAny.caseId ?? null,
+                    caseId: extractedCaseId,
                     ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
                 }, activeOrderAny);
             }
@@ -4197,9 +4483,12 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
             // Save meal orders only when service type is Meal (meal_planner_orders for Food clients
             // are managed by the Saved Meal Plan section and admin template, not by saveClientMealOrder).
-            if (serviceType === 'Meal' && updateData.activeOrder?.caseId) {
+            const extractedCaseIdForMealSave = formData.caseIdExternal 
+                ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
+                : null;
+            if (serviceType === 'Meal' && extractedCaseIdForMealSave) {
                 await saveClientMealOrder(clientId, {
-                    caseId: updateData.activeOrder.caseId,
+                    caseId: extractedCaseIdForMealSave,
                     mealSelections: (updateData.activeOrder as any).mealSelections || {}
                 });
             }
@@ -4226,7 +4515,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
             // Show cutoff-aware confirmation message if order was saved
             let confirmationMessage = 'Changes saved successfully.';
-            if (hasOrderChanges && orderConfig && orderConfig.caseId) {
+            if (hasOrderChanges && orderConfig) {
                 const cutoffPassed = isCutoffPassed();
                 const takeEffectDate = getEarliestTakeEffectDateForOrder();
 
@@ -4253,13 +4542,11 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
             } else {
                 setMessage(confirmationMessage);
                 setTimeout(() => setMessage(null), 6000); // Longer timeout for longer messages
-                const updatedClient = await getClient(clientId);
-                if (updatedClient) {
-                    setClient(updatedClient);
-                    loadData().catch((error) => {
-                        console.error('[ClientProfile] Error reloading data after save:', error);
-                    });
-                }
+                // Minimal refresh only: invalidate cache and refresh client so server-side fields (e.g. updatedAt) stay in sync. No full loadData().
+                invalidateClientData(clientId);
+                getClient(clientId).then((updatedClient) => {
+                    if (updatedClient) setClient(updatedClient);
+                }).catch(() => {});
             }
             return true;
         } catch (error) {
@@ -4452,6 +4739,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                 ) : (
                     // Regular client view
                     <div className={styles.grid}>
+                        {!serviceConfigOnly && (
                         <div className={styles.column}>
                             <section className={styles.card}>
                                 <h3 className={styles.sectionTitle}>Client Details</h3>
@@ -5008,6 +5296,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                             </section>
 
                         </div>
+                        )}
 
                         <div className={styles.column}>
                             <section className={styles.card}>
@@ -5016,7 +5305,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                 <div className={styles.formGroup}>
                                     <label className="label">Service Type</label>
                                     <div className={styles.serviceTypes}>
-                                        {SERVICE_TYPES.map(type => (
+                                        {SERVICE_TYPES.filter(type => type !== 'Boxes' && type !== 'Custom').map(type => (
                                             <button
                                                 key={type}
                                                 className={`${styles.serviceBtn} ${formData.serviceType === type ? styles.activeService : ''}`}
@@ -5030,26 +5319,7 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
 
 
 
-                                <div className={styles.formGroup}>
-                                    <label className="label">Case ID (Required)</label>
-                                    <input
-                                        className="input"
-                                        value={orderConfig?.caseId || ''}
-                                        placeholder="Enter Case ID to enable configuration..."
-                                        onChange={e => setOrderConfig({ ...(orderConfig || {}), caseId: e.target.value })}
-                                    />
-                                </div>
-
-                                {(orderConfig?.caseId ?? '').trim() === '' && (
-                                    <div className={styles.alert} style={{ marginTop: '16px', backgroundColor: 'var(--bg-surface-hover)' }}>
-                                        <AlertTriangle size={16} />
-                                        Please enter a Case ID to configure the service.
-                                    </div>
-                                )}
-
-                                {(orderConfig?.caseId ?? '').trim() !== '' && (
-                                    <>
-                                        {formData.serviceType === 'Food' && (
+                                {formData.serviceType === 'Food' && (
                                             <div className="animate-fade-in">
                                                 <div className={styles.formGroup}>
                                                     <label className="label">Approved Meals Per Week</label>
@@ -5066,6 +5336,26 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                 <div className={styles.orderHeader}>
                                                     <h4>Current Order Request</h4>
                                                     <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column', alignItems: 'flex-end' }}>
+                                                        {/* Show indicator if displaying default template (not yet saved) */}
+                                                        {(() => {
+                                                            const hasNoSavedOrder = !client?.activeOrder || 
+                                                                (!(client.activeOrder as any)?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items).length > 0) &&
+                                                                 !(client.activeOrder as any)?.deliveryDayOrders);
+                                                            const hasTemplateData = orderConfig?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items || {}).length > 0) ||
+                                                                (orderConfig?.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0);
+                                                            return hasNoSavedOrder && hasTemplateData ? (
+                                                                <div style={{ 
+                                                                    fontSize: '0.85rem', 
+                                                                    color: 'var(--color-text-secondary)',
+                                                                    backgroundColor: 'var(--bg-surface-hover)',
+                                                                    padding: '4px 8px',
+                                                                    borderRadius: '4px',
+                                                                    marginBottom: '4px'
+                                                                }}>
+                                                                    Default template (not saved)
+                                                                </div>
+                                                            ) : null;
+                                                        })()}
                                                         <div className={styles.budget} style={{
                                                             color: getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) ? 'var(--color-danger)' : 'inherit',
                                                             backgroundColor: getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-surface-hover)'
@@ -6283,20 +6573,27 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                             <div className="animate-fade-in">
                                                 <div className={styles.formGroup}>
                                                     <label className="label">Bill Amount</label>
-                                                    <input
-                                                        type="number"
-                                                        step="0.01"
-                                                        min="0"
-                                                        className="input"
-                                                        value={orderConfig?.billAmount || 0}
-                                                        readOnly
-                                                        placeholder="0.00"
-                                                        style={{ 
-                                                            maxWidth: '300px',
-                                                            backgroundColor: 'var(--bg-surface-hover)',
-                                                            cursor: 'not-allowed'
-                                                        }}
-                                                    />
+                                                    {produceBillAmountLoading ? (
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '2.25rem', maxWidth: '300px' }}>
+                                                            <Loader2 size={18} className="spin" />
+                                                            <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Loading from template...</span>
+                                                        </div>
+                                                    ) : (
+                                                        <input
+                                                            type="number"
+                                                            step="0.01"
+                                                            min="0"
+                                                            className="input"
+                                                            value={orderConfig?.billAmount ?? ''}
+                                                            readOnly
+                                                            placeholder="0.00"
+                                                            style={{ 
+                                                                maxWidth: '300px',
+                                                                backgroundColor: 'var(--bg-surface-hover)',
+                                                                cursor: 'not-allowed'
+                                                            }}
+                                                        />
+                                                    )}
                                                     <p style={{ 
                                                         fontSize: '0.875rem', 
                                                         color: 'var(--text-secondary)', 
@@ -6307,11 +6604,9 @@ export function ClientProfileDetail({ clientId: propClientId, onClose, initialDa
                                                 </div>
                                             </div>
                                         )}
-                                    </>
-                                )}
                             </section>
 
-                            {formData.serviceType === 'Food' && (orderConfig?.caseId ?? '').trim() !== '' && (
+                            {formData.serviceType === 'Food' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
                                     <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
                                     <SavedMealPlanMonth

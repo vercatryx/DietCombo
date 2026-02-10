@@ -864,15 +864,17 @@ export default function DriversMapLeaflet({
     );
 
     /* ===== Driver filter (index click) ===== */
+    // Use string IDs so both numeric and UUID driver IDs work
     const [driverFilter, setDriverFilter] = useState(() => new Set());
     const hasFilter = driverFilter.size > 0;
 
     const toggleDriverFilter = useCallback((driverId) => {
         setDriverFilter((prev) => {
             const next = new Set(prev);
-            const idNum = Number(driverId);
-            if (next.has(idNum)) next.delete(idNum);
-            else next.add(idNum);
+            const idStr = driverId != null && driverId !== "" ? String(driverId) : null;
+            if (idStr == null) return prev;
+            if (next.has(idStr)) next.delete(idStr);
+            else next.add(idStr);
             return next;
         });
     }, []);
@@ -883,7 +885,7 @@ export default function DriversMapLeaflet({
     const visibleDrivers = useMemo(
         () =>
             hasFilter
-                ? sortedDrivers.filter((d) => driverFilter.has(Number(d.driverId)))
+                ? sortedDrivers.filter((d) => driverFilter.has(String(d.driverId ?? d.id ?? "")))
                 : sortedDrivers,
         [sortedDrivers, driverFilter, hasFilter]
     );
@@ -2080,18 +2082,15 @@ export default function DriversMapLeaflet({
                     {/* Clickable driver index */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {indexItems.map((it, idx) => {
-                            // Check if driverId is null, undefined, or NaN before converting
-                            const hasValidDriverId = it.driverId != null && it.driverId !== "" && !isNaN(it.driverId);
-                            const idNum = hasValidDriverId ? Number(it.driverId) : NaN;
-                            const active = driverFilter.has(idNum);
+                            const driverIdStr = it.driverId != null && it.driverId !== "" ? String(it.driverId) : null;
+                            const active = driverIdStr != null && driverFilter.has(driverIdStr);
                             const isEditing = editingDriverId === it.driverId;
                             const isDriver0 = /driver\s+0/i.test(it.name || "");
-                            // Ensure unique keys: use driverId if valid, otherwise use index-based key
-                            const driverId = Number.isFinite(idNum) && hasValidDriverId ? String(idNum) : `unrouted-${idx}`;
+                            const rowKey = driverIdStr != null ? `driver-${driverIdStr}` : `driver-idx-${idx}`;
 
                             return (
                                 <div
-                                    key={`driver-${driverId}`}
+                                    key={rowKey}
                                     style={{
                                         display: "flex",
                                         alignItems: "center",

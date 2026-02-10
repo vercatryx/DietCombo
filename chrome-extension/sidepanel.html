@@ -113,6 +113,29 @@
                 </div>
 
                 <div class="form-group">
+                    <label>Client Flags</label>
+                    <div class="flags-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="flag-paused" name="flag-paused">
+                            <span>Paused</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="flag-complex" name="flag-complex">
+                            <span>Complex</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="flag-bill" name="flag-bill" checked>
+                            <span>Bill</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="flag-delivery" name="flag-delivery" checked>
+                            <span>Delivery</span>
+                        </label>
+                    </div>
+                    <small class="field-hint">Defaults: Paused off, Complex off, Bill on, Delivery on</small>
+                </div>
+
+                <div class="form-group">
                     <label>Service Type *</label>
                     <div class="radio-group">
                         <label class="radio-label">
@@ -120,8 +143,8 @@
                             <span>Food</span>
                         </label>
                         <label class="radio-label">
-                            <input type="radio" name="service-type" value="Boxes">
-                            <span>Boxes</span>
+                            <input type="radio" name="service-type" value="Produce">
+                            <span>Produce</span>
                         </label>
                     </div>
                 </div>

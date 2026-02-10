@@ -20,6 +20,20 @@ interface LocalOrdersDB {
 
 const DB_PATH = path.join(process.cwd(), 'data', 'local-orders-db.json');
 
+// Sync lock to prevent concurrent syncs
+let isSyncing = false;
+let lastSyncAttempt = 0;
+const MIN_SYNC_INTERVAL = 30000; // Minimum 30 seconds between sync attempts
+let syncTimeout: NodeJS.Timeout | null = null;
+
+// Helper to validate and filter IDs
+function validateIds(ids: any[]): string[] {
+    return ids
+        .filter(id => id != null && id !== undefined && id !== '')
+        .map(id => String(id))
+        .filter(id => id.length > 0);
+}
+
 // Ensure data directory exists and initialize DB file if it doesn't exist
 async function ensureDBFile(): Promise<boolean> {
     const dataDir = path.join(process.cwd(), 'data');
@@ -140,8 +154,30 @@ async function needsSync(): Promise<boolean> {
     }
 }
 
-// Trigger sync in background (non-blocking)
+// Trigger sync in background (non-blocking) with debouncing
 export async function triggerSyncInBackground(): Promise<void> {
+    const now = Date.now();
+    
+    // If a sync is already in progress, skip
+    if (isSyncing) {
+        return;
+    }
+    
+    // If we tried to sync recently, debounce it
+    if (now - lastSyncAttempt < MIN_SYNC_INTERVAL) {
+        // Clear any existing timeout and set a new one
+        if (syncTimeout) {
+            clearTimeout(syncTimeout);
+        }
+        syncTimeout = setTimeout(() => {
+            syncTimeout = null;
+            triggerSyncInBackground();
+        }, MIN_SYNC_INTERVAL - (now - lastSyncAttempt));
+        return;
+    }
+    
+    lastSyncAttempt = now;
+    
     // Use setImmediate or setTimeout to run in background
     // This function returns immediately, sync runs asynchronously
     if (typeof setImmediate !== 'undefined') {
@@ -167,6 +203,13 @@ export async function syncLocalDBFromMySQL(): Promise<void> {
 
 // Sync all orders and upcoming orders from Supabase to local DB
 export async function syncLocalDBFromSupabase(): Promise<void> {
+    // Prevent concurrent syncs
+    if (isSyncing) {
+        return;
+    }
+    
+    isSyncing = true;
+    
     try {
         // console.log('Starting local DB sync from Supabase...');
 
@@ -193,7 +236,7 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
         }
 
         // Fetch related data for orders
-        const orderIds = (orders || []).map(o => o.id);
+        const orderIds = validateIds((orders || []).map(o => o.id));
         let orderVendorSelections: any[] = [];
         let orderItems: any[] = [];
         let orderBoxSelections: any[] = [];
@@ -207,13 +250,14 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
             if (vsError) {
                 console.error('[syncLocalDBFromSupabase] Error fetching vendor selections:', vsError);
-                throw vsError;
+                // Don't throw - continue with empty array
+                orderVendorSelections = [];
+            } else {
+                orderVendorSelections = vsData || [];
             }
 
-            orderVendorSelections = vsData || [];
-
             // Fetch items for these vendor selections
-            const vsIds = orderVendorSelections.map(vs => vs.id);
+            const vsIds = validateIds(orderVendorSelections.map(vs => vs.id));
             if (vsIds.length > 0) {
                 const { data: itemsData, error: itemsError } = await supabase
                     .from('order_items')
@@ -222,10 +266,11 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
                 if (itemsError) {
                     console.error('[syncLocalDBFromSupabase] Error fetching order items:', itemsError);
-                    throw itemsError;
+                    // Don't throw - continue with empty array
+                    orderItems = [];
+                } else {
+                    orderItems = itemsData || [];
                 }
-
-                orderItems = itemsData || [];
             }
 
             // Fetch box selections
@@ -236,14 +281,15 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
             if (boxError) {
                 console.error('[syncLocalDBFromSupabase] Error fetching box selections:', boxError);
-                throw boxError;
+                // Don't throw - continue with empty array
+                orderBoxSelections = [];
+            } else {
+                orderBoxSelections = boxData || [];
             }
-
-            orderBoxSelections = boxData || [];
         }
 
         // Fetch related data for upcoming orders
-        const upcomingOrderIds = (upcomingOrders || []).map(o => o.id);
+        const upcomingOrderIds = validateIds((upcomingOrders || []).map(o => o.id));
         let upcomingOrderVendorSelections: any[] = [];
         let upcomingOrderItems: any[] = [];
         let upcomingOrderBoxSelections: any[] = [];
@@ -257,13 +303,14 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
             if (uvsError) {
                 console.error('[syncLocalDBFromSupabase] Error fetching upcoming vendor selections:', uvsError);
-                throw uvsError;
+                // Don't throw - continue with empty array
+                upcomingOrderVendorSelections = [];
+            } else {
+                upcomingOrderVendorSelections = uvsData || [];
             }
 
-            upcomingOrderVendorSelections = uvsData || [];
-
             // Fetch items for these vendor selections (Food orders)
-            const uvsIds = upcomingOrderVendorSelections.map(vs => vs.id);
+            const uvsIds = validateIds(upcomingOrderVendorSelections.map(vs => vs.id));
             if (uvsIds.length > 0) {
                 const { data: uitemsData, error: uitemsError } = await supabase
                     .from('upcoming_order_items')
@@ -272,10 +319,11 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
                 if (uitemsError) {
                     console.error('[syncLocalDBFromSupabase] Error fetching upcoming order items:', uitemsError);
-                    throw uitemsError;
+                    // Don't throw - continue with empty array
+                    upcomingOrderItems = [];
+                } else {
+                    upcomingOrderItems = uitemsData || [];
                 }
-
-                upcomingOrderItems = uitemsData || [];
             }
 
             // Fetch box items (items linked directly to upcoming_order_id without vendor_selection_id)
@@ -289,12 +337,12 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
             if (boxItemsError) {
                 console.error('[syncLocalDBFromSupabase] Error fetching upcoming box items:', boxItemsError);
-                throw boxItemsError;
-            }
-
-            // Merge box items with other items
-            if (boxItemsData && boxItemsData.length > 0) {
-                upcomingOrderItems = [...(upcomingOrderItems || []), ...boxItemsData];
+                // Don't throw - continue without box items
+            } else {
+                // Merge box items with other items
+                if (boxItemsData && boxItemsData.length > 0) {
+                    upcomingOrderItems = [...(upcomingOrderItems || []), ...boxItemsData];
+                }
             }
 
             // Fetch box selections
@@ -305,10 +353,11 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
 
             if (uboxError) {
                 console.error('[syncLocalDBFromSupabase] Error fetching upcoming box selections:', uboxError);
-                throw uboxError;
+                // Don't throw - continue with empty array
+                upcomingOrderBoxSelections = [];
+            } else {
+                upcomingOrderBoxSelections = uboxData || [];
             }
-
-            upcomingOrderBoxSelections = uboxData || [];
         }
 
         // Update local database
@@ -336,6 +385,8 @@ export async function syncLocalDBFromSupabase(): Promise<void> {
         }
         // Log other errors (e.g., Supabase query errors) but don't fail the operation
         console.warn('Error syncing local DB:', error);
+    } finally {
+        isSyncing = false;
     }
 }
 
@@ -344,8 +395,8 @@ export async function getActiveOrderForClientLocal(clientId: string) {
     if (!clientId) return null;
 
     try {
-        // Check if sync is needed and trigger background sync
-        if (await needsSync()) {
+        // Check if sync is needed and trigger background sync (only if not already syncing)
+        if (!isSyncing && await needsSync()) {
             triggerSyncInBackground();
         }
 
@@ -547,8 +598,8 @@ export async function getUpcomingOrderForClientLocal(clientId: string, caseId?: 
     if (!clientId) return null;
 
     try {
-        // Check if sync is needed and trigger background sync
-        if (await needsSync()) {
+        // Check if sync is needed and trigger background sync (only if not already syncing)
+        if (!isSyncing && await needsSync()) {
             triggerSyncInBackground();
         }
 

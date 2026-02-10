@@ -2,6 +2,10 @@
  * Import clients from backup JSON (and their signatures, stops, drivers).
  * Optionally clear existing client-related data first, then import all or a slice.
  *
+ * Partial data is OK: every client row is attempted. Missing fields get defaults
+ * (e.g. full_name -> "Unknown", lat/lng on stops -> 0, created_at/updated_at -> now).
+ * On per-row errors the script logs and continues so all clients can be imported.
+ *
  * Usage:
  *   node scripts/import-five-clients.js [options] <path-to-backup.json>
  *
@@ -95,10 +99,8 @@ function main() {
   }
 
   const allUsers = Array.isArray(backup.users) ? backup.users : [];
-  const limit = importAll || clearFirst ? allUsers.length : DEFAULT_LIMIT;
-  const users = importAll || clearFirst
-    ? allUsers
-    : allUsers.slice(offset, offset + limit);
+  const limit = importAll ? allUsers.length : DEFAULT_LIMIT;
+  const users = importAll ? allUsers : allUsers.slice(offset, offset + limit);
 
   const allSignatures = Array.isArray(backup.signatures) ? backup.signatures : [];
   const allDrivers = Array.isArray(backup.drivers) ? backup.drivers : [];
@@ -108,8 +110,17 @@ function main() {
   const userById = new Map(users.map((u) => [u.id, u]));
   const signatures = allSignatures.filter((s) => userIds.has(s.userId));
   const stops = allStops.filter((s) => userIds.has(s.userId));
-  const assignedDriverIds = new Set(stops.map((s) => s.assignedDriverId).filter(Boolean));
-  const drivers = allDrivers.filter((d) => assignedDriverIds.has(d.id));
+  // Normalize driver IDs for lookup (backup may use number or string)
+  const assignedDriverIds = new Set(stops.map((s) => s.assignedDriverId).filter((id) => id != null).map((id) => String(id)));
+  const drivers = allDrivers.filter((d) => assignedDriverIds.has(String(d.id)));
+  // For each user, resolve assigned driver: from user.assignedDriverId or from first stop for that user
+  const userToOldDriverId = new Map();
+  for (const u of users) {
+    const fromUser = u.assignedDriverId != null ? String(u.assignedDriverId) : null;
+    const fromStop = stops.find((s) => s.userId === u.id && s.assignedDriverId != null);
+    const oldId = fromUser || (fromStop ? String(fromStop.assignedDriverId) : null);
+    if (oldId) userToOldDriverId.set(u.id, oldId);
+  }
 
   console.log("Will import:", {
     clients: users.length,
@@ -168,12 +179,43 @@ function main() {
 
     const userIdToClientId = new Map();
 
-    // 1. Clients
-    console.log("\n--- Importing clients ---");
+    let stats = { driversOk: 0, driversFail: 0, clientsOk: 0, clientsFail: 0, signaturesOk: 0, signaturesFail: 0, stopsOk: 0, stopsFail: 0 };
+
+    // 1. Drivers first (so we have oldDriverIdToNewId for client and stop assigned_driver_id)
+    console.log("\n--- Importing drivers ---");
+    const oldDriverIdToNewId = new Map();
+    for (const d of drivers) {
+      const newId = randomUUID();
+      oldDriverIdToNewId.set(String(d.id), newId);
+      const row = {
+        id: newId,
+        day: (d.day || "all").slice(0, 40),
+        name: (d.name || "Driver").slice(0, 510),
+        color: d.color ? String(d.color).slice(0, 14) : null,
+        stop_ids: [],
+      };
+      const { error } = await supabase.from("drivers").upsert(row, { onConflict: "id" });
+      if (error) {
+        console.error("Driver upsert error:", error.message);
+        stats.driversFail++;
+        continue;
+      }
+      stats.driversOk++;
+      console.log("  Imported driver:", d.name || "Driver", "(" + (d.day || "all") + ")");
+    }
+    console.log("--- Drivers done:", stats.driversOk, "ok,", stats.driversFail, "failed ---\n");
+
+    // 2. Clients (with assigned_driver_id from backup user or from user's stop)
+    // Each user must get a unique Supabase client id. Backup can have duplicate u.clientId across users.
+    const usedClientIds = new Set();
+    console.log("--- Importing clients ---");
     for (const u of users) {
-      const clientId = u.clientId && /^[0-9a-f-]{36}$/i.test(u.clientId) ? u.clientId : randomUUID();
-      userIdToClientId.set(u.id, clientId);
+      const preferredId = u.clientId && /^[0-9a-f-]{36}$/i.test(u.clientId) ? u.clientId : null;
+      const clientId = preferredId && !usedClientIds.has(preferredId) ? preferredId : randomUUID();
+      usedClientIds.add(clientId);
       const fullName = [u.first, u.last].filter(Boolean).join(" ").trim() || "Unknown";
+      const oldDriverId = userToOldDriverId.get(u.id);
+      const assignedDriverId = oldDriverId ? (oldDriverIdToNewId.get(oldDriverId) || null) : null;
       const row = {
         id: clientId,
         full_name: fullName.slice(0, 510),
@@ -187,7 +229,7 @@ function main() {
         zip: u.zip ? String(u.zip).slice(0, 20) : null,
         county: u.county ? String(u.county).slice(0, 200) : null,
         phone_number: u.phone ? String(u.phone).slice(0, 510) : null,
-        client_id_external: null,
+        client_id_external: (u.clientId && String(u.clientId).length <= 200) ? String(u.clientId).slice(0, 200) : null,
         case_id_external: (u.caseId && u.clientId)
           ? `https://app.uniteus.io/dashboard/cases/open/${encodeURIComponent(String(u.caseId))}/contact/${encodeURIComponent(String(u.clientId))}`.slice(0, 510)
           : (u.caseId ? String(u.caseId).slice(0, 510) : null),
@@ -206,19 +248,23 @@ function main() {
         visits: u.visits ?? null,
         sign_token: u.sign_token ? String(u.sign_token).slice(0, 510) : null,
         service_type: "Food",
-        created_at: toPgTimestamp(u.createdAt),
-        updated_at: toPgTimestamp(u.updatedAt),
+        assigned_driver_id: assignedDriverId,
+        created_at: toPgTimestamp(u.createdAt) || new Date().toISOString(),
+        updated_at: toPgTimestamp(u.updatedAt) || new Date().toISOString(),
       };
       const { error } = await supabase.from("clients").upsert(row, { onConflict: "id" });
       if (error) {
         console.error("Client upsert error:", error.message, "id:", clientId);
-        throw error;
+        stats.clientsFail++;
+        continue;
       }
-      console.log("  Imported client:", fullName);
+      userIdToClientId.set(u.id, clientId);
+      stats.clientsOk++;
+      console.log("  Imported client:", fullName + (assignedDriverId ? " (driver assigned)" : ""));
     }
-    console.log("--- Clients done:", users.length, "---\n");
+    console.log("--- Clients done:", stats.clientsOk, "ok,", stats.clientsFail, "failed ---\n");
 
-    // 2. Signatures
+    // 3. Signatures
     console.log("--- Importing signatures ---");
     for (const s of signatures) {
       const clientId = userIdToClientId.get(s.userId);
@@ -238,33 +284,13 @@ function main() {
       const { error } = await supabase.from("signatures").upsert(row, { onConflict: "client_id,slot" });
       if (error) {
         console.error("Signature upsert error:", error.message);
-        throw error;
+        stats.signaturesFail++;
+        continue;
       }
+      stats.signaturesOk++;
       console.log("  Imported signature for", name, "(slot", s.slot + ")");
     }
-    console.log("--- Signatures done:", signatures.length, "---\n");
-
-    // 3. Drivers
-    console.log("--- Importing drivers ---");
-    const oldDriverIdToNewId = new Map();
-    for (const d of drivers) {
-      const newId = randomUUID();
-      oldDriverIdToNewId.set(d.id, newId);
-      const row = {
-        id: newId,
-        day: (d.day || "all").slice(0, 40),
-        name: (d.name || "Driver").slice(0, 510),
-        color: d.color ? String(d.color).slice(0, 14) : null,
-        stop_ids: [],
-      };
-      const { error } = await supabase.from("drivers").upsert(row, { onConflict: "id" });
-      if (error) {
-        console.error("Driver upsert error:", error.message);
-        throw error;
-      }
-      console.log("  Imported driver:", d.name || "Driver", "(" + (d.day || "all") + ")");
-    }
-    console.log("--- Drivers done:", drivers.length, "---\n");
+    console.log("--- Signatures done:", stats.signaturesOk, "ok,", stats.signaturesFail, "failed ---\n");
 
     // 4. Stops
     console.log("--- Importing stops ---");
@@ -272,7 +298,7 @@ function main() {
     for (const s of stops) {
       const newId = randomUUID();
       const clientId = userIdToClientId.get(s.userId) || null;
-      const assignedDriverId = s.assignedDriverId != null ? oldDriverIdToNewId.get(s.assignedDriverId) || null : null;
+      const assignedDriverId = s.assignedDriverId != null ? oldDriverIdToNewId.get(String(s.assignedDriverId)) || null : null;
       const name = userName(userById.get(s.userId));
       const row = {
         id: newId,
@@ -287,8 +313,8 @@ function main() {
         zip: (s.zip || "—").slice(0, 20),
         phone: s.phone ? String(s.phone).slice(0, 40) : null,
         dislikes: s.dislikes || null,
-        lat: s.lat ?? null,
-        lng: s.lng ?? null,
+        lat: (s.lat != null && s.lat !== "") ? Number(s.lat) : 0,
+        lng: (s.lng != null && s.lng !== "") ? Number(s.lng) : 0,
         completed: s.completed === true,
         proof_url: s.proofUrl ? String(s.proofUrl).slice(0, 1000) : null,
         assigned_driver_id: assignedDriverId,
@@ -299,9 +325,11 @@ function main() {
       };
       const { error } = await supabase.from("stops").upsert(row, { onConflict: "id" });
       if (error) {
-        console.error("Stop upsert error:", error.message);
-        throw error;
+        console.error("Stop upsert error:", error.message, "(client:", name + ")");
+        stats.stopsFail++;
+        continue;
       }
+      stats.stopsOk++;
       if (assignedDriverId) {
         if (!driverToStopIds.has(assignedDriverId)) driverToStopIds.set(assignedDriverId, []);
         driverToStopIds.get(assignedDriverId).push(newId);
@@ -317,12 +345,11 @@ function main() {
       const { error } = await supabase.from("drivers").update({ stop_ids: stopIds }).eq("id", newDriverId);
       if (error) {
         console.error("Driver stop_ids update error:", error.message);
-        throw error;
       }
     }
     console.log("  Updated", driverToStopIds.size, "drivers with stop_ids.\n");
 
-    console.log("Done. Imported", users.length, "clients,", signatures.length, "signatures,", stops.length, "stops,", drivers.length, "drivers.");
+    console.log("Done. Clients:", stats.clientsOk, "ok,", stats.clientsFail, "failed. Signatures:", stats.signaturesOk, "ok,", stats.signaturesFail, "failed. Stops:", stats.stopsOk, "ok,", stats.stopsFail, "failed. Drivers:", stats.driversOk, "ok,", stats.driversFail, "failed.");
   })().catch((e) => {
     console.error(e);
     process.exit(1);

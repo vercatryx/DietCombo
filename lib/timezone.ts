@@ -1,6 +1,7 @@
 /**
  * App-wide timezone handling.
- * All order creation, delivery dates, and display use Eastern time (America/New_York)
+ * EST (America/New_York) is the ONLY source of time for the project.
+ * All order creation, delivery dates, meal planner calendar dates, and display use Eastern time
  * so that server UTC (e.g. on Vercel) does not shift "today" or delivery days.
  */
 
@@ -11,13 +12,22 @@ export const APP_TIMEZONE = 'America/New_York';
  * Use this whenever you need "today" for business logic (cutoffs, next delivery day, etc.).
  */
 export function getTodayInAppTz(now: Date = new Date()): string {
+  return toDateStringInAppTz(now);
+}
+
+/**
+ * Convert a Date to a calendar date string (YYYY-MM-DD) in the app timezone (EST).
+ * Use this whenever you need to store or compare "calendar date" from a Date object—
+ * never use date.toISOString().slice(0, 10) as that uses UTC and can shift the day in EST.
+ */
+export function toDateStringInAppTz(date: Date): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: APP_TIMEZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   });
-  const parts = formatter.formatToParts(now);
+  const parts = formatter.formatToParts(date);
   const year = parts.find((p) => p.type === 'year')?.value ?? '';
   const month = parts.find((p) => p.type === 'month')?.value ?? '';
   const day = parts.find((p) => p.type === 'day')?.value ?? '';
