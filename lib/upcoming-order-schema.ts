@@ -103,9 +103,13 @@ function sanitizeVendorSelection(s: unknown): VendorSelection | null {
   const o = s as Record<string, unknown>;
   const vendorId = o.vendorId != null ? String(o.vendorId) : '';
   if (!vendorId.trim()) return null;
-  const items = (o.items && typeof o.items === 'object' && !Array.isArray(o.items))
+  let items: Record<string, number> = (o.items && typeof o.items === 'object' && !Array.isArray(o.items))
     ? (o.items as Record<string, number>)
     : {};
+  // Filter out null/empty item keys to prevent "Item null not found in menu items"
+  items = Object.fromEntries(
+    Object.entries(items).filter(([k]) => k != null && k !== '' && String(k) !== 'null')
+  ) as Record<string, number>;
   const sel: VendorSelection = { vendorId: vendorId.trim(), items };
   if (o.itemNotes != null && typeof o.itemNotes === 'object' && !Array.isArray(o.itemNotes)) {
     sel.itemNotes = o.itemNotes as Record<string, string>;

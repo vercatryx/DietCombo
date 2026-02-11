@@ -21,6 +21,9 @@ import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
 import { composeUniteUsUrl } from './utils';
 import { toStoredUpcomingOrder, fromStoredUpcomingOrder } from './upcoming-order-schema';
+import { prepareMealPlannerDataForUpdate, mealPlannerDateOnly, mealPlannerCutoffDate, type MealPlannerOrderResult } from './meal-planner-utils';
+
+export type { MealPlannerOrderResult } from './meal-planner-utils';
 
 // Meal planner orders use meal_planner_orders and meal_planner_order_items (no longer upcoming_orders)
 const MEAL_PLANNER_SERVICE_TYPE = 'meal_planner';
@@ -1545,14 +1548,6 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
 
 // --- MEAL PLANNER CUSTOM ITEMS ACTIONS ---
 
-/** Normalize date string to YYYY-MM-DD for reliable DB matching. */
-function mealPlannerDateOnly(dateStr: string): string {
-    if (typeof dateStr !== 'string' || !dateStr) return dateStr;
-    const trimmed = dateStr.trim();
-    if (trimmed.length >= 10) return trimmed.slice(0, 10);
-    return trimmed;
-}
-
 /** Normalize DB date value (string or Date) to YYYY-MM-DD in EST for display and filtering. */
 function mealPlannerNormalizeDate(value: string | Date | null | undefined): string {
     if (value == null) return '';
@@ -1568,27 +1563,7 @@ function mealPlannerNormalizeDate(value: string | Date | null | undefined): stri
     return '';
 }
 
-/** Cutoff: dates older than this (7 days ago) are cleared on save. */
-function mealPlannerCutoffDate(): string {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
-}
-
 // --- CLIENTS.MEAL_PLANNER_DATA (single source of truth for client meal planner) ---
-
-export type MealPlannerOrderResult = {
-    id: string;
-    scheduledDeliveryDate: string;
-    deliveryDay: string | null;
-    status: string;
-    totalItems: number;
-    items: { id: string; name: string; quantity: number; value?: number | null }[];
-    /** If set, this date is only shown when today <= expirationDate (EST). */
-    expirationDate?: string | null;
-    /** Default total meals for this date (from template). Client selection should match this. */
-    expectedTotalMeals?: number | null;
-};
 
 /**
  * Get meal planner data from clients.meal_planner_data.
@@ -1714,30 +1689,14 @@ export async function saveClientMealPlannerDataFull(
 ): Promise<{ ok: boolean; error?: string }> {
     if (!clientId) return { ok: false, error: 'Missing clientId' };
     try {
-        const cutoff = mealPlannerCutoffDate();
-        const newData = orders
-            .filter((o) => (o.scheduledDeliveryDate ?? '') >= cutoff)
-            .map((o) => ({
-                scheduledDeliveryDate: mealPlannerDateOnly(o.scheduledDeliveryDate),
-                items: (o.items ?? [])
-                    .filter((i) => (i.name ?? '').trim())
-                    .map((it, idx) => ({
-                        id: it.id ?? `item-${idx}`,
-                        name: (it.name ?? 'Item').trim() || 'Item',
-                        quantity: Math.max(0, Number(it.quantity) ?? 0),
-                        value: it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
-                    }))
-            }))
-            .filter((o) => o.items.length > 0)
-            .sort((a, b) => a.scheduledDeliveryDate.localeCompare(b.scheduledDeliveryDate));
-
+        const newData = prepareMealPlannerDataForUpdate(orders);
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
         );
         const { error } = await supabaseAdmin
             .from('clients')
-            .update({ meal_planner_data: newData.length > 0 ? newData : null, updated_at: new Date().toISOString() })
+            .update({ meal_planner_data: newData, updated_at: new Date().toISOString() })
             .eq('id', clientId);
         if (error) return { ok: false, error: error.message };
         revalidatePath('/clients');
@@ -3804,11 +3763,15 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.expirationDate !== undefined) payload.expiration_date = data.expirationDate || null;
     // Sanitize upcoming_order to schema-only fields before persisting (UPCOMING_ORDER_SCHEMA)
     // When skipOrderSync is true (e.g. "save details only"), do not touch upcoming_order so we only update client fields.
+    // Use data.serviceType from caller (already in memory) - never fetch.
     if (data.activeOrder !== undefined && !options?.skipOrderSync) {
-        const serviceTypeForOrder = data.serviceType ?? (await getClient(id))?.serviceType ?? 'Food';
+        const serviceTypeForOrder = data.serviceType ?? 'Food';
         payload.upcoming_order = data.activeOrder == null
             ? null
             : (toStoredUpcomingOrder(data.activeOrder, serviceTypeForOrder as ServiceType) ?? null);
+    }
+    if (data.mealPlannerData !== undefined) {
+        payload.meal_planner_data = data.mealPlannerData;
     }
     // New fields from dietfantasy
     if (data.firstName !== undefined) payload.first_name = data.firstName || null;
@@ -3860,36 +3823,9 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
         updatedRow = data;
     }
 
-    // IMPORTANT: For existing clients with Food service, updates must be shown in active_orders
-    // The active_order field (active_orders) is already updated above (line 1702) when data.activeOrder is provided
-    // If activeOrder was updated, also sync to upcoming_orders for backward compatibility.
-    // CRITICAL: Do NOT sync Produce to upcoming_orders (Produce uses active_orders only).
-    // When skipOrderSync is true (e.g. sidebar "save details only"), only update client table; do not sync orders.
-    if (data.activeOrder && !options?.skipOrderSync) {
-        console.log('[updateClient] activeOrder provided, syncing to upcoming_orders:', {
-            clientId: id,
-            serviceType: data.activeOrder.serviceType,
-            hasVendorSelections: !!(data.activeOrder as any).vendorSelections,
-            vendorSelectionsCount: (data.activeOrder as any).vendorSelections?.length || 0,
-            hasDeliveryDayOrders: !!(data.activeOrder as any).deliveryDayOrders,
-            deliveryDayOrdersKeys: (data.activeOrder as any).deliveryDayOrders ? Object.keys((data.activeOrder as any).deliveryDayOrders) : []
-        });
-        const updatedClient = await getClient(id);
-        if (updatedClient) {
-            updatedClient.activeOrder = data.activeOrder;
-            const serviceType = updatedClient.serviceType ?? data.serviceType;
-            if (serviceType !== 'Produce') {
-                await syncCurrentOrderToUpcoming(id, updatedClient, true);
-                console.log('[updateClient] Successfully synced order to upcoming_orders');
-            } else {
-                console.log('[updateClient] Skipping upcoming_orders sync for Produce (active_orders only)');
-            }
-        } else {
-            console.error('[updateClient] Failed to fetch updated client after update');
-        }
-    } else if (!options?.skipOrderSync) {
-        // Trigger local DB sync in background when order-related updates might have happened.
-        // Skip for details-only save (sidebar) - no order data changed.
+    // syncCurrentOrderToUpcoming is a no-op (order data lives in clients.upcoming_order only).
+    // Trigger local DB sync in background when order-related updates might have happened.
+    if (!options?.skipOrderSync) {
         const { triggerSyncInBackground } = await import('./local-db');
         triggerSyncInBackground();
     }

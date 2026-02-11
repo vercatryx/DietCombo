@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
 import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
+import { prepareMealPlannerDataForUpdate } from '@/lib/meal-planner-utils';
 import { getDefaultOrderTemplateCachedSync, getDefaultMealPlanTemplateCachedSync, getCachedDefaultOrderTemplate, getCachedDefaultMealPlanTemplateForNewClient } from '@/lib/default-order-template-cache';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
@@ -4480,16 +4481,22 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 if (orderConfig) {
                     // Ensure serviceType is set correctly for all service types (must be capitalized: 'Custom', 'Boxes', 'Produce', 'Food')
                     // For Custom orders, preserve all fields including customItems, vendorId, and caseId
-                    const activeOrderToSave = formData.serviceType === 'Food'
+                    let activeOrderToSave = formData.serviceType === 'Food'
                         ? normalizeFoodActiveOrder(orderConfig)
                         : { 
                             ...orderConfig, 
                             serviceType: formData.serviceType // Ensure serviceType matches formData (should be 'Custom', 'Boxes', or 'Produce')
                             // Spread operator preserves: customItems, vendorId, caseId, boxOrders, etc.
                         };
-                    // Only persist Food recurring order when it differs from default; otherwise clear so client follows default template
+                    // For Food: ensure caseId from UniteUs link is included (from memory)
+                    if (formData.serviceType === 'Food' && formData.caseIdExternal) {
+                        const extractedCaseId = parseUniteUsUrl(formData.caseIdExternal)?.caseId ?? orderConfig?.caseId ?? null;
+                        if (extractedCaseId) activeOrderToSave = { ...activeOrderToSave, caseId: extractedCaseId };
+                    }
+                    // Only persist Food recurring order when it differs from default; otherwise clear so client follows default template.
+                    // Use sync cache (already loaded when displaying) - no fetch on save.
                     if (formData.serviceType === 'Food') {
-                        const defaultFoodTemplate = await getCachedDefaultOrderTemplate('Food');
+                        const defaultFoodTemplate = getDefaultOrderTemplateCachedSync('Food');
                         if (defaultFoodTemplate && (await isFoodOrderSameAsDefault(activeOrderToSave, defaultFoodTemplate))) {
                             delete updateData.activeOrder; // clear upcoming_order so client uses default (updates when default changes)
                         } else {
@@ -4525,6 +4532,11 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 }
             }
 
+            // Include meal planner in same update (from memory - no extra fetch)
+            if (!saveDetailsOnly && formData.serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
+                updateData.mealPlannerData = prepareMealPlannerDataForUpdate(mealPlanOrdersRef.current);
+            }
+
             // CRITICAL: Execute the single update call (skip order sync when saveDetailsOnly)
             let updatedClientFromSave: ClientProfile | undefined;
             try {
@@ -4539,26 +4551,11 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
             // When saveDetailsOnly we only updated the client table; skip all order sync and order-related saves.
             if (!saveDetailsOnly) {
-                // Sync to new independent tables if there's order data
-                // Sync to new independent tables if there's order data OR if we need to clear data
                 const serviceType = formData.serviceType;
                 
-                // For Boxes service, save even without caseId (caseId is optional for boxes)
+                // Boxes: save to client_box_orders (separate table)
                 if (serviceType === 'Boxes' && updateData.activeOrder) {
                     const boxesToSave = (updateData.activeOrder as any)?.boxOrders || [];
-                    console.log('[ClientProfile] Saving box orders:', {
-                        serviceType,
-                        hasCaseId: !!updateData.activeOrder.caseId,
-                        caseId: updateData.activeOrder.caseId,
-                        boxesCount: boxesToSave.length,
-                        boxes: boxesToSave.map((box: any) => ({
-                            boxTypeId: box.boxTypeId,
-                            vendorId: box.vendorId,
-                            quantity: box.quantity,
-                            itemsCount: Object.keys(box.items || {}).length,
-                            hasItems: Object.keys(box.items || {}).length > 0
-                        }))
-                    });
                     if (boxesToSave.length > 0) {
                         await saveClientBoxOrder(clientId, boxesToSave.map((box: any) => ({
                             ...box,
@@ -4566,52 +4563,16 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                         })));
                     }
                 }
-                
-                // Custom orders are handled by syncCurrentOrderToUpcoming (called by updateClient)
-                // No separate save needed - syncCurrentOrderToUpcoming will save customItems array to upcoming_order_items
 
-                // Save food orders: ALWAYS when service type is Food and we have activeOrder (even without caseId).
-                // CRITICAL: Pass the entire activeOrder so vendorSelections are preserved for syncCurrentOrderToUpcoming.
-                // Without this, upcoming_orders sync can miss vendorSelections and Food orders may not save.
-                if (serviceType === 'Food' && updateData.activeOrder) {
-                    const activeOrderAny = updateData.activeOrder as any;
-                    const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && 
-                        typeof activeOrderAny.deliveryDayOrders === 'object' &&
-                        Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
-                    // Extract caseId from UniteUs link if available
-                    const extractedCaseId = formData.caseIdExternal 
-                        ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
-                        : null;
-                    await saveClientFoodOrder(clientId, {
-                        caseId: extractedCaseId,
-                        ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
-                    }, activeOrderAny);
-                }
-
-                // Persist meal plan to clients.meal_planner_data (full snapshot, clears >7 days old)
-                if (serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
-                    const { ok, error: mealPlanErr } = await saveClientMealPlannerDataFull(clientId, mealPlanOrdersRef.current);
-                    if (!ok && mealPlanErr) {
-                        console.warn('[ClientProfile] Failed to save meal planner data:', mealPlanErr);
-                    }
-                }
-
-                // Save meal orders only when service type is Meal (meal_planner_orders for Food clients
-                // are managed by the Saved Meal Plan section and admin template, not by saveClientMealOrder).
+                // Meal service: save mealSelections (separate flow)
                 const extractedCaseIdForMealSave = formData.caseIdExternal 
                     ? (parseUniteUsUrl(formData.caseIdExternal)?.caseId || null)
                     : null;
                 if (serviceType === 'Meal' && extractedCaseIdForMealSave) {
                     await saveClientMealOrder(clientId, {
                         caseId: extractedCaseIdForMealSave,
-                        mealSelections: (updateData.activeOrder as any).mealSelections || {}
+                        mealSelections: (updateData.activeOrder as any)?.mealSelections || {}
                     });
-                }
-                // IMPORTANT: For existing clients with Food service, updates must be shown in active_orders
-                // updateClient already synced to upcoming_orders (and skips Produce). We sync again here so
-                // saveClientFoodOrder's active_order updates are reflected. Do NOT sync Produce to upcoming_orders.
-                if (serviceType !== 'Produce') {
-                    await syncCurrentOrderToUpcoming(clientId, { ...client, ...updateData } as ClientProfile, true);
                 }
             }
 
@@ -4663,9 +4624,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     setClient(updatedClientFromSave);
                 }
                 invalidateClientData(clientId);
-                getClient(clientId).then((updatedClient) => {
-                    if (updatedClient) setClient(updatedClient);
-                }).catch(() => {});
+                // Use updated client from save response (already in memory) - no refetch
+                if (updatedClientFromSave) setClient(updatedClientFromSave);
             }
             return true;
         } catch (error) {
