@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate } from '@/lib/actions';
+import { clearDefaultOrderTemplateCache } from '@/lib/default-order-template-cache';
 import { getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
 import { Save, Loader2, Plus, Trash2, Package, ChevronLeft, ChevronRight, X, Check, GripVertical } from 'lucide-react';
 import {
@@ -23,11 +24,11 @@ import { CSS } from '@dnd-kit/utilities';
 import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
 
-type MealPlannerCustomItem = { id: string; name: string; quantity: number; price?: number | null; value?: number | null; sortOrder?: number };
+type MealPlannerCustomItem = { id: string; name: string; quantity: number; value?: number | null; sortOrder?: number };
 
 interface SortableMealPlannerRowProps {
     item: MealPlannerCustomItem;
-    onUpdate: (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'value' | 'sortOrder'>>) => void;
+    onUpdate: (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'value' | 'sortOrder'>>) => void;
     onRemove: (id: string) => void;
     disabled?: boolean;
 }
@@ -77,7 +78,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
             <input
                 type="number"
                 className="input"
-                placeholder="Value"
+                placeholder="Meals"
                 step="0.01"
                 min="0"
                 value={item.value ?? ''}
@@ -88,24 +89,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                     });
                 }}
                 style={{ width: '70px', textAlign: 'right' }}
-                aria-label="Meal value"
-                disabled={disabled}
-            />
-            <input
-                type="number"
-                className="input"
-                placeholder="Price"
-                step="0.01"
-                min="0"
-                value={item.price ?? ''}
-                onChange={(e) => {
-                    const v = e.target.value;
-                    onUpdate(item.id, {
-                        price: v === '' ? null : parseFloat(v) || 0
-                    });
-                }}
-                style={{ width: '80px', textAlign: 'right' }}
-                aria-label="Price"
+                aria-label="Meals count"
                 disabled={disabled}
             />
             {!disabled && (
@@ -399,6 +383,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
 
             // Save template for the specific serviceType
             await saveDefaultOrderTemplate(templateToSave, templateToSave.serviceType);
+            clearDefaultOrderTemplateCache(); // So client profile/portal load fresh template on next open
             setTemplate(templateToSave);
             setMessage(`Default order template for ${templateToSave.serviceType} saved successfully!`);
             setTimeout(() => setMessage(null), 3000);
@@ -586,11 +571,12 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     id: i.id,
                     name: i.name,
                     quantity: i.quantity,
-                    price: i.price ?? null,
+                    value: i.value ?? null,
                     sortOrder: i.sortOrder ?? 0
                 }))
             );
-            setMealPlannerExpirationDate(expirationDate ?? dateKey);
+            const loadedExp = expirationDate ?? dateKey;
+            setMealPlannerExpirationDate(loadedExp > dateKey ? dateKey : loadedExp);
         } catch (e) {
             setMessage('Error loading meal planner items.');
             setTimeout(() => setMessage(null), 3000);
@@ -607,7 +593,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`,
                 name: '',
                 quantity: 1,
-                price: null,
                 value: null,
                 sortOrder: maxSort + 1
             }
@@ -636,6 +621,12 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 3000);
                 return;
             }
+            if (expTrim && mealPlannerPopupDate && expTrim > mealPlannerPopupDate) {
+                setMealPlannerPopupStatus('Expiration date cannot be after the delivery date.');
+                setMessage('Expiration date cannot be after the delivery date for this day.');
+                setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 3000);
+                return;
+            }
             const valid = mealPlannerDraftItems.filter(
                 (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
             );
@@ -645,7 +636,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                     id: i.id,
                     name: i.name,
                     quantity: i.quantity,
-                    price: i.price ?? null,
                     value: i.value ?? null,
                     sortOrder: i.sortOrder ?? 0
                 })),
@@ -691,6 +681,32 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         }
     }
 
+    async function handleMealPlannerClearDay() {
+        if (!mealPlannerPopupDate || isDatePast(mealPlannerPopupDate)) return;
+        setMealPlannerPopupSaving(true);
+        setMessage(null);
+        setMealPlannerPopupStatus('Clearing…');
+        try {
+            await saveMealPlannerCustomItems(mealPlannerPopupDate, [], null);
+            setMealPlannerItemCounts((prev) => {
+                const next = { ...prev };
+                delete next[mealPlannerPopupDate];
+                return next;
+            });
+            setMessage('Day cleared.');
+            closeMealPlannerPopup();
+        } catch (e) {
+            console.error('[handleMealPlannerClearDay]', e);
+            const errMsg = e instanceof Error ? e.message : 'Error clearing day.';
+            setMealPlannerPopupStatus(errMsg);
+            setMessage(errMsg);
+            setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 5000);
+        } finally {
+            setMealPlannerPopupSaving(false);
+            setMealPlannerPopupStatus(null);
+        }
+    }
+
     function closeMealPlannerPopup() {
         setMealPlannerPopupDate(null);
         setMealPlannerDraftItems([]);
@@ -714,7 +730,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
     );
 
     const handleUpdateMealPlannerDraftItem = useCallback(
-        (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'price' | 'value' | 'sortOrder'>>) => {
+        (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'value' | 'sortOrder'>>) => {
             setMealPlannerDraftItems((prev) =>
                 prev.map((item) => (item.id !== id ? item : { ...item, ...patch }))
             );
@@ -743,10 +759,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         Set the default order configuration for newly created clients. This template will be applied when a new client is created.
                     </p>
                 </div>
-                <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                    {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-                    {saving ? 'Saving...' : 'Save Template'}
-                </button>
             </div>
 
             {message && (
@@ -775,6 +787,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
             </div>
 
             {template.serviceType === 'Food' && (
+                <>
                 <div className={styles.formCard}>
                     <h3 className={styles.sectionTitle}>Menu Items</h3>
                     <p className={styles.description}>
@@ -825,6 +838,13 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                         </div>
                     )}
                 </div>
+                <div style={{ marginTop: 'var(--spacing-lg)', marginBottom: 'var(--spacing-lg)' }}>
+                    <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                        {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                        {saving ? 'Saving...' : 'Save Template'}
+                    </button>
+                </div>
+                </>
             )}
 
             {template.serviceType === 'Food' && (
@@ -974,6 +994,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                                 value={mealPlannerExpirationDate}
                                                 onChange={(e) => setMealPlannerExpirationDate(e.target.value)}
                                                 min={getTodayDateKey()}
+                                                max={mealPlannerPopupDate}
                                                 disabled={isPast}
                                                 style={{ maxWidth: '12rem' }}
                                                 aria-label="Expiration date"
@@ -1046,6 +1067,29 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                                     >
                                         {mealPlannerPopupStatus}
                                     </span>
+                                )}
+                                {!isPast && (
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            if (window.confirm('Clear this day? All items and expiration date will be deleted.')) {
+                                                handleMealPlannerClearDay();
+                                            }
+                                        }}
+                                        disabled={mealPlannerPopupSaving}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginRight: 'auto', color: 'var(--color-danger)' }}
+                                        title="Delete all items and expiration for this date, then close"
+                                    >
+                                        {mealPlannerPopupSaving ? (
+                                            <Loader2 className="animate-spin" size={16} />
+                                        ) : (
+                                            <Trash2 size={16} />
+                                        )}
+                                        Clear day
+                                    </button>
                                 )}
                                 <button
                                     type="button"
@@ -1482,6 +1526,15 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                             Enter the default bill amount for produce orders.
                         </p>
                     </div>
+                </div>
+            )}
+
+            {template.serviceType !== 'Food' && (
+                <div style={{ marginTop: 'var(--spacing-xl)', paddingTop: 'var(--spacing-lg)', borderTop: '1px solid var(--border-color)' }}>
+                    <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                        {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                        {saving ? 'Saving...' : 'Save Template'}
+                    </button>
                 </div>
             )}
         </div>

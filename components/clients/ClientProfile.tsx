@@ -4,7 +4,8 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode, forwardRef, 
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, getClientProfilePageData, getDefaultMealPlanTemplateForNewClient, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
+import { getDefaultOrderTemplateCachedSync, getDefaultMealPlanTemplateCachedSync, getCachedDefaultOrderTemplate, getCachedDefaultMealPlanTemplateForNewClient } from '@/lib/default-order-template-cache';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
@@ -418,8 +419,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     try {
                         const menuItemsList = initialMenuItems || [];
                         const [template, mealPlanTemplate] = await Promise.all([
-                            getDefaultOrderTemplate('Food'),
-                            getDefaultMealPlanTemplateForNewClient(),
+                            getCachedDefaultOrderTemplate('Food'),
+                            getCachedDefaultMealPlanTemplateForNewClient(),
                             loadLookupsForNewClient(false) // Only load settings and categories, lookups already provided
                         ]);
                         const defaultMeals = template ? await computeDefaultApprovedMealsFromTemplate(template, menuItemsList) : 0;
@@ -435,7 +436,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             } else {
                 // No lookups from parent - fetch lookups (but skip heavy client lists) and order template in parallel for faster load
                 setLoading(true);
-                Promise.all([loadLookupsForNewClient(true), getDefaultOrderTemplate('Food')])
+                Promise.all([loadLookupsForNewClient(true), getCachedDefaultOrderTemplate('Food')])
                     .then(async ([lookupsResult, template]) => {
                         const statusesList = lookupsResult.statuses || [];
                         const navigatorsList = lookupsResult.navigators || [];
@@ -509,21 +510,14 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     if (hasInitialData) {
                         hydrateFromInitialData(initialData!);
                     } else {
-                        const c = await getClient(clientId);
-                        if (!c) {
+                        const data = await getClientOrderEditData(clientId);
+                        if (!data) {
                             setMessage('Error loading client data. Please refresh the page.');
                             setLoading(false);
                             setLoadingOrderDetails(false);
                             return;
                         }
-                        hydrateFromInitialData({
-                            client: c,
-                            history: [],
-                            orderHistory: [],
-                            billingHistory: [],
-                            activeOrder: null,
-                            upcomingOrder: null
-                        });
+                        hydrateFromInitialData(data);
                     }
                     if (initialStatuses?.length) setStatuses(initialStatuses);
                     if (initialNavigators?.length) setNavigators(initialNavigators);
@@ -1013,16 +1007,20 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     }
 
     // Helper: Load and apply default order template for new clients. Pass providedTemplate to avoid a second fetch when caller already has it.
+    // Uses client-side cache so repeat opens are instant; cache clears on page refresh. Only shows "Loading default order" on cache miss.
     async function loadAndApplyDefaultTemplate(serviceType: string, providedTemplate?: any): Promise<void> {
         // Only apply for Food and Produce service types
         if (serviceType !== 'Food' && serviceType !== 'Produce') {
             return;
         }
-        if (serviceType === 'Food') setFoodDefaultTemplateLoading(true);
+        const needOrderFetch = !providedTemplate && !getDefaultOrderTemplateCachedSync(serviceType);
+        const needMealPlanFetch = serviceType === 'Food' && !getDefaultMealPlanTemplateCachedSync();
+        const needNetwork = needOrderFetch || needMealPlanFetch;
+        if (serviceType === 'Food') setFoodDefaultTemplateLoading(needNetwork);
         try {
             const template = (providedTemplate != null && ((serviceType === 'Food' && providedTemplate.serviceType === 'Food') || (serviceType === 'Produce' && providedTemplate.serviceType === 'Produce')))
                 ? providedTemplate
-                : await getDefaultOrderTemplate(serviceType);
+                : await getCachedDefaultOrderTemplate(serviceType);
             if (!template) {
                 if (DEBUG_PROFILE) console.log(`[ClientProfile] No default template found for service type: ${serviceType}`);
                 return;
@@ -1031,10 +1029,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             if (DEBUG_PROFILE) console.log(`[ClientProfile] Loading default template for ${serviceType}:`, template);
 
             if (serviceType === 'Food') {
-                // Load meal plan template and merge with food template
+                // Load meal plan template and merge with food template (from cache when available)
                 let finalTemplate = template;
                 try {
-                    const mealPlanTemplate = await getDefaultMealPlanTemplateForNewClient();
+                    const mealPlanTemplate = await getCachedDefaultMealPlanTemplateForNewClient();
                     if (mealPlanTemplate && mealPlanTemplate.length > 0) {
                         finalTemplate = mergeMealPlanIntoFoodOrder(template, mealPlanTemplate, vendors, menuItems);
                         if (DEBUG_PROFILE) console.log('[ClientProfile] Merged meal plan into food template');
@@ -2086,12 +2084,12 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     !(configToSet.deliveryDayOrders && typeof configToSet.deliveryDayOrders === 'object' && Object.values(configToSet.deliveryDayOrders).some((d: any) => d?.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items).length > 0)));
                 if (hasNoOrderData && !clientHasOrderDetailsInUpcomingOrder(c)) {
                     try {
-                        const template = await getDefaultOrderTemplate('Food');
+                        const template = await getCachedDefaultOrderTemplate('Food');
                         if (template) {
-                            // Load and merge meal plan template
+                            // Load and merge meal plan template (from cache when available)
                             let finalTemplate = template;
                             try {
-                                const mealPlanTemplate = await getDefaultMealPlanTemplateForNewClient();
+                                const mealPlanTemplate = await getCachedDefaultMealPlanTemplateForNewClient();
                                 if (mealPlanTemplate && mealPlanTemplate.length > 0) {
                                     finalTemplate = mergeMealPlanIntoFoodOrder(template, mealPlanTemplate, vendorsArray, menuItemsArray);
                                     if (DEBUG_PROFILE) console.log('[ClientProfile] loadData - Merged meal plan into food template');
@@ -2160,7 +2158,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     const cached = getProduceBillAmountFromCache();
                     if (cached != null) configToSet.billAmount = cached;
                     try {
-                        const produceTemplate = await getDefaultOrderTemplate('Produce');
+                        const produceTemplate = await getCachedDefaultOrderTemplate('Produce');
                         if (produceTemplate && (produceTemplate.billAmount != null || produceTemplate.billAmount === 0)) {
                             const val = parseFloat(String(produceTemplate.billAmount)) || 0;
                             configToSet.billAmount = val;
@@ -4442,20 +4440,40 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
             // Sync Current Order Request (skip when saveDetailsOnly - we only persist client table fields)
             const hasOrderConfigChanges = !saveDetailsOnly && JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
+            // For Food: also save when recurring order has items (vendorSelections, deliveryDayOrders, or itemsByDay) so "Default template (not saved)" clears
+            const hasRecurringOrderData = formData.serviceType === 'Food' && orderConfig && (
+                (orderConfig.vendorSelections && orderConfig.vendorSelections.some((s: any) => {
+                    const items = (s?.items || {});
+                    const hasItems = Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                    const hasItemsByDay = s?.itemsByDay && typeof s.itemsByDay === 'object' && s.selectedDeliveryDays?.length > 0 &&
+                        Object.keys(s.itemsByDay).some((day: string) => {
+                            const dayItems = (s.itemsByDay[day] || {});
+                            return Object.keys(dayItems).length > 0 && Object.values(dayItems).some((qty: any) => (Number(qty) || 0) > 0);
+                        });
+                    return hasItems || hasItemsByDay;
+                })) ||
+                (orderConfig.deliveryDayOrders && typeof orderConfig.deliveryDayOrders === 'object' && Object.values(orderConfig.deliveryDayOrders).some((dayOrder: any) => {
+                    const vs = dayOrder?.vendorSelections || [];
+                    return vs.some((s: any) => {
+                        const items = (s?.items || {});
+                        return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
+                    });
+                }))
+            );
             
             console.log('[ClientProfile] Order save check:', {
                 saveDetailsOnly,
                 serviceType: formData.serviceType,
                 hasOrderConfigChanges,
                 hasOrderChanges,
+                hasRecurringOrderData,
                 hasBoxOrders: !!(orderConfig?.boxOrders && Array.isArray(orderConfig.boxOrders) && orderConfig.boxOrders.length > 0),
                 boxOrdersCount: orderConfig?.boxOrders?.length || 0
             });
             
-            // Match triangleorder approach: Save if there are order config changes OR order changes
-            // Don't check hasValidOrderData - let the backend handle validation
+            // Match triangleorder approach: Save if there are order config changes OR order changes OR recurring order has items (Food)
             // When saveDetailsOnly we never add activeOrder (already deleted above).
-            if (!saveDetailsOnly && (hasOrderConfigChanges || hasOrderChanges)) {
+            if (!saveDetailsOnly && (hasOrderConfigChanges || hasOrderChanges || hasRecurringOrderData)) {
                 // Add activeOrder to updateData so updateClient handles the full save + sync efficiently
                 // efficiently with only ONE revalidation
                 // For Food tab: use canonical active_order structure (caseId, serviceType, mealSelections, vendorSelections, deliveryDayOrders)
@@ -4469,33 +4487,48 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                             serviceType: formData.serviceType // Ensure serviceType matches formData (should be 'Custom', 'Boxes', or 'Produce')
                             // Spread operator preserves: customItems, vendorId, caseId, boxOrders, etc.
                         };
-                    updateData.activeOrder = activeOrderToSave;
-                    console.log('[ClientProfile] Saving order with activeOrder:', {
-                        serviceType: activeOrderToSave.serviceType,
-                        caseId: activeOrderToSave.caseId,
-                        hasVendorSelections: !!(activeOrderToSave as any).vendorSelections,
-                        vendorSelectionsCount: (activeOrderToSave as any).vendorSelections?.length || 0,
-                        hasDeliveryDayOrders: !!(activeOrderToSave as any).deliveryDayOrders,
-                        deliveryDayOrdersKeys: (activeOrderToSave as any).deliveryDayOrders ? Object.keys((activeOrderToSave as any).deliveryDayOrders) : [],
-                        hasBoxOrders: !!(activeOrderToSave as any).boxOrders,
-                        boxOrdersCount: (activeOrderToSave as any).boxOrders?.length || 0,
-                        boxOrders: (activeOrderToSave as any).boxOrders?.map((box: any) => ({
-                            boxTypeId: box.boxTypeId,
-                            vendorId: box.vendorId,
-                            itemsCount: Object.keys(box.items || {}).length
-                        })) || [],
-                        hasCustomItems: !!(activeOrderToSave as any).customItems,
-                        customItemsCount: (activeOrderToSave as any).customItems?.length || 0,
-                        vendorId: (activeOrderToSave as any).vendorId
-                    });
+                    // Only persist Food recurring order when it differs from default; otherwise clear so client follows default template
+                    if (formData.serviceType === 'Food') {
+                        const defaultFoodTemplate = await getCachedDefaultOrderTemplate('Food');
+                        if (defaultFoodTemplate && (await isFoodOrderSameAsDefault(activeOrderToSave, defaultFoodTemplate))) {
+                            delete updateData.activeOrder; // clear upcoming_order so client uses default (updates when default changes)
+                        } else {
+                            updateData.activeOrder = activeOrderToSave;
+                        }
+                    } else {
+                        updateData.activeOrder = activeOrderToSave;
+                    }
+                    if (updateData.activeOrder != null) {
+                        console.log('[ClientProfile] Saving order with activeOrder:', {
+                            serviceType: (updateData.activeOrder as any).serviceType,
+                            caseId: (updateData.activeOrder as any).caseId,
+                            hasVendorSelections: !!((updateData.activeOrder as any).vendorSelections),
+                            vendorSelectionsCount: ((updateData.activeOrder as any).vendorSelections?.length ?? 0),
+                            hasDeliveryDayOrders: !!((updateData.activeOrder as any).deliveryDayOrders),
+                            deliveryDayOrdersKeys: (updateData.activeOrder as any).deliveryDayOrders ? Object.keys((updateData.activeOrder as any).deliveryDayOrders) : [],
+                            hasBoxOrders: !!((updateData.activeOrder as any).boxOrders),
+                            boxOrdersCount: ((updateData.activeOrder as any).boxOrders?.length ?? 0),
+                            boxOrders: (updateData.activeOrder as any).boxOrders?.map((box: any) => ({
+                                boxTypeId: box.boxTypeId,
+                                vendorId: box.vendorId,
+                                itemsCount: Object.keys(box.items || {}).length
+                            })) || [],
+                            hasCustomItems: !!((updateData.activeOrder as any).customItems),
+                            customItemsCount: ((updateData.activeOrder as any).customItems?.length ?? 0),
+                            vendorId: (updateData.activeOrder as any).vendorId
+                        });
+                    } else {
+                        console.log('[ClientProfile] Food order same as default; clearing upcoming_order so client follows default template');
+                    }
                 } else {
                     console.warn('[ClientProfile] orderConfig is undefined, skipping order save');
                 }
             }
 
             // CRITICAL: Execute the single update call (skip order sync when saveDetailsOnly)
+            let updatedClientFromSave: ClientProfile | undefined;
             try {
-                await updateClient(clientId, updateData, saveDetailsOnly ? { skipOrderSync: true } : undefined);
+                updatedClientFromSave = await updateClient(clientId, updateData, saveDetailsOnly ? { skipOrderSync: true } : undefined);
             } catch (error) {
                 console.error('[ClientProfile] Error updating client:', error);
                 const errorMessage = error instanceof Error ? error.message : 'An error occurred while saving the client.';
@@ -4625,7 +4658,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             } else {
                 setMessage(confirmationMessage);
                 setTimeout(() => setMessage(null), 6000); // Longer timeout for longer messages
-                // Minimal refresh only: invalidate cache and refresh client so server-side fields (e.g. updatedAt) stay in sync. No full loadData().
+                // Update client state so "Default template (not saved)" badge clears (client.activeOrder from saved upcoming_order)
+                if (updatedClientFromSave && updateData.activeOrder) {
+                    setClient(updatedClientFromSave);
+                }
                 invalidateClientData(clientId);
                 getClient(clientId).then((updatedClient) => {
                     if (updatedClient) setClient(updatedClient);
@@ -5446,16 +5482,17 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                 <div className={styles.divider} />
 
                                                 <div className={styles.orderHeader}>
-                                                    <h4>Current Order Request</h4>
+                                                    <h4>Recurring order (same every delivery)</h4>
                                                     <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column', alignItems: 'flex-end' }}>
-                                                        {/* Show indicator if displaying default template (not yet saved) */}
+                                                        {/* Show indicator only when displaying default template with no edits yet; hide as soon as user changes anything */}
                                                         {(() => {
                                                             const hasNoSavedOrder = !client?.activeOrder || 
                                                                 (!(client.activeOrder as any)?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items).length > 0) &&
                                                                  !(client.activeOrder as any)?.deliveryDayOrders);
                                                             const hasTemplateData = orderConfig?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items || {}).length > 0) ||
                                                                 (orderConfig?.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0);
-                                                            return hasNoSavedOrder && hasTemplateData ? (
+                                                            const userHasEditedOrder = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
+                                                            return hasNoSavedOrder && hasTemplateData && !userHasEditedOrder ? (
                                                                 <div style={{ 
                                                                     fontSize: '0.85rem', 
                                                                     color: 'var(--color-text-secondary)',
@@ -5472,7 +5509,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                             color: getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) ? 'var(--color-danger)' : 'inherit',
                                                             backgroundColor: getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-surface-hover)'
                                                         }}>
-                                                            Value: {getCurrentOrderTotalValueAllDays()} / {formData.approvedMealsPerWeek || 0}
+                                                            Meals: {getCurrentOrderTotalValueAllDays()} / {formData.approvedMealsPerWeek || 0}
                                                             {getCurrentOrderTotalValueAllDays() !== (formData.approvedMealsPerWeek || 0) && (
                                                                 <span style={{ marginLeft: '8px', fontSize: '0.85rem' }}>
                                                                     {getCurrentOrderTotalValueAllDays() > (formData.approvedMealsPerWeek || 0) ? '(OVER)' : '(UNDER)'}
@@ -5673,6 +5710,11 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                         uniqueVendorIds.forEach(vId => {
                                                             const v = vendors.find(vend => vend.id === vId);
                                                             if (v) {
+                                                                const name = v.name?.trim() ?? '';
+                                                                const isDietFantasy = name.length > 0 && /^diet\s*fantasy$/i.test(name);
+                                                                if (isDietFantasy) {
+                                                                    return;
+                                                                }
                                                                 const cutoff = v.cutoffHours || 0;
                                                                 messages.push(`Orders for ${v.name} must be placed ${cutoff} hours before delivery.`);
                                                             }
@@ -5787,9 +5829,9 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                                                                                     <span>
                                                                                         {item.name}
-                                                                                        {(item.quotaValue || 1) > 1 && (
+                                                                                        {((item as any).value ?? item.quotaValue ?? 1) !== 1 && (
                                                                                             <span style={{ color: 'var(--text-tertiary)', fontSize: '0.9em', marginLeft: '4px' }}>
-                                                                                                (counts as {item.quotaValue || 1} meals)
+                                                                                                ({(item as any).value ?? item.quotaValue ?? 1} meals)
                                                                                             </span>
                                                                                         )}
                                                                                         {upcomingQty > 0 && (
@@ -6323,15 +6365,15 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                                                                 }}>
                                                                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
                                                                                                         <div style={{ flex: 1 }}>
-                                                                                                            <div style={{ fontWeight: 600, fontSize: '0.9rem', color: isSelected ? 'var(--color-primary)' : 'var(--text-primary)' }}>
+<div style={{ fontWeight: 600, fontSize: '0.9rem', color: isSelected ? 'var(--color-primary)' : 'var(--text-primary)' }}>
                                                                                                                 {item.name}
-                                                                                                            </div>
-                                                                                                            {(item.quotaValue || 1) !== 1 && (
-                                                                                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
-                                                                                                                    Counts as {item.quotaValue} meals
-                                                                                                                </div>
-                                                                                                            )}
-                                                                                                            {upcomingQty > 0 && (
+                                                                                                                {((item as any).value ?? item.quotaValue ?? 1) !== 1 && (
+                                                                                                                    <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginLeft: '4px' }}>
+                                                                                                                        ({(item as any).value ?? item.quotaValue ?? 1} meals)
+                                                                                                                    </span>
+                                                                                                                )}
+                                                                            </div>
+                                                                            {upcomingQty > 0 && (
                                                                                                                 <div style={{ 
                                                                                                                     color: 'var(--color-primary)', 
                                                                                                                     fontSize: '0.85em', 
@@ -6435,15 +6477,15 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                                                                 }}>
                                                                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
                                                                                                         <div style={{ flex: 1 }}>
-                                                                                                            <div style={{ fontWeight: 600, fontSize: '0.9rem', color: isSelected ? 'var(--color-primary)' : 'var(--text-primary)' }}>
+<div style={{ fontWeight: 600, fontSize: '0.9rem', color: isSelected ? 'var(--color-primary)' : 'var(--text-primary)' }}>
                                                                                                                 {item.name}
-                                                                                                            </div>
-                                                                                                            {(item.quotaValue || 1) !== 1 && (
-                                                                                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
-                                                                                                                    Counts as {item.quotaValue} meals
-                                                                                                                </div>
-                                                                                                            )}
-                                                                                                            {upcomingQty > 0 && (
+                                                                                                                {((item as any).value ?? item.quotaValue ?? 1) !== 1 && (
+                                                                                                                    <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginLeft: '4px' }}>
+                                                                                                                        ({(item as any).value ?? item.quotaValue ?? 1} meals)
+                                                                                                                    </span>
+                                                                                                                )}
+                                                                            </div>
+                                                                            {upcomingQty > 0 && (
                                                                                                                 <div style={{ 
                                                                                                                     color: 'var(--color-primary)', 
                                                                                                                     fontSize: '0.85em', 
@@ -6722,7 +6764,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
                             {formData.serviceType === 'Food' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
-                                    <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
+                                    <h3 className={styles.sectionTitle}>Day-specific meal plan</h3>
+                                    <p style={{ margin: '0 0 var(--spacing-md) 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Different selections per delivery date.</p>
                                     <SavedMealPlanMonth
                                         clientId={clientId}
                                         onOrdersChange={(orders) => { mealPlanOrdersRef.current = orders; }}

@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota, BoxConfiguration } from '@/lib/types';
-import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient } from '@/lib/actions';
+import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, saveClientFoodOrder, saveClientBoxOrder, isFoodOrderSameAsDefault } from '@/lib/actions';
+import { getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
 import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
 import { Package, Truck, User, Loader2, Info, Plus, Calendar, AlertTriangle, Check, Trash2 } from 'lucide-react';
 import styles from './ClientProfile.module.css';
@@ -247,7 +248,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     useEffect(() => {
         if (!singleVendorMode || !singleVendor) return;
         if (singleVendorInitDoneRef.current) return;
-        setOrderConfig(prev => {
+        setOrderConfig((prev: any) => {
             const current = prev.vendorSelections || [];
             const hasSingleVendor = current.length === 1 && current[0]?.vendorId === singleVendor.id;
             if (hasSingleVendor) {
@@ -635,14 +636,59 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 tempClientActiveOrder: tempClient.activeOrder
             });
 
-            // Sync to upcoming_orders table
-            try {
-                await syncCurrentOrderToUpcoming(client.id, tempClient);
-                console.log('[ClientPortalInterface] syncCurrentOrderToUpcoming completed successfully');
-            } catch (syncError: any) {
-                console.error('[ClientPortalInterface] Error in syncCurrentOrderToUpcoming:', syncError);
-                throw syncError; // Re-throw to be caught by outer catch
+            // For Food: only persist when order differs from default; otherwise clear so client follows default template
+            let activeOrderToPersist: any = tempClient.activeOrder;
+            if (serviceType === 'Food') {
+                const defaultFoodTemplate = await getCachedDefaultOrderTemplate('Food');
+                if (defaultFoodTemplate && (await isFoodOrderSameAsDefault(tempClient.activeOrder, defaultFoodTemplate))) {
+                    activeOrderToPersist = null;
+                }
             }
+
+            // Persist recurring order to client.upcoming_order (single source of truth)
+            try {
+                await updateClient(client.id, {
+                    activeOrder: activeOrderToPersist,
+                    serviceType: client.serviceType
+                });
+                console.log('[ClientPortalInterface] updateClient (upcoming_order) completed successfully', activeOrderToPersist == null ? '(cleared; using default)' : '');
+            } catch (updateError: any) {
+                console.error('[ClientPortalInterface] Error updating client upcoming_order:', updateError);
+                throw updateError;
+            }
+
+            // Food: save full activeOrder to clients.upcoming_order so structure is preserved (only when customized, not default)
+            if (serviceType === 'Food' && activeOrderToPersist) {
+                const activeOrderAny = activeOrderToPersist as any;
+                const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && typeof activeOrderAny.deliveryDayOrders === 'object' && Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
+                try {
+                    await saveClientFoodOrder(client.id, {
+                        caseId: activeOrderAny.caseId ?? undefined,
+                        ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
+                    }, activeOrderAny);
+                } catch (foodErr: any) {
+                    console.error('[ClientPortalInterface] saveClientFoodOrder error (non-fatal):', foodErr);
+                }
+            }
+
+            // Boxes: persist box orders to client_box_orders
+            if (serviceType === 'Boxes' && (tempClient.activeOrder as any)?.boxOrders?.length > 0) {
+                try {
+                    const boxOrders = (tempClient.activeOrder as any).boxOrders;
+                    await saveClientBoxOrder(client.id, boxOrders.map((box: any) => ({
+                        ...box,
+                        caseId: (tempClient.activeOrder as any).caseId
+                    })));
+                } catch (boxErr: any) {
+                    console.error('[ClientPortalInterface] saveClientBoxOrder error (non-fatal):', boxErr);
+                }
+            }
+
+            // Optional no-op sync (kept for any future implementation)
+            await syncCurrentOrderToUpcoming(client.id, { ...client, activeOrder: activeOrderToPersist ?? undefined } as ClientProfile);
+
+            // Update local client so UI shows saved state (no "Default template (not saved)")
+            setClient({ ...client, activeOrder: activeOrderToPersist ?? undefined });
 
             // Refresh the router to refetch server data
             router.refresh();
@@ -1014,15 +1060,15 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         const dayItems = selection.itemsByDay[day] || {};
                         for (const [itemId, qty] of Object.entries(dayItems)) {
                             const item = menuItems.find(i => i.id === itemId);
-                            const itemPrice = item ? (item.priceEach ?? item.value) : 0;
-                            total += itemPrice * (qty as number);
+                            const mealsPerItem = item != null && (item.value ?? 0) > 0 ? (item.value ?? 1) : 1;
+                            total += mealsPerItem * (qty as number);
                         }
                     }
                 } else if (selection.items) {
                     for (const [itemId, qty] of Object.entries(selection.items)) {
                         const item = menuItems.find(i => i.id === itemId);
-                        const itemPrice = item ? (item.priceEach ?? item.value) : 0;
-                        total += itemPrice * (qty as number);
+                        const mealsPerItem = item != null && (item.value ?? 0) > 0 ? (item.value ?? 1) : 1;
+                        total += mealsPerItem * (qty as number);
                     }
                 }
             }
@@ -1037,8 +1083,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     const items = sel.items || {};
                     for (const [itemId, qty] of Object.entries(items)) {
                         const item = menuItems.find(i => i.id === itemId);
-                        const itemPrice = item ? (item.priceEach ?? item.value) : 0;
-                        total += itemPrice * (qty as number);
+                        const mealsPerItem = item != null && (item.value ?? 0) > 0 ? (item.value ?? 1) : 1;
+                        total += mealsPerItem * (qty as number);
                     }
                 }
             }
@@ -1103,7 +1149,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 {/* Budget Header */}
                 <div className={styles.orderHeader} style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h4>Your Selections</h4>
+                        <h4>Recurring order (same every delivery)</h4>
                         <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column', alignItems: 'flex-end' }}>
                             <div className={styles.budget} style={{
                                 color: getTotalMealCountAllDays() !== (client.approvedMealsPerWeek || 0) ? 'white' : 'inherit',
@@ -1289,9 +1335,9 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                             <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface)' }}>
                                                                 <div style={{ marginBottom: '8px', fontSize: '0.9rem', fontWeight: 500 }}>
                                                                     {item.name}
-                                                                    {val > 1 && (
+                                                                    {val !== 1 && (
                                                                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>
-                                                                            (counts as {val} meals)
+                                                                            ({val} meals)
                                                                         </span>
                                                                     )}
                                                                 </div>
@@ -1350,9 +1396,9 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                     <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface)' }}>
                                                         <div style={{ marginBottom: '8px', fontSize: '0.9rem', fontWeight: 500 }}>
                                                             {item.name}
-                                                            {val > 1 && (
+                                                            {val !== 1 && (
                                                                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '4px' }}>
-                                                                    (counts as {val} meals)
+                                                                    ({val} meals)
                                                                 </span>
                                                             )}
                                                         </div>
@@ -1546,6 +1592,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                     uniqueVendorIds.forEach(vId => {
                                         const v = vendors.find(vend => vend.id === vId);
                                         if (v) {
+                                            const name = v.name?.trim() ?? '';
+                                            const isDietFantasy = name.length > 0 && /^diet\s*fantasy$/i.test(name);
+                                            if (isDietFantasy) {
+                                                return;
+                                            }
                                             const cutoff = v.cutoffHours || 0; // Default to 0 if not set, or maybe don't show? 
                                             // User said "write by each vendor that changes must be made by however many hours".
                                             // If cutoff is 0, arguably "Changes take effect immediately" or just show 0 hours?
@@ -2085,7 +2136,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
 
                 {orderAndMealPlanOnly && client.serviceType === 'Food' && (
                     <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
-                        <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
+                        <h3 className={styles.sectionTitle}>Day-specific meal plan</h3>
                         <SavedMealPlanMonth
                             clientId={client.id}
                             initialOrders={initialMealPlanOrders ?? undefined}

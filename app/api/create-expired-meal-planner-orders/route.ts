@@ -222,7 +222,7 @@ export async function POST(request: NextRequest) {
                 ((!clientFoodOrder.vendorSelections || clientFoodOrder.vendorSelections.length === 0) &&
                     (!clientFoodOrder.deliveryDayOrders || Object.keys(clientFoodOrder.deliveryDayOrders).length === 0))
             ) {
-                skippedReasons.push(`Client ${client.id} (${client.fullName}): No food order template available`);
+                skippedReasons.push(`Client ${client.id} (${client.fullName}): No food order template available (client has none and default template is also empty or has no vendor/delivery structure)`);
                 continue;
             }
 

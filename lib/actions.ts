@@ -1105,6 +1105,62 @@ export async function getDefaultOrderTemplate(serviceType?: string): Promise<any
     }
 }
 
+/** Recursively sort object keys for stable JSON comparison. */
+function sortKeysForCompare(obj: unknown): unknown {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(sortKeysForCompare);
+    return Object.keys(obj)
+        .sort()
+        .reduce((acc: Record<string, unknown>, k) => {
+            acc[k] = sortKeysForCompare((obj as Record<string, unknown>)[k]);
+            return acc;
+        }, {});
+}
+
+/**
+ * Extract all (vendorId, itemId, quantity) tuples from a stored Food order for comparison.
+ * Handles both shapes: deliveryDayOrders (per-day vendorSelections) and top-level vendorSelections.
+ * Returns a canonical string so two orders can be compared by content only (same items = same order).
+ */
+function foodOrderContentSignature(stored: any): string {
+    if (!stored || typeof stored !== 'object') return '';
+    const tuples: [string, string, number][] = [];
+    function addVs(vs: any) {
+        const vendorId = vs?.vendorId != null ? String(vs.vendorId).trim() : '';
+        if (!vendorId) return;
+        const items = vs?.items && typeof vs.items === 'object' && !Array.isArray(vs.items) ? vs.items : {};
+        for (const [id, qty] of Object.entries(items)) {
+            const n = Number(qty);
+            if (id != null && id !== '' && n > 0) tuples.push([vendorId, id, n]);
+        }
+    }
+    const ddo = stored.deliveryDayOrders;
+    if (ddo && typeof ddo === 'object') {
+        for (const day of Object.keys(ddo)) {
+            const arr = Array.isArray((ddo[day] as any)?.vendorSelections) ? (ddo[day] as any).vendorSelections : [];
+            for (const vs of arr) addVs(vs);
+        }
+    }
+    const vsTop = stored.vendorSelections;
+    if (Array.isArray(vsTop)) for (const vs of vsTop) addVs(vs);
+    tuples.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]) || a[2] - b[2]);
+    return JSON.stringify(tuples);
+}
+
+/**
+ * Returns true if the given Food order is effectively the same as the default template.
+ * Used to avoid persisting the default into clients.upcoming_order so that when the
+ * default order template is updated, clients who never customized still get the new default.
+ * Compares canonical content (vendor + items) so default (vendorSelections) and client (deliveryDayOrders) match.
+ */
+export async function isFoodOrderSameAsDefault(order: any, defaultTemplate: any): Promise<boolean> {
+    if (!defaultTemplate || typeof defaultTemplate !== 'object') return false;
+    const a = toStoredUpcomingOrder(order, 'Food');
+    const b = toStoredUpcomingOrder(defaultTemplate, 'Food');
+    if (!a || !b) return false;
+    return foodOrderContentSignature(a) === foodOrderContentSignature(b);
+}
+
 /**
  * Calculate the default approved meals per week based on the total value
  * in the default order template for Food serviceType.
@@ -1528,6 +1584,10 @@ export type MealPlannerOrderResult = {
     status: string;
     totalItems: number;
     items: { id: string; name: string; quantity: number; value?: number | null }[];
+    /** If set, this date is only shown when today <= expirationDate (EST). */
+    expirationDate?: string | null;
+    /** Default total meals for this date (from template). Client selection should match this. */
+    expectedTotalMeals?: number | null;
 };
 
 /**
@@ -1591,11 +1651,11 @@ export async function saveClientMealPlannerData(
         const dateOnly = mealPlannerDateOnly(dateToSave);
         const cutoff = mealPlannerCutoffDate();
         const validItems = items
-            .filter((i) => (i.name ?? '').trim() && (Number(i.quantity) ?? 0) > 0)
+            .filter((i) => (i.name ?? '').trim())
             .map((it, idx) => ({
                 id: it.id ?? `item-${idx}`,
                 name: (it.name ?? 'Item').trim() || 'Item',
-                quantity: Math.max(1, Number(it.quantity) ?? 1),
+                quantity: Math.max(0, Number(it.quantity) ?? 0),
                 value: it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
             }));
 
@@ -1623,11 +1683,7 @@ export async function saveClientMealPlannerData(
             if (d && d !== dateOnly) byDate.set(d, e);
         }
 
-        if (validItems.length > 0) {
-            byDate.set(dateOnly, { scheduledDeliveryDate: dateOnly, items: validItems });
-        } else {
-            byDate.delete(dateOnly);
-        }
+        byDate.set(dateOnly, { scheduledDeliveryDate: dateOnly, items: validItems });
 
         const newData = Array.from(byDate.values()).sort((a, b) =>
             (a.scheduledDeliveryDate ?? a.scheduled_delivery_date ?? '').localeCompare(b.scheduledDeliveryDate ?? b.scheduled_delivery_date ?? '')
@@ -1661,15 +1717,14 @@ export async function saveClientMealPlannerDataFull(
         const cutoff = mealPlannerCutoffDate();
         const newData = orders
             .filter((o) => (o.scheduledDeliveryDate ?? '') >= cutoff)
-            .filter((o) => (o.items ?? []).some((i) => (Number(i.quantity) ?? 0) > 0))
             .map((o) => ({
                 scheduledDeliveryDate: mealPlannerDateOnly(o.scheduledDeliveryDate),
                 items: (o.items ?? [])
-                    .filter((i) => (i.name ?? '').trim() && (Number(i.quantity) ?? 0) > 0)
+                    .filter((i) => (i.name ?? '').trim())
                     .map((it, idx) => ({
                         id: it.id ?? `item-${idx}`,
                         name: (it.name ?? 'Item').trim() || 'Item',
-                        quantity: Math.max(1, Number(it.quantity) ?? 1),
+                        quantity: Math.max(0, Number(it.quantity) ?? 0),
                         value: it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
                     }))
             }))
@@ -2156,20 +2211,27 @@ export async function getAvailableMealPlanTemplateWithAllDates(): Promise<MealPl
         const list: MealPlannerOrderResult[] = [];
         for (const dateOnly of dates) {
             if (dateOnly < today) continue;
-            const { items } = await getMealPlannerCustomItems(dateOnly, null);
+            const { items, expirationDate } = await getMealPlannerCustomItems(dateOnly, null);
+            if (expirationDate != null && expirationDate !== '' && expirationDate < today) continue;
             const displayItems: MealPlannerOrderDisplayItem[] = items.map((it, idx) => ({
                 id: `template-${dateOnly}-${idx}`,
                 name: it.name ?? 'Item',
                 quantity: Math.max(0, Number(it.quantity) ?? 0),
                 value: it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
             }));
+            const expectedTotalMeals = displayItems.reduce(
+                (sum, it) => sum + (it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : 1) * Math.max(0, it.quantity ?? 0),
+                0
+            );
             list.push({
                 id: `template-${dateOnly}`,
                 scheduledDeliveryDate: dateOnly,
                 deliveryDay: null,
                 status: 'draft',
                 totalItems: displayItems.length,
-                items: displayItems
+                items: displayItems,
+                expirationDate: expirationDate ?? null,
+                expectedTotalMeals
             });
         }
         return list;
@@ -2895,7 +2957,7 @@ export async function saveMealPlannerCustomItems(
         revalidatePath('/admin');
         // Sync to meal_planner_orders only when saving a specific client's plan. Default template save does NOT
         // push to all clients (avoids slow mass-write). Orders are created on-demand when a client views their
-        // meal plan or when process-orders / create-expired runs.
+        // meal plan or when create-expired-meal-planner-orders runs.
         if (clientIdVal != null) {
             const defaultItemsForSync: EffectiveMealPlanItem[] = validItems.map((item, idx) => ({
                 name: (item.name ?? '').trim() || 'Item',
@@ -2916,7 +2978,7 @@ export async function saveMealPlannerCustomItems(
 
 /**
  * Ensure meal_planner_orders exist for the given date for all Food/Meal clients, using the default template.
- * Used by process-orders and create-expired-meal-planner-orders so they see orders even though we no longer
+ * Used by create-expired-meal-planner-orders so they see orders even though we no longer
  * sync to all clients when the default template is saved.
  */
 export async function ensureMealPlannerOrdersForDateFromDefaultTemplate(dateOnly: string): Promise<void> {
@@ -5880,7 +5942,7 @@ async function syncSingleOrderForDeliveryDay(
     }
     
     // Map serviceType to DB service_type for upcoming_orders.
-    // CRITICAL: Use 'Food', 'Boxes', 'Custom', 'Produce' (schema/process-weekly-orders expect these).
+    // CRITICAL: Use 'Food', 'Boxes', 'Custom', 'Produce' (schema expects these).
     // Never use lowercase ('food', etc.) or inserts/queries will not match.
     let serviceTypeForUpcomingOrders: string;
     if (serviceType === 'Food') {
@@ -8323,6 +8385,43 @@ export async function getClientFullDetails(clientId: string) {
         };
     } catch (error) {
         console.error('Error fetching full client details:', error);
+        return null;
+    }
+}
+
+/**
+ * Lightweight fetch for Order Details view (serviceConfigOnly). Only loads what's needed:
+ * - Order Details only shows Food and Produce (Boxes is hidden)
+ * - Skips: history, orderHistory, billingHistory, submissions, box orders, box types
+ */
+export async function getClientOrderEditData(clientId: string) {
+    if (!clientId) return null;
+    try {
+        const client = await getClient(clientId);
+        if (!client) return null;
+
+        const [
+            activeOrderData,
+            upcomingOrderData,
+            mealPlanData
+        ] = await Promise.all([
+            getRecentOrdersForClient(clientId),
+            getUpcomingOrderForClient(clientId, null),
+            client.serviceType === 'Food' ? getClientMealPlannerData(clientId) : Promise.resolve([])
+        ]);
+
+        return {
+            client,
+            history: [],
+            orderHistory: [],
+            billingHistory: [],
+            activeOrder: activeOrderData,
+            upcomingOrder: upcomingOrderData,
+            submissions: [],
+            mealPlanData: mealPlanData ?? []
+        };
+    } catch (error) {
+        console.error('[getClientOrderEditData] Error:', error);
         return null;
     }
 }

@@ -597,7 +597,7 @@ export function ClientInfoShelf({
                     </div>
 
                     <div className={styles.section}>
-                        <h3>Service Information</h3>
+
                         <div className={styles.infoGrid}>
                             <div className={styles.infoItem}>
                                 <div className={styles.label}>Navigator</div>

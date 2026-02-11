@@ -5,7 +5,7 @@ import { decrypt } from '@/lib/session';
 // 1. Specify protected and public routes
 const protectedRoutes = ['/admin', '/clients', '/billing', '/vendors', '/'];
 const vendorRoutes = ['/vendor'];
-const publicRoutes = ['/login', '/api/auth/login', '/api/process-weekly-orders', '/api/extension', '/verify-order', '/delivery', '/drivers', '/produce'];
+const publicRoutes = ['/login', '/api/auth/login', '/api/extension', '/verify-order', '/delivery', '/drivers', '/produce'];
 
 export default async function proxy(req: NextRequest) {
     // 2. Check if the current route is protected or public

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { CalendarDays, UtensilsCrossed } from 'lucide-react';
+import { CalendarDays, UtensilsCrossed, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import {
   getClientMealPlannerData,
   getAvailableMealPlanTemplateWithAllDates,
@@ -35,6 +35,17 @@ function getTodayIso(): string {
   return getTodayInAppTz();
 }
 
+function formatExpirationLabel(iso: string): string {
+  if (!iso || typeof iso !== 'string') return '—';
+  const normalized = iso.trim().slice(0, 10);
+  const d = new Date(normalized + 'T12:00:00');
+  if (Number.isNaN(d.getTime())) return normalized || '—';
+  const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: APP_TZ });
+  const day = d.toLocaleDateString('en-US', { day: 'numeric', timeZone: APP_TZ });
+  const year = d.toLocaleDateString('en-US', { year: 'numeric', timeZone: APP_TZ });
+  return `${month} ${day}, ${year}`;
+}
+
 export interface SavedMealPlanMonthProps {
   /** Current client ID; when null or 'new', no data is loaded. */
   clientId: string | null;
@@ -62,17 +73,22 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [editingQty, setEditingQty] = useState<{ itemId: string; value: string } | null>(null);
   const fetchIdRef = useRef(0);
+  /** Only dates the client has edited are persisted; untouched dates stay template-only. */
+  const clientEditedDatesRef = useRef<Set<string>>(new Set());
 
   const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
 
-  // Report current orders to parent so client profile save can persist meal plan quantity changes.
+  // Report only client-edited dates to parent so we don't overwrite template with merged data for untouched dates.
   useEffect(() => {
-    if (orders.length > 0) onOrdersChange?.(orders);
+    const toPersist = orders.filter((o) => o.scheduledDeliveryDate && clientEditedDatesRef.current.has(o.scheduledDeliveryDate));
+    if (toPersist.length > 0) onOrdersChange?.(toPersist);
   }, [orders, onOrdersChange]);
 
   // When initialOrders is provided (existing client from profile payload or new client preload), use it and skip fetch.
+  // Treat dates in initialOrders as client-edited so we persist them on save; only add new dates when user edits.
   useEffect(() => {
     if (initialOrders == null || !Array.isArray(initialOrders)) return;
+    clientEditedDatesRef.current = new Set(initialOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean));
     applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
     setLoadingDates(false);
   }, [initialOrders]);
@@ -111,13 +127,42 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       }
       return;
     }
+    // Menu (items, order, meals per item) always comes from the template. Only the client's
+    // selection (quantities) is merged on top so the same full menu is shown with their choices.
     const mergeTemplateWithClient = (templateList: MealPlannerOrderResult[], clientSavedList: MealPlannerOrderResult[]) => {
       const byDate = new Map<string, MealPlannerOrderResult>();
       for (const o of templateList) {
         if (o.scheduledDeliveryDate) byDate.set(o.scheduledDeliveryDate, o);
       }
       for (const o of clientSavedList) {
-        if (o.scheduledDeliveryDate) byDate.set(o.scheduledDeliveryDate, o);
+        if (!o.scheduledDeliveryDate) continue;
+        const templateOrder = byDate.get(o.scheduledDeliveryDate);
+        if (!templateOrder) {
+          byDate.set(o.scheduledDeliveryDate, o);
+          continue;
+        }
+        const clientSelectionsByKey = new Map(
+          o.items.map((i) => [(i.name ?? '').trim().toLowerCase(), i])
+        );
+        const mergedItems = templateOrder.items.map((tItem) => {
+          const key = (tItem.name ?? '').trim().toLowerCase();
+          const clientItem = clientSelectionsByKey.get(key);
+          if (clientItem) {
+            return {
+              ...tItem,
+              id: clientItem.id,
+              quantity: clientItem.quantity
+              // value (meals per item) stays from template - menu is fixed
+            };
+          }
+          return tItem;
+        });
+        byDate.set(o.scheduledDeliveryDate, {
+          ...templateOrder,
+          items: mergedItems,
+          expirationDate: templateOrder.expirationDate ?? o.expirationDate,
+          expectedTotalMeals: templateOrder.expectedTotalMeals ?? o.expectedTotalMeals
+        });
       }
       return Array.from(byDate.values()).sort((a, b) =>
         (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || '')
@@ -128,9 +173,10 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       setLoadingDates(true);
       const thisFetchId = fetchIdRef.current + 1;
       fetchIdRef.current = thisFetchId;
-      getAvailableMealPlanTemplateWithAllDates()
+        getAvailableMealPlanTemplateWithAllDates()
         .then((templateList) => {
           if (fetchIdRef.current !== thisFetchId) return;
+          clientEditedDatesRef.current = new Set(initialOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean));
           const merged = mergeTemplateWithClient(templateList, initialOrders);
           applyOrdersAndSelectFirst(merged, setOrders, setSelectedDate);
         })
@@ -153,6 +199,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
     ])
       .then(([templateList, clientSavedList]) => {
         if (fetchIdRef.current !== thisFetchId) return;
+        clientEditedDatesRef.current = new Set(clientSavedList.map((o) => o.scheduledDeliveryDate).filter(Boolean));
         const merged = mergeTemplateWithClient(templateList, clientSavedList);
         applyOrdersAndSelectFirst(merged, setOrders, setSelectedDate);
       })
@@ -168,11 +215,42 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
-  // All today and future dates from the list (all dates from settings are shown; client's saved data merged in)
+  // Only show dates that are today or future and not expired (expirationDate >= today when set)
   const futureOrders = useMemo(
-    () => orders.filter((o) => (o.scheduledDeliveryDate || '') >= todayIso),
+    () =>
+      orders.filter(
+        (o) =>
+          (o.scheduledDeliveryDate || '') >= todayIso &&
+          (o.expirationDate == null || o.expirationDate === '' || o.expirationDate >= todayIso)
+      ),
     [orders, todayIso]
   );
+
+  const validDateSet = useMemo(() => new Set(futureOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean)), [futureOrders]);
+
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+
+  const calendarDays = useMemo(() => {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const firstWeekday = firstDay.getDay();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const days: (Date | null)[] = [];
+    for (let i = 0; i < firstWeekday; i++) days.push(null);
+    for (let d = 1; d <= lastDay; d++) days.push(new Date(year, month, d));
+    return days;
+  }, [calendarMonth]);
+
+  function dateKeyForCalendarDay(year: number, month: number, day: number): string {
+    return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const calendarMonthYear = calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const selectedOrder = useMemo(
     () => (selectedDate ? futureOrders.find((o) => o.scheduledDeliveryDate === selectedDate) : null),
     [futureOrders, selectedDate]
@@ -204,8 +282,8 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
     const qty = Math.max(0, Math.floor(Number(newQty)) || 0);
     const currentQty = getItemQty(item);
     if (qty === currentQty) return;
+    clientEditedDatesRef.current.add(selectedDate);
     setUpdatingItemId(item.id);
-    // Compute next orders so we can update parent ref synchronously (fixes Save not persisting when user clicks Save right after editing)
     const nextOrders = orders.map((o) =>
       o.scheduledDeliveryDate === selectedDate
         ? {
@@ -217,7 +295,8 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
         : o
     );
     setOrders(nextOrders);
-    onOrdersChange?.(nextOrders);
+    const toPersist = nextOrders.filter((o) => o.scheduledDeliveryDate && clientEditedDatesRef.current.has(o.scheduledDeliveryDate));
+    onOrdersChange?.(toPersist);
     // For new client, only update local state; parent will persist on save via saveClientMealPlannerDataFull
     if (!effectiveClientId) {
       setUpdatingItemId(null);
@@ -242,10 +321,10 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       <header className={styles.header}>
         <div className={styles.titleRow}>
           <CalendarDays className={styles.titleIcon} size={26} />
-          <h4 className={styles.title}>Saved Meal Plan for the Month</h4>
+          <h4 className={styles.title}>Day-specific meal plan</h4>
         </div>
         <p className={styles.subtitle}>
-          All delivery dates from settings. Click a date to view or set quantities; your choices are saved for this client.
+          Different selections per delivery date. Only non-expired dates are shown. Select a date on the calendar to view or set quantities.
         </p>
       </header>
 
@@ -261,26 +340,83 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       ) : !hasDates ? (
         <div className={styles.emptyState}>
           <CalendarDays size={32} />
-          <p>No delivery dates are configured in settings. Add dates in the meal planner settings to show them here.</p>
+          <p>No non-expired delivery dates. Add dates in the meal planner settings or extend expiration to show them here.</p>
         </div>
       ) : (
         <>
-          <div className={styles.datesRow}>
-            {futureOrders.map((o) => {
-              const d = o.scheduledDeliveryDate;
-              if (!d) return null;
-              return (
+          <div className={styles.mealPlannerCalendar}>
+            <div className={styles.calendarHeader}>
               <button
-                key={d}
                 type="button"
-                className={`${styles.dateBtn} ${selectedDate === d ? styles.active : ''}`}
-                onClick={() => setSelectedDate(selectedDate === d ? null : d)}
+                className={styles.calendarNav}
+                onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}
+                aria-label="Previous month"
               >
-                {isToday(d) && <span className={styles.todayTag}>Today</span>}
-                <span className={styles.dateLabel}>{formatDateLabel(d)}</span>
+                <ChevronLeft size={20} />
               </button>
-            );
-            })}
+              <span className={styles.calendarMonthYear}>{calendarMonthYear}</span>
+              <button
+                type="button"
+                className={styles.calendarNav}
+                onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}
+                aria-label="Next month"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
+            <div className={styles.calendarWeekdays}>
+              {WEEKDAY_LABELS.map((label) => (
+                <div key={label} className={styles.calendarWeekday}>{label}</div>
+              ))}
+            </div>
+            <div className={styles.calendarGrid}>
+              {calendarDays.map((date, index) => {
+                const dateKey = date ? dateKeyForCalendarDay(date.getFullYear(), date.getMonth(), date.getDate()) : null;
+                const isSelectable = dateKey != null && validDateSet.has(dateKey);
+                const hasPlan = isSelectable && futureOrders.some((o) => o.scheduledDeliveryDate === dateKey);
+                const orderForDate = dateKey ? futureOrders.find((o) => o.scheduledDeliveryDate === dateKey) : null;
+                const itemCount = orderForDate?.items?.length ?? 0;
+                const isTodayCell = dateKey === getTodayIso();
+                return (
+                  <div
+                    key={dateKey ?? `empty-${index}`}
+                    className={[
+                      date ? styles.calendarDay : styles.calendarDayEmpty,
+                      date && !isSelectable && styles.calendarDayDisabled,
+                      date && hasPlan && styles.calendarDayHasPlan,
+                      date && isTodayCell && styles.calendarDayToday,
+                    ].filter(Boolean).join(' ')}
+                    onClick={isSelectable && dateKey ? () => setSelectedDate(selectedDate === dateKey ? null : dateKey) : undefined}
+                    role={date && isSelectable ? 'button' : undefined}
+                    tabIndex={date && isSelectable ? 0 : undefined}
+                    onKeyDown={dateKey && isSelectable ? (e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedDate(selectedDate === dateKey ? null : dateKey); } : undefined}
+                    title={date && hasPlan ? `Meal plan · ${itemCount} item${itemCount !== 1 ? 's' : ''}` : !isSelectable && dateKey ? 'Expired or not configured' : undefined}
+                  >
+                    {date && (
+                      <>
+                        {hasPlan && (
+                          <span className={styles.calendarDayCheck} aria-hidden>
+                            <Check size={12} strokeWidth={2.5} />
+                          </span>
+                        )}
+                        <span className={styles.calendarDayNum}>{date.getDate()}</span>
+                        {hasPlan && itemCount > 0 && (
+                          <span className={styles.calendarDayIndicator} aria-hidden>
+                            {itemCount}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className={styles.calendarLegend} aria-hidden>
+              <span className={styles.calendarLegendItem}>
+                <Check size={14} strokeWidth={2.5} />
+                <span>Meal plan saved</span>
+              </span>
+            </div>
           </div>
 
           {selectedDate && (
@@ -289,130 +425,168 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
                 <UtensilsCrossed className={styles.detailIcon} size={22} />
                 <span>{formatDateLabel(selectedDate)}</span>
                 {isToday(selectedDate) && <span className={styles.todayBadge}>Today</span>}
+                {selectedOrder?.expirationDate && (
+                  <span className={styles.expiresTag} title={`You can edit this order until ${formatExpirationLabel(selectedOrder.expirationDate)}`}>
+                    You can edit this order till {formatExpirationLabel(selectedOrder.expirationDate)}
+                  </span>
+                )}
               </div>
               {!selectedOrder ? (
                 <p className={styles.noItems}>No order for this date.</p>
               ) : selectedOrder.items.length === 0 ? (
                 <p className={styles.noItems}>No items for this date.</p>
-              ) : (
-                <div className={styles.tableWrap}>
-                  <table className={styles.itemsTable}>
-                    <thead>
-                      <tr>
-                        <th className={styles.thName}>Item</th>
-                        <th className={styles.thQty}>Qty</th>
-                        <th className={styles.thValue}>Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedOrder.items.map((item) => {
-                        const unitValue = item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : null;
-                        const lineTotal = unitValue != null ? unitValue * getItemQty(item) : null;
-                        return (
-                        <tr key={item.id} className={styles.itemRow}>
-                          <td className={styles.itemName}>{item.name}</td>
-                          <td className={styles.itemQty}>
-                            <div
-                              className={clientProfileStyles.quantityControl}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                                backgroundColor: 'var(--bg-surface)',
-                                padding: '2px',
-                                borderRadius: '6px',
-                                border: '1px solid var(--border-color)'
-                              }}
-                            >
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  changeQuantity(item, -1);
-                                }}
-                                className="btn btn-ghost btn-sm"
-                                style={{
-                                  width: '24px',
-                                  height: '24px',
-                                  padding: 0,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center'
-                                }}
-                                aria-label="Decrease quantity"
-                              >
-                                -
-                              </button>
-                              <input
-                                type="number"
-                                min={0}
-                                step={1}
-                                value={editingQty?.itemId === item.id ? editingQty.value : String(getItemQty(item))}
-                                onFocus={() =>
-                                  setEditingQty({ itemId: item.id, value: String(getItemQty(item)) })
-                                }
-                                onChange={(e) => {
-                                  const raw = e.target.value;
-                                  if (editingQty?.itemId === item.id) {
-                                    setEditingQty({ itemId: item.id, value: raw });
-                                  }
-                                }}
-                                onBlur={() => {
-                                  const raw = editingQty?.itemId === item.id ? editingQty.value : '';
-                                  setEditingQty(null);
-                                  const num = raw === '' ? 0 : parseInt(raw, 10);
-                                  const qty = Number.isNaN(num) || num < 0 ? 0 : num;
-                                  if (qty !== getItemQty(item)) setQuantityDirect(item, qty);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.currentTarget.blur();
-                                  }
-                                }}
-                                style={{
-                                  width: '44px',
-                                  textAlign: 'center',
-                                  fontWeight: 600,
-                                  fontSize: '0.9rem',
-                                  border: '1px solid var(--border-color)',
-                                  borderRadius: '4px',
-                                  padding: '2px 4px',
-                                  backgroundColor: 'var(--bg-surface)'
-                                }}
-                                aria-label="Quantity"
-                              />
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  changeQuantity(item, 1);
-                                }}
-                                className="btn btn-ghost btn-sm"
-                                style={{
-                                  width: '24px',
-                                  height: '24px',
-                                  padding: 0,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center'
-                                }}
-                                aria-label="Increase quantity"
-                              >
-                                +
-                              </button>
-                            </div>
-                          </td>
-                          <td className={styles.itemValue}>
-                            {lineTotal != null ? `$${lineTotal.toFixed(2)}` : '—'}
-                          </td>
-                        </tr>
-                      );})}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              ) : (() => {
+                const currentTotalMeals = selectedOrder.items.reduce((sum, item) => {
+                  const unitValue = item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : 1;
+                  return sum + unitValue * getItemQty(item);
+                }, 0);
+                const expectedTotal = selectedOrder.expectedTotalMeals ?? null;
+                const totalMismatch = expectedTotal != null && currentTotalMeals !== expectedTotal;
+
+                return (
+                  <>
+                    {totalMismatch && (
+                      <div className={styles.mealsMismatchBanner} role="alert">
+                        Total meals ({currentTotalMeals}) must equal the default for this day ({expectedTotal}). Adjust quantities to match.
+                      </div>
+                    )}
+                    <div className={styles.tableWrap}>
+                      <table className={styles.itemsTable}>
+                        <thead>
+                          <tr>
+                            <th className={styles.thName}>Item</th>
+                            <th className={styles.thQty}>Qty</th>
+                            <th className={styles.thValue}>Meals</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedOrder.items.map((item) => {
+                            const unitValue = item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : 1;
+                            const lineTotal = unitValue * getItemQty(item);
+                            return (
+                              <tr key={item.id} className={styles.itemRow}>
+                                <td className={styles.itemName}>
+                                  {item.name}
+                                  {item.value != null && !Number.isNaN(Number(item.value)) && Number(item.value) !== 1 && (
+                                    <span className={styles.itemValueHint}> ({Number(item.value)} meals)</span>
+                                  )}
+                                </td>
+                                <td className={styles.itemQty}>
+                                  <div
+                                    className={clientProfileStyles.quantityControl}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '8px',
+                                      backgroundColor: 'var(--bg-surface)',
+                                      padding: '2px',
+                                      borderRadius: '6px',
+                                      border: '1px solid var(--border-color)'
+                                    }}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        changeQuantity(item, -1);
+                                      }}
+                                      className="btn btn-ghost btn-sm"
+                                      style={{
+                                        width: '24px',
+                                        height: '24px',
+                                        padding: 0,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                      aria-label="Decrease quantity"
+                                    >
+                                      -
+                                    </button>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={1}
+                                      value={editingQty?.itemId === item.id ? editingQty.value : String(getItemQty(item))}
+                                      onFocus={() =>
+                                        setEditingQty({ itemId: item.id, value: String(getItemQty(item)) })
+                                      }
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        if (editingQty?.itemId === item.id) {
+                                          setEditingQty({ itemId: item.id, value: raw });
+                                        }
+                                      }}
+                                      onBlur={() => {
+                                        const raw = editingQty?.itemId === item.id ? editingQty.value : '';
+                                        setEditingQty(null);
+                                        const num = raw === '' ? 0 : parseInt(raw, 10);
+                                        const qty = Number.isNaN(num) || num < 0 ? 0 : num;
+                                        if (qty !== getItemQty(item)) setQuantityDirect(item, qty);
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.currentTarget.blur();
+                                        }
+                                      }}
+                                      style={{
+                                        width: '44px',
+                                        textAlign: 'center',
+                                        fontWeight: 600,
+                                        fontSize: '0.9rem',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '4px',
+                                        padding: '2px 4px',
+                                        backgroundColor: 'var(--bg-surface)'
+                                      }}
+                                      aria-label="Quantity"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        changeQuantity(item, 1);
+                                      }}
+                                      className="btn btn-ghost btn-sm"
+                                      style={{
+                                        width: '24px',
+                                        height: '24px',
+                                        padding: 0,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                      aria-label="Increase quantity"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                </td>
+                                <td className={styles.itemValue}>{lineTotal}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className={styles.totalRow}>
+                            <td className={styles.itemName} colSpan={2}>
+                              <strong>Total meals</strong>
+                            </td>
+                            <td className={styles.itemValue}>
+                              {selectedOrder.items.reduce((sum, item) => {
+                                const unitValue = item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : 1;
+                                return sum + unitValue * getItemQty(item);
+                              }, 0)}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </>
