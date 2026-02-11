@@ -35,6 +35,8 @@ interface Props {
     serviceConfigOnly?: boolean;
     /** When true (e.g. sidebar save), only persist client table fields; no order sync or order-related saves */
     saveDetailsOnly?: boolean;
+    /** When true, render for client portal: same look and save behavior, but hide admin-only buttons (delete, status, navigator, history, dependents, signature link, back to list) */
+    portalMode?: boolean;
     initialData?: ClientFullDetails | null;
     // Lookups passed from parent to avoid re-fetching
     statuses?: ClientStatus[];
@@ -178,7 +180,7 @@ export interface ClientProfileDetailHandle {
     hasUnsavedChanges(): boolean;
 }
 
-export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(function ClientProfileDetail({ clientId: propClientId, onClose, serviceConfigOnly = false, saveDetailsOnly = false, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }, ref) {
+export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(function ClientProfileDetail({ clientId: propClientId, onClose, serviceConfigOnly = false, saveDetailsOnly = false, portalMode = false, initialData, statuses: initialStatuses, navigators: initialNavigators, vendors: initialVendors, menuItems: initialMenuItems, boxTypes: initialBoxTypes, currentUser, initialSettings, initialCategories, initialAllClients, initialRegularClients, initialDependents }, ref) {
     const router = useRouter();
     const params = useParams();
     const propClientIdValue = (params?.id as string) || propClientId;
@@ -236,6 +238,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
     /** When true, Produce default template (bill amount) is being loaded after switching to Produce. */
     const [produceBillAmountLoading, setProduceBillAmountLoading] = useState(false);
+    /** When true, Food default order template is being loaded (new client or existing with no order). */
+    const [foodDefaultTemplateLoading, setFoodDefaultTemplateLoading] = useState(false);
 
     // Form Filler State
     const [isFillingForm, setIsFillingForm] = useState(false);
@@ -268,6 +272,9 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     const [cands, setCands] = useState<any[]>([]);
     const [mapOpen, setMapOpen] = useState(false);
     const inflight = useRef(new Set<AbortController>());
+    // Refs for useImperativeHandle (must be stable so hook count is consistent across early returns)
+    const handleSaveAndCloseRef = useRef<(() => Promise<void>) | null>(null);
+    const hasUnsavedChangesRef = useRef<boolean>(false);
 
     // Signature State
     const [signatureCollected, setSignatureCollected] = useState<number>(0);
@@ -1011,7 +1018,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         if (serviceType !== 'Food' && serviceType !== 'Produce') {
             return;
         }
-
+        if (serviceType === 'Food') setFoodDefaultTemplateLoading(true);
         try {
             const template = (providedTemplate != null && ((serviceType === 'Food' && providedTemplate.serviceType === 'Food') || (serviceType === 'Produce' && providedTemplate.serviceType === 'Produce')))
                 ? providedTemplate
@@ -1109,6 +1116,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             }
         } catch (error) {
             console.error(`[ClientProfile] Error loading default template for ${serviceType}:`, error);
+        } finally {
+            if (serviceType === 'Food') setFoodDefaultTemplateLoading(false);
         }
     }
 
@@ -1316,6 +1325,14 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         }
     }, [client?.id, client?.serviceType, isNewClient, vendors.length, orderConfig]);
 
+    // useImperativeHandle must run before any conditional return to satisfy Rules of Hooks
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+    useImperativeHandle(ref, () => ({
+        saveAndClose: () => handleSaveAndCloseRef.current?.() ?? Promise.resolve(),
+        close: () => onClose?.(),
+        hasUnsavedChanges: () => hasUnsavedChangesRef.current ?? false,
+    }), [onClose]);
+
     // Don't show anything until all data is loaded
     if (loading || loadingOrderDetails || !client) {
         return (
@@ -1434,11 +1451,12 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         setClient(data.client);
         setFormData(data.client);
 
-        // Set active order, history, order history, and billing history if available
+        // Set active order, history, order history, billing history, and meal plan if available
         setActiveOrder(data.activeOrder || null);
         setHistory(data.history || []);
         setOrderHistory(data.orderHistory || []);
         setBillingHistory(data.billingHistory || []);
+        if (data.mealPlanData != null) setMealPlanInitialOrders(Array.isArray(data.mealPlanData) ? data.mealPlanData : []);
         setLoadingOrderDetails(false);
 
         // Handle upcoming order logic (reused from loadData)
@@ -1698,6 +1716,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             mealPlanData: payload.mealPlanData ?? []
         };
         hydrateFromInitialData(fullInitialData);
+        setMealPlanInitialOrders(Array.isArray(payload.mealPlanData) ? payload.mealPlanData : []);
         setStatuses(payload.s ?? []);
         setNavigators(payload.n ?? []);
         setVendors(payload.v ?? []);
@@ -3776,12 +3795,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             });
         }
     }
-
-    useImperativeHandle(ref, () => ({
-        saveAndClose: () => handleSaveAndClose(),
-        close: () => onClose?.(),
-        hasUnsavedChanges: () => hasUnsavedChanges,
-    }), [onClose, hasUnsavedChanges]);
+    handleSaveAndCloseRef.current = handleSaveAndClose;
 
     async function handleCreateDependent() {
         if (!dependentName.trim() || !client?.id) return;
@@ -4649,19 +4663,19 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 <header className={styles.header}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            {onClose ? (
+                            {!portalMode && (onClose ? (
                                 <button className="btn btn-secondary" onClick={handleDiscardChanges} style={{ marginRight: '8px' }}>
                                     <ArrowLeft size={16} /> Back
                                 </button>
-                            ) : (
+                            ) : !portalMode ? (
                                 <button className="btn btn-secondary" onClick={handleDiscardChanges} style={{ marginRight: '8px' }}>
                                     <ArrowLeft size={16} /> Back
                                 </button>
-                            )}
+                            ) : null)}
                             <h1 className={styles.title}>{formData.fullName || (isDependent ? 'Dependent Profile' : 'Client Profile')}</h1>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {!isDependent && (
+                            {!portalMode && !isDependent && (
                                 <>
                                     <button
                                         className="btn btn-secondary"
@@ -4693,14 +4707,16 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     )}
                                 </>
                             )}
-                            <button
-                                className={`btn ${styles.deleteButton}`}
-                                onClick={() => setShowDeleteModal(true)}
-                                style={{ marginRight: '8px' }}
-                            >
-                                <Trash2 size={16} /> Delete {isDependent ? 'Dependent' : 'Client'}
-                            </button>
-                            {!onClose && (
+                            {!portalMode && (
+                                <button
+                                    className={`btn ${styles.deleteButton}`}
+                                    onClick={() => setShowDeleteModal(true)}
+                                    style={{ marginRight: '8px' }}
+                                >
+                                    <Trash2 size={16} /> Delete {isDependent ? 'Dependent' : 'Client'}
+                                </button>
+                            )}
+                            {(!onClose || portalMode) && (
                                 <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
                                     <Save size={16} /> Save Changes
                                 </button>
@@ -4825,13 +4841,16 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     <input className="input" value={formData.fullName || ''} onChange={e => setFormData({ ...formData, fullName: e.target.value })} />
                                 </div>
 
+                                {!portalMode && (
                                 <div className={styles.formGroup}>
                                     <label className="label">Status</label>
                                     <select className="input" value={formData.statusId} onChange={e => setFormData({ ...formData, statusId: e.target.value })}>
                                         {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                                     </select>
                                 </div>
+                                )}
 
+                                {!portalMode && (
                                 <div className={styles.formGroup}>
                                     <label className="label">Assigned Navigator</label>
                                     <select className="input" value={formData.navigatorId} onChange={e => setFormData({ ...formData, navigatorId: e.target.value })}>
@@ -4839,6 +4858,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                         {navigators.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
                                     </select>
                                 </div>
+                                )}
 
                                 <div className={styles.formGroup}>
                                     <label className="label">Address</label>
@@ -5217,7 +5237,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
                             </section>
 
-                            {!isDependent && (
+                            {!portalMode && !isDependent && (
                                 <section className={styles.card}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                                         <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Dependents {dependents.length > 0 && `(${dependents.length})`}</h3>
@@ -5341,6 +5361,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                 </section>
                             )}
 
+                            {!portalMode && (
+                            <>
                             {/* Screening Form Submissions */}
                             <section className={styles.card}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -5363,6 +5385,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     <SubmissionsList submissions={submissions} />
                                 )}
                             </section>
+                            </>
+                            )}
 
                         </div>
                         )}
@@ -5389,7 +5413,26 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
 
                                 {formData.serviceType === 'Food' && (
-                                            <div className="animate-fade-in">
+                                            <div className="animate-fade-in" style={{ position: 'relative' }}>
+                                                {foodDefaultTemplateLoading && (
+                                                    <div className={styles.loadingContainer} style={{
+                                                        position: 'absolute',
+                                                        inset: 0,
+                                                        zIndex: 10,
+                                                        display: 'flex',
+                                                        flexDirection: 'column',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        gap: '12px',
+                                                        backgroundColor: 'var(--bg-surface)',
+                                                        borderRadius: '8px',
+                                                        minHeight: '120px'
+                                                    }}>
+                                                        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+                                                        <p className={styles.loadingText}>Loading default order…</p>
+                                                    </div>
+                                                )}
+                                                <div style={{ opacity: foodDefaultTemplateLoading ? 0.5 : 1, pointerEvents: foodDefaultTemplateLoading ? 'none' : 'auto' }}>
                                                 <div className={styles.formGroup}>
                                                     <label className="label">Approved Meals Per Week</label>
                                                     <input
@@ -5844,6 +5887,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                         </div>
                                                     );
                                                 })()}
+                                                </div>
                                             </div>
                                         )}
 

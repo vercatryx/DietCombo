@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ClientProfile, Vendor, MenuItem, BoxType, ClientStatus, Navigator } from '@/lib/types';
 import { getClient, getVendors, getMenuItems, getBoxTypes, getStatuses, getNavigators, invalidateClientData } from '@/lib/cached-data';
@@ -130,6 +131,14 @@ export function SidebarActiveOrderSummary() {
                     <h3 className={styles.orderSummaryTitle}>Client Info</h3>
                 </div>
                 <div className={styles.orderSummaryContent}>
+                    <div className={styles.orderSummaryInfoRow} style={{ fontWeight: 600, marginBottom: '4px' }}>
+                        <span>{client.fullName}</span>
+                    </div>
+                    <div className={styles.orderSummaryInfoRow} style={{ marginBottom: '8px' }}>
+                        <Link href={`/client-portal/${clientId}`} className={styles.orderSummaryLink} target="_blank" rel="noopener noreferrer" title="Open client portal">
+                            {clientId}
+                        </Link>
+                    </div>
                     {(client.address?.trim() || client.apt?.trim()) && (
                         <div className={styles.orderSummaryInfoRow}>
                             <MapPin size={12} className={styles.orderSummaryInfoIcon} />

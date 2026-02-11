@@ -2143,6 +2143,43 @@ export async function getDefaultMealPlanTemplateForNewClient(): Promise<MealPlan
 }
 
 /**
+ * Returns all available meal plan dates from the default template (settings), each with its
+ * template items. Includes dates that have no items so the client profile can show every
+ * configured date and let the user set/remember choices per client. Used by SavedMealPlanMonth
+ * to show all dates; client-specific saved data is merged on top by the component.
+ */
+export async function getAvailableMealPlanTemplateWithAllDates(): Promise<MealPlannerOrderResult[]> {
+    try {
+        const dates = await getDefaultTemplateMealPlanDatesForFuture();
+        if (dates.length === 0) return [];
+        const today = getTodayInAppTz();
+        const list: MealPlannerOrderResult[] = [];
+        for (const dateOnly of dates) {
+            if (dateOnly < today) continue;
+            const { items } = await getMealPlannerCustomItems(dateOnly, null);
+            const displayItems: MealPlannerOrderDisplayItem[] = items.map((it, idx) => ({
+                id: `template-${dateOnly}-${idx}`,
+                name: it.name ?? 'Item',
+                quantity: Math.max(0, Number(it.quantity) ?? 0),
+                value: it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
+            }));
+            list.push({
+                id: `template-${dateOnly}`,
+                scheduledDeliveryDate: dateOnly,
+                deliveryDay: null,
+                status: 'draft',
+                totalItems: displayItems.length,
+                items: displayItems
+            });
+        }
+        return list;
+    } catch (err) {
+        console.error('Error fetching available meal plan template with all dates:', err);
+        return [];
+    }
+}
+
+/**
  * When a client has no meal_planner_orders (e.g. on first opening the profile), load the default
  * template from meal_planner_custom_items for today and future dates and create meal_planner_orders
  * and meal_planner_order_items for this client. Called from ClientProfile/SavedMealPlanMonth when

@@ -7,6 +7,7 @@ import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateCl
 import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
 import { Package, Truck, User, Loader2, Info, Plus, Calendar, AlertTriangle, Check, Trash2 } from 'lucide-react';
 import styles from './ClientProfile.module.css';
+import { SavedMealPlanMonth } from './SavedMealPlanMonth';
 
 interface Props {
     client: ClientProfile;
@@ -19,9 +20,13 @@ interface Props {
     upcomingOrder: any;
     activeOrder: any;
     previousOrders: any[];
+    /** When true, show only Current Order Request + Saved Meal Plan (for client portal). Keeps code independent from admin profile. */
+    orderAndMealPlanOnly?: boolean;
+    /** Preloaded meal plan orders for Saved Meal Plan section (when orderAndMealPlanOnly and service is Food). */
+    initialMealPlanOrders?: any[] | null;
 }
 
-export function ClientPortalInterface({ client: initialClient, statuses, navigators, vendors, menuItems, boxTypes, categories, upcomingOrder, activeOrder, previousOrders }: Props) {
+export function ClientPortalInterface({ client: initialClient, statuses, navigators, vendors, menuItems, boxTypes, categories, upcomingOrder, activeOrder, previousOrders, orderAndMealPlanOnly = false, initialMealPlanOrders = null }: Props) {
     const router = useRouter();
     const [client, setClient] = useState<ClientProfile>(initialClient);
     const [activeBoxQuotas, setActiveBoxQuotas] = useState<BoxQuota[]>([]);
@@ -233,6 +238,31 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         }
     }, [orderConfig.boxes, orderConfig.boxTypeId, client.serviceType]);
 
+    // Single-vendor portal: when only one Food vendor exists, ensure it's selected and we don't show vendor dropdown/add/remove
+    const foodVendors = useMemo(() => vendors.filter(v => (v as any).serviceTypes?.includes?.('Food') && (v as any).isActive !== false), [vendors]);
+    const singleVendorMode = orderAndMealPlanOnly && client.serviceType === 'Food' && foodVendors.length === 1;
+    const singleVendor = singleVendorMode ? foodVendors[0] : null;
+
+    const singleVendorInitDoneRef = useRef(false);
+    useEffect(() => {
+        if (!singleVendorMode || !singleVendor) return;
+        if (singleVendorInitDoneRef.current) return;
+        setOrderConfig(prev => {
+            const current = prev.vendorSelections || [];
+            const hasSingleVendor = current.length === 1 && current[0]?.vendorId === singleVendor.id;
+            if (hasSingleVendor) {
+                singleVendorInitDoneRef.current = true;
+                return prev;
+            }
+            const needInit = current.length === 0 || (current.length === 1 && !current[0]?.vendorId);
+            if (!needInit) return prev;
+            singleVendorInitDoneRef.current = true;
+            const one = [{ vendorId: singleVendor.id, items: current[0]?.items || {}, itemsByDay: current[0]?.itemsByDay, selectedDeliveryDays: current[0]?.selectedDeliveryDays || [] }];
+            const next = { ...prev, vendorSelections: one, deliveryDayOrders: undefined };
+            setOriginalOrderConfig(JSON.parse(JSON.stringify(next)));
+            return next;
+        });
+    }, [singleVendorMode, singleVendor?.id]);
 
     // Extract dependencies for auto-save
     const vendorSelections = useMemo(() => orderConfig?.vendorSelections ?? [], [orderConfig?.vendorSelections]);
@@ -1129,29 +1159,37 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     return (
                         <div key={index} className={styles.vendorBlock}>
                             <div className={styles.vendorHeader}>
-                                <select
-                                    className="input"
-                                    value={selection.vendorId}
-                                    onChange={e => {
-                                        const newSelections = [...selectionsToRender];
-                                        newSelections[index] = { ...newSelections[index], vendorId: e.target.value, items: {}, itemsByDay: {}, selectedDeliveryDays: [] };
-                                        setOrderConfig({ ...orderConfig, vendorSelections: newSelections, deliveryDayOrders: undefined });
-                                    }}
-                                >
-                                    <option value="">Select Vendor...</option>
-                                    {vendors.filter(v => v.serviceTypes.includes('Food') && v.isActive).map(v => (
-                                        <option key={v.id} value={v.id} disabled={selectionsToRender.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
-                                            {v.name}
-                                        </option>
-                                    ))}
-                                </select>
-                                <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => {
-                                    const newSelections = [...selectionsToRender];
-                                    newSelections.splice(index, 1);
-                                    setOrderConfig({ ...orderConfig, vendorSelections: newSelections, deliveryDayOrders: undefined });
-                                }} title="Remove Vendor">
-                                    <Trash2 size={16} />
-                                </button>
+                                {singleVendorMode ? (
+                                    <span className={styles.sectionTitle} style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
+                                        {vendor?.name ?? singleVendor?.name ?? 'Vendor'}
+                                    </span>
+                                ) : (
+                                    <>
+                                        <select
+                                            className="input"
+                                            value={selection.vendorId}
+                                            onChange={e => {
+                                                const newSelections = [...selectionsToRender];
+                                                newSelections[index] = { ...newSelections[index], vendorId: e.target.value, items: {}, itemsByDay: {}, selectedDeliveryDays: [] };
+                                                setOrderConfig({ ...orderConfig, vendorSelections: newSelections, deliveryDayOrders: undefined });
+                                            }}
+                                        >
+                                            <option value="">Select Vendor...</option>
+                                            {vendors.filter((v: any) => (v.serviceTypes || []).includes('Food') && (v as any).isActive !== false).map((v: Vendor) => (
+                                                <option key={v.id} value={v.id} disabled={selectionsToRender.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
+                                                    {v.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button className={`${styles.iconBtn} ${styles.danger}`} onClick={() => {
+                                            const newSelections = [...selectionsToRender];
+                                            newSelections.splice(index, 1);
+                                            setOrderConfig({ ...orderConfig, vendorSelections: newSelections, deliveryDayOrders: undefined });
+                                        }} title="Remove Vendor">
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </>
+                                )}
                             </div>
 
                             {/* Delivery Day Selection */}
@@ -1361,12 +1399,14 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     );
                 })}
 
-                <button className={styles.addVendorBtn} onClick={() => {
-                    const newSelections = [...selectionsToRender, { vendorId: '', items: {} }];
-                    setOrderConfig({ ...orderConfig, vendorSelections: newSelections, deliveryDayOrders: undefined });
-                }}>
-                    <Plus size={16} /> Add Vendor
-                </button>
+                {!singleVendorMode && (
+                    <button className={styles.addVendorBtn} onClick={() => {
+                        const newSelections = [...selectionsToRender, { vendorId: '', items: {} }];
+                        setOrderConfig({ ...orderConfig, vendorSelections: newSelections, deliveryDayOrders: undefined });
+                    }}>
+                        <Plus size={16} /> Add Vendor
+                    </button>
+                )}
             </div>
         );
     };
@@ -1376,7 +1416,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     return (
         <div className={styles.container}>
             <div className={styles.wideGrid}>
-                {/* Access Profile - Read Only */}
+                {!orderAndMealPlanOnly && (
+                /* Access Profile - Read Only */
                 <div className={styles.card}>
                     <div className={styles.sectionTitle} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1462,12 +1503,10 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         </div>
                     </div>
                 </div>
-
-
-
+                )}
 
                 {/* Current Order Request - Editable */}
-                <div className={styles.card} style={{ marginTop: '6rem' }}>
+                <div className={styles.card} style={{ marginTop: orderAndMealPlanOnly ? 0 : '6rem' }}>
                     <div className={styles.sectionTitle} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span>Current Order Request</span>
@@ -2044,6 +2083,18 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     )}
                 </div>
 
+                {orderAndMealPlanOnly && client.serviceType === 'Food' && (
+                    <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
+                        <h3 className={styles.sectionTitle}>Saved Meal Plan</h3>
+                        <SavedMealPlanMonth
+                            clientId={client.id}
+                            initialOrders={initialMealPlanOrders ?? undefined}
+                        />
+                    </section>
+                )}
+
+                {!orderAndMealPlanOnly && (
+                <>
                 {/* Recent Orders Panel */}
                 <div className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: 'var(--spacing-md)' }}>
@@ -2249,6 +2300,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         </div>
                     )}
                 </div>
+                </>
+                )}
             </div>
 
             {/* Fixed Floating Save Section at Bottom of Viewport */}

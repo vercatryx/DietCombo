@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { CalendarDays, UtensilsCrossed } from 'lucide-react';
 import {
   getClientMealPlannerData,
-  getDefaultMealPlanTemplateForNewClient,
+  getAvailableMealPlanTemplateWithAllDates,
   saveClientMealPlannerData,
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
@@ -77,14 +77,14 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
     setLoadingDates(false);
   }, [initialOrders]);
 
-  // Load default template when clientId is 'new' and no initialOrders (user opened new client without preload).
+  // Load all available dates from default template when clientId is 'new' and no initialOrders.
   // When preloadInProgress is true, parent is fetching; don't fetch here to avoid duplicate request.
   useEffect(() => {
     if (clientId !== 'new' || preloadInProgress || (initialOrders != null && initialOrders.length > 0)) return;
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
-    getDefaultMealPlanTemplateForNewClient()
+    getAvailableMealPlanTemplateWithAllDates()
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
         applyOrdersAndSelectFirst(list, setOrders, setSelectedDate);
@@ -99,9 +99,9 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       });
   }, [clientId, initialOrders, preloadInProgress]);
 
-  // Load meal plan data when the dialog is opened for an existing client (and no initialOrders). Always refetch when the client
-  // is set so the list of dates with meal plans is always up to date (e.g. after adding a plan
-  // elsewhere and reopening the dialog).
+  // Load meal plan data for existing client: show ALL dates from settings (default template),
+  // merged with this client's saved data per date. So every configured date appears; client's
+  // choices are remembered where they've set them.
   useEffect(() => {
     if (!effectiveClientId) {
       if (clientId !== 'new') {
@@ -111,23 +111,54 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       }
       return;
     }
+    const mergeTemplateWithClient = (templateList: MealPlannerOrderResult[], clientSavedList: MealPlannerOrderResult[]) => {
+      const byDate = new Map<string, MealPlannerOrderResult>();
+      for (const o of templateList) {
+        if (o.scheduledDeliveryDate) byDate.set(o.scheduledDeliveryDate, o);
+      }
+      for (const o of clientSavedList) {
+        if (o.scheduledDeliveryDate) byDate.set(o.scheduledDeliveryDate, o);
+      }
+      return Array.from(byDate.values()).sort((a, b) =>
+        (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || '')
+      );
+    };
     if (initialOrders != null && initialOrders.length > 0) {
-      applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
-      setLoadingDates(false);
+      // Parent passed cached client data; still merge with template so all dates from settings show.
+      setLoadingDates(true);
+      const thisFetchId = fetchIdRef.current + 1;
+      fetchIdRef.current = thisFetchId;
+      getAvailableMealPlanTemplateWithAllDates()
+        .then((templateList) => {
+          if (fetchIdRef.current !== thisFetchId) return;
+          const merged = mergeTemplateWithClient(templateList, initialOrders);
+          applyOrdersAndSelectFirst(merged, setOrders, setSelectedDate);
+        })
+        .catch((err) => {
+          if (fetchIdRef.current !== thisFetchId) return;
+          applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
+        })
+        .finally(() => {
+          if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
+        });
       return;
     }
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
 
-    getClientMealPlannerData(effectiveClientId)
-      .then((list) => {
+    Promise.all([
+      getAvailableMealPlanTemplateWithAllDates(),
+      getClientMealPlannerData(effectiveClientId)
+    ])
+      .then(([templateList, clientSavedList]) => {
         if (fetchIdRef.current !== thisFetchId) return;
-        applyOrdersAndSelectFirst(list, setOrders, setSelectedDate);
+        const merged = mergeTemplateWithClient(templateList, clientSavedList);
+        applyOrdersAndSelectFirst(merged, setOrders, setSelectedDate);
       })
       .catch((err) => {
         if (fetchIdRef.current !== thisFetchId) return;
-        console.error('[SavedMealPlanMonth] Error loading meal planner orders:', err);
+        console.error('[SavedMealPlanMonth] Error loading meal planner data:', err);
         setOrders([]);
       })
       .finally(() => {
@@ -137,32 +168,23 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
-  // Only show today and future dates in the meal planner (from upcoming_orders + upcoming_order_items, service_type = meal_planner)
+  // All today and future dates from the list (all dates from settings are shown; client's saved data merged in)
   const futureOrders = useMemo(
     () => orders.filter((o) => (o.scheduledDeliveryDate || '') >= todayIso),
     [orders, todayIso]
-  );
-  // Only show days that have at least one item with quantity > 0
-  const datesWithPlans = useMemo(
-    () =>
-      futureOrders
-        .filter((o) => (o.items ?? []).some((i) => (Number(i.quantity) || 0) > 0))
-        .map((o) => o.scheduledDeliveryDate)
-        .filter(Boolean),
-    [futureOrders]
   );
   const selectedOrder = useMemo(
     () => (selectedDate ? futureOrders.find((o) => o.scheduledDeliveryDate === selectedDate) : null),
     [futureOrders, selectedDate]
   );
-  const hasDates = datesWithPlans.length > 0;
+  const hasDates = futureOrders.length > 0;
 
-  // When selected date no longer has any items (all 0), switch to first available date or clear
+  // When selected date is no longer in the list, switch to first available date or clear
   useEffect(() => {
     if (!selectedDate) return;
-    if (datesWithPlans.includes(selectedDate)) return;
-    setSelectedDate(datesWithPlans.length > 0 ? datesWithPlans[0] : null);
-  }, [selectedDate, datesWithPlans]);
+    if (futureOrders.some((o) => o.scheduledDeliveryDate === selectedDate)) return;
+    setSelectedDate(futureOrders.length > 0 ? (futureOrders[0]?.scheduledDeliveryDate ?? null) : null);
+  }, [selectedDate, futureOrders]);
 
   function getItemQty(item: MealPlannerOrderDisplayItem): number {
     const n = Number(item.quantity);
@@ -223,7 +245,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
           <h4 className={styles.title}>Saved Meal Plan for the Month</h4>
         </div>
         <p className={styles.subtitle}>
-          Upcoming dates (today and future) with a saved meal plan. Click a date to view its items.
+          All delivery dates from settings. Click a date to view or set quantities; your choices are saved for this client.
         </p>
       </header>
 
@@ -239,12 +261,15 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
       ) : !hasDates ? (
         <div className={styles.emptyState}>
           <CalendarDays size={32} />
-          <p>No saved meal plans for this client.</p>
+          <p>No delivery dates are configured in settings. Add dates in the meal planner settings to show them here.</p>
         </div>
       ) : (
         <>
           <div className={styles.datesRow}>
-            {datesWithPlans.map((d) => (
+            {futureOrders.map((o) => {
+              const d = o.scheduledDeliveryDate;
+              if (!d) return null;
+              return (
               <button
                 key={d}
                 type="button"
@@ -254,7 +279,8 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
                 {isToday(d) && <span className={styles.todayTag}>Today</span>}
                 <span className={styles.dateLabel}>{formatDateLabel(d)}</span>
               </button>
-            ))}
+            );
+            })}
           </div>
 
           {selectedDate && (

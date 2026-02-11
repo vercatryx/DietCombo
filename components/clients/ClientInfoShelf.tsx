@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Link from 'next/link';
 import {
     X, ExternalLink, MapPin, Phone, Mail, User, Info,
     Calendar, DollarSign, StickyNote, Square, CheckSquare,
@@ -272,7 +273,18 @@ export function ClientInfoShelf({
                                 autoFocus
                             />
                         ) : (
-                            <h2>{client.fullName}</h2>
+                            <>
+                                <h2>{client.fullName}</h2>
+                                <Link
+                                    href={`/client-portal/${client.id}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={styles.portalLink}
+                                    title="Open client portal"
+                                >
+                                    {client.id}
+                                </Link>
+                            </>
                         )}
                     </div>
                     <div className={styles.headerActions}>
