@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import styles from './Admin.module.css';
 import { StatusManagement } from '@/components/admin/StatusManagement';
 import { VendorManagement } from '@/components/admin/VendorManagement';
-import { MenuManagement } from '@/components/admin/MenuManagement';
 import { BoxCategoriesManagement } from '@/components/admin/BoxCategoriesManagement';
 import { NavigatorManagement } from '@/components/admin/NavigatorManagement';
 import { AdminManagement } from '@/components/admin/AdminManagement';
@@ -15,10 +14,9 @@ import { DefaultOrderTemplate } from '@/components/admin/DefaultOrderTemplate';
 import { useDataCache } from '@/lib/data-cache';
 import { Vendor, MenuItem } from '@/lib/types';
 
-import { GlobalSettings } from '@/components/admin/GlobalSettings';
 import { MealSelectionManagement } from '@/components/admin/MealSelectionManagement';
 
-type Tab = 'vendors' | 'menus' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'settings' | 'admins' | 'form' | 'meals' | 'template';
+type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'form' | 'meals' | 'template';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('template');
@@ -56,13 +54,7 @@ export default function AdminPage() {
                     className={`${styles.tab} ${activeTab === 'template' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('template')}
                 >
-                    Default Order Template
-                </button>
-                <button
-                    className={`${styles.tab} ${activeTab === 'menus' ? styles.activeTab : ''}`}
-                    onClick={() => setActiveTab('menus')}
-                >
-                    Menus
+                    Menu
                 </button>
                 {/* Hidden: Box Categories
                 <button
@@ -103,12 +95,6 @@ export default function AdminPage() {
                     Screening Form
                 </button>
                 <button
-                    className={`${styles.tab} ${activeTab === 'settings' ? styles.activeTab : ''}`}
-                    onClick={() => setActiveTab('settings')}
-                >
-                    Settings
-                </button>
-                <button
                     className={`${styles.tab} ${activeTab === 'admins' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('admins')}
                 >
@@ -125,7 +111,6 @@ export default function AdminPage() {
             </div>
 
             <div className={styles.content}>
-                {activeTab === 'menus' && <MenuManagement />}
                 {activeTab === 'boxes' && <BoxCategoriesManagement />}
                 {activeTab === 'vendors' && <VendorManagement />}
                 {activeTab === 'navigators' && <NavigatorManagement />}
@@ -144,11 +129,17 @@ export default function AdminPage() {
                         }} />
                     </div>
                 )}
-                {activeTab === 'settings' && <GlobalSettings />}
                 {activeTab === 'admins' && <AdminManagement />}
                 {activeTab === 'meals' && <MealSelectionManagement />}
                 {activeTab === 'template' && mainVendor && (
-                    <DefaultOrderTemplate mainVendor={mainVendor} menuItems={filteredMenuItems} />
+                    <DefaultOrderTemplate
+                        mainVendor={mainVendor}
+                        menuItems={filteredMenuItems}
+                        onMenuItemsChange={async () => {
+                            const mData = await getMenuItems();
+                            setMenuItems(mData);
+                        }}
+                    />
                 )}
                 {activeTab === 'template' && !mainVendor && (
                     <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>

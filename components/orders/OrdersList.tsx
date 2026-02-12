@@ -20,6 +20,7 @@ export function OrdersList() {
     const [isLoading, setIsLoading] = useState(true);
     const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
     const [isDeleting, setIsDeleting] = useState(false);
+    const [goToPageInput, setGoToPageInput] = useState('');
 
     useEffect(() => {
         loadData(page);
@@ -199,16 +200,16 @@ export function OrdersList() {
                     onChange={(e) => setCreationIdFilter(e.target.value)}
                     min={1}
                 />
-                <button type="button" className="button" onClick={handleSelectAll} style={{ marginLeft: 'auto' }}>
+                <button type="button" className="btn btn-secondary" onClick={handleSelectAll} style={{ marginLeft: 'auto' }}>
                     {selectedOrders.size === filteredOrders.length && filteredOrders.length > 0 ? 'Deselect All' : 'Select All'}
                 </button>
                 {selectedOrders.size > 0 && (
                     <button
                         type="button"
-                        className="button"
+                        className="btn btn-danger"
                         onClick={handleDeleteSelected}
                         disabled={isDeleting}
-                        style={{ backgroundColor: 'var(--color-danger)', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                     >
                         <Trash2 size={16} />
                         {isDeleting ? 'Deleting...' : `Delete Selected (${selectedOrders.size})`}
@@ -284,35 +285,67 @@ export function OrdersList() {
                 {filteredOrders.length === 0 && <div className={styles.empty}>No orders found.</div>}
             </div>
 
-            {total > 0 && (
-                <div className={styles.pagination} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '1rem', padding: '0.5rem 0', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                        Page {page} of {Math.ceil(total / PAGE_SIZE) || 1} ({total} total)
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <button
-                            type="button"
-                            className="button"
-                            disabled={page <= 1 || isLoading}
-                            onClick={() => setPage((p) => Math.max(1, p - 1))}
-                            aria-label="Previous page"
-                        >
-                            <ChevronLeft size={18} />
-                            Previous
-                        </button>
-                        <button
-                            type="button"
-                            className="button"
-                            disabled={page >= Math.ceil(total / PAGE_SIZE) || isLoading}
-                            onClick={() => setPage((p) => p + 1)}
-                            aria-label="Next page"
-                        >
-                            Next
-                            <ChevronRight size={18} />
-                        </button>
+            {total > 0 && (() => {
+                const maxPage = Math.ceil(total / PAGE_SIZE) || 1;
+                const goToPage = () => {
+                    const num = parseInt(goToPageInput, 10);
+                    if (!Number.isNaN(num) && num >= 1 && num <= maxPage) {
+                        setPage(num);
+                        setGoToPageInput('');
+                    }
+                };
+                return (
+                    <div className={styles.pagination}>
+                        <span className={styles.paginationInfo}>
+                            Page {page} of {maxPage} ({total} total)
+                        </span>
+                        <div className={styles.paginationButtons}>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                disabled={page <= 1 || isLoading}
+                                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                aria-label="Previous page"
+                            >
+                                <ChevronLeft size={18} />
+                                Previous
+                            </button>
+                            <span className={styles.goToPage}>
+                                <input
+                                    type="number"
+                                    className={`input ${styles.pageInput}`}
+                                    min={1}
+                                    max={maxPage}
+                                    placeholder="Page"
+                                    value={goToPageInput}
+                                    onChange={(e) => setGoToPageInput(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && goToPage()}
+                                    aria-label="Go to page"
+                                />
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={goToPage}
+                                    disabled={isLoading}
+                                    aria-label="Go to page"
+                                >
+                                    Go
+                                </button>
+                            </span>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                disabled={page >= maxPage || isLoading}
+                                onClick={() => setPage((p) => Math.min(maxPage, p + 1))}
+                                aria-label="Next page"
+                            >
+                                Next
+                                <ChevronRight size={18} />
+                            </button>
+                        </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
         </div>
     );
 }

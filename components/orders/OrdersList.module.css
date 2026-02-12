@@ -96,6 +96,39 @@
 
 .empty { padding: var(--spacing-xl, 2rem); text-align: center; color: var(--text-secondary, #555); }
 
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 1rem;
+    padding: 0.5rem 0;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.paginationInfo {
+    color: var(--text-secondary, #555);
+    font-size: 0.9rem;
+}
+
+.paginationButtons {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.goToPage {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.pageInput {
+    width: 4rem;
+    padding: 0.5rem 0.5rem;
+    text-align: center;
+}
+
 .loadingContainer {
     display: flex;
     flex-direction: column;

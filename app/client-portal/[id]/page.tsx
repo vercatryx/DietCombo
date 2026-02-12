@@ -1,27 +1,27 @@
 import {
-  getPublicClient,
+  getClient,
   getStatuses,
   getNavigators,
   getVendors,
   getMenuItems,
   getBoxTypes,
   getCategories,
-  getUpcomingOrderForClient,
   getActiveOrderForClient,
   getOrderHistory,
   getClientMealPlannerData
 } from '@/lib/actions';
 import { ClientPortalInterface } from '@/components/clients/ClientPortalInterface';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { logout } from '@/lib/auth-actions';
 import { LogOut } from 'lucide-react';
 import type { Metadata } from 'next';
+import { getSession } from '@/lib/session';
 
 type Props = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
-  const client = await getPublicClient(id);
+  const client = await getClient(id);
   if (!client) return { title: 'Client Portal' };
   return { title: `${client.fullName} – Portal` };
 }
@@ -29,10 +29,20 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function ClientPortalPage({ params }: Props) {
   const { id } = await params;
 
-  const client = await getPublicClient(id);
+  // Clients may only view their own portal — redirect to their page if they try another
+  const session = await getSession();
+  if (session?.role === 'client' && session.userId !== id) {
+    redirect(`/client-portal/${session.userId}`);
+  }
+
+  // Use getClient (same as client profile) so client.activeOrder comes from clients.upcoming_order
+  const client = await getClient(id);
   if (!client) {
     notFound();
   }
+
+  // Upcoming order from same source as profile: clients.upcoming_order via client.activeOrder
+  const upcomingOrder = client.activeOrder ?? null;
 
   // Portal-specific data fetch (independent of admin getClientProfilePageData)
   const [
@@ -42,7 +52,6 @@ export default async function ClientPortalPage({ params }: Props) {
     menuItems,
     boxTypes,
     categories,
-    upcomingOrder,
     activeOrder,
     previousOrders,
     mealPlanData
@@ -53,7 +62,6 @@ export default async function ClientPortalPage({ params }: Props) {
     getMenuItems(),
     getBoxTypes(),
     getCategories(),
-    getUpcomingOrderForClient(id),
     getActiveOrderForClient(id),
     getOrderHistory(id),
     client.serviceType === 'Food' ? getClientMealPlannerData(id) : Promise.resolve([])

@@ -29,7 +29,12 @@ import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
 import * as actions from '@/lib/actions';
 
-export function MenuManagement() {
+interface MenuManagementProps {
+    /** When provided (e.g. when embedded in Default Order tab), parent can refresh its menu list after add/edit/delete */
+    onMenuItemsChange?: () => void | Promise<void>;
+}
+
+export function MenuManagement({ onMenuItemsChange }: MenuManagementProps = {}) {
     const { getVendors, getMenuItems, invalidateReferenceData } = useDataCache();
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -258,9 +263,9 @@ export function MenuManagement() {
         }
 
         invalidateReferenceData(); // Invalidate cache after update/add
-        // Refresh items
         const mData = await getMenuItems();
         setMenuItems(mData);
+        await onMenuItemsChange?.();
         resetForm();
     }
 
@@ -273,6 +278,7 @@ export function MenuManagement() {
             invalidateReferenceData(); // Invalidate cache after delete
             const mData = await getMenuItems();
             setMenuItems(mData);
+            await onMenuItemsChange?.();
         }
     }
 

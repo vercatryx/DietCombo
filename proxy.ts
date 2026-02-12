@@ -46,6 +46,15 @@ export default async function proxy(req: NextRequest) {
 
     // 5. Redirect if user tries to access wrong portal
     if (session?.userId) {
+        // Clients may ONLY access their own portal page — redirect everything else to it
+        if (session.role === 'client') {
+            const clientPortalPath = `/client-portal/${session.userId}`;
+            if (path !== clientPortalPath) {
+                return NextResponse.redirect(new URL(clientPortalPath, req.url));
+            }
+            return NextResponse.next();
+        }
+
         // Vendor trying to access admin routes
         if (session.role === 'vendor' && isProtectedRoute) {
             // Don't redirect if already on a vendor route (shouldn't happen, but safety check)

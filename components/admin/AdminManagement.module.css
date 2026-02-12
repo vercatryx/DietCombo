@@ -109,8 +109,7 @@
 }
 
 .addButton {
-    background-color: #4f46e5;
-    /* indigo-600 */
+    background-color: var(--color-primary);
     color: white;
     border: none;
     padding: 0.625rem;
@@ -122,8 +121,7 @@
 }
 
 .addButton:hover {
-    background-color: #4338ca;
-    /* indigo-700 */
+    filter: brightness(0.9);
 }
 
 .addButton:disabled {

@@ -1597,20 +1597,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         return date >= startOfWeek && date <= endOfWeek;
     }
 
-    if (isLoading) {
-        return (
-            <div className={styles.container}>
-                <div className={styles.header}>
-                    <h1 className={styles.title}>Clients</h1>
-                </div>
-                <div className={styles.loadingContainer}>
-                    <div className="spinner"></div>
-                    <p>Loading clients...</p>
-                </div>
-            </div>
-        );
-    }
-
     return (
         <div className={styles.container}>
             <div className={styles.header}>
@@ -1625,6 +1611,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 ({clients.length} / {totalClients} loaded)
                             </span>
                         </>
+                    )}
+                    {isLoading && (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading…</span>
                     )}
                     {isRefreshing && (
                         <div className={styles.refreshIndicator}>
@@ -1732,6 +1721,15 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 )}
             </div>
 
+            {isLoading ? (
+                <div className={styles.loadingContainer}>
+                    <Loader2 size={32} className="animate-spin" />
+                    <p>Loading clients...</p>
+                </div>
+            ) : null}
+
+            {!isLoading && (
+            <>
 
             {isAddingDependent && (
                 <div className={styles.createModal}>
@@ -2294,6 +2292,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         refreshDataInBackground();
                     }}
                 />
+            )}
+            </>
             )}
         </div>
     );

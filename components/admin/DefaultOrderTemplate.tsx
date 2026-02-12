@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
-import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate } from '@/lib/actions';
+import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate, addMenuItem, updateMenuItem, deleteMenuItem, updateMenuItemOrder } from '@/lib/actions';
 import { clearDefaultOrderTemplateCache } from '@/lib/default-order-template-cache';
 import { getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
-import { Save, Loader2, Plus, Trash2, Package, ChevronLeft, ChevronRight, X, Check, GripVertical } from 'lucide-react';
+import { Save, Loader2, Plus, Trash2, Package, ChevronLeft, ChevronRight, X, Check, GripVertical, Edit2 } from 'lucide-react';
 import {
     DndContext,
     closestCenter,
@@ -106,12 +106,95 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
     );
 }
 
+interface SortableDefaultOrderItemRowProps {
+    item: MenuItem;
+    template: OrderConfiguration;
+    updateItemQuantity: (itemId: string, qty: number) => void;
+    startEditItem: (item: MenuItem) => void;
+    handleDeleteMenuItem: (id: string) => void;
+}
+
+function SortableDefaultOrderItemRow({ item, template, updateItemQuantity, startEditItem, handleDeleteMenuItem }: SortableDefaultOrderItemRowProps) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.6 : 1,
+    };
+    return (
+        <div ref={setNodeRef} className={styles.itemRow} style={style}>
+            <div
+                {...attributes}
+                {...listeners}
+                className={styles.mealPlannerDragHandle}
+                aria-label="Drag to reorder"
+                style={{ cursor: 'grab', flexShrink: 0 }}
+            >
+                <GripVertical size={16} />
+            </div>
+            <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
+                <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                    Value: {item.value} | Price: ${item.priceEach || 0}
+                </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+                <button
+                    className="btn btn-secondary"
+                    onClick={() => updateItemQuantity(item.id, (template.vendorSelections?.[0]?.items[item.id] || 0) - 1)}
+                    disabled={(template.vendorSelections?.[0]?.items[item.id] || 0) <= 0}
+                    style={{ minWidth: '32px', padding: '4px 8px' }}
+                >
+                    -
+                </button>
+                <input
+                    type="number"
+                    className="input"
+                    value={template.vendorSelections?.[0]?.items[item.id] || 0}
+                    onChange={e => updateItemQuantity(item.id, parseInt(e.target.value) || 0)}
+                    min="0"
+                    style={{ width: '80px', textAlign: 'center' }}
+                />
+                <button
+                    className="btn btn-secondary"
+                    onClick={() => updateItemQuantity(item.id, (template.vendorSelections?.[0]?.items[item.id] || 0) + 1)}
+                    style={{ minWidth: '32px', padding: '4px 8px' }}
+                >
+                    +
+                </button>
+                <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => startEditItem(item)}
+                    title="Edit item"
+                    style={{ minWidth: '36px', padding: '6px' }}
+                >
+                    <Edit2 size={16} />
+                </button>
+                <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleDeleteMenuItem(item.id)}
+                    title="Delete item"
+                    style={{ minWidth: '36px', padding: '6px', color: 'var(--color-danger, #e5534b)' }}
+                >
+                    <Trash2 size={16} />
+                </button>
+            </div>
+        </div>
+    );
+}
+
 interface Props {
     mainVendor: Vendor;
     menuItems: MenuItem[];
+    /** When provided, parent can refresh menu items after add/edit/delete */
+    onMenuItemsChange?: () => Promise<void>;
 }
 
-export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
+const emptyItemForm = { name: '', value: 0, priceEach: 0, sortOrder: 0 };
+
+export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange }: Props) {
     const { getBoxTypes, getVendors, getCategories } = useDataCache();
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
     const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -136,6 +219,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         const d = new Date();
         return new Date(d.getFullYear(), d.getMonth(), 1);
     });
+    // Menu item add/edit (combined with default order list)
+    const [isAddingItem, setIsAddingItem] = useState(false);
+    const [editingItemId, setEditingItemId] = useState<string | null>(null);
+    const [itemForm, setItemForm] = useState(emptyItemForm);
+    const [itemFormSaving, setItemFormSaving] = useState(false);
 
     const mealPlannerSensors = useSensors(
         useSensor(PointerSensor, {
@@ -498,6 +586,120 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
         });
     }
 
+    function cancelItemForm() {
+        setIsAddingItem(false);
+        setEditingItemId(null);
+        setItemForm(emptyItemForm);
+    }
+
+    function startAddItem() {
+        setEditingItemId(null);
+        const maxSort = menuItems.length ? Math.max(...menuItems.map(i => i.sortOrder ?? 0), 0) : 0;
+        setItemForm({ name: '', value: 0, priceEach: 0, sortOrder: maxSort + 1 });
+        setIsAddingItem(true);
+    }
+
+    function startEditItem(item: MenuItem) {
+        setIsAddingItem(false);
+        setEditingItemId(item.id);
+        setItemForm({
+            name: item.name,
+            value: item.value ?? 0,
+            priceEach: item.priceEach ?? 0,
+            sortOrder: item.sortOrder ?? 0
+        });
+    }
+
+    async function handleSaveNewItem() {
+        if (!itemForm.name?.trim()) return;
+        if (!itemForm.priceEach || itemForm.priceEach <= 0) {
+            setMessage('Price must be greater than 0');
+            setTimeout(() => setMessage(null), 3000);
+            return;
+        }
+        setItemFormSaving(true);
+        try {
+            await addMenuItem({
+                vendorId: mainVendor.id,
+                name: itemForm.name.trim(),
+                value: itemForm.value,
+                priceEach: itemForm.priceEach,
+                isActive: true,
+                sortOrder: itemForm.sortOrder
+            } as Omit<MenuItem, 'id'>);
+            await onMenuItemsChange?.();
+            cancelItemForm();
+        } catch (e: any) {
+            setMessage(e?.message || 'Failed to add item');
+            setTimeout(() => setMessage(null), 3000);
+        } finally {
+            setItemFormSaving(false);
+        }
+    }
+
+    async function handleSaveEditItem() {
+        if (!editingItemId || !itemForm.name?.trim()) return;
+        if (!itemForm.priceEach || itemForm.priceEach <= 0) {
+            setMessage('Price must be greater than 0');
+            setTimeout(() => setMessage(null), 3000);
+            return;
+        }
+        setItemFormSaving(true);
+        try {
+            await updateMenuItem(editingItemId, {
+                name: itemForm.name.trim(),
+                value: itemForm.value,
+                priceEach: itemForm.priceEach,
+                sortOrder: itemForm.sortOrder
+            });
+            await onMenuItemsChange?.();
+            cancelItemForm();
+        } catch (e: any) {
+            setMessage(e?.message || 'Failed to update item');
+            setTimeout(() => setMessage(null), 3000);
+        } finally {
+            setItemFormSaving(false);
+        }
+    }
+
+    async function handleDeleteMenuItem(id: string) {
+        if (!confirm('Delete this menu item? It may be deactivated instead if used by orders.')) return;
+        try {
+            const result = await deleteMenuItem(id);
+            if (result && typeof result === 'object' && !result.success && result.message) {
+                setMessage(result.message);
+                setTimeout(() => setMessage(null), 5000);
+            }
+            await onMenuItemsChange?.();
+        } catch (e: any) {
+            setMessage(e?.message || 'Failed to delete item');
+            setTimeout(() => setMessage(null), 3000);
+        }
+    }
+
+    const orderedMenuItems = useMemo(
+        () => [...menuItems].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+        [menuItems]
+    );
+
+    function handleDefaultOrderDragEnd(event: DragEndEvent) {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+        const oldIndex = orderedMenuItems.findIndex((i) => i.id === active.id);
+        const newIndex = orderedMenuItems.findIndex((i) => i.id === over.id);
+        if (oldIndex === -1 || newIndex === -1) return;
+        const reordered = arrayMove(orderedMenuItems, oldIndex, newIndex);
+        const updates = reordered.map((item, index) => ({ id: item.id, sortOrder: index }));
+        updateMenuItemOrder(updates).then(() => onMenuItemsChange?.()).catch((e: any) => {
+            setMessage(e?.message || 'Failed to update order');
+            setTimeout(() => setMessage(null), 3000);
+        });
+    }
+
+    const defaultOrderSensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+    );
+
     // Get box items (items without vendorId)
     function getBoxItems() {
         return menuItems.filter(item =>
@@ -791,51 +993,98 @@ export function DefaultOrderTemplate({ mainVendor, menuItems }: Props) {
                 <div className={styles.formCard}>
                     <h3 className={styles.sectionTitle}>Menu Items</h3>
                     <p className={styles.description}>
-                        Select the default items and quantities for new clients.
+                        Select the default items and quantities for new clients. Drag the handle to reorder; add, edit, or remove menu items below.
                     </p>
 
-                    {menuItems.length === 0 ? (
-                        <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                            No menu items available. Add items in the Menu Items tab first.
-                        </p>
-                    ) : (
-                        <div className={styles.itemsList}>
-                            {menuItems.map(item => (
-                                <div key={item.id} className={styles.itemRow}>
-                                    <div style={{ flex: 1 }}>
-                                        <div style={{ fontWeight: 500, marginBottom: '4px' }}>{item.name}</div>
-                                        <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                                            Value: {item.value} | Price: ${item.priceEach || 0}
-                                        </div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                                        <button
-                                            className="btn btn-secondary"
-                                            onClick={() => updateItemQuantity(item.id, (template.vendorSelections?.[0]?.items[item.id] || 0) - 1)}
-                                            disabled={(template.vendorSelections?.[0]?.items[item.id] || 0) <= 0}
-                                            style={{ minWidth: '32px', padding: '4px 8px' }}
-                                        >
-                                            -
-                                        </button>
-                                        <input
-                                            type="number"
-                                            className="input"
-                                            value={template.vendorSelections?.[0]?.items[item.id] || 0}
-                                            onChange={e => updateItemQuantity(item.id, parseInt(e.target.value) || 0)}
-                                            min="0"
-                                            style={{ width: '80px', textAlign: 'center' }}
-                                        />
-                                        <button
-                                            className="btn btn-secondary"
-                                            onClick={() => updateItemQuantity(item.id, (template.vendorSelections?.[0]?.items[item.id] || 0) + 1)}
-                                            style={{ minWidth: '32px', padding: '4px 8px' }}
-                                        >
-                                            +
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
+                    {(isAddingItem || editingItemId) && (
+                        <div className={styles.itemRow} style={{ flexWrap: 'wrap', gap: 'var(--spacing-sm)', alignItems: 'flex-end', marginBottom: 'var(--spacing-md)', padding: 'var(--spacing-md)', background: 'var(--bg-secondary, rgba(255,255,255,0.03))', borderRadius: '8px' }}>
+                            <div style={{ flex: '1 1 120px', minWidth: 0 }}>
+                                <label className="label" style={{ display: 'block', marginBottom: 4 }}>Name</label>
+                                <input
+                                    className="input"
+                                    value={itemForm.name}
+                                    onChange={e => setItemForm(f => ({ ...f, name: e.target.value }))}
+                                    placeholder="Item name"
+                                />
+                            </div>
+                            <div style={{ width: '80px' }}>
+                                <label className="label" style={{ display: 'block', marginBottom: 4 }}>Value</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={itemForm.value}
+                                    onChange={e => setItemForm(f => ({ ...f, value: Number(e.target.value) || 0 }))}
+                                />
+                            </div>
+                            <div style={{ width: '90px' }}>
+                                <label className="label" style={{ display: 'block', marginBottom: 4 }}>Price</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={itemForm.priceEach}
+                                    onChange={e => setItemForm(f => ({ ...f, priceEach: Number(e.target.value) || 0 }))}
+                                    min="0"
+                                    step="0.01"
+                                />
+                            </div>
+                            <div style={{ width: '70px' }}>
+                                <label className="label" style={{ display: 'block', marginBottom: 4 }}>Order</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={itemForm.sortOrder}
+                                    onChange={e => setItemForm(f => ({ ...f, sortOrder: Number(e.target.value) || 0 }))}
+                                    min="0"
+                                />
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <button type="button" className="btn btn-primary" onClick={editingItemId ? handleSaveEditItem : handleSaveNewItem} disabled={itemFormSaving}>
+                                    {itemFormSaving ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+                                    {itemFormSaving ? 'Saving...' : 'Save'}
+                                </button>
+                                <button type="button" className="btn btn-secondary" onClick={cancelItemForm} disabled={itemFormSaving}>Cancel</button>
+                            </div>
                         </div>
+                    )}
+
+                    {menuItems.length === 0 && !isAddingItem ? (
+                        <p style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: 'var(--spacing-md)' }}>
+                            No menu items yet.
+                        </p>
+                    ) : null}
+                    {menuItems.length > 0 && (
+                        <DndContext
+                            sensors={defaultOrderSensors}
+                            collisionDetection={closestCenter}
+                            onDragEnd={handleDefaultOrderDragEnd}
+                        >
+                            <SortableContext
+                                items={orderedMenuItems.map((i) => i.id)}
+                                strategy={verticalListSortingStrategy}
+                            >
+                                <div className={styles.itemsList}>
+                                    {orderedMenuItems.map((item) => {
+                                        if (editingItemId === item.id) return null;
+                                        return (
+                                            <SortableDefaultOrderItemRow
+                                                key={item.id}
+                                                item={item}
+                                                template={template}
+                                                updateItemQuantity={updateItemQuantity}
+                                                startEditItem={startEditItem}
+                                                handleDeleteMenuItem={handleDeleteMenuItem}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            </SortableContext>
+                        </DndContext>
+                    )}
+
+                    {!isAddingItem && !editingItemId && (
+                        <button type="button" className="btn btn-primary" onClick={startAddItem} style={{ marginTop: 'var(--spacing-md)' }}>
+                            <Plus size={16} /> Add item
+                        </button>
                     )}
                 </div>
                 <div style={{ marginTop: 'var(--spacing-lg)', marginBottom: 'var(--spacing-lg)' }}>
