@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "import-five": "node scripts/import-five-clients.js",
+    "import-all": "node scripts/import-all-clients.js",
+    "import-signatures": "node scripts/import-signatures-from-backup.js",
     "debug-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/debug-client-portal-food.ts",
     "test-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-portal-food-selections.ts"
   },
