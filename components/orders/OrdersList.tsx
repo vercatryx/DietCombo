@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Search, ChevronRight, ArrowUpDown, Trash2, Loader2, ChevronLeft } from 'lucide-react';
 import { getOrdersPaginatedBilling, deleteOrder } from '@/lib/actions-orders-billing';
+import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import styles from './OrdersList.module.css';
+
+const SEARCH_DEBOUNCE_MS = 350;
 
 export function OrdersList() {
     const router = useRouter();
@@ -15,6 +18,7 @@ export function OrdersList() {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
     const [search, setSearch] = useState('');
+    const [searchForFetch, setSearchForFetch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [creationIdFilter, setCreationIdFilter] = useState('');
     const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
@@ -22,15 +26,32 @@ export function OrdersList() {
     const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
     const [isDeleting, setIsDeleting] = useState(false);
     const [goToPageInput, setGoToPageInput] = useState('');
+    const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        loadData(page);
-    }, [page, pageSize]);
+        if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+        searchDebounceRef.current = setTimeout(() => {
+            setSearchForFetch(search);
+            setPage(1);
+            searchDebounceRef.current = null;
+        }, SEARCH_DEBOUNCE_MS);
+        return () => {
+            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+        };
+    }, [search]);
 
-    async function loadData(pageNum: number) {
+    useEffect(() => {
+        setPage(1);
+    }, [statusFilter, creationIdFilter]);
+
+    const loadData = useCallback(async (pageNum: number) => {
         setIsLoading(true);
         try {
-            const { orders: data, total: totalCount } = await getOrdersPaginatedBilling(pageNum, pageSize);
+            const { orders: data, total: totalCount } = await getOrdersPaginatedBilling(pageNum, pageSize, {
+                search: searchForFetch || undefined,
+                statusFilter: statusFilter !== 'all' ? statusFilter : undefined,
+                creationIdFilter: creationIdFilter.trim() || undefined,
+            });
             setOrders(data);
             setTotal(totalCount);
         } catch (error) {
@@ -38,7 +59,11 @@ export function OrdersList() {
         } finally {
             setIsLoading(false);
         }
-    }
+    }, [pageSize, searchForFetch, statusFilter, creationIdFilter]);
+
+    useEffect(() => {
+        loadData(page);
+    }, [page, loadData]);
 
     const handleSort = (key: string) => {
         const direction = sortConfig?.key === key && sortConfig.direction === 'asc' ? 'desc' : 'asc';
@@ -67,18 +92,7 @@ export function OrdersList() {
         return 0;
     });
 
-    const filteredOrders = sortedOrders.filter((o) => {
-        const vendorStr = (o.vendorNames || []).join(' ').toLowerCase();
-        const matchesSearch =
-            (o.clientName || '').toLowerCase().includes(search.toLowerCase()) ||
-            (o.order_number ?? '').toString().includes(search) ||
-            vendorStr.includes(search.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || o.status === statusFilter;
-        const matchesCreationId =
-            !creationIdFilter ||
-            (o.creation_id != null && o.creation_id.toString() === creationIdFilter.trim());
-        return matchesSearch && matchesStatus && matchesCreationId;
-    });
+    const filteredOrders = sortedOrders;
 
     const getStatusStyle = (status: string) => {
         switch (status) {
@@ -138,10 +152,7 @@ export function OrdersList() {
                 <div className={styles.header}>
                     <h1 className={styles.title}>All Orders</h1>
                 </div>
-                <div className={styles.loadingContainer}>
-                    <Loader2 className="animate-spin" size={32} />
-                    <p>Loading orders...</p>
-                </div>
+                <LoadingIndicator message="Loading orders..." />
             </div>
         );
     }

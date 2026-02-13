@@ -627,11 +627,18 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                 isActive: true,
                 sortOrder: itemForm.sortOrder
             } as Omit<MenuItem, 'id'>);
-            await onMenuItemsChange?.();
+            try {
+                await onMenuItemsChange?.();
+            } catch (refreshErr) {
+                console.error('[DefaultOrderTemplate] Refresh after add failed:', refreshErr);
+                // Save succeeded; user can refresh page to see changes
+            }
             cancelItemForm();
         } catch (e: any) {
-            setMessage(e?.message || 'Failed to add item');
-            setTimeout(() => setMessage(null), 3000);
+            console.error('[DefaultOrderTemplate] Add item failed:', e);
+            const msg = e?.message || (typeof e === 'string' ? e : 'Failed to add item');
+            setMessage(msg);
+            setTimeout(() => setMessage(null), 5000);
         } finally {
             setItemFormSaving(false);
         }
@@ -652,11 +659,17 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                 priceEach: itemForm.priceEach,
                 sortOrder: itemForm.sortOrder
             });
-            await onMenuItemsChange?.();
+            try {
+                await onMenuItemsChange?.();
+            } catch (refreshErr) {
+                console.error('[DefaultOrderTemplate] Refresh after edit failed:', refreshErr);
+            }
             cancelItemForm();
         } catch (e: any) {
-            setMessage(e?.message || 'Failed to update item');
-            setTimeout(() => setMessage(null), 3000);
+            console.error('[DefaultOrderTemplate] Update item failed:', e);
+            const msg = e?.message || (typeof e === 'string' ? e : 'Failed to update item');
+            setMessage(msg);
+            setTimeout(() => setMessage(null), 5000);
         } finally {
             setItemFormSaving(false);
         }

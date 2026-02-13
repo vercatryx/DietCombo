@@ -8,9 +8,11 @@ interface DateFilterProps {
     selectedDate: string;
     onDateChange: (date: string) => void;
     onClear: () => void;
+    /** 'orders' = show dates that have orders (Orders View); 'stops' = show dates that have stops (default) */
+    datesSource?: 'stops' | 'orders';
 }
 
-export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterProps) {
+export function DateFilter({ selectedDate, onDateChange, onClear, datesSource = 'stops' }: DateFilterProps) {
     const [showCalendar, setShowCalendar] = useState(false); // Hidden by default
     const [inputValue, setInputValue] = useState(selectedDate || ''); // Text input value
     const [datesWithStops, setDatesWithStops] = useState<Map<string, number>>(new Map());
@@ -53,15 +55,15 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
         }
     }, [selectedDate]);
 
-    // Fetch dates with stops and their counts
+    // Fetch dates with counts: orders table for Orders View, stops for others
     useEffect(() => {
-        const fetchDatesWithStops = async () => {
+        const url = datesSource === 'orders' ? '/api/route/orders-dates' : '/api/stops/dates';
+        const fetchDates = async () => {
             setLoadingDates(true);
             try {
-                const response = await fetch('/api/stops/dates', { cache: 'no-store' });
+                const response = await fetch(url, { cache: 'no-store' });
                 if (response.ok) {
                     const data = await response.json();
-                    // Convert object { date: count } to Map
                     const datesMap = new Map<string, number>();
                     if (data.dates && typeof data.dates === 'object') {
                         Object.entries(data.dates).forEach(([date, count]) => {
@@ -71,14 +73,14 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
                     setDatesWithStops(datesMap);
                 }
             } catch (error) {
-                console.error('Error fetching dates with stops:', error);
+                console.error('Error fetching dates:', error);
             } finally {
                 setLoadingDates(false);
             }
         };
 
-        fetchDatesWithStops();
-    }, []);
+        fetchDates();
+    }, [datesSource]);
 
     // Calendar view functions
     const monthYear = useMemo(() => {
@@ -346,14 +348,32 @@ export function DateFilter({ selectedDate, onDateChange, onClear }: DateFilterPr
     );
 }
 
+/** Format YYYY-MM-DD as local calendar date (avoids UTC-midnight timezone shift). */
 function formatDisplayDate(dateStr: string): string {
     try {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+        if (match) {
+            const year = parseInt(match[1], 10);
+            const month = parseInt(match[2], 10) - 1;
+            const day = parseInt(match[3], 10);
+            const date = new Date(year, month, day);
+            if (!isNaN(date.getTime())) {
+                return date.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                });
+            }
+        }
         const date = new Date(dateStr);
-        return date.toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric' 
-        });
+        if (!isNaN(date.getTime())) {
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+            });
+        }
+        return dateStr;
     } catch {
         return dateStr;
     }

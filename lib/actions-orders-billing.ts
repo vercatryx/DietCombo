@@ -138,31 +138,85 @@ async function enrichOrdersPage(
     }));
 }
 
+export type GetOrdersBillingFilters = {
+    search?: string;
+    statusFilter?: string;
+    creationIdFilter?: string;
+};
+
 /**
  * Paginated orders list. Fetches one page of orders and total count; client/vendor lookups only for that page.
+ * When filters are provided, uses DB-level search (RPC get_orders_billing_search if available).
  * Returns { orders, total } for the Orders list UI.
  */
 export async function getOrdersPaginatedBilling(
     page: number,
     pageSize: number,
+    filters?: GetOrdersBillingFilters,
 ): Promise<{ orders: any[]; total: number }> {
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const db = serviceRoleKey
         ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
         : supabase;
 
+    const hasFilters =
+        (filters?.search != null && filters.search.trim() !== '') ||
+        (filters?.statusFilter != null && filters.statusFilter !== 'all') ||
+        (filters?.creationIdFilter != null && filters.creationIdFilter.trim() !== '');
+
+    if (hasFilters) {
+        const rpcResult = await db.rpc('get_orders_billing_search', {
+            p_search: filters?.search?.trim() || null,
+            p_status: filters?.statusFilter || null,
+            p_creation_id:
+                filters?.creationIdFilter?.trim() && /^\d+$/.test(filters.creationIdFilter.trim())
+                    ? parseInt(filters.creationIdFilter.trim(), 10)
+                    : null,
+            p_limit: pageSize,
+            p_offset: (page - 1) * pageSize,
+        });
+
+        if (!rpcResult.error && rpcResult.data) {
+            const data = rpcResult.data as { order_ids: string[] | null; total: number };
+            const orderIds = data.order_ids || [];
+            const total = Number(data.total) ?? 0;
+            if (orderIds.length === 0) {
+                return { orders: [], total };
+            }
+            const { data: ordersData, error: fetchError } = await db
+                .from('orders')
+                .select('*')
+                .in('id', orderIds);
+            if (fetchError) {
+                console.error('Error fetching orders by ids:', fetchError);
+                return { orders: [], total };
+            }
+            const orders = (ordersData || []).slice(0, orderIds.length);
+            const orderById = new Map(orders.map((o: any) => [o.id, o]));
+            const ordered = orderIds.map((id) => orderById.get(id)).filter(Boolean);
+            const enriched = await enrichOrdersPage(db, ordered);
+            return { orders: enriched, total };
+        }
+        if (rpcResult.error) {
+            console.warn('get_orders_billing_search RPC failed (run sql/get_orders_billing_search_rpc.sql?), falling back:', rpcResult.error.message);
+        }
+    }
+
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const countQuery = db
-        .from('orders')
-        .select('*', { count: 'exact', head: true });
-
-    const dataQuery = db
+    let countQuery = db.from('orders').select('*', { count: 'exact', head: true });
+    let dataQuery = db
         .from('orders')
         .select('*')
         .order('created_at', { ascending: false })
         .range(from, to);
+
+    if (filters?.statusFilter && filters.statusFilter !== 'all') {
+        countQuery = countQuery.eq('status', filters.statusFilter);
+        dataQuery = dataQuery.eq('status', filters.statusFilter);
+    }
+    // creation_id filter only applied when using RPC (column may not exist on all deployments)
 
     const [countResult, dataResult] = await Promise.all([countQuery, dataQuery]);
 

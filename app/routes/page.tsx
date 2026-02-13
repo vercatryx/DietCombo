@@ -180,7 +180,13 @@ export default function RoutesPage() {
 
     const [routes, setRoutes] = React.useState<any[]>([]);
     const [unrouted, setUnrouted] = React.useState<any[]>([]);
-    const [users, setUsers] = React.useState<any[]>([]);
+    /** Lightweight data for Client Assignment: clients (with assigned_driver_id) + driver id→name (+ color). Loaded once. */
+    const [assignmentData, setAssignmentData] = React.useState<{ clients: any[]; drivers: { id: string; name: string; color: string | null }[] } | null>(null);
+    const [assignmentDataLoading, setAssignmentDataLoading] = React.useState(true);
+    /** Orders for selected delivery date (DB-side via RPC). Fetched when Orders View tab is active. */
+    const [ordersForDate, setOrdersForDate] = React.useState<{ order_ids: string[]; client_ids: string[] } | null>(null);
+    /** Orders View: no fetch until user picks a date. null = show empty map only. */
+    const [ordersViewDate, setOrdersViewDate] = React.useState<string | null>(null);
 
     const [busy, setBusy] = React.useState(false);
     const [activeTab, setActiveTab] = React.useState("clients"); // "map" or "clients" — default: Client Assignment
@@ -193,7 +199,7 @@ export default function RoutesPage() {
     const [stats, setStats] = React.useState({ selectedCount: 0, totalAssigned: 0, unroutedVisible: 0, indexItems: [] });
 
     // Manual geocode dialog
-    const [missingBatch, setMissingBatch] = React.useState([]);
+    const [missingBatch, setMissingBatch] = React.useState<any[]>([]);
     const [manualOpen, setManualOpen] = React.useState(false);
 
     const hasRoutes = routes.length > 0;
@@ -241,121 +247,63 @@ export default function RoutesPage() {
     }, [selectedDay, selectedDeliveryDate]);
 
 
+    // Single lightweight load for Client Assignment: clients + driver map (DB-side filter). No /api/users, no full routes.
     React.useEffect(() => {
-        // Load users
         (async () => {
+            setAssignmentDataLoading(true);
             try {
-                const usersRes = await fetch('/api/users', { cache: 'no-store' });
-                if (usersRes.ok) {
-                    const usersData = await usersRes.json();
-                    setUsers(Array.isArray(usersData) ? usersData : []);
-
-                    const missing = usersData.filter((u: any) => (u.lat ?? u.latitude) == null || (u.lng ?? u.longitude) == null);
-                    setMissingBatch(missing);
-                }
+                const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
+                if (!res.ok) throw new Error("Failed to load assignment data");
+                const data = await res.json();
+                setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [] });
+                const clients = data.clients || [];
+                const missing = clients.filter((c: any) => (c.lat ?? null) == null || (c.lng ?? null) == null);
+                setMissingBatch(missing);
             } catch (e) {
-                console.error("Failed to load users", e);
+                console.error("Failed to load assignment data", e);
+                setAssignmentData({ clients: [], drivers: [] });
+            } finally {
+                setAssignmentDataLoading(false);
             }
         })();
+    }, [selectedDay]);
 
-        // Load data and then auto-cleanup
+    const refreshAssignmentData = React.useCallback(async () => {
+        try {
+            const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
+            if (res.ok) {
+                const data = await res.json();
+                setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [] });
+            }
+        } catch (e) {
+            console.error("Failed to refresh assignment data", e);
+        }
+    }, [selectedDay]);
+
+    // Orders View: only load orders-for-date (no routes API, no stops). Map is built from clients + client_ids.
+    React.useEffect(() => {
+        if (activeTab !== "map" || !ordersViewDate) return;
         (async () => {
             setBusy(true);
             try {
-                // Load initial data
-                let url1 = `/api/route/routes?day=${selectedDay}`;
-                if (selectedDeliveryDate) {
-                    url1 += `&delivery_date=${selectedDeliveryDate}`;
-                }
-                const res1 = await fetch(url1, { cache: "no-store" });
-                const data1 = await res1.json();
-                setRoutes(data1.routes || []);
-                setUnrouted(data1.unrouted || []);
-
-                // Debug: Log initial route data
-                console.log(`[RoutesPage] Initial load for day="${selectedDay}":`, {
-                    routesCount: (data1.routes || []).length,
-                    unroutedCount: (data1.unrouted || []).length
-                });
-
-                if (!data1.routes || data1.routes.length === 0) {
-                    console.warn(`[RoutesPage] ⚠️ No drivers found on initial load for day="${selectedDay}". User needs to generate routes.`);
-                }
-
-                // Log users without stops to browser console
-                if (data1.usersWithoutStops && Array.isArray(data1.usersWithoutStops)) {
-                    console.log(`\n[RoutesPage] Checking users without stops for day: ${selectedDay}`);
-                    if (data1.usersWithoutStops.length === 0) {
-                        console.log(`  ✅ All users have stops for day: ${selectedDay}`);
-                    } else {
-                        data1.usersWithoutStops.forEach((user: any) => {
-                            console.log(`  ❌ User #${user.id} (${user.name}): ${user.reason}`);
-                        });
-                        console.log(`  📊 Total users without stops: ${data1.usersWithoutStops.length}`);
-                    }
-                }
-
-
-                // Auto-cleanup after initial load (for selected day and "all" for drivers)
-                // This ensures all active users (not paused, delivery=true) have stops
-                let cleanupUrl = `/api/route/cleanup?day=${selectedDay}`;
-                if (selectedDeliveryDate) {
-                    cleanupUrl += `&delivery_date=${selectedDeliveryDate}`;
-                }
-                const res3 = await fetch(cleanupUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                });
-
-                let cleanupData = null;
-                if (res3.ok) {
-                    cleanupData = await res3.json().catch(() => null);
-                    if (cleanupData?.stopsCreated > 0) {
-                        console.log(`[RoutesPage] Created ${cleanupData.stopsCreated} missing stops for day "${selectedDay}"`);
-                    }
+                const ordRes = await fetch(`/api/route/orders-for-date?date=${ordersViewDate}`, { cache: "no-store" });
+                if (ordRes.ok) {
+                    const ordData = await ordRes.json();
+                    setOrdersForDate({
+                        order_ids: ordData.order_ids || [],
+                        client_ids: ordData.client_ids || [],
+                    });
                 } else {
-                    const errorText = await res3.text().catch(() => "Unknown error");
-                    console.error(`[RoutesPage] Cleanup failed for "${selectedDay}":`, errorText);
-                }
-
-                // Also cleanup "all" day routes (used by driver app)
-                if (selectedDay !== "all") {
-                    try {
-                        const resAll = await fetch("/api/route/cleanup?day=all", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                        });
-                        if (resAll.ok) {
-                            const allData = await resAll.json().catch(() => null);
-                            if (allData?.stopsCreated > 0) {
-                                console.log(`[RoutesPage] Created ${allData.stopsCreated} missing stops for day "all"`);
-                            }
-                        }
-                    } catch (e) {
-                        console.error("[RoutesPage] Cleanup for 'all' day failed:", e);
-                    }
-                }
-
-                if (res3.ok) {
-                    // Reload after cleanup
-                    let url4 = `/api/route/routes?day=${selectedDay}`;
-                    if (selectedDeliveryDate) {
-                        url4 += `&delivery_date=${selectedDeliveryDate}`;
-                    }
-                    const res4 = await fetch(url4, { cache: "no-store" });
-                    const data4 = await res4.json();
-                    setRoutes(data4.routes || []);
-                    setUnrouted(data4.unrouted || []);
-
+                    setOrdersForDate(null);
                 }
             } catch (e) {
-                console.error("Auto-cleanup failed:", e);
-                // Silently fail - don't block the page
+                console.error("Failed to load orders for Orders View", e);
+                setOrdersForDate(null);
             } finally {
                 setBusy(false);
             }
         })();
-    }, [selectedDay, selectedDeliveryDate]);
+    }, [activeTab, ordersViewDate]);
 
     async function handleManualGeocoded(updates: any) {
         try {
@@ -370,17 +318,15 @@ export default function RoutesPage() {
                     })
                 )
             );
-            setUsers(prev => {
-                const updated = [...prev];
-                updates.forEach((u: any) => {
-                    const idx = updated.findIndex(usr => String(usr.id) === String(u.id));
-                    if (idx >= 0) {
-                        updated[idx] = { ...updated[idx], ...u };
-                    }
+            setAssignmentData(prev => {
+                if (!prev) return prev;
+                const updated = prev.clients.map((c: any) => {
+                    const u = updates.find((x: any) => String(x.id) === String(c.id));
+                    return u ? { ...c, ...u } : c;
                 });
-                return updated;
+                return { ...prev, clients: updated };
             });
-            setMissingBatch((prev) => prev.filter((u: any) => !updates.some((x: any) => x.id === u.id)));
+            setMissingBatch((prev: any[]) => prev.filter((u: any) => !updates.some((x: any) => x.id === u.id)));
         } catch (err: any) {
             console.error("Manual geocode save failed:", err);
             alert("Save failed: " + (err?.message || "Unknown error"));
@@ -463,15 +409,21 @@ export default function RoutesPage() {
         }
     }, [selectedDay, loadRoutes, saveCurrentRun, selectedDeliveryDate]);
 
-    // Driver id -> color map for marker coloring by assigned driver (client's assigned_driver_id)
+    // Driver id -> color map (from routes when available, else from assignmentData.drivers for Orders View)
     const driverIdToColor = React.useMemo(() => {
         const m = new Map<string, string>();
-        (routes || []).forEach((r, i) => {
-            const id = String(r.driverId ?? r.id ?? "");
-            if (id) m.set(id, r.color || palette[i % palette.length]);
-        });
+        if ((routes || []).length > 0) {
+            (routes || []).forEach((r, i) => {
+                const id = String(r.driverId ?? r.id ?? "");
+                if (id) m.set(id, r.color || palette[i % palette.length]);
+            });
+        } else if (assignmentData?.drivers?.length) {
+            assignmentData.drivers.forEach((d, i) => {
+                if (d.id) m.set(String(d.id), d.color || palette[i % palette.length]);
+            });
+        }
         return m;
-    }, [routes]);
+    }, [routes, assignmentData?.drivers]);
 
     // Map-facing drivers (kept in sync with page routes)
     // Marker colors use the assigned driver's color (client's assigned_driver_id), not the route owner
@@ -536,6 +488,74 @@ export default function RoutesPage() {
             return { ...s, __driverColor: assignedColor ?? "#666" };
         });
     }, [unrouted, driverIdToColor]);
+
+    // Orders View: map from clients + orders (no stops). Clients with orders on selected date, grouped by assigned_driver_id.
+    const clientIdsWithOrdersOnDate = React.useMemo(
+        () => new Set<string>((ordersForDate?.client_ids || []).map((id) => String(id))),
+        [ordersForDate?.client_ids]
+    );
+    const ordersViewClients = React.useMemo(() => {
+        if (!assignmentData?.clients?.length || clientIdsWithOrdersOnDate.size === 0) return [];
+        return assignmentData.clients.filter((c: any) => clientIdsWithOrdersOnDate.has(String(c.id)));
+    }, [assignmentData?.clients, clientIdsWithOrdersOnDate]);
+
+    const mapDriversOrdersView = React.useMemo(() => {
+        const drivers = assignmentData?.drivers || [];
+        return drivers.map((d, i) => {
+            const driverId = String(d.id);
+            const color = d.color || palette[i % palette.length];
+            const stops = ordersViewClients
+                .filter((c: any) => String(c.assigned_driver_id || c.assignedDriverId || "") === driverId)
+                .filter((c: any) => c.lat != null && c.lng != null && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng)))
+                .map((c: any, idx: number) => ({
+                    id: c.id,
+                    userId: c.id,
+                    name: nameOf(c),
+                    first: c.first ?? null,
+                    last: c.last ?? null,
+                    firstName: c.first ?? null,
+                    lastName: c.last ?? null,
+                    fullName: nameOf(c),
+                    address: `${c.address ?? ""}${c.apt ? " " + c.apt : ""}`.trim(),
+                    phone: c.phone ?? "",
+                    city: c.city ?? "",
+                    state: c.state ?? "",
+                    zip: c.zip ?? "",
+                    lat: Number(c.lat),
+                    lng: Number(c.lng),
+                    __driverId: driverId,
+                    __driverName: d.name || `Driver ${i}`,
+                    assigned_driver_id: driverId,
+                    __driverColor: color,
+                    __stopIndex: idx,
+                    orderId: null,
+                    orderDate: null,
+                    deliveryDate: null,
+                    orderStatus: null,
+                    completed: false,
+                    dislikes: "",
+                }));
+            return { id: driverId, driverId, name: d.name || `Driver ${i}`, color, polygon: [], stops };
+        });
+    }, [assignmentData?.drivers, ordersViewClients]);
+
+    const enrichedUnroutedOrdersView = React.useMemo(() => {
+        const noDriver = ordersViewClients.filter(
+            (c: any) => !(c.assigned_driver_id || c.assignedDriverId) && c.lat != null && c.lng != null && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng))
+        );
+        return noDriver.map((c: any) => ({
+            id: c.id,
+            userId: c.id,
+            name: nameOf(c),
+            first: c.first,
+            last: c.last,
+            address: c.address ?? "",
+            lat: Number(c.lat),
+            lng: Number(c.lng),
+            assigned_driver_id: null,
+            __driverColor: "#666",
+        }));
+    }, [ordersViewClients]);
 
     const routeStops = React.useMemo(() => routes.map(r => (r.stops || [])), [routes]);
     const driverColors = React.useMemo(() => routes.map((r, i) => r.color || palette[i % palette.length]), [routes]);
@@ -802,7 +822,7 @@ export default function RoutesPage() {
             <ManualGeocodeDialog
                 open={manualOpen}
                 onClose={() => setManualOpen(false)}
-                usersMissing={missingBatch}
+                usersMissing={missingBatch as unknown as never[]}
                 onGeocoded={handleManualGeocoded}
             />
 
@@ -879,9 +899,17 @@ export default function RoutesPage() {
                             position: 'relative'
                         }}>
                             <DateFilter
-                                selectedDate={selectedDeliveryDate}
-                                onDateChange={(date) => setSelectedDeliveryDate(date)}
+                                selectedDate={ordersViewDate ?? ''}
+                                onDateChange={(date) => {
+                                    setOrdersViewDate(date);
+                                    setSelectedDeliveryDate(date);
+                                }}
+                                datesSource="orders"
                                 onClear={() => {
+                                    setOrdersViewDate(null);
+                                    setRoutes([]);
+                                    setUnrouted([]);
+                                    setOrdersForDate(null);
                                     const today = new Date();
                                     const year = today.getFullYear();
                                     const month = String(today.getMonth() + 1).padStart(2, '0');
@@ -893,9 +921,10 @@ export default function RoutesPage() {
                         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
                             {(() => {
                                 const Component = DriversMapLeaflet as any;
+                                const useOrdersViewData = activeTab === "map" && ordersForDate?.client_ids != null;
                                 return <Component
-                                    drivers={mapDrivers}
-                                    unrouted={enrichedUnrouted}
+                                    drivers={useOrdersViewData ? mapDriversOrdersView : mapDrivers}
+                                    unrouted={useOrdersViewData ? enrichedUnroutedOrdersView : enrichedUnrouted}
                                     onReassign={handleReassign}
                                     onRenameDriver={handleRenameDriver}
                                     busy={busy}
@@ -1009,13 +1038,16 @@ export default function RoutesPage() {
                         </div>
                         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                             <ClientDriverAssignment
-                                routes={routes}
+                                initialClients={assignmentData?.clients ?? []}
+                                drivers={assignmentData?.drivers ?? []}
+                                assignmentDataLoading={assignmentDataLoading}
                                 selectedDay={selectedDay}
                                 selectedDeliveryDate={selectedDeliveryDate}
                                 readOnly={false}
                                 onDriverAssigned={() => {
                                     loadRoutes();
                                     saveCurrentRun(true);
+                                    refreshAssignmentData();
                                 }}
                             />
                         </div>
@@ -1045,32 +1077,20 @@ export default function RoutesPage() {
                     onClick={async () => {
                         setBusy(true);
                         try {
-                            // Fetch all clients (users) to get their assigned_driver_id
-                            const usersRes = await fetch('/api/users', { cache: 'no-store' });
-                            if (!usersRes.ok) throw new Error('Failed to fetch users');
-                            const allClients = await usersRes.json();
-                            
-                            // Exclude paused and delivery-off clients (same as routes map / client assignment)
-                            const activeClients = (allClients || []).filter((c: any) => {
-                                if (c.paused) return false;
-                                const d = c.delivery;
-                                if (d !== undefined && d !== null && !d) return false;
-                                return true;
-                            });
-                            
-                            // Fetch routes to get driver info (colors, names, etc.)
-                            const routesRes = await fetch(`/api/route/routes?day=${selectedDay}`, { cache: "no-store" });
-                            const routesData = await routesRes.json();
-                            const labelRoutes = routesData.routes || [];
-                            
-                            // Build driver map: driverId -> { color, name, number }
-                            const driverMap = new Map();
-                            labelRoutes.forEach((r: any, i: number) => {
-                                const driverId = String(r.driverId || r.id || '');
-                                const driverNum = rankForRoute(r, i);
+                            const activeClients = assignmentData?.clients ?? [];
+                            const driverList = assignmentData?.drivers ?? [];
+                            if (activeClients.length === 0) {
+                                alert('No client data loaded. Please wait for the page to load.');
+                                return;
+                            }
+                            // Build driver map from assignment-data (id -> { color, name, number })
+                            const driverMap = new Map<string, { color: string; name: string; number: number }>();
+                            driverList.forEach((d: any, i: number) => {
+                                const driverId = String(d.id);
+                                const driverNum = parseDriverNum(d.name) ?? i;
                                 driverMap.set(driverId, {
-                                    color: r.color || palette[i % palette.length],
-                                    name: r.driverName || r.name || `Driver ${driverNum}`,
+                                    color: (d.color && d.color !== "#666") ? d.color : palette[i % palette.length],
+                                    name: d.name || `Driver ${driverNum}`,
                                     number: driverNum,
                                 });
                             });
@@ -1156,7 +1176,7 @@ export default function RoutesPage() {
                         }
                     }}
                     variant="outlined"
-                    disabled={busy || !hasRoutes}
+                    disabled={busy || !assignmentData || assignmentData.clients.length === 0}
                 >
                     Download Labels
                 </Button>

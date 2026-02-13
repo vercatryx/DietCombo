@@ -24,6 +24,7 @@ export async function GET(req: Request) {
         const { searchParams } = new URL(req.url);
         const day = (searchParams.get("day") || "all").toLowerCase();
         const deliveryDate = searchParams.get("delivery_date") || null;
+        const light = searchParams.get("light") === "1" || searchParams.get("light") === "true";
 
         // 1) Drivers filtered by day (if not "all")
         let driversQuery = supabase
@@ -437,6 +438,15 @@ export async function GET(req: Request) {
             if (!claimed.has(k) && !hasAssignedDriver) {
                 unrouted.push(v);
             }
+        }
+
+        const skipStopCreation = light || (normalizedDeliveryDate != null && normalizedDeliveryDate !== "");
+        if (skipStopCreation) {
+            console.log(`[route/routes] Returning ${routes.length} routes, ${unrouted.length} unrouted (no stop-creation: light=${light}, delivery_date=${deliveryDate ?? "none"})`);
+            return NextResponse.json(
+                { routes, unrouted, usersWithoutStops: [] },
+                { headers: { "Cache-Control": "no-store" } }
+            );
         }
 
         // 9) Check clients without stops, create missing stops, and log reasons

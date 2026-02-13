@@ -129,16 +129,6 @@
     text-align: center;
 }
 
-.loadingContainer {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 4rem;
-    color: var(--text-secondary, #555);
-    gap: 1rem;
-}
-
 .statusPending { background: rgba(217,119,6,0.1); color: var(--color-warning, #d97706); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
 .statusConfirmed { background: rgba(253,235,35,0.4); color: #000; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
 .statusCompleted { background: rgba(22,163,74,0.1); color: var(--color-success, #16a34a); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }

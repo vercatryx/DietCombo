@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Box, Typography, TextField, Select, MenuItem, FormControl, InputLabel, CircularProgress, InputAdornment, Checkbox, Button } from '@mui/material';
+import { Box, Typography, TextField, Select, MenuItem, FormControl, InputLabel, InputAdornment, Checkbox, Button } from '@mui/material';
 import { Search } from 'lucide-react';
+import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import StopPreviewDialog from './StopPreviewDialog';
 import dynamic from 'next/dynamic';
 const DriversMapLeaflet = dynamic(() => import('./DriversMapLeaflet'), { ssr: false });
@@ -26,158 +27,95 @@ interface Driver {
     driverId?: string;
 }
 
+interface DriverInfo {
+    id: string;
+    name: string;
+    color?: string | null;
+}
+
 interface ClientDriverAssignmentProps {
-    routes: any[];
+    /** Clients from assignment-data API (with assigned_driver_id). No fetch inside. */
+    initialClients: any[];
+    /** Drivers from assignment-data API: id, name, color. */
+    drivers: DriverInfo[];
+    assignmentDataLoading?: boolean;
     selectedDay: string;
     selectedDeliveryDate?: string;
     readOnly?: boolean;
     onDriverAssigned?: () => void;
 }
 
+const DEFAULT_PALETTE = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
+    "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
+];
+
 export default function ClientDriverAssignment({
-    routes,
+    initialClients,
+    drivers,
+    assignmentDataLoading = false,
     selectedDay,
     selectedDeliveryDate,
     readOnly = false,
     onDriverAssigned
 }: ClientDriverAssignmentProps) {
-    const [clients, setClients] = useState<Client[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
-    const [clientDriverMap, setClientDriverMap] = useState<Map<string, string>>(new Map());
-    const [clientStopMap, setClientStopMap] = useState<Map<string, any>>(new Map()); // Store stop info for each client
     const [savingClientId, setSavingClientId] = useState<string | null>(null);
     const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
     const [bulkDriverId, setBulkDriverId] = useState<string>('');
     const [isBulkSaving, setIsBulkSaving] = useState(false);
     const [previewStop, setPreviewStop] = useState<any | null>(null);
     const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
-    const [totalCustomers, setTotalCustomers] = useState<number>(0);
-    const [skippedPausedOrDeliveryOff, setSkippedPausedOrDeliveryOff] = useState<number>(0);
+    /** Optimistic overrides for assigned_driver_id after user assigns (before parent refreshes) */
+    const [assignmentOverride, setAssignmentOverride] = useState<Map<string, string>>(new Map());
 
-    // Extract drivers from routes
-    const drivers = useMemo(() => {
-        return routes.map(route => ({
-            id: route.driverId || route.id,
-            name: route.driverName || route.name || 'Unknown Driver',
-            driverId: route.driverId || route.id
-        }));
-    }, [routes]);
+    // Map initialClients to Client[] and build base clientDriverMap from assigned_driver_id
+    const { clients, baseDriverMap } = useMemo(() => {
+        const list: Client[] = (initialClients || []).map((user: any) => {
+            const fullName = `${user.first || ''} ${user.last || ''}`.trim() || user.name || user.full_name || 'Unnamed';
+            return {
+                id: user.id,
+                fullName,
+                firstName: user.first ?? null,
+                lastName: user.last ?? null,
+                address: user.address ?? '',
+                city: user.city ?? '',
+                state: user.state ?? '',
+                phoneNumber: user.phone ?? '',
+                lat: user.lat != null ? Number(user.lat) : null,
+                lng: user.lng != null ? Number(user.lng) : null
+            };
+        });
+        const map = new Map<string, string>();
+        (initialClients || []).forEach((user: any) => {
+            const did = user.assigned_driver_id ?? user.assignedDriverId;
+            if (user.id && did) map.set(user.id, String(did));
+        });
+        return { clients: list, baseDriverMap: map };
+    }, [initialClients]);
 
+    const clientDriverMap = useMemo(() => {
+        const m = new Map<string, string>(baseDriverMap);
+        assignmentOverride.forEach((driverId, clientId) => {
+            if (driverId) m.set(clientId, driverId);
+            else m.delete(clientId);
+        });
+        return m;
+    }, [baseDriverMap, assignmentOverride]);
+
+    const driversForDropdown = useMemo(() => drivers.map(d => ({
+        id: d.id,
+        name: d.name,
+        driverId: d.id
+    })), [drivers]);
+    const totalCustomers = clients.length;
+
+    // When parent refreshes assignment data, clear optimistic overrides
     useEffect(() => {
-        loadClients();
-    }, []);
-
-    async function loadClients() {
-        setIsLoading(true);
-        try {
-            const res = await fetch('/api/users', { cache: 'no-store' });
-            if (!res.ok) {
-                throw new Error('Failed to load clients');
-            }
-            const usersData = await res.json();
-            const allUsers = usersData || [];
-
-            // Exclude paused and delivery-off clients (routes page should not show them)
-            const activeUsers = allUsers.filter((user: any) => {
-                if (user.paused) return false;
-                const delivery = user.delivery;
-                if (delivery !== undefined && delivery !== null && !delivery) return false;
-                return true;
-            });
-
-            setTotalCustomers(allUsers.length);
-            setSkippedPausedOrDeliveryOff(allUsers.length - activeUsers.length);
-            
-            // Map users to clients format
-            const clientsList: Client[] = activeUsers.map((user: any) => {
-                // Build full name: prefer first+last, fallback to full_name, then 'Unnamed'
-                const fullName = `${user.first || ''} ${user.last || ''}`.trim() || user.name || user.full_name || 'Unnamed';
-                
-                return {
-                    id: user.id,
-                    fullName: fullName,
-                    firstName: user.first || null,
-                    lastName: user.last || null,
-                    address: user.address || '',
-                    city: user.city || '',
-                    state: user.state || '',
-                    phoneNumber: user.phone || '',
-                    lat: user.lat != null ? Number(user.lat) : null,
-                    lng: user.lng != null ? Number(user.lng) : null
-                };
-            });
-
-            setClients(clientsList);
-
-            // Load current driver assignments for clients
-            await loadClientDriverAssignments(clientsList);
-        } catch (error) {
-            console.error('Failed to load clients:', error);
-        } finally {
-            setIsLoading(false);
-        }
-    }
-
-    async function loadClientDriverAssignments(clientsList: Client[]) {
-        try {
-            // Fetch clients directly to get their assigned_driver_id
-            const res = await fetch('/api/users', { cache: 'no-store' });
-            if (!res.ok) return;
-            
-            const usersData = await res.json();
-            
-            // Build a map of client ID to driver ID from clients table
-            const assignments = new Map<string, string>();
-            const stopInfoMap = new Map<string, any>();
-            
-            // Map users to get assigned_driver_id
-            (usersData || []).forEach((user: any) => {
-                if (user.id && user.assignedDriverId) {
-                    assignments.set(user.id, user.assignedDriverId);
-                }
-            });
-            
-            // Also fetch stops to get stop info for status-based color coding
-            const url = selectedDeliveryDate 
-                ? `/api/route/routes?day=${selectedDay}&delivery_date=${selectedDeliveryDate}`
-                : `/api/route/routes?day=${selectedDay}`;
-            
-            const routesRes = await fetch(url, { cache: 'no-store' });
-            if (routesRes.ok) {
-                const routesData = await routesRes.json();
-                const routes = routesData.routes || [];
-                const unroutedStops = routesData.unrouted || [];
-                
-                // Build stop info map from routes and unrouted stops
-                routes.forEach((route: any) => {
-                    const stops = route.stops || [];
-                    stops.forEach((stop: any) => {
-                        if (stop.userId || stop.clientId) {
-                            const clientId = stop.userId || stop.clientId;
-                            if (!stopInfoMap.has(clientId)) {
-                                stopInfoMap.set(clientId, stop);
-                            }
-                        }
-                    });
-                });
-                
-                unroutedStops.forEach((stop: any) => {
-                    if (stop.userId || stop.clientId) {
-                        const clientId = stop.userId || stop.clientId;
-                        if (!stopInfoMap.has(clientId)) {
-                            stopInfoMap.set(clientId, stop);
-                        }
-                    }
-                });
-            }
-            
-            setClientDriverMap(assignments);
-            setClientStopMap(stopInfoMap);
-        } catch (error) {
-            console.error('Failed to load client driver assignments:', error);
-        }
-    }
+        setAssignmentOverride(new Map());
+    }, [initialClients]);
+    const skippedPausedOrDeliveryOff = 0;
 
     async function handleDriverChange(clientId: string, driverId: string) {
         setSavingClientId(clientId);
@@ -198,14 +136,12 @@ export default function ClientDriverAssignment({
                 throw new Error(errorData.error || 'Failed to assign driver');
             }
 
-            // Update local state
-            const newMap = new Map(clientDriverMap);
-            if (driverId) {
-                newMap.set(clientId, driverId);
-            } else {
-                newMap.delete(clientId);
-            }
-            setClientDriverMap(newMap);
+            setAssignmentOverride(prev => {
+                const next = new Map(prev);
+                if (driverId) next.set(clientId, driverId);
+                else next.delete(clientId);
+                return next;
+            });
 
             // Notify parent to refresh routes if callback provided
             if (onDriverAssigned) {
@@ -265,12 +201,11 @@ export default function ClientDriverAssignment({
 
             await Promise.all(promises);
 
-            // Update local state
-            const newMap = new Map(clientDriverMap);
-            clientIdsArray.forEach(clientId => {
-                newMap.set(clientId, bulkDriverId);
+            setAssignmentOverride(prev => {
+                const next = new Map(prev);
+                clientIdsArray.forEach(cid => next.set(cid, bulkDriverId));
+                return next;
             });
-            setClientDriverMap(newMap);
 
             // Clear selection
             setSelectedClientIds(new Set());
@@ -331,25 +266,19 @@ export default function ClientDriverAssignment({
     // Order status is only used for display in popups/dialogs, not for map marker colors
     // The __driverColor property on stops is set from assignedDriver?.color and is used for all marker coloring
 
-    // Convert clients to stops format for the map
-    // NOTE: All hooks must be called before any conditional returns
+    // Convert clients to stops format for the map (driver info from props)
     const mapStops = useMemo(() => {
         return filteredClients
             .filter(client => {
-                // Only include clients with geolocation from client table
                 const lat = client.lat;
                 const lng = client.lng;
                 return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
             })
             .map(client => {
-                const stopInfo = clientStopMap.get(client.id);
                 const currentDriverId = clientDriverMap.get(client.id) || null;
-                
-                // Find which driver this client is assigned to
-                const assignedDriver = currentDriverId 
-                    ? routes.find(r => String(r.driverId || r.id) === String(currentDriverId))
+                const assignedDriver = currentDriverId
+                    ? drivers.find(d => String(d.id) === String(currentDriverId))
                     : null;
-                
                 return {
                     id: client.id,
                     userId: client.id,
@@ -361,62 +290,51 @@ export default function ClientDriverAssignment({
                     lastName: client.lastName,
                     fullName: client.fullName,
                     full_name: client.fullName,
-                    address: stopInfo?.address || client.address || '',
-                    apt: stopInfo?.apt || '',
-                    city: stopInfo?.city || client.city || '',
-                    state: stopInfo?.state || client.state || '',
-                    zip: stopInfo?.zip || '',
-                    phone: stopInfo?.phone || client.phoneNumber || '',
-                    lat: client.lat, // Use lat from client table
-                    lng: client.lng, // Use lng from client table
+                    address: client.address ?? '',
+                    apt: '',
+                    city: client.city ?? '',
+                    state: client.state ?? '',
+                    zip: '',
+                    phone: client.phoneNumber ?? '',
+                    lat: client.lat,
+                    lng: client.lng,
                     __driverId: currentDriverId,
-                    __driverName: assignedDriver?.driverName || assignedDriver?.name || null,
-                    __driverColor: assignedDriver?.color || null,
-                    orderId: stopInfo?.orderId || stopInfo?.order_id || null,
-                    orderStatus: stopInfo?.orderStatus || stopInfo?.order?.status || null,
-                    completed: stopInfo?.completed || false,
-                    dislikes: stopInfo?.dislikes || null,
+                    __driverName: assignedDriver?.name ?? null,
+                    __driverColor: assignedDriver?.color ?? null,
+                    orderId: null,
+                    orderStatus: null,
+                    completed: false,
+                    dislikes: null,
                 };
             });
-    }, [filteredClients, clientStopMap, clientDriverMap, routes]);
+    }, [filteredClients, clientDriverMap, drivers]);
 
-    // Convert routes to map drivers format
+    // Build map drivers from props (id, name, color) and mapStops
     const mapDrivers = useMemo(() => {
-        const palette = [
-            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-            "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
-            "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
-        ];
-        
-        return routes.map((route, i) => {
-            const driverId = String(route.driverId || route.id);
-            const color = route.color || palette[i % palette.length];
-            const driverName = route.driverName || route.name || `Driver ${i}`;
-            
-            // Get stops assigned to this driver from our map stops
+        return (drivers || []).map((d, i) => {
+            const driverId = String(d.id);
+            const color = (d.color && d.color !== "#666") ? d.color : DEFAULT_PALETTE[i % DEFAULT_PALETTE.length];
             const driverStops = mapStops.filter(s => String(s.__driverId) === String(driverId));
-            
             return {
                 id: driverId,
-                driverId: driverId,
-                name: driverName,
-                color: color,
+                driverId,
+                name: d.name || `Driver ${i}`,
+                color,
                 polygon: [],
                 stops: driverStops
             };
         });
-    }, [routes, mapStops]);
+    }, [drivers, mapStops]);
 
     // Unrouted stops (clients without driver assignment)
     const unroutedStops = useMemo(() => {
         return mapStops.filter(s => !s.__driverId);
     }, [mapStops]);
 
-    if (isLoading) {
+    if (assignmentDataLoading) {
         return (
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', p: 4 }}>
-                <CircularProgress size={24} />
-                <Typography sx={{ ml: 2 }}>Loading clients...</Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 120 }}>
+                <LoadingIndicator message="Loading clients..." />
             </Box>
         );
     }
@@ -464,7 +382,7 @@ export default function ClientDriverAssignment({
                         drivers={mapDrivers}
                         unrouted={unroutedStops}
                         onReassign={readOnly ? undefined : handleMapReassign}
-                        driversForAssignment={drivers}
+                        driversForAssignment={driversForDropdown}
                         onDriverChange={async (stop: any, driverId: any) => {
                             const clientId = stop.userId || stop.clientId || stop.id;
                             if (clientId) {
@@ -472,11 +390,7 @@ export default function ClientDriverAssignment({
                             }
                         }}
                         onBulkAssignComplete={async () => {
-                            // Refresh routes and client assignments after bulk area selection is saved
-                            await loadClientDriverAssignments(clients);
-                            if (onDriverAssigned) {
-                                onDriverAssigned();
-                            }
+                            if (onDriverAssigned) onDriverAssigned();
                         }}
                         busy={isBulkSaving}
                         readonly={readOnly}
@@ -494,7 +408,7 @@ export default function ClientDriverAssignment({
                     setPreviewStop(null);
                 }}
                 stop={previewStop}
-                drivers={drivers}
+                drivers={driversForDropdown}
                 onDriverChange={async (stop: any, driverId: string) => {
                     const clientId = stop.userId || stop.clientId || stop.id;
                     if (clientId) {

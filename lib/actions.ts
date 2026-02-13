@@ -8450,7 +8450,9 @@ export async function getClientProfilePageData(clientId: string) {
 const SINGLE_VENDOR_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
 /**
- * Get orders for a vendor. Optionally filter by deliveryDate to reduce payload (avoids stack overflow
+ * Get orders for a vendor from the orders table only (not upcoming_orders).
+ * Produce orders are excluded; they are shown on produce-specific pages.
+ * Optionally filter by deliveryDate to reduce payload (avoids stack overflow
  * when returning huge result sets to client for vendors like cccccccc-cccc-cccc-cccc-cccccccccccc).
  */
 export async function getOrdersByVendor(vendorId: string, deliveryDate?: string) {
@@ -8517,8 +8519,9 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string)
             }
         }
 
-        // Filter: for Equipment, include if order.vendor_id matches OR notes.vendorId matches
+        // Filter: only orders from orders table; exclude Produce (handled on produce pages)
         let filteredOrders = ordersData.filter((order: any) => {
+            if (order.service_type === 'Produce') return false;
             if (order.vendor_id === vendorId) return true;
             if (order.service_type === 'Equipment') {
                 try {
@@ -8549,63 +8552,14 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string)
             return { ...processed, orderType: 'completed' };
         }));
 
-        // 3. Also include upcoming (scheduled) orders for this vendor from upcoming_orders
-        const { data: foodUpcomingIds } = await db
-            .from('upcoming_order_vendor_selections')
-            .select('upcoming_order_id')
-            .eq('vendor_id', vendorId);
-        const { data: boxUpcomingIds } = await db
-            .from('upcoming_order_box_selections')
-            .select('upcoming_order_id')
-            .eq('vendor_id', vendorId);
-        const upcomingOrderIds = Array.from(new Set([
-            ...(foodUpcomingIds?.map((o: { upcoming_order_id: string }) => o.upcoming_order_id) || []),
-            ...(boxUpcomingIds?.map((o: { upcoming_order_id: string }) => o.upcoming_order_id) || [])
-        ]));
-
-        let upcomingOrders: any[] = [];
-        if (upcomingOrderIds.length > 0) {
-            const { data: upcomingRows, error: upcomingErr } = await db
-                .from('upcoming_orders')
-                .select('*')
-                .in('id', upcomingOrderIds)
-                .order('created_at', { ascending: false });
-            if (!upcomingErr && upcomingRows?.length) {
-                let rowsToProcess = upcomingRows;
-                if (deliveryDate) {
-                    const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
-                    rowsToProcess = upcomingRows.filter((order: any) => {
-                        if (!order.scheduled_delivery_date) return false;
-                        const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
-                        return orderDateKey === dateKey;
-                    });
-                }
-                upcomingOrders = await Promise.all(rowsToProcess.map(async (order: any) => {
-                    const processed = await processVendorOrderDetails(order, vendorId, true);
-                    return { ...processed, orderType: 'upcoming' };
-                }));
-            }
-        }
-
-        let combined = [...completedOrders, ...upcomingOrders];
-        combined.sort((a: any, b: any) => {
+        // Vendor page shows only placed orders from the orders table (not upcoming_orders/drafts)
+        completedOrders.sort((a: any, b: any) => {
             const dateA = new Date(a.created_at || 0).getTime();
             const dateB = new Date(b.created_at || 0).getTime();
             return dateB - dateA;
         });
 
-        // When deliveryDate provided (e.g. delivery page), filter server-side to reduce payload and avoid stack overflow
-        // Include both completed and upcoming orders for the date (vendor needs to see all scheduled deliveries)
-        if (deliveryDate) {
-            const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
-            combined = combined.filter((order: any) => {
-                if (!order.scheduled_delivery_date) return false;
-                const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
-                return orderDateKey === dateKey;
-            });
-        }
-
-        return combined;
+        return completedOrders;
 
     } catch (err) {
         console.error('Error in getOrdersByVendor:', err);

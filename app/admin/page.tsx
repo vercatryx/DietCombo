@@ -12,6 +12,7 @@ import FormBuilder from '@/components/forms/FormBuilder';
 import { saveSingleForm } from '@/lib/form-actions';
 import { DefaultOrderTemplate } from '@/components/admin/DefaultOrderTemplate';
 import { useDataCache } from '@/lib/data-cache';
+import { getMenuItems as getMenuItemsAction } from '@/lib/actions';
 import { Vendor, MenuItem } from '@/lib/types';
 
 import { MealSelectionManagement } from '@/components/admin/MealSelectionManagement';
@@ -136,8 +137,19 @@ export default function AdminPage() {
                         mainVendor={mainVendor}
                         menuItems={filteredMenuItems}
                         onMenuItemsChange={async () => {
-                            const mData = await getMenuItems();
-                            setMenuItems(mData);
+                            try {
+                                // Use server action directly to get fresh data (bypasses cache)
+                                const mData = await getMenuItemsAction();
+                                setMenuItems(mData);
+                            } catch (err) {
+                                console.error('[Admin] Failed to refresh menu items:', err);
+                                try {
+                                    const mData = await getMenuItems();
+                                    setMenuItems(mData);
+                                } catch {
+                                    // Ignore - user can refresh the page
+                                }
+                            }
                         }}
                     />
                 )}
