@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "import-five": "node scripts/import-five-clients.js"
+    "import-five": "node scripts/import-five-clients.js",
+    "debug-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/debug-client-portal-food.ts",
+    "test-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-portal-food-selections.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

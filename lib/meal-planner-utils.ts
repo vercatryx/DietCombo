@@ -1,3 +1,5 @@
+import { getTodayDateInAppTzAsReference, toDateStringInAppTz } from './timezone';
+
 /** Normalize date string to YYYY-MM-DD for reliable DB matching. */
 export function mealPlannerDateOnly(dateStr: string): string {
     if (typeof dateStr !== 'string' || !dateStr) return dateStr;
@@ -6,11 +8,11 @@ export function mealPlannerDateOnly(dateStr: string): string {
     return trimmed;
 }
 
-/** Cutoff: dates older than this (7 days ago) are cleared on save. */
+/** Cutoff: dates older than this (7 days ago in app timezone) are cleared on save. */
 export function mealPlannerCutoffDate(): string {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
+    const todayRef = getTodayDateInAppTzAsReference();
+    const d = new Date(todayRef.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return toDateStringInAppTz(d);
 }
 
 export type MealPlannerOrderResult = {

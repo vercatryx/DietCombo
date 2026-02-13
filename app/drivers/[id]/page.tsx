@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import SearchStops from "../../../components/drivers/SearchStops";
 import { DateFilter } from "../../../components/routes/DateFilter";
+import { getTodayInAppTz, toDateStringInAppTz } from "@/lib/timezone";
 
 /** Lazy-load the shared Leaflet map */
 const DriversMapLeaflet = dynamic(() => import("../../../components/routes/DriversMapLeaflet"), { ssr: false });
@@ -86,15 +87,14 @@ export default function DriverDetailPage() {
     const { id } = useParams(); // driver id
     const router = useRouter();
     
-    // Get delivery_date from URL search params, default to today
+    // Get delivery_date from URL search params, default to today (app timezone)
     const getInitialDate = () => {
         if (typeof window !== 'undefined') {
             const params = new URLSearchParams(window.location.search);
             const dateParam = params.get('delivery_date');
             if (dateParam) return dateParam;
         }
-        const today = new Date();
-        return today.toISOString().split('T')[0];
+        return getTodayInAppTz();
     };
     
     const [selectedDate, setSelectedDate] = useState<string>(getInitialDate);
@@ -179,9 +179,7 @@ export default function DriverDetailPage() {
                 ? every.filter((s: any) => {
                     const stopDate = s.delivery_date || s.deliveryDate;
                     if (!stopDate) return false;
-                    const stopDateStr = typeof stopDate === 'string' 
-                        ? stopDate.split('T')[0].split(' ')[0]
-                        : new Date(stopDate).toISOString().split('T')[0];
+                    const stopDateStr = toDateStringInAppTz(new Date(stopDate));
                     return stopDateStr === selectedDate;
                 })
                 : every;
@@ -534,8 +532,7 @@ export default function DriverDetailPage() {
                         window.history.replaceState({}, '', url.toString());
                     }}
                     onClear={() => {
-                        const today = new Date();
-                        const todayStr = today.toISOString().split('T')[0];
+                        const todayStr = getTodayInAppTz();
                         setSelectedDate(todayStr);
                         const url = new URL(window.location.href);
                         url.searchParams.set('delivery_date', todayStr);

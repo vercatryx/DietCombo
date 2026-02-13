@@ -7,6 +7,7 @@ import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from
 import { getOrdersByVendor, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, isOrderUnderVendor, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
 import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { toDateStringInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
 interface Props {
@@ -74,7 +75,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         try {
             const [vendorsData, ordersData, clientsData, menuItemsData, boxTypesData, categoriesData] = await Promise.all([
                 getVendors(),
-                getOrdersByVendor(vendorId),
+                getOrdersByVendor(vendorId, deliveryDate),
                 getClients(),
                 getMenuItems(),
                 getBoxTypes(),
@@ -84,15 +85,12 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             const foundVendor = vendorsData.find(v => v.id === vendorId);
             setVendor(foundVendor || null);
 
-            // Filter orders by delivery date and exclude "upcoming" (scheduled but not placed) orders
-            const dateKey = new Date(deliveryDate).toISOString().split('T')[0];
-            const filteredOrders = ordersData.filter(order => {
+            // Filter orders by delivery date. Match VendorDetail.groupOrdersByDeliveryDate logic:
+            // dateKey from URL is already in YYYY-MM-DD (from that grouping); use toDateStringInAppTz for order dates
+            const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
+            const filteredOrders = (ordersData || []).filter(order => {
                 if (!order.scheduled_delivery_date) return false;
-
-                // Exclude upcoming orders
-                if (order.orderType === 'upcoming') return false;
-
-                const orderDateKey = new Date(order.scheduled_delivery_date).toISOString().split('T')[0];
+                const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
                 return orderDateKey === dateKey;
             });
 
@@ -158,7 +156,8 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                 day: 'numeric',
                 year: 'numeric',
                 hour: '2-digit',
-                minute: '2-digit'
+                minute: '2-digit',
+                timeZone: 'America/New_York'
             });
         } catch {
             return dateString;
@@ -527,9 +526,9 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
 
                 if (order) {
                     const orderDateKey = order.scheduled_delivery_date
-                        ? new Date(order.scheduled_delivery_date).toISOString().split('T')[0]
+                        ? toDateStringInAppTz(new Date(order.scheduled_delivery_date))
                         : null;
-                    const pageDateKey = new Date(deliveryDate).toISOString().split('T')[0];
+                    const pageDateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
 
                     if (orderDateKey !== pageDateKey) {
                         errorCount++;

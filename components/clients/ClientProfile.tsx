@@ -2904,12 +2904,34 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
         if (st === 'Food') {
             const limit = client.approvedMealsPerWeek || 0;
-            const vendorsSummary = (conf.vendorSelections || [])
-                .map(v => {
+            // Use same source as sidebar/detail: prefer deliveryDayOrders when present
+            const isMultiDay = conf.deliveryDayOrders && typeof conf.deliveryDayOrders === 'object';
+            const vendorToCount = new Map<string, number>();
+
+            if (isMultiDay) {
+                Object.values(conf.deliveryDayOrders || {}).forEach((dayOrder: any) => {
+                    if (!dayOrder?.vendorSelections) return;
+                    dayOrder.vendorSelections.forEach((v: any) => {
+                        const vendorName = vendors.find(ven => ven.id === v.vendorId)?.name || 'Unknown';
+                        const itemCount = Object.values(v.items || {}).reduce((a: number, b: any) => a + Number(b), 0);
+                        if (itemCount > 0) {
+                            vendorToCount.set(vendorName, (vendorToCount.get(vendorName) || 0) + itemCount);
+                        }
+                    });
+                });
+            }
+            if (vendorToCount.size === 0 && (conf.vendorSelections || []).length > 0) {
+                (conf.vendorSelections || []).forEach(v => {
                     const vendorName = vendors.find(ven => ven.id === v.vendorId)?.name || 'Unknown';
                     const itemCount = Object.values(v.items || {}).reduce((a: number, b: any) => a + Number(b), 0);
-                    return itemCount > 0 ? `${vendorName} (${itemCount})` : '';
-                }).filter(Boolean).join(', ');
+                    if (itemCount > 0) {
+                        vendorToCount.set(vendorName, (vendorToCount.get(vendorName) || 0) + itemCount);
+                    }
+                });
+            }
+            const vendorsSummary = Array.from(vendorToCount.entries())
+                .map(([name, count]) => `${name} (${count})`)
+                .join(', ');
 
             if (!vendorsSummary) return '';
             content = `: ${vendorsSummary} [Max ${limit}]`;

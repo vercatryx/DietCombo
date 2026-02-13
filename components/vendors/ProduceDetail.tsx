@@ -6,6 +6,7 @@ import { ClientProfile, MenuItem, BoxType } from '@/lib/types';
 import { getClients, getMenuItems, getBoxTypes } from '@/lib/cached-data';
 import { ArrowLeft, Package, Download, FileText, Search, User } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { getTodayInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
 export function ProduceDetail() {
@@ -151,7 +152,7 @@ export function ProduceDetail() {
         const link = document.createElement('a');
         const url = URL.createObjectURL(blob);
         link.setAttribute('href', url);
-        link.setAttribute('download', `produce_clients_${new Date().toISOString().split('T')[0]}.csv`);
+        link.setAttribute('download', `produce_clients_${getTodayInAppTz()}.csv`);
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();

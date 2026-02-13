@@ -261,33 +261,45 @@ function fromStoredCustom(stored: UpcomingOrderCustom): OrderConfiguration {
   return config;
 }
 
-function fromStoredFoodMeal(stored: UpcomingOrderFoodMeal): OrderConfiguration {
-  const config: OrderConfiguration = {
-    serviceType: stored.serviceType as ServiceType,
-  };
-  if (stored.caseId) config.caseId = stored.caseId;
-  if (stored.notes) config.notes = stored.notes;
-  if (stored.vendorSelections && stored.vendorSelections.length > 0) {
-    config.vendorSelections = stored.vendorSelections.map((s) => ({
-      vendorId: s.vendorId,
-      items: s.items ?? {},
-      ...(s.itemNotes && Object.keys(s.itemNotes).length > 0 && { itemNotes: s.itemNotes }),
-    }));
-  }
-  if (stored.deliveryDayOrders && Object.keys(stored.deliveryDayOrders).length > 0) {
-    config.deliveryDayOrders = {};
-    for (const [day, dayOrder] of Object.entries(stored.deliveryDayOrders)) {
-      config.deliveryDayOrders[day] = {
-        vendorSelections: (dayOrder.vendorSelections ?? []).map((s) => ({
-          vendorId: s.vendorId,
-          items: s.items ?? {},
-          ...(s.itemNotes && Object.keys(s.itemNotes).length > 0 && { itemNotes: s.itemNotes }),
-        })),
+function fromStoredFoodMeal(stored: UpcomingOrderFoodMeal | Record<string, unknown>): OrderConfiguration {
+  const s = stored as Record<string, unknown>;
+  const serviceType = (s.serviceType ?? s.service_type ?? 'Food') as ServiceType;
+  const config: OrderConfiguration = { serviceType: serviceType === 'Meal' ? 'Meal' : 'Food' };
+  if (s.caseId ?? s.case_id) config.caseId = String(s.caseId ?? s.case_id);
+  if (s.notes) config.notes = String(s.notes);
+  const vendorSelections = (s.vendorSelections ?? s.vendor_selections) as VendorSelection[] | undefined;
+  if (Array.isArray(vendorSelections) && vendorSelections.length > 0) {
+    config.vendorSelections = vendorSelections.map((vs: any) => {
+      const itemNotes = (vs.itemNotes ?? vs.item_notes) as Record<string, string> | undefined;
+      return {
+        vendorId: vs.vendorId ?? vs.vendor_id ?? '',
+        items: (vs.items && typeof vs.items === 'object') ? vs.items as Record<string, number> : {},
+        ...(itemNotes && typeof itemNotes === 'object' && Object.keys(itemNotes).length > 0 && { itemNotes }),
       };
+    });
+  }
+  const deliveryDayOrders = (s.deliveryDayOrders ?? s.delivery_day_orders) as Record<string, { vendorSelections?: VendorSelection[]; vendor_selections?: VendorSelection[] }> | undefined;
+  if (deliveryDayOrders && typeof deliveryDayOrders === 'object' && Object.keys(deliveryDayOrders).length > 0) {
+    config.deliveryDayOrders = {};
+    for (const [day, dayOrder] of Object.entries(deliveryDayOrders)) {
+      const selections = dayOrder?.vendorSelections ?? (dayOrder as any)?.vendor_selections ?? [];
+      if (Array.isArray(selections) && selections.length > 0) {
+        config.deliveryDayOrders[day] = {
+          vendorSelections: selections.map((vs: any) => {
+            const itemNotes = (vs.itemNotes ?? vs.item_notes) as Record<string, string> | undefined;
+            return {
+              vendorId: vs.vendorId ?? vs.vendor_id ?? '',
+              items: (vs.items && typeof vs.items === 'object') ? vs.items as Record<string, number> : {},
+              ...(itemNotes && typeof itemNotes === 'object' && Object.keys(itemNotes).length > 0 && { itemNotes }),
+            };
+          }),
+        };
+      }
     }
   }
-  if (stored.mealSelections && Object.keys(stored.mealSelections).length > 0) {
-    config.mealSelections = stored.mealSelections;
+  const mealSelections = (s.mealSelections ?? s.meal_selections) as Record<string, MealSelection> | undefined;
+  if (mealSelections && typeof mealSelections === 'object' && Object.keys(mealSelections).length > 0) {
+    config.mealSelections = mealSelections;
   }
   return config;
 }
@@ -306,6 +318,47 @@ function fromStoredProduce(stored: UpcomingOrderProduce): OrderConfiguration {
  * Build UI OrderConfiguration from stored upcoming_order (or legacy shape).
  * Handles legacy payloads (e.g. Boxes with only vendorId/items, Custom with only customItems).
  */
+/**
+ * Detect multi-day format: object keyed by delivery day (e.g. "2025-02-17") where each value
+ * has serviceType. No top-level serviceType or deliveryDayOrders. Used by profile and DB.
+ */
+function isMultiDayKeyedFormat(stored: Record<string, unknown>): boolean {
+  if (stored.serviceType != null || (stored as any).service_type != null) return false;
+  if (stored.deliveryDayOrders != null || (stored as any).delivery_day_orders != null) return false;
+  const keys = Object.keys(stored);
+  return keys.some((key) => {
+    const val = stored[key];
+    return val != null && typeof val === 'object' && !Array.isArray(val) && ((val as any).serviceType != null || (val as any).service_type != null);
+  });
+}
+
+/**
+ * Convert multi-day keyed format to { serviceType, deliveryDayOrders } for Food so fromStoredFoodMeal can hydrate.
+ */
+function multiDayKeyedToFoodMeal(stored: Record<string, unknown>, serviceType: ServiceType): Record<string, unknown> {
+  const deliveryDayOrders: Record<string, { vendorSelections?: any[]; vendor_selections?: any[] }> = {};
+  let firstServiceType: string | null = null;
+  for (const day of Object.keys(stored)) {
+    const dayOrder = stored[day];
+    if (dayOrder == null || typeof dayOrder !== 'object' || Array.isArray(dayOrder)) continue;
+    const d = dayOrder as Record<string, unknown>;
+    const st = (d.serviceType ?? (d as any).service_type) as string;
+    if (st === 'Food' || st === 'Meal') {
+      if (firstServiceType == null) firstServiceType = st;
+      const vs = d.vendorSelections ?? (d as any).vendor_selections;
+      const arr = Array.isArray(vs) ? vs : [];
+      if (arr.length > 0) deliveryDayOrders[day] = { vendorSelections: arr, vendor_selections: arr };
+    }
+  }
+  if (Object.keys(deliveryDayOrders).length === 0) return {};
+  return {
+    serviceType: firstServiceType === 'Meal' ? 'Meal' : 'Food',
+    service_type: firstServiceType === 'Meal' ? 'Meal' : 'Food',
+    deliveryDayOrders,
+    delivery_day_orders: deliveryDayOrders,
+  };
+}
+
 export function fromStoredUpcomingOrder(
   stored: unknown,
   serviceType: ServiceType
@@ -314,7 +367,15 @@ export function fromStoredUpcomingOrder(
   if (typeof stored !== 'object') return null;
 
   const o = stored as Record<string, unknown>;
-  const st = (o.serviceType ?? serviceType) as string;
+
+  // Multi-day format: top-level object keyed by date, each value has serviceType (no top-level serviceType).
+  // Without this, we'd fall through and return empty Food config.
+  if ((serviceType === 'Food' || serviceType === 'Meal') && isMultiDayKeyedFormat(o)) {
+    const normalized = multiDayKeyedToFoodMeal(o, serviceType);
+    if (Object.keys(normalized).length > 0) return fromStoredFoodMeal(normalized);
+  }
+
+  const st = (o.serviceType ?? o.service_type ?? serviceType) as string;
 
   if (isUpcomingOrderBoxes(stored)) return fromStoredBoxes(stored);
   if (isUpcomingOrderCustom(stored)) return fromStoredCustom(stored);
@@ -367,13 +428,16 @@ export function fromStoredUpcomingOrder(
     });
   }
 
-  // Default: Food/Meal
+  // Default: Food/Meal (support snake_case keys from DB if present)
+  const vendorSelections = (o.vendorSelections ?? (o as any).vendor_selections) as VendorSelection[] | undefined;
+  const deliveryDayOrders = (o.deliveryDayOrders ?? (o as any).delivery_day_orders) as Record<string, { vendorSelections: VendorSelection[] }> | undefined;
+  const mealSelections = (o.mealSelections ?? (o as any).meal_selections) as Record<string, MealSelection> | undefined;
   return fromStoredFoodMeal({
-    serviceType: serviceType === 'Meal' ? 'Meal' : 'Food',
-    caseId: o.caseId as string | undefined,
-    vendorSelections: (o.vendorSelections as VendorSelection[]) ?? [],
-    deliveryDayOrders: (o.deliveryDayOrders as Record<string, { vendorSelections: VendorSelection[] }>) ?? {},
-    mealSelections: (o.mealSelections as Record<string, MealSelection>) ?? {},
-    notes: o.notes as string | undefined,
+    serviceType: (o.serviceType ?? (o as any).service_type ?? serviceType) === 'Meal' ? 'Meal' : 'Food',
+    caseId: (o.caseId ?? (o as any).case_id) as string | undefined,
+    vendorSelections: Array.isArray(vendorSelections) ? vendorSelections : [],
+    deliveryDayOrders: deliveryDayOrders && typeof deliveryDayOrders === 'object' ? deliveryDayOrders : {},
+    mealSelections: mealSelections && typeof mealSelections === 'object' ? mealSelections : {},
+    notes: (o.notes as string) ?? undefined,
   });
 }

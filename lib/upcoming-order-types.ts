@@ -97,12 +97,10 @@ export function isUpcomingOrderCustom(
 export function isUpcomingOrderFoodMeal(
   p: unknown
 ): p is UpcomingOrderFoodMeal {
-  const s = (p as { serviceType?: string })?.serviceType;
-  return (
-    typeof p === 'object' &&
-    p !== null &&
-    (s === 'Food' || s === 'Meal')
-  );
+  if (typeof p !== 'object' || p === null) return false;
+  const o = p as { serviceType?: string; service_type?: string };
+  const s = o.serviceType ?? o.service_type;
+  return s === 'Food' || s === 'Meal';
 }
 
 export function isUpcomingOrderProduce(

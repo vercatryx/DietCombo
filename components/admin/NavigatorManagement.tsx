@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Navigator } from '@/lib/types';
 import { addNavigator, updateNavigator, deleteNavigator, getNavigatorLogs } from '@/lib/actions';
 import { useDataCache } from '@/lib/data-cache';
+import { getTodayInAppTz } from '@/lib/timezone';
 import { Plus, Edit2, Trash2, X, Check, Users, Download } from 'lucide-react';
 import styles from './NavigatorManagement.module.css';
 
@@ -114,7 +115,7 @@ export function NavigatorManagement() {
             const link = document.createElement('a');
             const url = URL.createObjectURL(blob);
             link.setAttribute('href', url);
-            link.setAttribute('download', `navigator_logs_${nav.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`);
+            link.setAttribute('download', `navigator_logs_${nav.name.replace(/\s+/g, '_')}_${getTodayInAppTz()}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();

@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota, BoxConfiguration } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota, BoxConfiguration, ServiceType } from '@/lib/types';
 import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, saveClientFoodOrder, saveClientBoxOrder, isFoodOrderSameAsDefault } from '@/lib/actions';
-import { getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
+import { getCachedDefaultOrderTemplate, getDefaultOrderTemplateCachedSync } from '@/lib/default-order-template-cache';
 import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
+import { fromStoredUpcomingOrder } from '@/lib/upcoming-order-schema';
 import { Package, Truck, User, Loader2, Info, Plus, Calendar, AlertTriangle, Check, Trash2 } from 'lucide-react';
 import styles from './ClientProfile.module.css';
 import { SavedMealPlanMonth } from './SavedMealPlanMonth';
@@ -49,15 +50,32 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         address: initialClient.address || ''
     });
 
-    // Order Configuration State
-    const [orderConfig, setOrderConfig] = useState<any>({});
-    const [originalOrderConfig, setOriginalOrderConfig] = useState<any>({});
+    // Order Configuration State — initialize from upcomingOrder on portal so first paint has data (avoids zero flash)
+    const [orderConfig, setOrderConfig] = useState<any>(() => {
+        if (!orderAndMealPlanOnly || !upcomingOrder || !initialClient) return {};
+        const st = (initialClient.serviceType || 'Food') as ServiceType;
+        const hydrated = fromStoredUpcomingOrder(upcomingOrder, st);
+        return hydrated ?? {};
+    });
+    const [originalOrderConfig, setOriginalOrderConfig] = useState<any>(() => {
+        if (!orderAndMealPlanOnly || !upcomingOrder || !initialClient) return {};
+        const st = (initialClient.serviceType || 'Food') as ServiceType;
+        const hydrated = fromStoredUpcomingOrder(upcomingOrder, st);
+        const config = hydrated ?? {};
+        return JSON.parse(JSON.stringify(config));
+    });
 
     // UI State
     const [saving, setSaving] = useState(false);
     const [savingProfile, setSavingProfile] = useState(false);
     const [message, setMessage] = useState<string | null>('');
     const [profileMessage, setProfileMessage] = useState<string | null>('');
+    const [missingItemsToastDismissed, setMissingItemsToastDismissed] = useState(false);
+
+    // Reset missing-items toast when client changes so it can show again for another client
+    useEffect(() => {
+        setMissingItemsToastDismissed(false);
+    }, [client?.id]);
 
     // Sync profile data when initialClient changes
     useEffect(() => {
@@ -82,8 +100,20 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     const hasInitializedRef = useRef(false);
     const lastSavedTimestampRef = useRef<string | null>(null);
     const lastUpcomingOrderIdRef = useRef<string | null>(null);
+    const defaultTemplateAppliedRef = useRef(false);
+    const lastClientIdForDefaultRef = useRef<string | null>(null);
 
-    // Initialize order config - matching ClientProfile logic exactly
+    // Same as ClientProfile: true if order has any vendor/delivery-day items
+    function hasOrderDetailsInOrder(order: any): boolean {
+        if (!order || typeof order !== 'object') return false;
+        const vs = order.vendorSelections ?? order.vendor_selections;
+        if (Array.isArray(vs) && vs.some((s: any) => s?.items && typeof s.items === 'object' && Object.keys(s.items).length > 0)) return true;
+        const ddo = order.deliveryDayOrders ?? order.delivery_day_orders;
+        if (ddo && typeof ddo === 'object' && Object.values(ddo).some((d: any) => (d?.vendorSelections || d?.vendor_selections || []).some((s: any) => s?.items && Object.keys(s.items || {}).length > 0))) return true;
+        return false;
+    }
+
+    // Initialize order config - matching ClientProfile logic exactly (read from clients.upcoming_order; when empty, use default template)
     useEffect(() => {
         if (!client) {
             return;
@@ -127,88 +157,199 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         let configToSet: any = {};
         let source = '';
 
-        // Priority 1: Use upcomingOrder from upcoming_orders table
-        if (upcomingOrder) {
-            source = 'upcomingOrder';
+        // Client portal: single source of truth is clients.upcoming_order (via upcomingOrder / client.activeOrder).
+        // Never populate the form from activeOrder (orders table) so we always read/write clients.upcoming_order.
+        const useOnlyClientUpcomingOrder = orderAndMealPlanOnly;
 
-            // Check if it's the multi-day format (object keyed by delivery day, not deliveryDayOrders)
-            const isMultiDayFormat = upcomingOrder && typeof upcomingOrder === 'object' &&
-                !upcomingOrder.serviceType &&
-                !upcomingOrder.deliveryDayOrders &&
-                Object.keys(upcomingOrder).some(key => {
-                    const val = (upcomingOrder as any)[key];
-                    return val && val.serviceType;
-                });
+        const sourceOrder = upcomingOrder ?? client.activeOrder ?? null;
 
-            if (isMultiDayFormat) {
-                // Convert to deliveryDayOrders format
-                const deliveryDayOrders: any = {};
-                for (const day of Object.keys(upcomingOrder)) {
-                    const dayOrder = (upcomingOrder as any)[day];
-                    if (dayOrder && dayOrder.serviceType) {
-                        deliveryDayOrders[day] = {
-                            vendorSelections: dayOrder.vendorSelections || []
-                        };
+        if (useOnlyClientUpcomingOrder) {
+            // Portal: use only client.activeOrder (clients.upcoming_order) or empty default.
+            // Use same hydration as getClient (fromStoredUpcomingOrder) so items/vendorSelections match profile.
+            if (sourceOrder) {
+                source = 'client.upcoming_order';
+                const serviceType = (client.serviceType || 'Food') as ServiceType;
+                const hydrated = fromStoredUpcomingOrder(sourceOrder, serviceType);
+                if (hydrated) {
+                    configToSet = hydrated;
+                } else {
+                    const order = sourceOrder as any;
+                    const isMultiDayFormat = typeof order === 'object' &&
+                        !order.serviceType &&
+                        !order.deliveryDayOrders &&
+                        Object.keys(order).some((key: string) => {
+                            const val = order[key];
+                            return val && typeof val === 'object' && (val as any).serviceType;
+                        });
+
+                    if (isMultiDayFormat) {
+                        const deliveryDayOrders: any = {};
+                        for (const day of Object.keys(order)) {
+                            const dayOrder = order[day];
+                            if (dayOrder && (dayOrder as any).serviceType) {
+                                deliveryDayOrders[day] = {
+                                    vendorSelections: (dayOrder as any).vendorSelections || (dayOrder as any).vendor_selections || []
+                                };
+                            }
+                        }
+                        const firstDayKey = Object.keys(order)[0];
+                        const firstDayOrder = order[firstDayKey];
+                        if (firstDayOrder?.serviceType === 'Boxes') {
+                            configToSet = firstDayOrder;
+                        } else {
+                            configToSet = {
+                                serviceType: firstDayOrder?.serviceType || client.serviceType,
+                                deliveryDayOrders
+                            };
+                        }
+                    } else if (order.serviceType === 'Food' && !order.vendorSelections?.length && !(order.deliveryDayOrders && Object.keys(order.deliveryDayOrders).length > 0)) {
+                        if (order.vendorId) {
+                            configToSet = { ...order, vendorSelections: [{ vendorId: order.vendorId, items: order.menuSelections || {} }] };
+                        } else {
+                            configToSet = { ...order, vendorSelections: [{ vendorId: '', items: {} }] };
+                        }
+                    } else {
+                        configToSet = { ...order };
                     }
                 }
-                // Check if it's Boxes - if so, flatten it to single order config
-                const firstDayKey = Object.keys(upcomingOrder)[0];
-                const firstDayOrder = (upcomingOrder as any)[firstDayKey];
-
-                if (firstDayOrder?.serviceType === 'Boxes') {
-                    configToSet = firstDayOrder;
-                } else {
-                    configToSet = {
-                        serviceType: firstDayOrder?.serviceType || client.serviceType,
-                        deliveryDayOrders
-                    };
-                }
-            } else if ((upcomingOrder as any).serviceType === 'Food' && !(upcomingOrder as any).vendorSelections && !(upcomingOrder as any).deliveryDayOrders) {
-                // Migration/Safety: Ensure vendorSelections exists for Food
-                if ((upcomingOrder as any).vendorId) {
-                    (upcomingOrder as any).vendorSelections = [{ vendorId: (upcomingOrder as any).vendorId, items: (upcomingOrder as any).menuSelections || {} }];
-                } else {
-                    (upcomingOrder as any).vendorSelections = [{ vendorId: '', items: {} }];
-                }
-                configToSet = upcomingOrder;
             } else {
-                // For Boxes or other service types, use upcomingOrder directly
-                configToSet = upcomingOrder;
-            }
-        } else if (activeOrder) {
-            source = 'activeOrder';
-            // Priority 2: No upcoming order, but we have active_order from clients table - use that
-            // This ensures vendorId, items, and other Boxes data are preserved even if sync to upcoming_orders failed
-            configToSet = { ...activeOrder };
-            // Ensure serviceType matches client's service type
-            if (!configToSet.serviceType) {
-                configToSet.serviceType = client.serviceType;
-            }
-        } else if (client.activeOrder) {
-            source = 'client.activeOrder';
-            // Priority 3: Fallback to client.activeOrder if available
-            configToSet = { ...client.activeOrder };
-            if (!configToSet.serviceType) {
-                configToSet.serviceType = client.serviceType;
+                source = 'default';
+                configToSet = client.serviceType === 'Food'
+                    ? { serviceType: 'Food', vendorSelections: [{ vendorId: '', items: {} }] }
+                    : { serviceType: client.serviceType };
             }
         } else {
-            source = 'default';
-            // Priority 4: No order data, initialize with default
-            const defaultOrder: any = { serviceType: client.serviceType };
-            if (client.serviceType === 'Food') {
-                defaultOrder.vendorSelections = [{ vendorId: '', items: {} }];
+            // Admin ClientProfile: existing priority (upcoming_orders table, then activeOrder, then client.activeOrder, then default)
+            if (upcomingOrder) {
+                source = 'upcomingOrder';
+                const isMultiDayFormat = upcomingOrder && typeof upcomingOrder === 'object' &&
+                    !(upcomingOrder as any).serviceType &&
+                    !(upcomingOrder as any).deliveryDayOrders &&
+                    Object.keys(upcomingOrder).some(key => {
+                        const val = (upcomingOrder as any)[key];
+                        return val && val.serviceType;
+                    });
+
+                if (isMultiDayFormat) {
+                    const deliveryDayOrders: any = {};
+                    for (const day of Object.keys(upcomingOrder)) {
+                        const dayOrder = (upcomingOrder as any)[day];
+                        if (dayOrder && dayOrder.serviceType) {
+                            deliveryDayOrders[day] = { vendorSelections: dayOrder.vendorSelections || [] };
+                        }
+                    }
+                    const firstDayKey = Object.keys(upcomingOrder)[0];
+                    const firstDayOrder = (upcomingOrder as any)[firstDayKey];
+                    if (firstDayOrder?.serviceType === 'Boxes') {
+                        configToSet = firstDayOrder;
+                    } else {
+                        configToSet = {
+                            serviceType: firstDayOrder?.serviceType || client.serviceType,
+                            deliveryDayOrders
+                        };
+                    }
+                } else if ((upcomingOrder as any).serviceType === 'Food' && !(upcomingOrder as any).vendorSelections && !(upcomingOrder as any).deliveryDayOrders) {
+                    if ((upcomingOrder as any).vendorId) {
+                        (upcomingOrder as any).vendorSelections = [{ vendorId: (upcomingOrder as any).vendorId, items: (upcomingOrder as any).menuSelections || {} }];
+                    } else {
+                        (upcomingOrder as any).vendorSelections = [{ vendorId: '', items: {} }];
+                    }
+                    configToSet = upcomingOrder;
+                } else {
+                    configToSet = upcomingOrder;
+                }
+            } else if (activeOrder) {
+                source = 'activeOrder';
+                if ((activeOrder as any).multiple === true && Array.isArray((activeOrder as any).orders) && client.serviceType === 'Food') {
+                    const orders = (activeOrder as any).orders as any[];
+                    const deliveryDayOrders: any = {};
+                    for (const order of orders) {
+                        const dayKey = order.scheduledDeliveryDate || order.deliveryDay || order.id;
+                        if (order.vendorSelections?.length > 0) {
+                            deliveryDayOrders[dayKey] = { vendorSelections: order.vendorSelections };
+                        }
+                    }
+                    configToSet = Object.keys(deliveryDayOrders).length > 0
+                        ? { serviceType: 'Food', caseId: orders[0]?.caseId, deliveryDayOrders }
+                        : (orders[0] ? { ...orders[0], serviceType: 'Food' } : { serviceType: 'Food', vendorSelections: [{ vendorId: '', items: {} }] });
+                } else {
+                    configToSet = { ...activeOrder };
+                    if (!configToSet.serviceType) configToSet.serviceType = client.serviceType;
+                }
+            } else if (client.activeOrder) {
+                source = 'client.activeOrder';
+                configToSet = { ...client.activeOrder };
+                if (!configToSet.serviceType) configToSet.serviceType = client.serviceType;
+            } else {
+                source = 'default';
+                configToSet = client.serviceType === 'Food'
+                    ? { serviceType: 'Food', vendorSelections: [{ vendorId: '', items: {} }] }
+                    : { serviceType: client.serviceType };
             }
-            configToSet = defaultOrder;
         }
 
         // Migrate legacy box order format to new format if needed
         if (configToSet.serviceType === 'Boxes') {
             configToSet = migrateLegacyBoxOrder(configToSet);
         }
-        
-        setOrderConfig(configToSet);
-        const deepCopy = JSON.parse(JSON.stringify(configToSet));
-        setOriginalOrderConfig(deepCopy);
+
+        // Client portal + Food with no order data: use default order template (same as ClientProfile loadData)
+        if (useOnlyClientUpcomingOrder && client.id !== lastClientIdForDefaultRef.current) {
+            lastClientIdForDefaultRef.current = client.id;
+            defaultTemplateAppliedRef.current = false;
+        }
+        const shouldApplyDefaultTemplate = useOnlyClientUpcomingOrder && client.serviceType === 'Food' && !defaultTemplateAppliedRef.current &&
+            (!sourceOrder || !hasOrderDetailsInOrder(sourceOrder));
+
+        const defaultVendorId = (vendors?.length && (vendors.find((v: any) => v.isDefault && (v.serviceTypes || []).includes('Food'))?.id || vendors.find((v: any) => (v.serviceTypes || []).includes('Food'))?.id || vendors[0]?.id)) || '';
+
+        function applyTemplateToState(template: any) {
+            if (!template) return;
+            const templateVs = template.vendorSelections || [];
+            const applied: any = { serviceType: 'Food', caseId: template.caseId, notes: template.notes };
+            if (template.deliveryDayOrders && typeof template.deliveryDayOrders === 'object' && Object.keys(template.deliveryDayOrders).length > 0) {
+                applied.deliveryDayOrders = {};
+                for (const [day, dayOrder] of Object.entries(template.deliveryDayOrders)) {
+                    const dayVal = dayOrder as { vendorSelections?: any[] };
+                    const selections = (dayVal.vendorSelections || []).map((vs: any) => ({
+                        vendorId: defaultVendorId || vs.vendorId || '',
+                        items: { ...(vs.items || {}) }
+                    }));
+                    if (selections.length > 0) applied.deliveryDayOrders[day] = { vendorSelections: selections };
+                }
+            }
+            if (!applied.deliveryDayOrders || Object.keys(applied.deliveryDayOrders).length === 0) {
+                applied.vendorSelections = templateVs.length > 0
+                    ? templateVs.map((vs: any) => ({ vendorId: defaultVendorId || vs.vendorId || '', items: { ...(vs.items || {}) } }))
+                    : [{ vendorId: defaultVendorId || '', items: {} }];
+            }
+            setOrderConfig(applied);
+            setOriginalOrderConfig(JSON.parse(JSON.stringify(applied)));
+            defaultTemplateAppliedRef.current = true;
+        }
+
+        if (shouldApplyDefaultTemplate) {
+            const cached = getDefaultOrderTemplateCachedSync('Food');
+            if (cached) {
+                applyTemplateToState(cached);
+            } else {
+                getCachedDefaultOrderTemplate('Food')
+                    .then(applyTemplateToState)
+                    .catch((e) => {
+                        console.warn('[ClientPortalInterface] Default Food template load failed', e);
+                        defaultTemplateAppliedRef.current = false;
+                    });
+            }
+        }
+
+        // Don't overwrite with empty when we've already applied the default template for this client (effect re-run would replace template with zero items)
+        const skipOverwriteWithEmpty = useOnlyClientUpcomingOrder && client.serviceType === 'Food' && defaultTemplateAppliedRef.current && !hasOrderDetailsInOrder(configToSet);
+
+        if (!skipOverwriteWithEmpty) {
+            setOrderConfig(configToSet);
+            const deepCopy = JSON.parse(JSON.stringify(configToSet));
+            setOriginalOrderConfig(deepCopy);
+        }
         hasInitializedRef.current = true;
 
         // Track the upcoming order ID we just initialized from
@@ -218,7 +359,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 (upcomingOrder as any)?.id
         ) : null;
         lastUpcomingOrderIdRef.current = currentUpcomingOrderId;
-    }, [upcomingOrder, activeOrder, client]);
+    }, [upcomingOrder, activeOrder, client, vendors]);
 
     // Box Logic - Load quotas if boxTypeId is set (supports both legacy and new format)
     useEffect(() => {
@@ -239,10 +380,15 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         }
     }, [orderConfig.boxes, orderConfig.boxTypeId, client.serviceType]);
 
-    // Single-vendor portal: when only one Food vendor exists, ensure it's selected and we don't show vendor dropdown/add/remove
-    const foodVendors = useMemo(() => vendors.filter(v => (v as any).serviceTypes?.includes?.('Food') && (v as any).isActive !== false), [vendors]);
-    const singleVendorMode = orderAndMealPlanOnly && client.serviceType === 'Food' && foodVendors.length === 1;
-    const singleVendor = singleVendorMode ? foodVendors[0] : null;
+    // Portal + Food: always single-vendor UI — no vendor dropdown, no Add Vendor (client-portal page only)
+    const foodVendors = useMemo(() => vendors.filter((v: any) => {
+        const active = v.isActive !== false;
+        const types = v.serviceTypes ?? [];
+        const hasFood = Array.isArray(types) ? types.some((t: string) => String(t).toLowerCase() === 'food') : false;
+        return hasFood && active;
+    }), [vendors]);
+    const singleVendorMode = Boolean(orderAndMealPlanOnly && client.serviceType === 'Food');
+    const singleVendor = singleVendorMode ? (foodVendors[0] ?? vendors[0] ?? null) : null;
 
     const singleVendorInitDoneRef = useRef(false);
     useEffect(() => {
@@ -257,9 +403,33 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             }
             const needInit = current.length === 0 || (current.length === 1 && !current[0]?.vendorId);
             if (!needInit) return prev;
+
+            const ddo = prev.deliveryDayOrders;
+            const hasItemsInDdo = ddo && typeof ddo === 'object' && Object.keys(ddo).length > 0 &&
+                Object.values(ddo).some((dayOrder: any) => (dayOrder?.vendorSelections ?? []).some((s: any) => Object.keys(s?.items ?? {}).length > 0));
+
             singleVendorInitDoneRef.current = true;
-            const one = [{ vendorId: singleVendor.id, items: current[0]?.items || {}, itemsByDay: current[0]?.itemsByDay, selectedDeliveryDays: current[0]?.selectedDeliveryDays || [] }];
-            const next = { ...prev, vendorSelections: one, deliveryDayOrders: undefined };
+            let one: any[];
+            let next: any;
+            if (hasItemsInDdo && ddo) {
+                const deliveryDays = Object.keys(ddo).sort();
+                const itemsByDay: Record<string, Record<string, number>> = {};
+                const selectedDeliveryDays: string[] = [];
+                for (const day of deliveryDays) {
+                    const dayOrder = ddo[day];
+                    const selections = dayOrder?.vendorSelections ?? [];
+                    const sel = selections.find((s: any) => s.vendorId === singleVendor.id) ?? selections[0];
+                    if (sel?.items && Object.keys(sel.items).length > 0) {
+                        itemsByDay[day] = sel.items;
+                        selectedDeliveryDays.push(day);
+                    }
+                }
+                one = [{ vendorId: singleVendor.id, items: {}, itemsByDay, selectedDeliveryDays }];
+                next = { ...prev, vendorSelections: one, deliveryDayOrders: ddo };
+            } else {
+                one = [{ vendorId: singleVendor.id, items: current[0]?.items || {}, itemsByDay: current[0]?.itemsByDay, selectedDeliveryDays: current[0]?.selectedDeliveryDays || [] }];
+                next = { ...prev, vendorSelections: one, deliveryDayOrders: prev.deliveryDayOrders ?? undefined };
+            }
             setOriginalOrderConfig(JSON.parse(JSON.stringify(next)));
             return next;
         });
@@ -818,6 +988,18 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         return menuItems.filter(i => i.vendorId === vendorId && i.isActive);
     }
 
+    /** Menu items for this vendor that appear in the order. Only show items that exist in the menu (no "Unknown item" rows). */
+    function getItemsToDisplayForVendor(vendorId: string, orderItemIds: string[]): Array<{ id: string; name: string; value?: number; isOrderOnly?: boolean }> {
+        const menu = getVendorMenuItems(vendorId);
+        const orderIdSet = new Set(orderItemIds);
+        return menu.filter((i) => orderIdSet.has(i.id)).map((i) => ({
+            id: i.id,
+            name: i.name,
+            value: i.quotaValue ?? i.value ?? 1,
+            isOrderOnly: false as const
+        }));
+    }
+
     // Legacy handler - now works with boxes array
     function handleBoxItemChange(itemId: string, qty: number, boxNumber?: number) {
         // If using new boxes format
@@ -1100,8 +1282,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         const isAlreadyMultiDay = orderConfig.deliveryDayOrders && typeof orderConfig.deliveryDayOrders === 'object';
         let currentSelections = orderConfig.vendorSelections || [];
 
-        if (isAlreadyMultiDay && (!orderConfig.vendorSelections || orderConfig.vendorSelections.length === 0)) {
-            // Convert saved deliveryDayOrders back to per-vendor format for editing if not already done
+        // When we have deliveryDayOrders, convert to per-vendor format so items show (DB often has empty vendorSelections + items in deliveryDayOrders)
+        if (isAlreadyMultiDay) {
             const deliveryDays = Object.keys(orderConfig.deliveryDayOrders).sort();
             const vendorMap = new Map<string, any>();
 
@@ -1136,11 +1318,26 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             }
         }
 
-        // This 'conversion' is transient for render if we haven't 'touched' the config yet. 
-        // If user interacts, we write to `orderConfig.vendorSelections` inside the handlers, breaking out of `deliveryDayOrders` mode.
-        const selectionsToRender = (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0)
+        // Prefer vendorSelections only when they actually have items; otherwise use currentSelections (from deliveryDayOrders conversion).
+        // DB often has vendorSelections: [{ items: {}, vendorId }] and real items in deliveryDayOrders.Wednesday etc. — show the latter.
+        const hasItemsInVendorSelections = orderConfig.vendorSelections?.some((s: any) => s?.items && Object.keys(s.items || {}).length > 0) ?? false;
+        const selectionsToRender = (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0 && hasItemsInVendorSelections)
             ? orderConfig.vendorSelections
             : currentSelections;
+
+        // Day-specific meal plan item IDs (from bottom section): do not show them in the recurring order section.
+        const mealPlanItemIds = new Set<string>();
+        if (orderAndMealPlanOnly && initialMealPlanOrders && Array.isArray(initialMealPlanOrders)) {
+            for (const order of initialMealPlanOrders) {
+                for (const item of order.items ?? []) {
+                    if (item?.id) mealPlanItemIds.add(String(item.id));
+                }
+            }
+        }
+        const recurringOnlyItemIds = (ids: string[]) =>
+            mealPlanItemIds.size === 0 ? ids : ids.filter((id) => !mealPlanItemIds.has(id));
+
+        // Only menu items that exist for this vendor are shown; order IDs not in the menu are omitted (no "Unknown item" rows).
 
         const totalMeals = getTotalMealCountAllDays();
 
@@ -1221,7 +1418,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                             }}
                                         >
                                             <option value="">Select Vendor...</option>
-                                            {vendors.filter((v: any) => (v.serviceTypes || []).includes('Food') && (v as any).isActive !== false).map((v: Vendor) => (
+                                            {vendors.filter((v: any) => {
+                                                const types = (v.serviceTypes || []) as string[];
+                                                const hasFood = types.some((t: string) => String(t).toLowerCase() === 'food');
+                                                return hasFood && (v as any).isActive !== false;
+                                            }).map((v: Vendor) => (
                                                 <option key={v.id} value={v.id} disabled={selectionsToRender.some((s: any, i: number) => i !== index && s.vendorId === v.id)}>
                                                     {v.name}
                                                 </option>
@@ -1326,13 +1527,13 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                 )}
 
                                                 <div className={styles.menuItemsGrid} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-                                                    {getVendorMenuItems(selection.vendorId).map(item => {
+                                                    {getItemsToDisplayForVendor(selection.vendorId, recurringOnlyItemIds(Object.keys(dayItems))).map(item => {
                                                         const qty = Number(dayItems[item.id] || 0);
-                                                        const val = item.value || 1;
-                                                        const canAdd = (totalMeals + val) <= (client.approvedMealsPerWeek || 0);
+                                                        const val = item.value ?? 1;
+                                                        const canAdd = !item.isOrderOnly && (totalMeals + val) <= (client.approvedMealsPerWeek || 0);
 
                                                         return (
-                                                            <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface)' }}>
+                                                            <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: item.isOrderOnly ? 'var(--bg-surface-hover)' : 'var(--bg-surface)' }}>
                                                                 <div style={{ marginBottom: '8px', fontSize: '0.9rem', fontWeight: 500 }}>
                                                                     {item.name}
                                                                     {val !== 1 && (
@@ -1353,28 +1554,30 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                                         setOrderConfig({ ...orderConfig, vendorSelections: updated, deliveryDayOrders: undefined });
                                                                     }} className="btn btn-secondary" style={{ padding: '2px 8px' }}>-</button>
                                                                     <span style={{ width: '20px', textAlign: 'center' }}>{qty}</span>
-                                                                    <button
-                                                                        title={!canAdd ? "Adding this item would exceed your weekly meal allowance" : "Add item"}
-                                                                        onClick={() => {
-                                                                            if (!canAdd) {
-                                                                                alert("Adding this item would exceed your weekly meal allowance");
-                                                                                return;
-                                                                            }
-                                                                            const updated = [...selectionsToRender];
-                                                                            const itemsByDay = { ...(updated[index].itemsByDay || {}) };
-                                                                            if (!itemsByDay[day]) itemsByDay[day] = {};
-                                                                            const items = itemsByDay[day];
-                                                                            items[item.id] = qty + 1;
-                                                                            updated[index] = { ...updated[index], itemsByDay };
-                                                                            setOrderConfig({ ...orderConfig, vendorSelections: updated, deliveryDayOrders: undefined });
-                                                                        }}
-                                                                        className="btn btn-secondary"
-                                                                        style={{
-                                                                            padding: '2px 8px',
-                                                                            opacity: canAdd ? 1 : 0.5,
-                                                                            cursor: canAdd ? 'pointer' : 'not-allowed'
-                                                                        }}
-                                                                    >+</button>
+                                                                    {!item.isOrderOnly && (
+                                                                        <button
+                                                                            title={!canAdd ? "Adding this item would exceed your weekly meal allowance" : "Add item"}
+                                                                            onClick={() => {
+                                                                                if (!canAdd) {
+                                                                                    alert("Adding this item would exceed your weekly meal allowance");
+                                                                                    return;
+                                                                                }
+                                                                                const updated = [...selectionsToRender];
+                                                                                const itemsByDay = { ...(updated[index].itemsByDay || {}) };
+                                                                                if (!itemsByDay[day]) itemsByDay[day] = {};
+                                                                                const items = itemsByDay[day];
+                                                                                items[item.id] = qty + 1;
+                                                                                updated[index] = { ...updated[index], itemsByDay };
+                                                                                setOrderConfig({ ...orderConfig, vendorSelections: updated, deliveryDayOrders: undefined });
+                                                                            }}
+                                                                            className="btn btn-secondary"
+                                                                            style={{
+                                                                                padding: '2px 8px',
+                                                                                opacity: canAdd ? 1 : 0.5,
+                                                                                cursor: canAdd ? 'pointer' : 'not-allowed'
+                                                                            }}
+                                                                        >+</button>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                         );
@@ -1384,16 +1587,17 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                         )
                                     });
                                 } else if (!vendorHasMultipleDays) {
-                                    // Single Day / Standard
+                                    // Single Day / Standard — show menu items + any order item IDs not in menu (full order data)
+                                    const singleDayItems = selection.items || {};
                                     return (
                                         <div className={styles.menuItemsGrid} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-                                            {getVendorMenuItems(selection.vendorId).map(item => {
-                                                const qty = Number((selection.items || {})[item.id] || 0);
-                                                const val = item.value || 1;
-                                                const canAdd = (totalMeals + val) <= (client.approvedMealsPerWeek || 0);
+                                            {getItemsToDisplayForVendor(selection.vendorId, recurringOnlyItemIds(Object.keys(singleDayItems))).map(item => {
+                                                const qty = Number(singleDayItems[item.id] || 0);
+                                                const val = item.value ?? 1;
+                                                const canAdd = !item.isOrderOnly && (totalMeals + val) <= (client.approvedMealsPerWeek || 0);
 
                                                 return (
-                                                    <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface)' }}>
+                                                    <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: item.isOrderOnly ? 'var(--bg-surface-hover)' : 'var(--bg-surface)' }}>
                                                         <div style={{ marginBottom: '8px', fontSize: '0.9rem', fontWeight: 500 }}>
                                                             {item.name}
                                                             {val !== 1 && (
@@ -1413,26 +1617,28 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                                 setOrderConfig({ ...orderConfig, vendorSelections: updated, deliveryDayOrders: undefined });
                                                             }} className="btn btn-secondary" style={{ padding: '2px 8px' }}>-</button>
                                                             <span style={{ width: '20px', textAlign: 'center' }}>{qty}</span>
-                                                            <button
-                                                                title={!canAdd ? "Adding this item would exceed your weekly meal allowance" : "Add item"}
-                                                                onClick={() => {
-                                                                    if (!canAdd) {
-                                                                        alert("Adding this item would exceed your weekly meal allowance");
-                                                                        return;
-                                                                    }
-                                                                    const updated = [...selectionsToRender];
-                                                                    const items = { ...(updated[index].items || {}) };
-                                                                    items[item.id] = qty + 1;
-                                                                    updated[index] = { ...updated[index], items };
-                                                                    setOrderConfig({ ...orderConfig, vendorSelections: updated, deliveryDayOrders: undefined });
-                                                                }}
-                                                                className="btn btn-secondary"
-                                                                style={{
-                                                                    padding: '2px 8px',
-                                                                    opacity: canAdd ? 1 : 0.5,
-                                                                    cursor: canAdd ? 'pointer' : 'not-allowed'
-                                                                }}
-                                                            >+</button>
+                                                            {!item.isOrderOnly && (
+                                                                <button
+                                                                    title={!canAdd ? "Adding this item would exceed your weekly meal allowance" : "Add item"}
+                                                                    onClick={() => {
+                                                                        if (!canAdd) {
+                                                                            alert("Adding this item would exceed your weekly meal allowance");
+                                                                            return;
+                                                                        }
+                                                                        const updated = [...selectionsToRender];
+                                                                        const items = { ...(updated[index].items || {}) };
+                                                                        items[item.id] = qty + 1;
+                                                                        updated[index] = { ...updated[index], items };
+                                                                        setOrderConfig({ ...orderConfig, vendorSelections: updated, deliveryDayOrders: undefined });
+                                                                    }}
+                                                                    className="btn btn-secondary"
+                                                                    style={{
+                                                                        padding: '2px 8px',
+                                                                        opacity: canAdd ? 1 : 0.5,
+                                                                        cursor: canAdd ? 'pointer' : 'not-allowed'
+                                                                    }}
+                                                                >+</button>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 );
@@ -1459,8 +1665,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
 
     const configChanged = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
 
-    return (
-        <div className={styles.container}>
+    const mainContent = (
             <div className={styles.wideGrid}>
                 {!orderAndMealPlanOnly && (
                 /* Access Profile - Read Only */
@@ -2353,7 +2558,6 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 </div>
                 </>
                 )}
-            </div>
 
             {/* Fixed Floating Save Section at Bottom of Viewport */}
             {(configChanged || saving) && (
@@ -2548,6 +2752,50 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     </div>
                 </>
             )}
-        </div >
+            </div>
+    );
+
+    const clientInfoSidebar = orderAndMealPlanOnly && (
+        <aside className={styles.profileLayoutSidebar}>
+            <section className={styles.clientInfoCard}>
+                <h3 className={styles.sectionTitle} style={{ marginTop: 0 }}>Your info</h3>
+                <div className={styles.clientInfoName}>{client.fullName || '—'}</div>
+                <span className="label">Email</span>
+                <div className={styles.clientInfoValue}>{client.email || '—'}</div>
+                <span className="label">Phone</span>
+                <div className={styles.clientInfoValue}>{client.phoneNumber || '—'}</div>
+                {client.secondaryPhoneNumber && (
+                    <>
+                        <span className="label">Secondary phone</span>
+                        <div className={styles.clientInfoValue}>{client.secondaryPhoneNumber}</div>
+                    </>
+                )}
+                <span className="label">Address</span>
+                <div className={styles.clientInfoValue}>{client.address || '—'}</div>
+                <span className="label">Service</span>
+                <div className={`${styles.clientInfoValue} ${client.serviceType !== 'Food' ? styles.clientInfoValueLast : ''}`}>{client.serviceType || '—'}</div>
+                {client.serviceType === 'Food' && (
+                    <>
+                        <span className="label">Meals per week</span>
+                        <div className={`${styles.clientInfoValue} ${styles.clientInfoValueLast}`}>{client.approvedMealsPerWeek ?? '—'}</div>
+                    </>
+                )}
+            </section>
+        </aside>
+    );
+
+    return (
+        <div className={styles.container}>
+            {orderAndMealPlanOnly ? (
+                <div className={styles.profileLayout}>
+                    {clientInfoSidebar}
+                    <div className={styles.profileLayoutMain}>
+                        {mainContent}
+                    </div>
+                </div>
+            ) : (
+                mainContent
+            )}
+        </div>
     );
 }

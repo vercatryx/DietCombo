@@ -9,10 +9,11 @@ import styles from './OrdersList.module.css';
 
 export function OrdersList() {
     const router = useRouter();
+    const PAGE_SIZE_OPTIONS = [50, 100, 250, 500] as const;
     const [orders, setOrders] = useState<any[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
-    const PAGE_SIZE = 50;
+    const [pageSize, setPageSize] = useState(50);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [creationIdFilter, setCreationIdFilter] = useState('');
@@ -24,12 +25,12 @@ export function OrdersList() {
 
     useEffect(() => {
         loadData(page);
-    }, [page]);
+    }, [page, pageSize]);
 
     async function loadData(pageNum: number) {
         setIsLoading(true);
         try {
-            const { orders: data, total: totalCount } = await getOrdersPaginatedBilling(pageNum, PAGE_SIZE);
+            const { orders: data, total: totalCount } = await getOrdersPaginatedBilling(pageNum, pageSize);
             setOrders(data);
             setTotal(totalCount);
         } catch (error) {
@@ -200,6 +201,25 @@ export function OrdersList() {
                     onChange={(e) => setCreationIdFilter(e.target.value)}
                     min={1}
                 />
+                <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem', color: 'var(--text-secondary, #555)' }}>
+                    Show
+                    <select
+                        className="input"
+                        value={pageSize}
+                        onChange={(e) => {
+                            const val = Number(e.target.value);
+                            setPageSize(val);
+                            setPage(1);
+                        }}
+                        style={{ width: '72px', marginLeft: '6px', marginRight: '6px' }}
+                        aria-label="Rows per page"
+                    >
+                        {PAGE_SIZE_OPTIONS.map((n) => (
+                            <option key={n} value={n}>{n}</option>
+                        ))}
+                    </select>
+                    per page
+                </label>
                 <button type="button" className="btn btn-secondary" onClick={handleSelectAll} style={{ marginLeft: 'auto' }}>
                     {selectedOrders.size === filteredOrders.length && filteredOrders.length > 0 ? 'Deselect All' : 'Select All'}
                 </button>
@@ -263,7 +283,7 @@ export function OrdersList() {
                                 style={{ cursor: 'pointer', width: 18, height: 18 }}
                             />
                         </span>
-                        <span style={{ width: '40px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{(page - 1) * PAGE_SIZE + index + 1}</span>
+                        <span style={{ width: '40px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{(page - 1) * pageSize + index + 1}</span>
                         <span style={{ width: '100px', fontWeight: 600 }}>{order.order_number ?? 'N/A'}</span>
                         <span style={{ flex: 2 }}>{order.clientName}</span>
                         <span style={{ flex: 1 }}>{order.service_type}</span>
@@ -286,7 +306,7 @@ export function OrdersList() {
             </div>
 
             {total > 0 && (() => {
-                const maxPage = Math.ceil(total / PAGE_SIZE) || 1;
+                const maxPage = Math.ceil(total / pageSize) || 1;
                 const goToPage = () => {
                     const num = parseInt(goToPageInput, 10);
                     if (!Number.isNaN(num) && num >= 1 && num <= maxPage) {

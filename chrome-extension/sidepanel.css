@@ -264,6 +264,54 @@ body {
     color: var(--text-tertiary);
 }
 
+/* Geocode block – required before submit */
+.geocode-group {
+    padding: 10px 12px;
+    background: var(--bg-surface-hover, #f1f5f9);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.geocode-status {
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+    min-height: 1.25em;
+}
+
+.geocode-status.idle {
+    color: var(--text-tertiary);
+}
+
+.geocode-status.loading {
+    color: var(--text-secondary);
+}
+
+.geocode-status.success {
+    color: var(--color-success);
+    font-weight: 600;
+}
+
+.geocode-status.error {
+    color: var(--color-danger);
+}
+
+.btn-geocode {
+    background-color: var(--color-primary);
+    color: white;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    width: 100%;
+}
+
+.btn-geocode:hover:not(:disabled) {
+    background-color: var(--color-primary-hover);
+}
+
+.btn-geocode:disabled {
+    background-color: var(--text-tertiary);
+    cursor: not-allowed;
+}
+
 .btn {
     padding: 0.6rem 1.2rem;
     border: none;

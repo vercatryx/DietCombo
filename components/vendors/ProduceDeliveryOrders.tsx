@@ -7,6 +7,7 @@ import { getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cach
 import { getOrdersByServiceType, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
 import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { toDateStringInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
 interface Props {
@@ -82,14 +83,14 @@ export function ProduceDeliveryOrders({ deliveryDate }: Props) {
             if (deliveryDate === 'no-date') {
                 filteredOrders = ordersData.filter(order => !order.scheduled_delivery_date);
             } else {
-                const dateKey = new Date(deliveryDate).toISOString().split('T')[0];
+                const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
                 filteredOrders = ordersData.filter(order => {
                     if (!order.scheduled_delivery_date) return false;
 
                     // Exclude upcoming orders
                     if (order.orderType === 'upcoming') return false;
 
-                    const orderDateKey = new Date(order.scheduled_delivery_date).toISOString().split('T')[0];
+                    const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
                     return orderDateKey === dateKey;
                 });
             }
@@ -156,7 +157,8 @@ export function ProduceDeliveryOrders({ deliveryDate }: Props) {
                 day: 'numeric',
                 year: 'numeric',
                 hour: '2-digit',
-                minute: '2-digit'
+                minute: '2-digit',
+                timeZone: 'America/New_York'
             });
         } catch {
             return dateString;
@@ -416,9 +418,9 @@ export function ProduceDeliveryOrders({ deliveryDate }: Props) {
                     } else {
                         // For specific dates, check that order matches the date
                         const orderDateKey = order.scheduled_delivery_date
-                            ? new Date(order.scheduled_delivery_date).toISOString().split('T')[0]
+                            ? toDateStringInAppTz(new Date(order.scheduled_delivery_date))
                             : null;
-                        const pageDateKey = new Date(deliveryDate).toISOString().split('T')[0];
+                        const pageDateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
 
                         if (orderDateKey !== pageDateKey) {
                             errorCount++;

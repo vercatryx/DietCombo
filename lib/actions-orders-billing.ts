@@ -13,6 +13,7 @@ import type { BillingRequest, ClientProfileMinimal, OrderDetail } from './types-
 
 export type { BillingRequest } from './types-orders-billing';
 import { getWeekStart, getWeekEnd, getWeekRangeString, isDateInWeek } from './utils-week';
+import { toDateStringInAppTz } from './timezone';
 
 import { supabase } from '@/lib/supabase';
 
@@ -653,7 +654,7 @@ export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<Bi
         const weekStart = getWeekStart(deliveryDate);
         weekStart.setHours(0, 0, 0, 0);
         const weekEnd = getWeekEnd(deliveryDate);
-        const weekStartDateStr = weekStart.toISOString().split('T')[0];
+        const weekStartDateStr = toDateStringInAppTz(weekStart);
         const weekKey = `${order.client_id}-${weekStartDateStr}`;
         const weekRange = getWeekRangeString(deliveryDate);
 

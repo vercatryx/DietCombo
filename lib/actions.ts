@@ -8446,18 +8446,32 @@ export async function getClientProfilePageData(clientId: string) {
 
 // --- VENDOR ORDER ACTIONS ---
 
-export async function getOrdersByVendor(vendorId: string) {
+/** Single vendor in the app; vendor page is always this id so we allow orders without session. */
+const SINGLE_VENDOR_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+
+/**
+ * Get orders for a vendor. Optionally filter by deliveryDate to reduce payload (avoids stack overflow
+ * when returning huge result sets to client for vendors like cccccccc-cccc-cccc-cccc-cccccccccccc).
+ */
+export async function getOrdersByVendor(vendorId: string, deliveryDate?: string) {
     if (!vendorId) return [];
 
     const session = await getSession();
-    if (!session || (session.role !== 'admin' && session.userId !== vendorId)) {
-        console.error('Unauthorized access to getOrdersByVendor');
+    const isSingleVendor = vendorId === SINGLE_VENDOR_ID;
+    const allowed = isSingleVendor || (session && (session.role === 'admin' || session.userId === vendorId));
+    if (!allowed) {
+        console.error('Unauthorized access to getOrdersByVendor', { hasSession: !!session, role: session?.role, userId: session?.userId, vendorId });
         return [];
     }
 
+    // Use service role client so RLS cannot block (e.g. when admin views a vendor's orders)
+    const db = process.env.SUPABASE_SERVICE_ROLE_KEY
+        ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
+        : supabase;
+
     try {
         // 1. Primary source: all orders from the database orders table for this vendor
-        const { data: directOrders, error: directErr } = await supabase
+        const { data: directOrders, error: directErr } = await db
             .from('orders')
             .select('*')
             .eq('vendor_id', vendorId)
@@ -8468,12 +8482,12 @@ export async function getOrdersByVendor(vendorId: string) {
         }
 
         // 2. Also include orders linked via junction tables (in case vendor_id is null on order)
-        const { data: foodOrderIds } = await supabase
+        const { data: foodOrderIds } = await db
             .from('order_vendor_selections')
             .select('order_id')
             .eq('vendor_id', vendorId);
 
-        const { data: boxOrderIds } = await supabase
+        const { data: boxOrderIds } = await db
             .from('order_box_selections')
             .select('order_id')
             .eq('vendor_id', vendorId);
@@ -8491,7 +8505,7 @@ export async function getOrdersByVendor(vendorId: string) {
         if (junctionOrderIds.length > 0) {
             const missingIds = junctionOrderIds.filter(id => !directIdSet.has(id));
             if (missingIds.length > 0) {
-                const { data: extraOrders } = await supabase
+                const { data: extraOrders } = await db
                     .from('orders')
                     .select('*')
                     .in('id', missingIds)
@@ -8504,7 +8518,7 @@ export async function getOrdersByVendor(vendorId: string) {
         }
 
         // Filter: for Equipment, include if order.vendor_id matches OR notes.vendorId matches
-        const filteredOrders = ordersData.filter((order: any) => {
+        let filteredOrders = ordersData.filter((order: any) => {
             if (order.vendor_id === vendorId) return true;
             if (order.service_type === 'Equipment') {
                 try {
@@ -8518,12 +8532,80 @@ export async function getOrdersByVendor(vendorId: string) {
             return true;
         });
 
-        const orders = await Promise.all(filteredOrders.map(async (order: any) => {
+        // When deliveryDate provided, filter early to avoid processing thousands of orders (stack overflow)
+        // dateKey from URL = same as VendorDetail.groupOrdersByDeliveryDate uses (toDateStringInAppTz of order dates)
+        // Use deliveryDate as-is (it came from that grouping) and toDateStringInAppTz for order dates to match
+        if (deliveryDate) {
+            const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
+            filteredOrders = filteredOrders.filter((order: any) => {
+                if (!order.scheduled_delivery_date) return false;
+                const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
+                return orderDateKey === dateKey;
+            });
+        }
+
+        const completedOrders = await Promise.all(filteredOrders.map(async (order: any) => {
             const processed = await processVendorOrderDetails(order, vendorId, false);
             return { ...processed, orderType: 'completed' };
         }));
 
-        return orders;
+        // 3. Also include upcoming (scheduled) orders for this vendor from upcoming_orders
+        const { data: foodUpcomingIds } = await db
+            .from('upcoming_order_vendor_selections')
+            .select('upcoming_order_id')
+            .eq('vendor_id', vendorId);
+        const { data: boxUpcomingIds } = await db
+            .from('upcoming_order_box_selections')
+            .select('upcoming_order_id')
+            .eq('vendor_id', vendorId);
+        const upcomingOrderIds = Array.from(new Set([
+            ...(foodUpcomingIds?.map((o: { upcoming_order_id: string }) => o.upcoming_order_id) || []),
+            ...(boxUpcomingIds?.map((o: { upcoming_order_id: string }) => o.upcoming_order_id) || [])
+        ]));
+
+        let upcomingOrders: any[] = [];
+        if (upcomingOrderIds.length > 0) {
+            const { data: upcomingRows, error: upcomingErr } = await db
+                .from('upcoming_orders')
+                .select('*')
+                .in('id', upcomingOrderIds)
+                .order('created_at', { ascending: false });
+            if (!upcomingErr && upcomingRows?.length) {
+                let rowsToProcess = upcomingRows;
+                if (deliveryDate) {
+                    const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
+                    rowsToProcess = upcomingRows.filter((order: any) => {
+                        if (!order.scheduled_delivery_date) return false;
+                        const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
+                        return orderDateKey === dateKey;
+                    });
+                }
+                upcomingOrders = await Promise.all(rowsToProcess.map(async (order: any) => {
+                    const processed = await processVendorOrderDetails(order, vendorId, true);
+                    return { ...processed, orderType: 'upcoming' };
+                }));
+            }
+        }
+
+        let combined = [...completedOrders, ...upcomingOrders];
+        combined.sort((a: any, b: any) => {
+            const dateA = new Date(a.created_at || 0).getTime();
+            const dateB = new Date(b.created_at || 0).getTime();
+            return dateB - dateA;
+        });
+
+        // When deliveryDate provided (e.g. delivery page), filter server-side to reduce payload and avoid stack overflow
+        // Include both completed and upcoming orders for the date (vendor needs to see all scheduled deliveries)
+        if (deliveryDate) {
+            const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
+            combined = combined.filter((order: any) => {
+                if (!order.scheduled_delivery_date) return false;
+                const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
+                return orderDateKey === dateKey;
+            });
+        }
+
+        return combined;
 
     } catch (err) {
         console.error('Error in getOrdersByVendor:', err);
@@ -8645,6 +8727,37 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
                 .eq(selectionIdField, vs.id);
 
             result.items = items || [];
+        }
+
+        // Fallback: for single vendor, if no order_items, try meal_planner_orders (same client + date)
+        if (result.items.length === 0 && vendorId === SINGLE_VENDOR_ID && order.client_id && order.scheduled_delivery_date) {
+            const dateOnly = mealPlannerDateOnly(order.scheduled_delivery_date);
+            const supabaseVendor = process.env.SUPABASE_SERVICE_ROLE_KEY
+                ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
+                : supabase;
+            const { data: mpoRows } = await supabaseVendor
+                .from('meal_planner_orders')
+                .select('id')
+                .eq('client_id', order.client_id)
+                .eq('scheduled_delivery_date', dateOnly)
+                .in('status', ['draft', 'scheduled', 'saved']);
+            const mpoIds = (mpoRows || []).map((r: { id: string }) => r.id);
+            if (mpoIds.length > 0) {
+                const { data: mpoItems } = await supabaseVendor
+                    .from('meal_planner_order_items')
+                    .select('id, menu_item_id, meal_item_id, quantity, notes, custom_name')
+                    .in('meal_planner_order_id', mpoIds);
+                if (mpoItems && mpoItems.length > 0) {
+                    result.items = mpoItems.map((row: any) => ({
+                        id: row.id,
+                        menu_item_id: row.menu_item_id ?? null,
+                        meal_item_id: row.meal_item_id ?? null,
+                        quantity: row.quantity ?? 0,
+                        notes: row.notes ?? null,
+                        custom_name: row.custom_name ?? null
+                    }));
+                }
+            }
         }
     } else if (order.service_type === 'Equipment') {
         // Parse equipment details from notes

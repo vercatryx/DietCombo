@@ -157,6 +157,11 @@ function setupEventListeners() {
     // Form submission
     document.getElementById('client-form').addEventListener('submit', handleSubmit);
 
+    // Geocode button
+    document.getElementById('geocode-btn').addEventListener('click', () => {
+        autoGeocode(true);
+    });
+
     // Auto fill button
     document.getElementById('auto-fill-btn').addEventListener('click', handleAutoFill);
 
@@ -522,6 +527,11 @@ async function handleSubmit(e) {
             throw new Error('Please fill in all required fields');
         }
 
+        // Require geocoding before submit
+        if (!window.geocodeLat || !window.geocodeLng) {
+            throw new Error('Address must be geocoded before submitting. Fill in address, city, state, and ZIP, then wait for geocoding or click "Geocode Address".');
+        }
+
         const response = await fetch(`${baseUrl}/api/extension/create-client`, {
             method: 'POST',
             headers: {
@@ -553,9 +563,10 @@ async function handleSubmit(e) {
             showStatus('form-status', `Client "${formData.fullName}" created successfully!`, 'success');
             // Reset form
             document.getElementById('client-form').reset();
-            // Clear geocode coordinates
+            // Clear geocode coordinates and reset geocode UI
             window.geocodeLat = null;
             window.geocodeLng = null;
+            updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
             // Reset status and navigator dropdowns to defaults
             const statusSelect = document.getElementById('status');
             const navigatorSelect = document.getElementById('navigator');
@@ -733,7 +744,7 @@ function isValidCaseUrl(url) {
     return pattern.test(url.trim());
 }
 
-// Setup form validation to enable/disable submit button
+// Setup form validation to enable/disable submit button (geocoding required)
 function setupFormValidation() {
     const form = document.getElementById('client-form');
     const submitBtn = document.getElementById('submit-btn');
@@ -776,9 +787,21 @@ function setupFormValidation() {
             isValid = false;
         }
 
+        // Require geocoding: must have coordinates when address is complete
+        const hasAddress = document.getElementById('address').value.trim() &&
+            document.getElementById('city').value.trim() &&
+            document.getElementById('state').value.trim() &&
+            document.getElementById('zip').value.trim();
+        if (hasAddress && (!window.geocodeLat || !window.geocodeLng)) {
+            isValid = false;
+        }
+
         submitBtn.disabled = !isValid;
         return isValid;
     }
+
+    // Expose so autoGeocode can re-run validation when geocode completes
+    form._validateForm = validateForm;
 
     // Add event listeners to all form fields
     requiredFields.forEach(fieldId => {
@@ -810,68 +833,107 @@ function setupFormValidation() {
     validateForm();
 }
 
-// Auto-geocode function
-async function autoGeocode() {
+// Update geocode status UI (idle | loading | success | error)
+function updateGeocodeUI(state, message) {
+    const el = document.getElementById('geocode-status');
+    const btn = document.getElementById('geocode-btn');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'geocode-status ' + (state || 'idle');
+    // Enable Geocode button when we have address fields (user can retry)
+    const hasAddress = document.getElementById('address').value.trim() &&
+        document.getElementById('city').value.trim() &&
+        document.getElementById('state').value.trim() &&
+        document.getElementById('zip').value.trim();
+    btn.disabled = !hasAddress;
+}
+
+// Clear stored coordinates when address changes (so submit stays disabled until re-geocoded)
+function clearGeocodeOnAddressChange() {
+    window.geocodeLat = null;
+    window.geocodeLng = null;
+    const hasAddress = document.getElementById('address').value.trim() &&
+        document.getElementById('city').value.trim() &&
+        document.getElementById('state').value.trim() &&
+        document.getElementById('zip').value.trim();
+    if (hasAddress) {
+        updateGeocodeUI('idle', 'Address changed — geocode required');
+    } else {
+        updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
+    }
+    const form = document.getElementById('client-form');
+    if (form._validateForm) form._validateForm();
+}
+
+// Auto-geocode function (required before submit). manualCall = true when user clicks "Geocode Address"
+async function autoGeocode(manualCall) {
     const address = document.getElementById('address').value.trim();
     const city = document.getElementById('city').value.trim();
     const state = document.getElementById('state').value.trim();
     const zip = document.getElementById('zip').value.trim();
-    
-    // Only geocode if we have minimum required fields
+
     if (!address || !city || !state || !zip) {
+        updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
         return;
     }
-    
-    // Don't geocode if we already have coordinates
-    if (window.geocodeLat && window.geocodeLng) {
-        return;
-    }
-    
+
+    updateGeocodeUI('loading', 'Geocoding…');
+    const geocodeBtn = document.getElementById('geocode-btn');
+    if (geocodeBtn) geocodeBtn.disabled = true;
+
     try {
-        // Build address query
-        let addressQuery = address;
-        if (city) addressQuery += `, ${city}`;
-        if (state) addressQuery += `, ${state}`;
-        if (zip) addressQuery += ` ${zip}`;
-        
-        // Call geocoding API
+        const addressQuery = `${address}, ${city}, ${state} ${zip}`;
         const response = await fetch(`${baseUrl}/api/geocode?q=${encodeURIComponent(addressQuery)}&provider=auto`, {
             method: 'GET'
         });
-        
-        if (!response.ok) {
-            return; // Silently fail - geocoding is optional
-        }
-        
-        const data = await response.json();
-        
-        if (data.lat && data.lng) {
-            // Store coordinates for form submission
+
+        const data = await response.json().catch(() => ({}));
+
+        if (response.ok && data.lat != null && data.lng != null) {
             window.geocodeLat = data.lat;
             window.geocodeLng = data.lng;
-            console.log('Auto-geocoded:', data.lat, data.lng);
+            updateGeocodeUI('success', '✓ Address geocoded');
+            const form = document.getElementById('client-form');
+            if (form._validateForm) form._validateForm();
+        } else {
+            const errMsg = data.error || (response.ok ? 'No coordinates returned' : `Geocode failed (${response.status})`);
+            updateGeocodeUI('error', errMsg + ' — click "Geocode Address" to retry');
+            window.geocodeLat = null;
+            window.geocodeLng = null;
         }
     } catch (error) {
-        // Silently fail - geocoding is optional
-        console.log('Auto-geocoding failed (optional):', error);
+        console.error('Geocoding failed:', error);
+        updateGeocodeUI('error', 'Network error — check connection and click "Geocode Address" to retry');
+        window.geocodeLat = null;
+        window.geocodeLng = null;
+    } finally {
+        const hasAddress = document.getElementById('address').value.trim() &&
+            document.getElementById('city').value.trim() &&
+            document.getElementById('state').value.trim() &&
+            document.getElementById('zip').value.trim();
+        const btn = document.getElementById('geocode-btn');
+        if (btn) btn.disabled = !hasAddress;
     }
 }
 
-// Setup auto-geocoding on address field changes
+// Setup auto-geocoding on address field changes; clear coords when address changes
 function setupAutoGeocode() {
     const addressFields = ['address', 'city', 'state', 'zip'];
     let geocodeTimeout;
-    
+
     addressFields.forEach(fieldId => {
         const field = document.getElementById(fieldId);
         if (field) {
             field.addEventListener('input', () => {
-                // Debounce geocoding - wait 1 second after user stops typing
+                clearGeocodeOnAddressChange();
                 clearTimeout(geocodeTimeout);
                 geocodeTimeout = setTimeout(() => {
-                    autoGeocode();
+                    autoGeocode(false);
                 }, 1000);
             });
         }
     });
+
+    // Initial UI state
+    updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
 }

@@ -203,7 +203,116 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
     URL.revokeObjectURL(url);
 }
 
+/** Render a grid (e.g. Breakdown or Cooking list) as a PDF table and trigger download */
+export function generateTablePDF(options: {
+    title: string;
+    rows: string[][];
+    filename: string;
+    columnWidths?: number[]; // in % of page width (excluding margins), or equal if not provided
+    /** If row's first cell equals this, draw a horizontal line instead of text (e.g. "---") */
+    lineRowMarker?: string;
+    /** If first column cell equals this, draw an empty checkbox (square) instead of text */
+    checkboxMarker?: string;
+}): void {
+    const { title, rows, filename: baseFilename, columnWidths, lineRowMarker, checkboxMarker } = options;
+    if (!rows || rows.length === 0) {
+        alert('No data to export');
+        return;
+    }
 
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
+    const margin = 0.5;
+    const pageWidth = 8.5;
+    const pageHeight = 11;
+    const contentWidth = pageWidth - 2 * margin;
+    const fontSize = 9;
+    const headerFontSize = 11;
+    const lineHeight = 0.2;
+    const cellPadding = 0.05;
+    const checkboxSize = 0.14;
+
+    doc.setFontSize(headerFontSize);
+    doc.setFont('helvetica', 'bold');
+    doc.text(title, margin, margin + 0.3);
+    let y = margin + 0.55;
+
+    const cols = rows[0]?.length ?? 0;
+    const widths = columnWidths && columnWidths.length === cols
+        ? columnWidths.map(p => (p / 100) * contentWidth)
+        : Array(cols).fill(contentWidth / cols);
+
+    const maxY = pageHeight - margin;
+
+    for (let r = 0; r < rows.length; r++) {
+        const row = rows[r];
+        if (!row || row.length === 0) {
+            y += lineHeight * 0.5;
+            continue;
+        }
+        if (y > maxY - lineHeight) {
+            doc.addPage();
+            y = margin;
+        }
+
+        // Line row: draw horizontal rule between client blocks
+        if (lineRowMarker && row[0] === lineRowMarker) {
+            doc.setDrawColor(180, 180, 180);
+            doc.setLineWidth(0.01);
+            doc.line(margin, y + lineHeight / 2, margin + contentWidth, y + lineHeight / 2);
+            y += lineHeight + cellPadding;
+            continue;
+        }
+
+        const isHeader = r === 0 || (row[1] === 'Item Name' && row[2] === 'Quantity');
+        doc.setFont('helvetica', isHeader ? 'bold' : 'normal');
+        doc.setFontSize(fontSize);
+
+        let rowHeight = lineHeight;
+        const cellSplits: string[][] = [];
+        for (let c = 0; c < row.length; c++) {
+            const cellText = String(row[c] ?? '');
+            const isCheckboxCell = c === 0 && checkboxMarker && cellText === checkboxMarker;
+            if (isCheckboxCell) {
+                cellSplits.push([]);
+                const h = checkboxSize + 0.02;
+                if (h > rowHeight) rowHeight = h;
+            } else {
+                const w = widths[c] ?? contentWidth / cols;
+                const split = doc.splitTextToSize(cellText, Math.max(w - cellPadding * 2, 0.1));
+                cellSplits.push(split);
+                const h = split.length * lineHeight;
+                if (h > rowHeight) rowHeight = h;
+            }
+        }
+        for (let c = 0; c < row.length; c++) {
+            const x = margin + widths.slice(0, c).reduce((a, b) => a + b, 0);
+            const w = widths[c] ?? contentWidth / cols;
+            const isCheckboxCell = c === 0 && checkboxMarker && String(row[c] ?? '') === checkboxMarker;
+            if (isCheckboxCell) {
+                const boxX = x + cellPadding;
+                const boxY = y + (rowHeight - checkboxSize) / 2;
+                doc.setDrawColor(0, 0, 0);
+                doc.setLineWidth(0.01);
+                doc.rect(boxX, boxY, checkboxSize, checkboxSize);
+            } else {
+                const lines = cellSplits[c];
+                for (let L = 0; L < lines.length; L++) {
+                    doc.text(lines[L], x + cellPadding, y + lineHeight - 0.02 + L * lineHeight);
+                }
+            }
+        }
+        y += rowHeight + cellPadding;
+    }
+
+    const filename = baseFilename.endsWith('.pdf') ? baseFilename : `${baseFilename}.pdf`;
+    const blob = doc.output('blob');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
 
 
 

@@ -6,6 +6,7 @@ import { Truck, RefreshCw } from "lucide-react";
 import SearchStops from "../../components/drivers/SearchStops";
 import DriversGrid from "../../components/drivers/DriversGrid";
 import { DateFilter } from "../../components/routes/DateFilter";
+import { getTodayInAppTz } from "@/lib/timezone";
 
 export default function DriversHome() {
     const [drivers, setDrivers] = useState([]);
@@ -14,9 +15,7 @@ export default function DriversHome() {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState(false);
     const [selectedDate, setSelectedDate] = useState<string>(() => {
-        // Set default date to today in YYYY-MM-DD format
-        const today = new Date();
-        return today.toISOString().split('T')[0];
+        return getTodayInAppTz();
     });
 
     const loadData = async (showRefreshSpinner = false) => {

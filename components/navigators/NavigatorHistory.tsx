@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getNavigatorLogs } from '@/lib/actions';
+import { toDateStringInAppTz } from '@/lib/timezone';
 import { History } from 'lucide-react';
 import styles from './NavigatorHistory.module.css';
 
@@ -63,9 +64,10 @@ export function NavigatorHistory({ navigatorId }: NavigatorHistoryProps) {
                     const dateKey = date.toLocaleDateString('en-US', { 
                         year: 'numeric', 
                         month: 'long', 
-                        day: 'numeric' 
+                        day: 'numeric',
+                        timeZone: 'America/New_York'
                     });
-                    const dateSortKey = date.toISOString().split('T')[0]; // For sorting
+                    const dateSortKey = toDateStringInAppTz(date); // Group by app timezone day
                     
                     if (!acc[dateSortKey]) {
                         acc[dateSortKey] = {
