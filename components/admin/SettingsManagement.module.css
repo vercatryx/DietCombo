@@ -1,0 +1,159 @@
+.container {
+    padding: 1rem;
+    background-color: #f9fafb;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e7eb;
+}
+
+.title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    color: #111827;
+}
+
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    background-color: white;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 1.5rem;
+}
+
+.sectionTitle {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.sectionTitle:first-child {
+    margin-top: 0;
+}
+
+.inputGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.input {
+    padding: 0.5rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    max-width: 20rem;
+}
+
+.input:focus {
+    outline: 2px solid #6366f1;
+    border-color: transparent;
+}
+
+.toggleGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.toggleLabel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.toggleLabel input {
+    width: 1.125rem;
+    height: 1.125rem;
+}
+
+.helper {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin: 0;
+}
+
+.buttonRow {
+    margin-top: 0.5rem;
+}
+
+.saveButton {
+    background-color: var(--color-primary);
+    color: white;
+    border: none;
+    padding: 0.625rem 1rem;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.saveButton:hover {
+    filter: brightness(0.9);
+}
+
+.saveButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.success {
+    color: #10b981;
+    font-size: 0.875rem;
+}
+
+.error {
+    color: #ef4444;
+    font-size: 0.875rem;
+}
+
+.actionsSection {
+    background-color: white;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e7eb;
+}
+
+.actionCard {
+    margin-top: 0.75rem;
+}
+
+.actionDescription {
+    font-size: 0.875rem;
+    color: #6b7280;
+    margin-bottom: 0.75rem;
+}
+
+.actionButton {
+    background-color: #f59e0b;
+    color: #000;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.actionButton:hover {
+    background-color: #d97706;
+}
+
+.actionButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

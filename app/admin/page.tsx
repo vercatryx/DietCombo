@@ -16,8 +16,9 @@ import { getMenuItems as getMenuItemsAction } from '@/lib/actions';
 import { Vendor, MenuItem } from '@/lib/types';
 
 import { MealSelectionManagement } from '@/components/admin/MealSelectionManagement';
+import { SettingsManagement } from '@/components/admin/SettingsManagement';
 
-type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'form' | 'meals' | 'template';
+type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'form' | 'meals' | 'settings' | 'template';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('template');
@@ -101,6 +102,12 @@ export default function AdminPage() {
                 >
                     Admins
                 </button>
+                <button
+                    className={`${styles.tab} ${activeTab === 'settings' ? styles.activeTab : ''}`}
+                    onClick={() => setActiveTab('settings')}
+                >
+                    Settings
+                </button>
                 {/* Hidden: Meal Selection
                 <button
                     className={`${styles.tab} ${activeTab === 'meals' ? styles.activeTab : ''}`}
@@ -131,6 +138,7 @@ export default function AdminPage() {
                     </div>
                 )}
                 {activeTab === 'admins' && <AdminManagement />}
+                {activeTab === 'settings' && <SettingsManagement />}
                 {activeTab === 'meals' && <MealSelectionManagement />}
                 {activeTab === 'template' && mainVendor && (
                     <DefaultOrderTemplate
