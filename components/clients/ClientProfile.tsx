@@ -4,8 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode, forwardRef, 
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
-import { prepareMealPlannerDataForUpdate } from '@/lib/meal-planner-utils';
+import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, saveClientMealPlannerData, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
 import { getDefaultOrderTemplateCachedSync, getDefaultMealPlanTemplateCachedSync, getCachedDefaultOrderTemplate, getCachedDefaultMealPlanTemplateForNewClient } from '@/lib/default-order-template-cache';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
@@ -200,6 +199,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     const defaultTemplateLoadedForFoodRef = useRef<boolean>(false);
     // Current meal plan orders (from Saved Meal Plan section) for persisting on profile save
     const mealPlanOrdersRef = useRef<MealPlannerOrderResult[]>([]);
+    /** Dates edited in meal planner this session; only these are written to clients.meal_planner_data on save. */
+    const [mealPlanEditedDates, setMealPlanEditedDates] = useState<string[]>([]);
+    /** Increment after save so SavedMealPlanMonth clears its session-edited set. */
+    const [mealPlanEditedResetTrigger, setMealPlanEditedResetTrigger] = useState(0);
 
     const [client, setClient] = useState<ClientProfile | null>(null);
     const [statuses, setStatuses] = useState<ClientStatus[]>(initialStatuses || []);
@@ -4554,10 +4557,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 }
             }
 
-            // Include meal planner in same update (from memory - no extra fetch)
-            if (!saveDetailsOnly && formData.serviceType === 'Food' && mealPlanOrdersRef.current.length > 0) {
-                updateData.mealPlannerData = prepareMealPlannerDataForUpdate(mealPlanOrdersRef.current);
-            }
+            // Meal planner: do NOT put in updateData. We save only edited days via saveClientMealPlannerData (merge-by-date) below, after updateClient.
 
             // CRITICAL: Execute the single update call (skip order sync when saveDetailsOnly)
             let updatedClientFromSave: ClientProfile | undefined;
@@ -4569,6 +4569,19 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 setErrorModal({ show: true, message: errorMessage });
                 setSaving(false);
                 return false;
+            }
+
+            // Save meal planner only for dates that were edited this session (merge-by-date; don't overwrite other days).
+            if (!saveDetailsOnly && formData.serviceType === 'Food' && mealPlanEditedDates.length > 0) {
+                const orders = mealPlanOrdersRef.current;
+                for (const date of mealPlanEditedDates) {
+                    const order = orders.find((o) => (o.scheduledDeliveryDate || '').slice(0, 10) === date.slice(0, 10));
+                    if (order?.items) {
+                        const { ok, error: mealErr } = await saveClientMealPlannerData(clientId, date, order.items);
+                        if (!ok && mealErr) console.warn('[ClientProfile] Meal planner save for date', date, mealErr);
+                    }
+                }
+                setMealPlanEditedResetTrigger((t) => t + 1);
             }
 
             // When saveDetailsOnly we only updated the client table; skip all order sync and order-related saves.
@@ -6751,8 +6764,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     <SavedMealPlanMonth
                                         clientId={clientId}
                                         onOrdersChange={(orders) => { mealPlanOrdersRef.current = orders; }}
+                                        onEditedDatesChange={setMealPlanEditedDates}
                                         initialOrders={initialData?.mealPlanData ?? mealPlanInitialOrders}
                                         preloadInProgress={mealPlanPreloading}
+                                        editedDatesResetTrigger={mealPlanEditedResetTrigger}
                                     />
                                 </section>
                             )}

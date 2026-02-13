@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota, BoxConfiguration, ServiceType } from '@/lib/types';
-import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, saveClientFoodOrder, saveClientBoxOrder, isFoodOrderSameAsDefault } from '@/lib/actions';
+import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, saveClientFoodOrder, saveClientBoxOrder, saveClientMealPlannerData, isFoodOrderSameAsDefault } from '@/lib/actions';
 import { getCachedDefaultOrderTemplate, getDefaultOrderTemplateCachedSync } from '@/lib/default-order-template-cache';
 import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
 import { fromStoredUpcomingOrder } from '@/lib/upcoming-order-schema';
@@ -71,6 +71,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     const [message, setMessage] = useState<string | null>('');
     const [profileMessage, setProfileMessage] = useState<string | null>('');
     const [missingItemsToastDismissed, setMissingItemsToastDismissed] = useState(false);
+    /** Current meal plan orders (from SavedMealPlanMonth) for saving only when user clicks Save. */
+    const [mealPlanOrders, setMealPlanOrders] = useState<any[]>([]);
+    /** Dates edited in meal plan this session; save bar shows and we only write these to clients.meal_planner_data. */
+    const [mealPlanEditedDates, setMealPlanEditedDates] = useState<string[]>([]);
+    const [mealPlanEditedResetTrigger, setMealPlanEditedResetTrigger] = useState(0);
 
     // Reset missing-items toast when client changes so it can show again for another client
     useEffect(() => {
@@ -334,16 +339,29 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 applyTemplateToState(cached);
             } else {
                 getCachedDefaultOrderTemplate('Food')
-                    .then(applyTemplateToState)
+                    .then((template) => {
+                        if (template) {
+                            applyTemplateToState(template);
+                        } else {
+                            defaultTemplateAppliedRef.current = false;
+                            setOrderConfig(configToSet);
+                            setOriginalOrderConfig(JSON.parse(JSON.stringify(configToSet)));
+                        }
+                    })
                     .catch((e) => {
                         console.warn('[ClientPortalInterface] Default Food template load failed', e);
                         defaultTemplateAppliedRef.current = false;
+                        setOrderConfig(configToSet);
+                        setOriginalOrderConfig(JSON.parse(JSON.stringify(configToSet)));
                     });
             }
         }
 
-        // Don't overwrite with empty when we've already applied the default template for this client (effect re-run would replace template with zero items)
-        const skipOverwriteWithEmpty = useOnlyClientUpcomingOrder && client.serviceType === 'Food' && defaultTemplateAppliedRef.current && !hasOrderDetailsInOrder(configToSet);
+        // Don't overwrite with empty when: we've already applied the default template, OR we're about to apply it (so client never sees zero when they have no upcoming order)
+        const skipOverwriteWithEmpty = useOnlyClientUpcomingOrder && client.serviceType === 'Food' && (
+            (defaultTemplateAppliedRef.current && !hasOrderDetailsInOrder(configToSet)) ||
+            shouldApplyDefaultTemplate
+        );
 
         if (!skipOverwriteWithEmpty) {
             setOrderConfig(configToSet);
@@ -798,78 +816,95 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             setSaving(true);
             setMessage('Saving...');
 
-            // Debug logging
-            console.log('[ClientPortalInterface] About to save order:', {
-                clientId: client.id,
-                serviceType: serviceType,
-                orderConfig: cleanedOrderConfig,
-                tempClientActiveOrder: tempClient.activeOrder
-            });
-
-            // For Food: only persist when order differs from default; otherwise clear so client follows default template
-            let activeOrderToPersist: any = tempClient.activeOrder;
-            if (serviceType === 'Food') {
-                const defaultFoodTemplate = await getCachedDefaultOrderTemplate('Food');
-                if (defaultFoodTemplate && (await isFoodOrderSameAsDefault(tempClient.activeOrder, defaultFoodTemplate))) {
-                    activeOrderToPersist = null;
-                }
-            }
-
-            // Persist recurring order to client.upcoming_order (single source of truth)
-            try {
-                await updateClient(client.id, {
-                    activeOrder: activeOrderToPersist,
-                    serviceType: client.serviceType
+            // Only persist to clients.upcoming_order when the recurring order (top) was actually changed.
+            if (configChanged) {
+                // Debug logging
+                console.log('[ClientPortalInterface] About to save order:', {
+                    clientId: client.id,
+                    serviceType: serviceType,
+                    orderConfig: cleanedOrderConfig,
+                    tempClientActiveOrder: tempClient.activeOrder
                 });
-                console.log('[ClientPortalInterface] updateClient (upcoming_order) completed successfully', activeOrderToPersist == null ? '(cleared; using default)' : '');
-            } catch (updateError: any) {
-                console.error('[ClientPortalInterface] Error updating client upcoming_order:', updateError);
-                throw updateError;
-            }
 
-            // Food: save full activeOrder to clients.upcoming_order so structure is preserved (only when customized, not default)
-            if (serviceType === 'Food' && activeOrderToPersist) {
-                const activeOrderAny = activeOrderToPersist as any;
-                const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && typeof activeOrderAny.deliveryDayOrders === 'object' && Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
-                try {
-                    await saveClientFoodOrder(client.id, {
-                        caseId: activeOrderAny.caseId ?? undefined,
-                        ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
-                    }, activeOrderAny);
-                } catch (foodErr: any) {
-                    console.error('[ClientPortalInterface] saveClientFoodOrder error (non-fatal):', foodErr);
+                // For Food: only persist when order differs from default; otherwise clear so client follows default template
+                let activeOrderToPersist: any = tempClient.activeOrder;
+                if (serviceType === 'Food') {
+                    const defaultFoodTemplate = await getCachedDefaultOrderTemplate('Food');
+                    if (defaultFoodTemplate && (await isFoodOrderSameAsDefault(tempClient.activeOrder, defaultFoodTemplate))) {
+                        activeOrderToPersist = null;
+                    }
                 }
-            }
 
-            // Boxes: persist box orders to client_box_orders
-            if (serviceType === 'Boxes' && (tempClient.activeOrder as any)?.boxOrders?.length > 0) {
+                // Persist recurring order to client.upcoming_order (single source of truth)
                 try {
-                    const boxOrders = (tempClient.activeOrder as any).boxOrders;
-                    await saveClientBoxOrder(client.id, boxOrders.map((box: any) => ({
-                        ...box,
-                        caseId: (tempClient.activeOrder as any).caseId
-                    })));
-                } catch (boxErr: any) {
-                    console.error('[ClientPortalInterface] saveClientBoxOrder error (non-fatal):', boxErr);
+                    await updateClient(client.id, {
+                        activeOrder: activeOrderToPersist,
+                        serviceType: client.serviceType
+                    });
+                    console.log('[ClientPortalInterface] updateClient (upcoming_order) completed successfully', activeOrderToPersist == null ? '(cleared; using default)' : '');
+                } catch (updateError: any) {
+                    console.error('[ClientPortalInterface] Error updating client upcoming_order:', updateError);
+                    throw updateError;
                 }
+
+                // Food: save full activeOrder to clients.upcoming_order so structure is preserved (only when customized, not default)
+                if (serviceType === 'Food' && activeOrderToPersist) {
+                    const activeOrderAny = activeOrderToPersist as any;
+                    const hasDeliveryDayOrders = activeOrderAny.deliveryDayOrders && typeof activeOrderAny.deliveryDayOrders === 'object' && Object.keys(activeOrderAny.deliveryDayOrders).length > 0;
+                    try {
+                        await saveClientFoodOrder(client.id, {
+                            caseId: activeOrderAny.caseId ?? undefined,
+                            ...(hasDeliveryDayOrders && { deliveryDayOrders: activeOrderAny.deliveryDayOrders })
+                        }, activeOrderAny);
+                    } catch (foodErr: any) {
+                        console.error('[ClientPortalInterface] saveClientFoodOrder error (non-fatal):', foodErr);
+                    }
+                }
+
+                // Boxes: persist box orders to client_box_orders
+                if (serviceType === 'Boxes' && (tempClient.activeOrder as any)?.boxOrders?.length > 0) {
+                    try {
+                        const boxOrders = (tempClient.activeOrder as any).boxOrders;
+                        await saveClientBoxOrder(client.id, boxOrders.map((box: any) => ({
+                            ...box,
+                            caseId: (tempClient.activeOrder as any).caseId
+                        })));
+                    } catch (boxErr: any) {
+                        console.error('[ClientPortalInterface] saveClientBoxOrder error (non-fatal):', boxErr);
+                    }
+                }
+
+                // Optional no-op sync (kept for any future implementation)
+                await syncCurrentOrderToUpcoming(client.id, { ...client, activeOrder: activeOrderToPersist ?? undefined } as ClientProfile);
+
+                // Update local client so UI shows saved state (no "Default template (not saved)")
+                setClient({ ...client, activeOrder: activeOrderToPersist ?? undefined });
+
+                // After saving, update originalOrderConfig to prevent re-saving
+                const savedConfig = JSON.parse(JSON.stringify(orderConfig));
+                setOriginalOrderConfig(savedConfig);
+
+                lastSavedTimestampRef.current = new Date().toISOString();
             }
 
-            // Optional no-op sync (kept for any future implementation)
-            await syncCurrentOrderToUpcoming(client.id, { ...client, activeOrder: activeOrderToPersist ?? undefined } as ClientProfile);
+            // Only persist to clients.meal_planner_data for dates that were actually edited (merge-by-date; don't touch other days).
+            const didSaveMealPlan = mealPlanEditedDates.length > 0;
+            if (didSaveMealPlan) {
+                for (const date of mealPlanEditedDates) {
+                    const order = mealPlanOrders.find((o: any) => (o.scheduledDeliveryDate || '').slice(0, 10) === date.slice(0, 10));
+                    if (order?.items) {
+                        const { ok, error: mealErr } = await saveClientMealPlannerData(client.id, date, order.items);
+                        if (!ok && mealErr) console.warn('[ClientPortalInterface] Meal planner save for date', date, mealErr);
+                    }
+                }
+                setMealPlanEditedDates([]);
+                setMealPlanEditedResetTrigger((t) => t + 1);
+            }
 
-            // Update local client so UI shows saved state (no "Default template (not saved)")
-            setClient({ ...client, activeOrder: activeOrderToPersist ?? undefined });
-
-            // Refresh the router to refetch server data
-            router.refresh();
-
-            // After saving, update originalOrderConfig to prevent re-saving
-            const savedConfig = JSON.parse(JSON.stringify(orderConfig));
-            setOriginalOrderConfig(savedConfig);
-
-            // Track the save timestamp to prevent re-initialization from stale data
-            const saveTimestamp = new Date().toISOString();
-            lastSavedTimestampRef.current = saveTimestamp;
+            // Refresh the router to refetch server data when we saved something
+            if (configChanged || didSaveMealPlan) {
+                router.refresh();
+            }
 
             setSaving(false);
             setMessage('Saved');
@@ -988,11 +1023,15 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
         return menuItems.filter(i => i.vendorId === vendorId && i.isActive);
     }
 
-    /** Menu items for this vendor that appear in the order. Only show items that exist in the menu (no "Unknown item" rows). */
-    function getItemsToDisplayForVendor(vendorId: string, orderItemIds: string[]): Array<{ id: string; name: string; value?: number; isOrderOnly?: boolean }> {
-        const menu = getVendorMenuItems(vendorId);
-        const orderIdSet = new Set(orderItemIds);
-        return menu.filter((i) => orderIdSet.has(i.id)).map((i) => ({
+    /** All menu items for this vendor (so the full menu always shows; items with zero quantity stay visible). Only includes items that exist in the menu (no "Unknown item" rows). */
+    function getItemsToDisplayForVendor(vendorId: string, _orderItemIds?: string[]): Array<{ id: string; name: string; value?: number; isOrderOnly?: boolean }> {
+        const menu = getVendorMenuItems(vendorId).sort((a, b) => {
+            const sortOrderA = a.sortOrder ?? 0;
+            const sortOrderB = b.sortOrder ?? 0;
+            if (sortOrderA !== sortOrderB) return sortOrderA - sortOrderB;
+            return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true, sensitivity: 'base' });
+        });
+        return menu.map((i) => ({
             id: i.id,
             name: i.name,
             value: i.quotaValue ?? i.value ?? 1,
@@ -1664,6 +1703,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     };
 
     const configChanged = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
+    const hasUnsavedChanges = configChanged || mealPlanEditedDates.length > 0;
 
     const mainContent = (
             <div className={styles.wideGrid}>
@@ -2334,7 +2374,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                     })()}
 
                     {/* Spacer to prevent content from being hidden behind fixed save bar */}
-                    {(configChanged || saving) && (
+                    {(hasUnsavedChanges || saving) && (
                         <div style={{ height: 'clamp(140px, 20vh, 200px)' }} />
                     )}
                 </div>
@@ -2344,7 +2384,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         <h3 className={styles.sectionTitle}>Day-specific meal plan</h3>
                         <SavedMealPlanMonth
                             clientId={client.id}
+                            onOrdersChange={setMealPlanOrders}
+                            onEditedDatesChange={setMealPlanEditedDates}
                             initialOrders={initialMealPlanOrders ?? undefined}
+                            autoSave={false}
+                            editedDatesResetTrigger={mealPlanEditedResetTrigger}
                         />
                     </section>
                 )}
@@ -2559,8 +2603,13 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 </>
                 )}
 
+                    {/* Spacer at very bottom so last content can scroll above the fixed save bar */}
+                    {(hasUnsavedChanges || saving) && (
+                        <div style={{ height: 'clamp(140px, 22vh, 220px)', minHeight: 140 }} aria-hidden />
+                    )}
+
             {/* Fixed Floating Save Section at Bottom of Viewport */}
-            {(configChanged || saving) && (
+            {(hasUnsavedChanges || saving) && (
                 <>
                     <style>{`
                         @media (max-width: 768px) {

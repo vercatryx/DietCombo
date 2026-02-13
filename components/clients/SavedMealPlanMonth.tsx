@@ -51,10 +51,16 @@ export interface SavedMealPlanMonthProps {
   clientId: string | null;
   /** Called whenever the current orders (with quantities) change, so the parent can persist them on save. */
   onOrdersChange?: (orders: MealPlannerOrderResult[]) => void;
+  /** Called when the set of dates edited in this session changes (so parent can show save button and only save those dates). */
+  onEditedDatesChange?: (dates: string[]) => void;
   /** Preloaded orders (from profile payload or parent preload). When provided, skips the initial fetch for faster load. */
   initialOrders?: MealPlannerOrderResult[] | null;
   /** When true and clientId is 'new', parent is preloading; show loading and do not fetch (avoids duplicate request). */
   preloadInProgress?: boolean;
+  /** When false, do not auto-save on each edit; parent will save on main Save click. Default true. */
+  autoSave?: boolean;
+  /** When this value changes (e.g. increment after save), component clears session-edited dates so parent can hide save button. */
+  editedDatesResetTrigger?: number;
 }
 
 function applyOrdersAndSelectFirst(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void, setSelectedDate: (d: string | null) => void) {
@@ -66,7 +72,7 @@ function applyOrdersAndSelectFirst(orders: MealPlannerOrderResult[], setOrders: 
   setSelectedDate(firstDate);
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, preloadInProgress }: SavedMealPlanMonthProps) {
+export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -75,6 +81,8 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
   const fetchIdRef = useRef(0);
   /** Only dates the client has edited are persisted; untouched dates stay template-only. */
   const clientEditedDatesRef = useRef<Set<string>>(new Set());
+  /** Dates edited in this session only (so parent saves only these, not all dates with data). */
+  const sessionEditedDatesRef = useRef<Set<string>>(new Set());
 
   const effectiveClientId = clientId && clientId !== 'new' ? clientId : null;
 
@@ -228,6 +236,13 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
 
   const validDateSet = useMemo(() => new Set(futureOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean)), [futureOrders]);
 
+  // When parent signals save completed (trigger changed), clear session-edited set so we don't report stale dirty state.
+  useEffect(() => {
+    if (editedDatesResetTrigger == null) return;
+    sessionEditedDatesRef.current = new Set();
+    onEditedDatesChange?.([]);
+  }, [editedDatesResetTrigger, onEditedDatesChange]);
+
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -283,6 +298,8 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
     const currentQty = getItemQty(item);
     if (qty === currentQty) return;
     clientEditedDatesRef.current.add(selectedDate);
+    sessionEditedDatesRef.current.add(selectedDate);
+    onEditedDatesChange?.(Array.from(sessionEditedDatesRef.current));
     setUpdatingItemId(item.id);
     const nextOrders = orders.map((o) =>
       o.scheduledDeliveryDate === selectedDate
@@ -299,6 +316,11 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, initialOrders, pr
     onOrdersChange?.(toPersist);
     // For new client, only update local state; parent will persist on save via saveClientMealPlannerDataFull
     if (!effectiveClientId) {
+      setUpdatingItemId(null);
+      return;
+    }
+    // When autoSave is false (e.g. client portal), parent Save button persists; don't write here.
+    if (!autoSave) {
       setUpdatingItemId(null);
       return;
     }
