@@ -371,7 +371,7 @@ export default function DriverDetailPage() {
     }, []);
 
     const brandColor = (driver?.color || "#3665F3") as string;
-    
+
     return (
         <div className="container theme" style={{ "--brand": brandColor } as React.CSSProperties}>
             {/* Sticky mobile header */}
@@ -742,7 +742,7 @@ html,body{margin:0;padding:0;background:var(--bg);color:#111;
 .proof-actions .btn{margin:0}
 .hidden-input{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
 .chip.chip-ok{background:#ecfdf5;border-color:#10b981;color:#059669}
-.stop-card-has-proof{border-color:#a7f3d0;background:linear-gradient(to right, #ecfdf5 0%, transparent 8px)}
+.stop-card-has-proof{border-color:#a7f3d0;background:#ecfdf5}
 .stop-card-has-proof .color-rail{background:#059669}
 .no-camera-msg{display:block;padding:10px 14px;font-size:13px;color:var(--muted);background:#f8fafc;border-radius:12px;border:1px solid var(--border)}
 

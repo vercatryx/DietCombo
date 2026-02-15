@@ -99,14 +99,14 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             // Filter orders by delivery date. Match VendorDetail.groupOrdersByDeliveryDate logic:
             // dateKey from URL is already in YYYY-MM-DD (from that grouping); use toDateStringInAppTz for order dates
             const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
-            const filteredOrders = (ordersData || []).filter(order => {
+            const filteredOrders = (ordersData || []).filter((order: { scheduled_delivery_date?: string | null; id: string }) => {
                 if (!order.scheduled_delivery_date) return false;
                 const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
                 return orderDateKey === dateKey;
             });
 
             // Expand all orders by default so items are visible
-            const allOrderKeys = new Set(filteredOrders.map(order => `${order.orderType}-${order.id}`));
+            const allOrderKeys = new Set<string>(filteredOrders.map((order: { orderType?: string; id: string }) => `${order.orderType ?? ''}-${order.id}`));
             setExpandedOrders(allOrderKeys);
 
             setOrders(filteredOrders);
@@ -118,7 +118,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
 
             // Initialize proof URLs from orders
             const initialProofUrls: Record<string, string> = {};
-            filteredOrders.forEach(order => {
+            filteredOrders.forEach((order: { id: string; delivery_proof_url?: string | null }) => {
                 if (order.delivery_proof_url) {
                     initialProofUrls[order.id] = order.delivery_proof_url;
                 }

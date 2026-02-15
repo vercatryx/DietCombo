@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type ComponentType } from 'react';
 import dynamic from 'next/dynamic';
 import { processDeliveryProof } from '@/app/delivery/actions';
 import { Camera, CheckCircle, Upload, AlertCircle, X } from 'lucide-react';
 
-const Webcam = dynamic(() => import('react-webcam'), { ssr: false });
+const Webcam = dynamic(
+    () => import('react-webcam') as Promise<{ default: ComponentType<any> }>,
+    { ssr: false }
+);
 
 type Step = 'CHECK' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR' | 'NO_CAMERA';
 

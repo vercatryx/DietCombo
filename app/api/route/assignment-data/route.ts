@@ -32,18 +32,26 @@ export async function GET(req: Request) {
             );
         }
 
+        // Read from row with fallbacks for casing (Supabase/Postgres typically use lowercase)
+        const pick = (row: any, ...keys: string[]) => {
+            for (const k of keys) {
+                const v = row[k];
+                if (v != null && v !== "") return String(v);
+            }
+            return "";
+        };
         const clients = (clientsRows || []).map((c: any) => ({
             id: c.id,
-            first: c.first_name ?? "",
-            last: c.last_name ?? "",
-            name: c.full_name ?? "",
-            full_name: c.full_name ?? "",
-            address: c.address ?? "",
-            apt: c.apt ?? null,
-            city: c.city ?? "",
-            state: c.state ?? "",
-            zip: c.zip ?? "",
-            phone: c.phone_number ?? null,
+            first: pick(c, "first_name", "firstName"),
+            last: pick(c, "last_name", "lastName"),
+            name: pick(c, "full_name", "fullName"),
+            full_name: pick(c, "full_name", "fullName"),
+            address: pick(c, "address", "Address"),
+            apt: c.apt != null && c.apt !== "" ? String(c.apt) : null,
+            city: pick(c, "city", "City"),
+            state: pick(c, "state", "State"),
+            zip: pick(c, "zip", "Zip", "zip_code", "postal_code"),
+            phone: c.phone_number != null && c.phone_number !== "" ? String(c.phone_number) : null,
             lat: c.lat != null ? Number(c.lat) : null,
             lng: c.lng != null ? Number(c.lng) : null,
             paused: Boolean(c.paused),

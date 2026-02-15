@@ -19,23 +19,48 @@ export default function ManualGeocodeDialog({
                                                 usersMissing = [],
                                                 onGeocoded,
                                             }) {
-    const toRow = React.useCallback((u) => ({
-        id: u.id,
-        name: `${u.first ?? ""} ${u.last ?? ""}`.trim() || "Unnamed",
-        address: String(u.address || ""),
-        city: u.city || "",
-        state: u.state || "",
-        zip: u.zip || "",
-        status: "pending",
-        lat: null,
-        lng: null,
-        attemptCount: 0,
-        lastError: null,
-        logs: [],
-        showLog: false,
-        candidatesOpen: false,
-        candidates: [],
-    }), []);
+    // Normalize client shape: support assignment-data, routes API, and alternate field names for names + address
+    const toRow = React.useCallback((u) => {
+        const first = u.first ?? u.first_name ?? "";
+        const last = u.last ?? u.last_name ?? "";
+        const name =
+            String(u.full_name ?? u.fullName ?? "").trim() ||
+            `${first} ${last}`.trim() ||
+            (u.name && String(u.name).trim()) ||
+            "Unnamed";
+
+        // Address: try all common keys and nested shapes (APIs/DB may use address, street, address_line_1, etc.)
+        const rawAddress = u.address ?? u.street ?? u.street_address ?? u.address_line_1 ?? u.addressLine1
+            ?? (u.address && typeof u.address === "object" ? (u.address.line1 ?? u.address.street ?? u.address.line_1) : null);
+        const address = (rawAddress != null && typeof rawAddress === "string" ? rawAddress : String(rawAddress ?? "")).trim();
+
+        const rawCity = u.city ?? u.city_name;
+        const city = (rawCity != null && typeof rawCity === "string" ? rawCity : String(rawCity ?? "")).trim();
+
+        const rawState = u.state ?? u.state_code;
+        const state = (rawState != null && typeof rawState === "string" ? rawState : String(rawState ?? "")).trim();
+
+        const rawZip = u.zip ?? u.zip_code ?? u.postal_code ?? u.postalCode;
+        const zip = (rawZip != null ? String(rawZip) : "").trim();
+
+        return {
+            id: u.id,
+            name: name || "Unnamed",
+            address,
+            city,
+            state,
+            zip,
+            status: "pending",
+            lat: null,
+            lng: null,
+            attemptCount: 0,
+            lastError: null,
+            logs: [],
+            showLog: false,
+            candidatesOpen: false,
+            candidates: [],
+        };
+    }, []);
 
     const [rows, setRows] = React.useState(() => usersMissing.map(toRow));
     const [autoDone, setAutoDone] = React.useState(0);
@@ -51,6 +76,26 @@ export default function ManualGeocodeDialog({
 
     React.useEffect(() => {
         if (!open) return;
+        // DEBUG: what dialog receives and what toRow produces (browser console)
+        console.log("[ManualGeocodeDialog] open=true, usersMissing length:", usersMissing?.length);
+        if (usersMissing?.length > 0) {
+            const u = usersMissing[0];
+            console.log("[ManualGeocodeDialog] first usersMissing item keys:", Object.keys(u));
+            console.log("[ManualGeocodeDialog] first usersMissing address fields:", {
+                address: u?.address,
+                city: u?.city,
+                state: u?.state,
+                zip: u?.zip,
+            });
+            const row = toRow(u);
+            console.log("[ManualGeocodeDialog] first row after toRow:", {
+                name: row.name,
+                address: row.address,
+                city: row.city,
+                state: row.state,
+                zip: row.zip,
+            });
+        }
         setRows(usersMissing.map(toRow));
         setAutoDone(0);
     }, [open, usersMissing, toRow]);

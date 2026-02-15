@@ -16,7 +16,7 @@ import {
     DAY_NAME_TO_NUMBER
 } from './order-dates';
 import { supabase, isConnectionError, getConnectionErrorHelp } from './supabase';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
 import { composeUniteUsUrl } from './utils';
@@ -8642,7 +8642,7 @@ export async function getStopNumbersForDeliveryDate(deliveryDate: string | null)
  * when returning huge result sets to client for vendors like cccccccc-cccc-cccc-cccc-cccccccccccc).
  * When options.db is provided (e.g. from API route), that client is used to avoid serialization/env issues.
  */
-export async function getOrdersByVendor(vendorId: string, deliveryDate?: string, options?: { db?: ReturnType<typeof createClient> }) {
+export async function getOrdersByVendor(vendorId: string, deliveryDate?: string, options?: { db?: SupabaseClient }) {
     if (!vendorId) return [];
 
     const session = await getSession();

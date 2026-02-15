@@ -26,6 +26,7 @@ const ClientDriverAssignment = dynamic(() => import("@/components/routes/ClientD
 import ManualGeocodeDialog from "@/components/routes/ManualGeocodeDialog";
 import { exportRouteLabelsPDF } from "@/utils/pdfRouteLabels";
 import { DateFilter } from "@/components/routes/DateFilter";
+import { LoadingIndicator } from "@/components/ui/LoadingIndicator";
 import { fetchDrivers } from "@/lib/api";
 import styles from './routes.module.css';
 
@@ -188,6 +189,8 @@ export default function RoutesPage() {
     const [ordersForDate, setOrdersForDate] = React.useState<{ order_ids: string[]; client_ids: string[] } | null>(null);
     /** Orders View: no fetch until user picks a date. null = show empty map only. */
     const [ordersViewDate, setOrdersViewDate] = React.useState<string | null>(null);
+    /** True while fetching orders-for-date in Orders View tab. */
+    const [ordersViewLoading, setOrdersViewLoading] = React.useState(false);
 
     const [busy, setBusy] = React.useState(false);
     const [reorganizing, setReorganizing] = React.useState(false);
@@ -260,12 +263,31 @@ export default function RoutesPage() {
                 if (!res.ok) throw new Error("Failed to load assignment data");
                 const data = await res.json();
                 setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [] });
-                const clients = data.clients || [];
-                const missing = clients.filter((c: any) => (c.lat ?? null) == null || (c.lng ?? null) == null);
-                setMissingBatch(missing);
+                // Load ungeocoded list from clients table so count is correct
+                const missingRes = await fetch("/api/route/clients-missing-geocode", { cache: "no-store" });
+                if (missingRes.ok) {
+                    const missingData = await missingRes.json();
+                    const list = missingData.clients || [];
+                    setMissingBatch(list);
+                    // DEBUG: what we got from API (browser console)
+                    console.log("[RoutesPage] clients-missing-geocode response count:", list.length);
+                    if (list.length > 0) {
+                        const first = list[0];
+                        console.log("[RoutesPage] first item keys:", Object.keys(first));
+                        console.log("[RoutesPage] first item address fields:", {
+                            address: first?.address,
+                            city: first?.city,
+                            state: first?.state,
+                            zip: first?.zip,
+                        });
+                    }
+                } else {
+                    setMissingBatch([]);
+                }
             } catch (e) {
                 console.error("Failed to load assignment data", e);
                 setAssignmentData({ clients: [], drivers: [] });
+                setMissingBatch([]);
             } finally {
                 setAssignmentDataLoading(false);
             }
@@ -286,6 +308,11 @@ export default function RoutesPage() {
                 const data = await res.json();
                 setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [] });
             }
+            const missingRes = await fetch("/api/route/clients-missing-geocode", { cache: "no-store" });
+            if (missingRes.ok) {
+                const missingData = await missingRes.json();
+                setMissingBatch(missingData.clients || []);
+            }
         } catch (e) {
             console.error("Failed to refresh assignment data", e);
         }
@@ -295,7 +322,7 @@ export default function RoutesPage() {
     React.useEffect(() => {
         if (activeTab !== "map" || !ordersViewDate) return;
         (async () => {
-            setBusy(true);
+            setOrdersViewLoading(true);
             try {
                 const ordRes = await fetch(`/api/route/orders-for-date?date=${ordersViewDate}`, { cache: "no-store" });
                 if (ordRes.ok) {
@@ -317,7 +344,7 @@ export default function RoutesPage() {
                 console.error("Failed to load orders for Orders View", e);
                 setOrdersForDate(null);
             } finally {
-                setBusy(false);
+                setOrdersViewLoading(false);
             }
         })();
     }, [activeTab, ordersViewDate]);
@@ -972,6 +999,21 @@ export default function RoutesPage() {
                             />
                         </div>
                         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+                            {ordersViewLoading && ordersViewDate && (
+                                <Box
+                                    sx={{
+                                        position: "absolute",
+                                        inset: 0,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        backgroundColor: "rgba(255,255,255,0.85)",
+                                        zIndex: 10,
+                                    }}
+                                >
+                                    <LoadingIndicator message="Loading orders…" size={40} />
+                                </Box>
+                            )}
                             {(() => {
                                 const Component = DriversMapLeaflet as any;
                                 const useOrdersViewData = activeTab === "map" && ordersForDate?.client_ids != null;
@@ -998,7 +1040,7 @@ export default function RoutesPage() {
                     </div>
                 ) : (
                     <div style={{ height: "100%", width: "100%", position: "relative", minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-                        {/* Generate Route + Driver Management buttons inside Client Assignment tab */}
+                        {/* Driver Management buttons inside Client Assignment tab */}
                         <div style={{
                             padding: 'var(--spacing-md)',
                             borderBottom: '1px solid var(--border-color)',
@@ -1009,19 +1051,6 @@ export default function RoutesPage() {
                             position: 'relative',
                             flexWrap: 'wrap'
                         }}>
-                            <DateFilter
-                                selectedDate={selectedDeliveryDate}
-                                onDateChange={(date) => {
-                                    setSelectedDeliveryDate(date);
-                                    setOrdersViewDate(date);
-                                }}
-                                datesSource="orders"
-                                onClear={() => {
-                                    const today = getTodayDate();
-                                    setSelectedDeliveryDate(today);
-                                    setOrdersViewDate(today);
-                                }}
-                            />
                             <Button
                                 onClick={handleAddDriver}
                                 variant="outlined"
@@ -1129,7 +1158,30 @@ export default function RoutesPage() {
                 {missingBatch.length > 0 && (
                     <Typography variant="body2" sx={{ mr: "auto", opacity: 0.8 }}>
                         {missingBatch.length} customer{missingBatch.length === 1 ? "" : "s"} are not geocoded.
-                        <Button size="small" sx={{ ml: 1 }} onClick={() => setManualOpen(true)}>
+                        <Button
+                            size="small"
+                            sx={{ ml: 1 }}
+                            onClick={async () => {
+                                const res = await fetch("/api/route/clients-missing-geocode", { cache: "no-store" });
+                                if (res.ok) {
+                                    const data = await res.json();
+                                    const list = data.clients || [];
+                                    setMissingBatch(list);
+                                    // DEBUG: data passed to dialog when opening (browser console)
+                                    console.log("[RoutesPage] Manual Geocoding open – fetched count:", list.length);
+                                    if (list.length > 0) {
+                                        const first = list[0];
+                                        console.log("[RoutesPage] first item keys:", Object.keys(first));
+                                        console.log("[RoutesPage] first item address:", JSON.stringify(first?.address), "city:", JSON.stringify(first?.city), "state:", JSON.stringify(first?.state), "zip:", JSON.stringify(first?.zip));
+                                        const withAddr = list.filter((c: any) => (c?.address ?? "").trim() || (c?.city ?? "").trim() || (c?.zip ?? "").trim());
+                                        if (withAddr.length === 0) {
+                                            console.warn("[RoutesPage] All", list.length, "clients from API have empty address/city/state/zip. These values come from the clients table – fill address fields in the DB for them to appear here.");
+                                        }
+                                    }
+                                }
+                                setManualOpen(true);
+                            }}
+                        >
                             Manual Geocoding
                         </Button>
                     </Typography>
