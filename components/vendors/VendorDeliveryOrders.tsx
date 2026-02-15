@@ -4,9 +4,11 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
-import { getOrdersByVendor, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, isOrderUnderVendor, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
-import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText } from 'lucide-react';
+import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, isOrderUnderVendor, orderHasDeliveryProof, resolveOrderId, getClientsUnlimited } from '@/lib/actions';
+import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
+import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText, Loader2 } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { toDateStringInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
@@ -22,12 +24,14 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
     const [orders, setOrders] = useState<any[]>([]);
     const [clients, setClients] = useState<ClientProfile[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+    const [mealItems, setMealItems] = useState<any[]>([]);
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
     const [categories, setCategories] = useState<ItemCategory[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
     const [proofUrls, setProofUrls] = useState<Record<string, string>>({});
     const [isSaving, setIsSaving] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
     const [summaryModal, setSummaryModal] = useState<{
         show: boolean;
         results?: Array<{ success: boolean; orderId: string; error?: string; summary?: any }>;
@@ -73,13 +77,15 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
     async function loadData() {
         setIsLoading(true);
         try {
-            const [vendorsData, ordersData, clientsData, menuItemsData, boxTypesData, categoriesData] = await Promise.all([
+            const [vendorsData, ordersData, clientsData, menuItemsData, mealItemsData, boxTypesData, categoriesData, /* template preloaded */] = await Promise.all([
                 getVendors(),
                 getOrdersByVendor(vendorId, deliveryDate),
                 getClients(),
                 getMenuItems(),
+                getMealItems(),
                 getBoxTypes(),
-                getCategories()
+                getCategories(),
+                getCachedDefaultOrderTemplate('Food')
             ]);
 
             const foundVendor = vendorsData.find(v => v.id === vendorId);
@@ -101,6 +107,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             setOrders(filteredOrders);
             setClients(clientsData);
             setMenuItems(menuItemsData);
+            setMealItems(mealItemsData || []);
             setBoxTypes(boxTypesData);
             setCategories(categoriesData);
 
@@ -148,6 +155,19 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         }
     }
 
+    /** Get orders sorted by driver then stop number (1.1, 1.2, …). Optional clientsOverride when state clients is empty. */
+    async function getSortedOrders(clientsOverride?: ClientProfile[], ordersOverride?: any[]) {
+        const ordersToUse = ordersOverride ?? orders;
+        if (ordersToUse.length === 0) {
+            return { sortedOrders: [], driverIdToNumber: {} as Record<string, number>, driverIdToColor: {} as Record<string, string> };
+        }
+        const drivers = await getDriversForDate(deliveryDate);
+        const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : undefined;
+        const clientsToUse = clientsOverride?.length ? clientsOverride : clients;
+        const { sortedOrders, driverIdToNumber, driverIdToColor } = sortOrdersByDriver(ordersToUse, clientsToUse, drivers, clientIdToStopNumber);
+        return { sortedOrders, driverIdToNumber, driverIdToColor };
+    }
+
     function formatDateTime(dateString: string | null | undefined) {
         if (!dateString) return '-';
         try {
@@ -184,18 +204,20 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         return stringValue;
     }
 
-    function formatOrderedItemsForCSV(order: any): string {
+    /** Format order items for CSV/labels. Only source of truth: order (order.items / boxSelection / equipmentSelection). */
+    function formatOrderedItemsForCSVWithClient(order: any, client: ClientProfile | undefined): string {
         if (order.service_type === 'Food') {
             const items = order.items || [];
-            if (items.length === 0) {
-                return 'No items';
+            if (items.length > 0) {
+                return items.map((item: any) => {
+                    const menuItem = menuItems.find(mi => mi.id === item.menu_item_id);
+                    const mealItem = mealItems.find(m => m.id === item.meal_item_id);
+                    const itemName = menuItem?.name ?? mealItem?.name ?? item.custom_name ?? item.menuItemName ?? 'Unknown Item';
+                    const quantity = parseInt(item.quantity || 0);
+                    return `${itemName} (Qty: ${quantity})`;
+                }).join('; ');
             }
-            return items.map((item: any) => {
-                const menuItem = menuItems.find(mi => mi.id === item.menu_item_id);
-                const itemName = menuItem?.name || item.custom_name || item.menuItemName || 'Unknown Item';
-                const quantity = parseInt(item.quantity || 0);
-                return `${itemName} (Qty: ${quantity})`;
-            }).join('; ');
+            return 'No items';
         } else if (order.service_type === 'Boxes') {
             const boxSelection = order.boxSelection;
             if (!boxSelection) {
@@ -288,14 +310,36 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         return 'No items available';
     }
 
-    function exportOrdersToCSV() {
+    function formatOrderedItemsForCSV(order: any): string {
+        return formatOrderedItemsForCSVWithClient(order, clients.find(c => c.id === order.client_id));
+    }
+
+    async function exportOrdersToCSV() {
         if (orders.length === 0) {
             alert('No orders to export');
             return;
         }
+        setIsExporting(true);
+        try {
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders, driverIdToNumber } = await getSortedOrders(clientsForExport);
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : {};
+        const getDriverStop = (order: any) => {
+            const client = clientById.get(order.client_id);
+            const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+            const driverNum = driverId != null ? driverIdToNumber[driverId] : null;
+            const stopNum = clientIdToStopNumber[order.client_id];
+            if (driverNum != null && stopNum != null) return `${driverNum} - ${stopNum}`;
+            if (driverNum != null) return String(driverNum);
+            return '';
+        };
+        const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
+        const getClientAddressForExport = (id: string) => clientById.get(id)?.address || '-';
+        const getClientPhoneForExport = (id: string) => clientById.get(id)?.phoneNumber || '-';
 
-        // Define CSV headers
         const headers = [
+            'Driver - Stop',
             'Order Number',
             'Order ID',
             'Client ID',
@@ -308,17 +352,17 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             'Delivery Proof URL'
         ];
 
-        // Convert orders to CSV rows
-        const rows = orders.map(order => [
+        const rows = sortedOrders.map((order: any) => [
+            getDriverStop(order),
             order.orderNumber || '',
             order.id || '',
             order.client_id || '',
-            getClientName(order.client_id),
-            getClientAddress(order.client_id),
-            getClientPhone(order.client_id),
+            getClientNameForExport(order.client_id),
+            getClientAddressForExport(order.client_id),
+            getClientPhoneForExport(order.client_id),
             order.scheduled_delivery_date || '',
             order.total_items || 0,
-            formatOrderedItemsForCSV(order),
+            formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             order.delivery_proof_url || ''
         ]);
 
@@ -340,18 +384,53 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+        } finally {
+            setIsExporting(false);
+        }
     }
 
     async function exportLabelsPDF() {
+        if (orders.length === 0) {
+            alert('No orders to export');
+            return;
+        }
+        setIsExporting(true);
+        try {
+        // Re-fetch full orders for this delivery date so labels always have complete order data (items, boxSelection, etc.)
+        const freshOrders = await getOrdersByVendor(vendorId, deliveryDate);
+        if (freshOrders.length === 0) {
+            alert('No orders to export');
+            return;
+        }
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrders(clientsForExport, freshOrders);
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : {};
+        const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
+        const getClientAddressForExport = (clientId: string) => clientById.get(clientId)?.address || '-';
         await generateLabelsPDF({
-            orders,
-            getClientName,
-            getClientAddress,
-            formatOrderedItemsForCSV,
+            orders: sortedOrders,
+            getClientName: getClientNameForExport,
+            getClientAddress: getClientAddressForExport,
+            formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             formatDate,
             vendorName: vendor?.name,
-            deliveryDate
+            deliveryDate,
+            getDriverInfo: (order) => {
+                const client = clientById.get(order.client_id);
+                const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+                if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
+                const stopNumber = clientIdToStopNumber[order.client_id];
+                return {
+                    driverNumber: driverIdToNumber[driverId],
+                    driverColor: driverIdToColor[driverId],
+                    ...(stopNumber != null && { stopNumber })
+                };
+            }
         });
+        } finally {
+            setIsExporting(false);
+        }
     }
 
     function parseCSVRow(row: string): string[] {
@@ -1051,10 +1130,10 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                     </h1>
                     {orders.length > 0 && (
                         <div style={{ display: 'flex', gap: '1rem' }}>
-                            <button className="btn btn-secondary" onClick={exportLabelsPDF} style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <button className="btn btn-secondary" disabled={isExporting} onClick={exportLabelsPDF} style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <FileText size={20} /> Download Labels
                             </button>
-                            <button className="btn btn-secondary" onClick={exportOrdersToCSV} style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <button className="btn btn-secondary" disabled={isExporting} onClick={exportOrdersToCSV} style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <Download size={20} /> Download Excel
                             </button>
                             <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1569,6 +1648,18 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             )}
 
             {/* CSV Import Progress Modal */}
+            {isExporting && (
+                <div className={styles.importModalOverlay} style={{ pointerEvents: 'auto' }}>
+                    <div className={styles.importModal} style={{ maxWidth: 320 }}>
+                        <div className={styles.importModalContent} style={{ alignItems: 'center', gap: '1rem' }}>
+                            <Loader2 className="animate-spin" size={40} style={{ color: 'var(--color-primary)' }} />
+                            <p style={{ margin: 0, fontWeight: 600, color: 'var(--text-primary)' }}>Generating file...</p>
+                            <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Please wait</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {(importProgress.isImporting || importProgress.totalRows > 0) && (
                 <div className={styles.importModalOverlay}>
                     <div className={styles.importModal}>

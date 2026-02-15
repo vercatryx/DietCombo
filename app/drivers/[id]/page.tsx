@@ -3,14 +3,14 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
-import { fetchDriver, fetchStops, setStopCompleted } from "../../../lib/api";
+import { fetchDriver, fetchStops, fetchDriversPageData, setStopCompleted } from "../../../lib/api";
 import { mapsUrlFromAddress } from "../../../lib/maps";
 import {
     CheckCircle2, MapPin, Phone, Clock, Hash, ArrowLeft, Link as LinkIcon, X, Map as MapIcon, Crosshair
 } from "lucide-react";
 import SearchStops from "../../../components/drivers/SearchStops";
 import { DateFilter } from "../../../components/routes/DateFilter";
-import { getTodayInAppTz, toDateStringInAppTz } from "@/lib/timezone";
+import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from "@/lib/timezone";
 
 /** Lazy-load the shared Leaflet map */
 const DriversMapLeaflet = dynamic(() => import("../../../components/routes/DriversMapLeaflet"), { ssr: false });
@@ -162,35 +162,53 @@ export default function DriverDetailPage() {
         return res.json();
     }
 
-    /** Centralized reload — always fresh */
+    /** Centralized reload — use route API (driver_route_order) when date set, else mobile APIs */
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            // 1) Driver (with date filtering)
-            const d = await fetchDriver(id as string, (selectedDate || null) as any);
-            // 2) All stops (with date filtering)
-            const every = await fetchStops((selectedDate || null) as any);
-            // 3) Signature counts
+            const dateParam = selectedDate || null;
             const sigRows = await fetchSignStatus().catch(() => []);
 
-            // 4) Order and attach sigs
-            // Filter stops by delivery_date if selectedDate is set
-            const filteredEvery = selectedDate 
-                ? every.filter((s: any) => {
-                    const stopDate = s.delivery_date || s.deliveryDate;
-                    if (!stopDate) return false;
-                    const stopDateStr = toDateStringInAppTz(new Date(stopDate));
-                    return stopDateStr === selectedDate;
-                })
-                : every;
-            
-            const orderedServer = orderByDriverStopIds(d, filteredEvery);
-            const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
-            const allWithSigs = mergeSigCounts(filteredEvery, sigRows);
-
-            setDriver(d);
-            setAllStops(allWithSigs);
-            setStops(orderedWithSigs);
+            if (dateParam) {
+                const dateNorm = dateParam.split('T')[0].split(' ')[0];
+                const pageData = await fetchDriversPageData(dateNorm);
+                const dFromPage = pageData?.drivers?.find((r: any) => String(r.id) === String(id)) ?? null;
+                if (pageData && dFromPage) {
+                    const stopsById = new Map(pageData.allStops.map((s: any) => [String(s.id), s]));
+                    const orderedServer = (dFromPage.stopIds || [])
+                        .map((sid: any) => stopsById.get(String(sid)))
+                        .filter(Boolean);
+                    const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
+                    const allWithSigs = mergeSigCounts(pageData.allStops, sigRows);
+                    setDriver({ id: dFromPage.id, name: dFromPage.name, color: dFromPage.color, stopIds: dFromPage.stopIds });
+                    setAllStops(allWithSigs);
+                    setStops(orderedWithSigs);
+                } else {
+                    const d = await fetchDriver(id as string, dateNorm as any);
+                    const every = await fetchStops(dateNorm as any);
+                    const filteredEvery = every.filter((s: any) => {
+                        const stopDate = s.delivery_date || s.deliveryDate;
+                        if (!stopDate) return false;
+                        const key = toCalendarDateKeyInAppTz(stopDate);
+                        return key === dateNorm;
+                    });
+                    const orderedServer = orderByDriverStopIds(d, filteredEvery);
+                    const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
+                    const allWithSigs = mergeSigCounts(filteredEvery, sigRows);
+                    setDriver(d);
+                    setAllStops(allWithSigs);
+                    setStops(orderedWithSigs);
+                }
+            } else {
+                const d = await fetchDriver(id as string, null);
+                const every = await fetchStops(null);
+                const orderedServer = orderByDriverStopIds(d, every);
+                const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
+                const allWithSigs = mergeSigCounts(every, sigRows);
+                setDriver(d);
+                setAllStops(allWithSigs);
+                setStops(orderedWithSigs);
+            }
         } finally {
             setLoading(false);
         }
@@ -522,7 +540,6 @@ export default function DriverDetailPage() {
                     selectedDate={selectedDate}
                     onDateChange={(date) => {
                         setSelectedDate(date);
-                        // Update URL without page reload
                         const url = new URL(window.location.href);
                         if (date) {
                             url.searchParams.set('delivery_date', date);
@@ -538,6 +555,7 @@ export default function DriverDetailPage() {
                         url.searchParams.set('delivery_date', todayStr);
                         window.history.replaceState({}, '', url.toString());
                     }}
+                    datesSource="orders"
                 />
             </div>
 
@@ -647,7 +665,7 @@ export default function DriverDetailPage() {
                                             )}
                                             {s.dislikes && (
                                                 <div className="flex muted wrap">
-                                                    <span className="b600">Dislikes:</span>
+                                                    <span className="b600">Notes:</span>
                                                     <span>{s.dislikes}</span>
                                                 </div>
                                             )}

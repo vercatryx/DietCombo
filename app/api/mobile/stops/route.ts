@@ -29,60 +29,77 @@ export async function GET(req: Request) {
         whereParams.push(day);
     }
 
-    // If driverId provided, prefer using Driver.stopIds to preserve intended order
+    // If driverId provided, return that driver's stops in route order (driver_route_order when delivery_date set, else stop_ids or stops.order)
     if (driverIdParam) {
         const driverId = driverIdParam;
         if (!driverId) {
             return NextResponse.json({ error: "Invalid driverId" }, { status: 400 });
         }
 
-        // Fetch driver's ordered stopIds
-        const { data: driverData, error: driverError } = await supabase
-            .from('drivers')
-            .select('stop_ids')
-            .eq('id', driverId)
-            .single();
-        if (driverError) {
-            console.error("[/api/mobile/stops] Error fetching driver:", driverError);
-            return NextResponse.json({ error: "Driver not found" }, { status: 404 });
-        }
-        const driver = driverData;
+        let stops: any[] = [];
+        let ordered: any[] = [];
 
-        // Keep stop_ids as strings (UUIDs) - don't convert to numbers
-        const orderedIds: string[] = driver?.stop_ids
-            ? (Array.isArray(driver.stop_ids) ? driver.stop_ids : (typeof driver.stop_ids === 'string' ? JSON.parse(driver.stop_ids) : []))
-                .map((id: any) => String(id))
-                .filter((id: string) => id && id.trim().length > 0)
-            : [];
-
-        if (!orderedIds.length) {
-            // No stops for this driver — return empty array (contract expects an array)
-            return NextResponse.json([], { headers: { "Cache-Control": "no-store" } });
-        }
-
-        // Get those stops (optionally constrained by day and delivery_date)
-        let stopsQuery = supabase
-            .from('stops')
-            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
-            .in('id', orderedIds);
-        
-        if (day !== "all") {
-            stopsQuery = stopsQuery.eq('day', day);
-        }
-        
-        // Filter by delivery_date if provided
         if (deliveryDateParam) {
-            stopsQuery = stopsQuery.eq('delivery_date', deliveryDateParam);
+            const { data: routeOrder } = await supabase
+                .from('driver_route_order')
+                .select('client_id, position')
+                .eq('driver_id', driverId)
+                .order('position', { ascending: true })
+                .order('client_id', { ascending: true });
+            let stopsQuery = supabase
+                .from('stops')
+                .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
+                .eq('assigned_driver_id', driverId)
+                .eq('delivery_date', deliveryDateParam);
+            if (day !== "all") stopsQuery = stopsQuery.eq('day', day);
+            const { data: stopsData } = await stopsQuery;
+            stops = stopsData || [];
+            const byClient = new Map<string, any>();
+            for (const s of stops) if (s.client_id) byClient.set(String(s.client_id), s);
+            ordered = (routeOrder || [])
+                .map((r) => byClient.get(String(r.client_id)))
+                .filter((s): s is NonNullable<typeof s> => Boolean(s));
         }
 
-        const { data: stops } = await stopsQuery;
+        if (ordered.length === 0) {
+            const { data: driverData, error: driverError } = await supabase
+                .from('drivers')
+                .select('stop_ids')
+                .eq('id', driverId)
+                .single();
+            if (driverError) {
+                const { data: routeRow } = await supabase.from('routes').select('stop_ids').eq('id', driverId).maybeSingle();
+                if (!routeRow) return NextResponse.json({ error: "Driver not found" }, { status: 404 });
+                const rawIds = Array.isArray(routeRow.stop_ids) ? routeRow.stop_ids : (typeof routeRow.stop_ids === 'string' ? JSON.parse(routeRow.stop_ids || '[]') : []);
+                const orderedIds = rawIds.map((id: any) => String(id)).filter((id: string) => id && id.trim().length > 0);
+                let q = supabase.from('stops').select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id').in('id', orderedIds);
+                if (day !== "all") q = q.eq('day', day);
+                if (deliveryDateParam) q = q.eq('delivery_date', deliveryDateParam);
+                const { data: stopsData } = await q;
+                stops = stopsData || [];
+                const byId = new Map(stops.map((s) => [String(s.id), s]));
+                ordered = orderedIds.map((id: string) => byId.get(id)).filter((s: unknown): s is NonNullable<typeof s> => Boolean(s));
+            } else {
+                const driver = driverData;
+                const orderedIds: string[] = driver?.stop_ids
+                    ? (Array.isArray(driver.stop_ids) ? driver.stop_ids : (typeof driver.stop_ids === 'string' ? JSON.parse(driver.stop_ids || '[]') : []))
+                        .map((id: any) => String(id))
+                        .filter((id: string) => id && id.trim().length > 0)
+                    : [];
+                if (orderedIds.length === 0) return NextResponse.json([], { headers: { "Cache-Control": "no-store" } });
+                let q = supabase.from('stops').select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id').in('id', orderedIds);
+                if (day !== "all") q = q.eq('day', day);
+                if (deliveryDateParam) q = q.eq('delivery_date', deliveryDateParam);
+                const { data: stopsData } = await q;
+                stops = stopsData || [];
+                const byId = new Map(stops.map((s) => [String(s.id), s]));
+                ordered = orderedIds.map((id: string) => byId.get(id)).filter((s: unknown): s is NonNullable<typeof s> => Boolean(s));
+            }
+        }
 
-        // Reorder to match Driver.stopIds order (keep IDs as strings for comparison)
-        if (!stops) {
+        if (!ordered.length) {
             return NextResponse.json([], { headers: { "Cache-Control": "no-store" } });
         }
-        const byId = new Map(stops.map((s) => [String(s.id), s]));
-        const ordered = orderedIds.map((id) => byId.get(id)).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
         // Fetch order information for all stops
         // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table

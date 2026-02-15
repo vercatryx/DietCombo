@@ -320,11 +320,11 @@ export function DateFilter({ selectedDate, onDateChange, onClear, datesSource = 
                                         hasStops(date) ? styles.calendarDayHasStops : ''
                                     }`}
                                     onClick={() => handleDateClick(date)}
-                                    title={hasStops(date) ? `${getStopCount(date)} stop${getStopCount(date) !== 1 ? 's' : ''} on ${formatDisplayDate(dateKey)}` : formatDisplayDate(dateKey)}
+                                    title={hasStops(date) ? `${getStopCount(date)} ${datesSource === 'orders' ? 'order' : 'stop'}${getStopCount(date) !== 1 ? 's' : ''} on ${formatDisplayDate(dateKey)}` : formatDisplayDate(dateKey)}
                                 >
                                     <span className={styles.calendarDayNumber}>{date.getDate()}</span>
                                     {hasStops(date) && (
-                                        <span className={styles.calendarDayCount} title={`${getStopCount(date)} stop${getStopCount(date) !== 1 ? 's' : ''}`}>
+                                        <span className={styles.calendarDayCount} title={`${getStopCount(date)} ${datesSource === 'orders' ? 'order' : 'stop'}${getStopCount(date) !== 1 ? 's' : ''}`}>
                                             {getStopCount(date)}
                                         </span>
                                     )}
@@ -333,7 +333,7 @@ export function DateFilter({ selectedDate, onDateChange, onClear, datesSource = 
                         })}
                     </div>
                         {loadingDates && (
-                            <div className={styles.calendarLoading}>Loading dates with stops...</div>
+                            <div className={styles.calendarLoading}>Loading dates with {datesSource === 'orders' ? 'orders' : 'stops'}...</div>
                         )}
                     </div>
                 )}

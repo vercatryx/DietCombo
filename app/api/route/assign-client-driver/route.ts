@@ -90,6 +90,37 @@ export async function POST(request: NextRequest) {
             }
         }
 
+        // driver_route_order: delete from any driver first, then add to new driver (delete-before-add)
+        const { error: deleteOrderError } = await supabase
+            .from('driver_route_order')
+            .delete()
+            .eq('client_id', clientId);
+
+        if (deleteOrderError) {
+            console.warn('[assign-client-driver] Error deleting from driver_route_order (non-critical):', deleteOrderError);
+        }
+
+        if (driverId) {
+            // Get next position for this driver (allow duplicate positions; tie-breaker ORDER BY position, client_id)
+            const { data: maxRow } = await supabase
+                .from('driver_route_order')
+                .select('position')
+                .eq('driver_id', driverId)
+                .order('position', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            const nextPosition = (maxRow?.position != null ? Number(maxRow.position) + 1 : 1);
+
+            const { error: insertOrderError } = await supabase
+                .from('driver_route_order')
+                .insert({ driver_id: driverId, client_id: clientId, position: nextPosition });
+
+            if (insertOrderError) {
+                console.warn('[assign-client-driver] Error inserting into driver_route_order (non-critical):', insertOrderError);
+            }
+        }
+
         return NextResponse.json({
             success: true,
             stopsUpdated: stopsUpdated,

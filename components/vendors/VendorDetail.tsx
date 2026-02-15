@@ -4,12 +4,15 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
-import { getOrdersByVendor, getMealItems, isOrderUnderVendor, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
-import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet } from 'lucide-react';
+import { getClientsUnlimited } from '@/lib/actions';
+import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, isOrderUnderVendor, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
+import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { generateLabelsPDF, generateTablePDF } from '@/lib/label-utils';
+import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { logout } from '@/lib/auth-actions';
-import { getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
+import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from '@/lib/timezone';
+import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
 import styles from './VendorDetail.module.css';
 
 interface Props {
@@ -30,6 +33,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     const [mealItems, setMealItems] = useState<{ id: string; name: string; categoryId?: string }[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+
+    const [isExporting, setIsExporting] = useState(false);
 
     // CSV Import Progress State
     const [importProgress, setImportProgress] = useState<{
@@ -67,13 +72,14 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 getMenuItems(),
                 getBoxTypes(),
                 getCategories(),
-                getMealItems()
+                getMealItems(),
+                getCachedDefaultOrderTemplate('Food')
             ];
 
             let vendorsResultIndex = -1;
             if (!initialVendor) {
                 promises.push(getVendors());
-                vendorsResultIndex = 6;
+                vendorsResultIndex = 7;
             }
 
             const results = await Promise.all(promises);
@@ -92,6 +98,13 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             // Prefer server-fetched orders: only replace if we got a non-empty array (avoid client action returning [] and wiping server data)
             if (Array.isArray(ordersData) && ordersData.length > 0) {
                 setOrders(ordersData);
+                // Debug: log raw dates from getOrdersByVendor to compare with Orders View
+                const sample = ordersData.slice(0, 5).map((o: any) => ({
+                    id: o.id,
+                    raw: o.scheduled_delivery_date,
+                    inEastern: o.scheduled_delivery_date ? toCalendarDateKeyInAppTz(o.scheduled_delivery_date) ?? null : null,
+                }));
+                console.log("[VendorDetail] loadData orders:", { count: ordersData.length, sample });
             } else if (Array.isArray(serverOrders) && serverOrders.length > 0) {
                 setOrders(serverOrders);
             } else if (Array.isArray(ordersData)) {
@@ -127,7 +140,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     function formatDate(dateString: string | null | undefined) {
         if (!dateString) return '-';
         try {
-            return new Date(dateString).toLocaleDateString('en-US', {
+            // YYYY-MM-DD is parsed as UTC midnight by new Date(), shifting the day in Eastern.
+            // Use noon UTC so the calendar day is correct in app timezone regardless of user's locale.
+            const d = /^\d{4}-\d{2}-\d{2}$/.test(String(dateString).trim())
+                ? new Date(dateString + 'T12:00:00.000Z')
+                : new Date(dateString);
+            return d.toLocaleDateString('en-US', {
                 month: 'short',
                 day: 'numeric',
                 year: 'numeric',
@@ -172,8 +190,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         ordersList.forEach(order => {
             const deliveryDate = order.scheduled_delivery_date;
             if (deliveryDate) {
-                // Use date as key in app timezone (Eastern) so 15th/16th don't shift
-                const dateKey = toDateStringInAppTz(new Date(deliveryDate));
+                // Date-only from DB must be used as-is; new Date("YYYY-MM-DD") is UTC midnight and shifts day in Eastern
+                const dateKey = toCalendarDateKeyInAppTz(deliveryDate) ?? deliveryDate;
                 if (!grouped[dateKey]) {
                     grouped[dateKey] = [];
                 }
@@ -186,6 +204,17 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         // Sort dates in descending order (most recent first)
         const sortedDates = Object.keys(grouped).sort((a, b) => {
             return new Date(b).getTime() - new Date(a).getTime();
+        });
+
+        // Debug: log grouping so we can compare with Orders View date
+        const sampleByDate = Object.fromEntries(
+            sortedDates.slice(0, 5).map((k) => [k, grouped[k]?.slice(0, 2).map((o: any) => ({ id: o.id, raw: o.scheduled_delivery_date, dateKey: toCalendarDateKeyInAppTz(o.scheduled_delivery_date) })) ?? []])
+        );
+        console.log("[VendorDetail] groupOrdersByDeliveryDate:", {
+            totalOrders: ordersList.length,
+            sortedDates,
+            countsByDate: Object.fromEntries(sortedDates.map((k) => [k, grouped[k]?.length ?? 0])),
+            sampleRawDates: sampleByDate,
         });
 
         return { grouped, sortedDates, noDate };
@@ -444,18 +473,18 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         return stringValue;
     }
 
-    function formatOrderedItemsForCSV(order: any): string {
+    /** Format order items for CSV/labels. Only source of truth: order (order.items / boxSelection / equipmentSelection). */
+    function formatOrderedItemsForCSVWithClient(order: any, client: ClientProfile | undefined): string {
         if (order.service_type === 'Food') {
-            // Food orders - items from order_items or upcoming_order_items (include meal_item_id / custom_name)
             const items = order.items || [];
-            if (items.length === 0) {
-                return 'No items';
+            if (items.length > 0) {
+                return items.map((item: any) => {
+                    const itemName = getFoodItemDisplayName(item);
+                    const quantity = parseInt(item.quantity || 0);
+                    return `${itemName} (Qty: ${quantity})`;
+                }).join('; ');
             }
-            return items.map((item: any) => {
-                const itemName = getFoodItemDisplayName(item);
-                const quantity = parseInt(item.quantity || 0);
-                return `${itemName} (Qty: ${quantity})`;
-            }).join('; ');
+            return 'No items';
         } else if (order.service_type === 'Boxes') {
             // Box orders - items from box_selections.items JSONB
             const boxSelection = order.boxSelection;
@@ -525,11 +554,18 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         return 'No items available';
     }
 
-    function exportOrdersToCSV() {
+    function formatOrderedItemsForCSV(order: any): string {
+        return formatOrderedItemsForCSVWithClient(order, clients.find(c => c.id === order.client_id));
+    }
+
+    async function exportOrdersToCSV() {
         if (orders.length === 0) {
             alert('No orders to export');
             return;
         }
+        const clientsForExport = await getClientsUnlimited();
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
 
         // Define CSV headers (standardized for all order types)
         const headers = [
@@ -543,15 +579,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             'Delivery Proof URL'
         ];
 
-        // Convert orders to CSV rows
+        // Convert orders to CSV rows (use full client list for item fallbacks)
         const rows = orders.map(order => [
             order.orderNumber || '',
             order.id || '',
             order.client_id || '',
-            getClientName(order.client_id),
+            getClientNameForExport(order.client_id),
             order.scheduled_delivery_date || '',
             order.total_items || 0,
-            formatOrderedItemsForCSV(order),
+            formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             order.delivery_proof_url || ''
         ]);
 
@@ -574,14 +610,29 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         URL.revokeObjectURL(url);
     }
 
-    function exportOrdersByDateToCSV(dateKey: string, dateOrders: any[]) {
+    async function exportOrdersByDateToCSV(dateKey: string, dateOrders: any[]) {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
             return;
         }
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const deliveryDateForStop = dateKey === 'no-date' ? null : dateKey;
+        const clientIdToStopNumber = deliveryDateForStop ? await getStopNumbersForDeliveryDate(deliveryDateForStop) : {};
+        const getDriverStop = (order: any) => {
+            const client = clientById.get(order.client_id);
+            const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+            const driverNum = driverId != null ? driverIdToNumber[driverId] : null;
+            const stopNum = clientIdToStopNumber[order.client_id];
+            if (driverNum != null && stopNum != null) return `${driverNum} - ${stopNum}`;
+            if (driverNum != null) return String(driverNum);
+            return '';
+        };
+        const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
 
-        // Define CSV headers (standardized for all order types)
         const headers = [
+            'Driver - Stop',
             'Order Number',
             'Order ID',
             'Client ID',
@@ -592,15 +643,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             'Delivery Proof URL'
         ];
 
-        // Convert orders to CSV rows
-        const rows = dateOrders.map(order => [
+        const rows = sortedOrders.map(order => [
+            getDriverStop(order),
             order.orderNumber || '',
             order.id || '',
             order.client_id || '',
-            getClientName(order.client_id),
+            getClientNameForExport(order.client_id),
             order.scheduled_delivery_date || '',
             order.total_items || 0,
-            formatOrderedItemsForCSV(order),
+            formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             order.delivery_proof_url || ''
         ]);
 
@@ -630,22 +681,46 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         return dateKey === 'no-date' ? 'no_delivery_date' : formatDate(dateKey).replace(/\s/g, '_');
     }
 
-    /** Client Breakdown - blocks per order with line items (for use while cooking: checkboxes, lines between clients) */
+    /** Get orders sorted by driver then stop number (1.1, 1.2, …) for consistent exports. */
+    async function getSortedOrdersForDate(dateKey: string, dateOrders: any[], clientsOverride?: ClientProfile[]) {
+        if (dateOrders.length === 0) {
+            return { sortedOrders: [], driverIdToNumber: {} as Record<string, number>, driverIdToColor: {} as Record<string, string> };
+        }
+        const deliveryDate = dateKey === 'no-date' ? null : dateKey;
+        const drivers = await getDriversForDate(deliveryDate);
+        const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : undefined;
+        const clientsToUse = clientsOverride?.length ? clientsOverride : clients;
+        const { sortedOrders, driverIdToNumber, driverIdToColor } = sortOrdersByDriver(dateOrders, clientsToUse, drivers, clientIdToStopNumber);
+        return { sortedOrders, driverIdToNumber, driverIdToColor };
+    }
+
+    /** Client Breakdown - blocks per order with line items. Optional getDriverStop adds Driver - Stop as 2nd column (like labels). */
     const BREAKDOWN_CHECK = '☐';
     const BREAKDOWN_LINE = '---';
-    function buildClientBreakdownSheet(dateOrders: any[]): string[][] {
+    function buildClientBreakdownSheet(
+        dateOrders: any[],
+        getClientNameFn?: (id: string) => string,
+        getClientAddressFn?: (id: string) => string,
+        getDriverStopFn?: (order: any) => string
+    ): string[][] {
+        const getName = getClientNameFn ?? getClientName;
+        const getAddress = getClientAddressFn ?? getClientAddress;
+        const hasDriverStop = typeof getDriverStopFn === 'function';
+        const withDriverStop = (row: string[], driverStop: string) =>
+            hasDriverStop ? [row[0], driverStop, ...row.slice(1)] : row;
         const rows: string[][] = [];
         dateOrders.forEach((order, idx) => {
-            const clientName = getClientName(order.client_id);
-            const address = getClientAddress(order.client_id);
-            // Client and Address on same row, spaced apart (cols: Check, Item Name, Quantity, Category, Notes)
-            rows.push(['', clientName, '', '', address]);
-            rows.push(['', '', '', '', '']);
-            rows.push(['', 'Item Name', 'Quantity', 'Category', 'Notes']);
+            const driverStop = hasDriverStop ? (getDriverStopFn!(order) || '') : '';
+            const clientName = getName(order.client_id);
+            const address = getAddress(order.client_id);
+            rows.push(withDriverStop(['', clientName, '', '', address], driverStop));
+            rows.push(withDriverStop(['', '', '', '', ''], driverStop));
+            rows.push(withDriverStop(['', 'Item Name', 'Quantity', 'Category', 'Notes'], driverStop));
             const lineItems = getOrderLineItems(order);
-            lineItems.forEach(li => rows.push([BREAKDOWN_CHECK, li.itemName, String(li.quantity), li.category, li.notes]));
+            lineItems.forEach(li => rows.push(withDriverStop([BREAKDOWN_CHECK, li.itemName, String(li.quantity), li.category, li.notes], driverStop)));
             if (idx < dateOrders.length - 1) {
-                rows.push([BREAKDOWN_LINE, BREAKDOWN_LINE, BREAKDOWN_LINE, BREAKDOWN_LINE, BREAKDOWN_LINE]);
+                const lineRow = [BREAKDOWN_LINE, BREAKDOWN_LINE, BREAKDOWN_LINE, BREAKDOWN_LINE, BREAKDOWN_LINE];
+                rows.push(withDriverStop(lineRow, BREAKDOWN_LINE));
             }
         });
         return rows;
@@ -681,18 +756,36 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         URL.revokeObjectURL(link.href);
     }
 
-    function exportExcelForDate(dateKey: string, dateOrders: any[], which: 'breakdown' | 'cooking' | 'combined') {
+    async function exportExcelForDate(dateKey: string, dateOrders: any[], which: 'breakdown' | 'cooking' | 'combined') {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
             return;
         }
+        setIsExporting(true);
+        try {
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const deliveryDateForStop = dateKey === 'no-date' ? null : dateKey;
+        const clientIdToStopNumber = deliveryDateForStop ? await getStopNumbersForDeliveryDate(deliveryDateForStop) : {};
+        const getDriverStop = (order: any) => {
+            const client = clientById.get(order.client_id);
+            const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+            const driverNum = driverId != null ? driverIdToNumber[driverId] : null;
+            const stopNum = clientIdToStopNumber[order.client_id];
+            if (driverNum != null && stopNum != null) return `${driverNum} - ${stopNum}`;
+            if (driverNum != null) return String(driverNum);
+            return '';
+        };
+        const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
+        const getClientAddressForExport = (id: string) => clientById.get(id)?.address || '-';
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}`;
 
         if (which === 'combined') {
             const wb = XLSX.utils.book_new();
-            const ws2 = XLSX.utils.aoa_to_sheet(buildClientBreakdownSheet(dateOrders));
-            const ws3 = XLSX.utils.aoa_to_sheet(buildCookingListSheet(dateOrders));
+            const ws2 = XLSX.utils.aoa_to_sheet(buildClientBreakdownSheet(sortedOrders, getClientNameForExport, getClientAddressForExport, getDriverStop));
+            const ws3 = XLSX.utils.aoa_to_sheet(buildCookingListSheet(sortedOrders));
             XLSX.utils.book_append_sheet(wb, ws2, 'Client Breakdown');
             XLSX.utils.book_append_sheet(wb, ws3, 'Cooking List');
             downloadExcelWorkbook(wb, `${baseName}_combined.xlsx`);
@@ -700,48 +793,79 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         }
 
         if (which === 'breakdown') {
-            const ws = XLSX.utils.aoa_to_sheet(buildClientBreakdownSheet(dateOrders));
+            const ws = XLSX.utils.aoa_to_sheet(buildClientBreakdownSheet(sortedOrders, getClientNameForExport, getClientAddressForExport, getDriverStop));
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Client Breakdown');
             downloadExcelWorkbook(wb, `${baseName}_breakdown.xlsx`);
         } else if (which === 'cooking') {
-            const ws = XLSX.utils.aoa_to_sheet(buildCookingListSheet(dateOrders));
+            const ws = XLSX.utils.aoa_to_sheet(buildCookingListSheet(sortedOrders));
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Cooking List');
             downloadExcelWorkbook(wb, `${baseName}_cooking.xlsx`);
         }
+        } finally {
+            setIsExporting(false);
+        }
     }
 
-    function exportBreakdownPDFForDate(dateKey: string, dateOrders: any[]) {
+    async function exportBreakdownPDFForDate(dateKey: string, dateOrders: any[]) {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
             return;
         }
+        setIsExporting(true);
+        try {
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const deliveryDateForStop = dateKey === 'no-date' ? null : dateKey;
+        const clientIdToStopNumber = deliveryDateForStop ? await getStopNumbersForDeliveryDate(deliveryDateForStop) : {};
+        const getDriverStop = (order: any) => {
+            const client = clientById.get(order.client_id);
+            const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+            const driverNum = driverId != null ? driverIdToNumber[driverId] : null;
+            const stopNum = clientIdToStopNumber[order.client_id];
+            if (driverNum != null && stopNum != null) return `${driverNum} - ${stopNum}`;
+            if (driverNum != null) return String(driverNum);
+            return '';
+        };
+        const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
+        const getClientAddressForExport = (id: string) => clientById.get(id)?.address || '-';
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}_breakdown`;
         generateTablePDF({
             title: `Client Breakdown – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
-            rows: buildClientBreakdownSheet(dateOrders),
+            rows: buildClientBreakdownSheet(sortedOrders, getClientNameForExport, getClientAddressForExport, getDriverStop),
             filename: `${baseName}.pdf`,
-            columnWidths: [8, 42, 15, 20, 15],
+            columnWidths: [7, 9, 38, 14, 18, 14],
             lineRowMarker: BREAKDOWN_LINE,
             checkboxMarker: BREAKDOWN_CHECK
         });
+        } finally {
+            setIsExporting(false);
+        }
     }
 
-    function exportCookingPDFForDate(dateKey: string, dateOrders: any[]) {
+    async function exportCookingPDFForDate(dateKey: string, dateOrders: any[]) {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
             return;
         }
+        setIsExporting(true);
+        try {
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}_cooking`;
         generateTablePDF({
             title: `Cooking List – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
-            rows: buildCookingListSheet(dateOrders),
+            rows: buildCookingListSheet(sortedOrders),
             filename: `${baseName}.pdf`,
             columnWidths: [50, 25, 25]
         });
+        } finally {
+            setIsExporting(false);
+        }
     }
 
     async function exportLabelsPDFForDate(dateKey: string, dateOrders: any[]) {
@@ -749,16 +873,96 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
-
+        setIsExporting(true);
+        try {
+        // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
+        const freshOrders = dateKey === 'no-date'
+            ? (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date)
+            : await getOrdersByVendor(vendorId, dateKey);
+        if (freshOrders.length === 0) {
+            alert('No orders to export for this date');
+            return;
+        }
+        // Use getClientsUnlimited to bypass 1000-row limit and avoid "Unknown Client" on exports
+        const clientsForExport = await getClientsUnlimited();
+        const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsForExport);
+        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
+        const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
+        const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
+        const getClientAddressForExport = (clientId: string) => clientById.get(clientId)?.address || '-';
         await generateLabelsPDF({
-            orders: dateOrders,
-            getClientName,
-            getClientAddress,
-            formatOrderedItemsForCSV,
+            orders: sortedOrders,
+            getClientName: getClientNameForExport,
+            getClientAddress: getClientAddressForExport,
+            formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             formatDate,
             vendorName: vendor?.name,
-            deliveryDate: dateKey === 'no-date' ? undefined : dateKey
+            deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
+            getDriverInfo: (order) => {
+                const client = clientById.get(order.client_id);
+                const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+                if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
+                const stopNumber = clientIdToStopNumber[order.client_id];
+                return {
+                    driverNumber: driverIdToNumber[driverId],
+                    driverColor: driverIdToColor[driverId],
+                    ...(stopNumber != null && { stopNumber })
+                };
+            }
         });
+        } finally {
+            setIsExporting(false);
+        }
+    }
+
+    /** Alternate Download Labels — separate code path for customization. Modify this function independently. */
+    async function exportLabelsPDFForDateAlt(dateKey: string, dateOrders: any[]) {
+        if (dateOrders.length === 0) {
+            alert('No orders to export for this date');
+            return;
+        }
+        setIsExporting(true);
+        try {
+            // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
+            const freshOrders = dateKey === 'no-date'
+                ? (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date)
+                : await getOrdersByVendor(vendorId, dateKey);
+            if (freshOrders.length === 0) {
+                alert('No orders to export for this date');
+                return;
+            }
+            const clientsForExport = await getClientsUnlimited();
+            const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsForExport);
+            const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+            const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
+            const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
+            const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
+            const getClientAddressForExport = (clientId: string) => clientById.get(clientId)?.address || '-';
+            await generateLabelsPDF({
+                orders: sortedOrders,
+                getClientName: getClientNameForExport,
+                getClientAddress: getClientAddressForExport,
+                formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
+                formatDate,
+                vendorName: vendor?.name,
+                deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
+                getDriverInfo: (order) => {
+                    const client = clientById.get(order.client_id);
+                    const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+                    if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
+                    const stopNumber = clientIdToStopNumber[order.client_id];
+                    return {
+                        driverNumber: driverIdToNumber[driverId],
+                        driverColor: driverIdToColor[driverId],
+                        ...(stopNumber != null && { stopNumber })
+                    };
+                },
+                getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
+            });
+        } finally {
+            setIsExporting(false);
+        }
     }
 
     async function handleCSVImportForDate(event: React.ChangeEvent<HTMLInputElement>, dateKey: string) {
@@ -912,7 +1116,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     } else {
                         // For specific dates, check that order matches the date
                         const orderDateKey = order.scheduled_delivery_date
-                            ? toDateStringInAppTz(new Date(order.scheduled_delivery_date))
+                            ? (toCalendarDateKeyInAppTz(order.scheduled_delivery_date) ?? null)
                             : null;
                         if (orderDateKey !== dateKey) {
                             errorCount++;
@@ -1227,7 +1431,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 )}
                 <div className={styles.loadingContainer}>
                     <div className="spinner"></div>
-                    <p>Loading vendor details...</p>
+                    <p>Loading Downloads...</p>
                 </div>
             </div>
         );
@@ -1237,11 +1441,11 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         return (
             <div className={styles.container}>
                 <div className={styles.header}>
-                    {!isVendorView && (
-                        <button className={styles.backButton} onClick={() => router.push('/vendors')}>
-                            <ArrowLeft size={16} /> Back to Vendors
-                        </button>
-                    )}
+                    {/*{!isVendorView && (*/}
+                    {/*    // <button className={styles.backButton} onClick={() => router.push('/vendors')}>*/}
+                    {/*    //     <ArrowLeft size={16} /> Back to Vendors*/}
+                    {/*    // </button>*/}
+                    {/*)}*/}
                     {isVendorView && (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flex: 1 }}>
                             <button
@@ -1264,16 +1468,16 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     return (
         <div className={styles.container}>
             <div className={styles.header}>
-                {!isVendorView && (
-                    <button className={styles.backButton} onClick={() => router.push('/vendors')}>
-                        <ArrowLeft size={16} /> Back to Vendors
-                    </button>
-                )}
+                {/*{!isVendorView && (*/}
+                {/*    <button className={styles.backButton} onClick={() => router.push('/vendors')}>*/}
+                {/*        <ArrowLeft size={16} /> Back to Vendors*/}
+                {/*    </button>*/}
+                {/*)}*/}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1 }}>
-                    <h1 className={styles.title}>
-                        <Truck size={24} style={{ marginRight: '12px', verticalAlign: 'middle' }} />
-                        {vendor.name}
-                    </h1>
+                    {/*<h1 className={styles.title}>*/}
+                    {/*    <Truck size={24} style={{ marginRight: '12px', verticalAlign: 'middle' }} />*/}
+                    {/*    {vendor.name}*/}
+                    {/*</h1>*/}
                     {isVendorView && (
                         <button
                             onClick={() => logout()}
@@ -1288,9 +1492,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
 
             {/* Orders Section */}
             <div className={styles.ordersSection}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-lg)' }}>
-                    <h2 className={styles.sectionTitle}>Orders</h2>
-                </div>
+                {/*<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-lg)' }}>*/}
+                {/*    /!*<h2 className={styles.sectionTitle}>Orders</h2>*!/*/}
+                {/*</div>*/}
 
                 {(() => {
                     if (orders.length === 0) {
@@ -1336,26 +1540,29 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                             </span>
                                             <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportLabelsPDFForDate(dateKey, dateOrders)}>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDate(dateKey, dateOrders)}>
                                                         <FileText size={14} /> Download Labels
                                                     </button>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDateAlt(dateKey, dateOrders)}>
+                                                        <FileText size={14} /> Labels – with notes
+                                                    </button>
                                                     <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportExcelForDate(dateKey, dateOrders, 'breakdown')}>
+                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate(dateKey, dateOrders, 'breakdown')}>
                                                             <FileSpreadsheet size={14} /> Breakdown Excel
                                                         </button>
-                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportBreakdownPDFForDate(dateKey, dateOrders)}>
+                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportBreakdownPDFForDate(dateKey, dateOrders)}>
                                                             <FileText size={14} /> Breakdown PDF
                                                         </button>
                                                     </div>
                                                     <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportExcelForDate(dateKey, dateOrders, 'cooking')}>
+                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate(dateKey, dateOrders, 'cooking')}>
                                                             <FileSpreadsheet size={14} /> Cooking Excel
                                                         </button>
-                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportCookingPDFForDate(dateKey, dateOrders)}>
+                                                        <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportCookingPDFForDate(dateKey, dateOrders)}>
                                                             <FileText size={14} /> Cooking PDF
                                                         </button>
                                                     </div>
-                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportExcelForDate(dateKey, dateOrders, 'combined')}>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate(dateKey, dateOrders, 'combined')}>
                                                         <Download size={14} /> Combined Excel
                                                     </button>
                                                 </div>
@@ -1383,26 +1590,29 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                         </span>
                                         <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportLabelsPDFForDate('no-date', noDate)}>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDate('no-date', noDate)}>
                                                     <FileText size={14} /> Download Labels
                                                 </button>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDateAlt('no-date', noDate)}>
+                                                    <FileText size={14} /> Labels – with notes
+                                                </button>
                                                 <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportExcelForDate('no-date', noDate, 'breakdown')}>
+                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate('no-date', noDate, 'breakdown')}>
                                                         <FileSpreadsheet size={14} /> Breakdown Excel
                                                     </button>
-                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportBreakdownPDFForDate('no-date', noDate)}>
+                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportBreakdownPDFForDate('no-date', noDate)}>
                                                         <FileText size={14} /> Breakdown PDF
                                                     </button>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportExcelForDate('no-date', noDate, 'cooking')}>
+                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate('no-date', noDate, 'cooking')}>
                                                         <FileSpreadsheet size={14} /> Cooking Excel
                                                     </button>
-                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportCookingPDFForDate('no-date', noDate)}>
+                                                    <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportCookingPDFForDate('no-date', noDate)}>
                                                         <FileText size={14} /> Cooking PDF
                                                     </button>
                                                 </div>
-                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} onClick={() => exportExcelForDate('no-date', noDate, 'combined')}>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate('no-date', noDate, 'combined')}>
                                                     <Download size={14} /> Combined Excel
                                                 </button>
                                             </div>
@@ -1414,6 +1624,19 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     );
                 })()}
             </div>
+
+            {/* Export Loading Overlay */}
+            {isExporting && (
+                <div className={styles.importModalOverlay} style={{ pointerEvents: 'auto' }}>
+                    <div className={styles.importModal} style={{ maxWidth: 320 }}>
+                        <div className={styles.importModalContent} style={{ alignItems: 'center', gap: '1rem' }}>
+                            <Loader2 className="animate-spin" size={40} style={{ color: 'var(--color-primary)' }} />
+                            <p style={{ margin: 0, fontWeight: 600, color: 'var(--text-primary)' }}>Generating file...</p>
+                            <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Please wait</p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* CSV Import Progress Modal */}
             {importProgress.isImporting || importProgress.totalRows > 0 ? (

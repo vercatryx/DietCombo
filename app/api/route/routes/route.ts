@@ -74,17 +74,19 @@ export async function GET(req: Request) {
             .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
             .order('id', { ascending: true });
         
-        // Filter by delivery_date if provided
-        // Also include stops that match the day of week if delivery_date is NULL
-        // This ensures we get all stops for the selected date, including legacy stops
+        // Filter by delivery_date if provided (date-only comparison so DATE and TIMESTAMP both match)
         if (normalizedDeliveryDate) {
+            const nextDay = (() => {
+                const [y, m, d] = normalizedDeliveryDate.split('-').map(Number);
+                const next = new Date(y, m - 1, d + 1);
+                return next.toISOString().slice(0, 10);
+            })();
             if (day !== "all") {
-                // Query stops that match delivery_date OR (delivery_date is NULL AND day matches)
-                // Use PostgREST filter syntax for OR conditions
-                stopsQuery = stopsQuery.or(`delivery_date.eq.${normalizedDeliveryDate},and(delivery_date.is.null,day.eq.${day})`);
+                stopsQuery = stopsQuery.or(
+                    `and(delivery_date.gte.${normalizedDeliveryDate},delivery_date.lt.${nextDay}),and(delivery_date.is.null,day.eq.${day})`
+                );
             } else {
-                // When day is "all", filter by delivery_date only
-                stopsQuery = stopsQuery.eq('delivery_date', normalizedDeliveryDate);
+                stopsQuery = stopsQuery.gte('delivery_date', normalizedDeliveryDate).lt('delivery_date', nextDay);
             }
         } else if (day !== "all") {
             // If no delivery_date but day is specified, filter by day
@@ -368,47 +370,80 @@ export async function GET(req: Request) {
             });
         }
 
-        // 7) Build driver routes from both stopIds AND assigned_driver_id
-        // Since drivers are now saved to client records via assigned_driver_id, we need to include
-        // stops that have assigned_driver_id matching the driver, not just stops in driver's stop_ids array
-        // Color palette for fallback
+        // 7) Build driver routes. Route order source: driver_route_order (when delivery_date set); drivers.stop_ids / routes.stop_ids deprecated for order (Phase 6).
+        // When delivery_date is set, order from driver_route_order; else fallback to stop_ids + assigned_driver_id.
         const colorPalette = [
             "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
             "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#393b79",
             "#ad494a", "#637939", "#ce6dbd", "#8c6d31", "#7f7f7f",
         ];
-        
-        // Create a map of driver ID -> route index for quick lookup
+        const driverIdsForRoutes = drivers.map((d) => String(d.id));
+        let routeOrderByDriver: Map<string, { client_id: string }[]> = new Map();
+        if (normalizedDeliveryDate && driverIdsForRoutes.length > 0) {
+            const { data: routeOrderRows } = await supabase
+                .from("driver_route_order")
+                .select("driver_id, client_id, position")
+                .in("driver_id", driverIdsForRoutes)
+                .order("position", { ascending: true })
+                .order("client_id", { ascending: true });
+            for (const row of routeOrderRows || []) {
+                const did = String(row.driver_id);
+                if (!routeOrderByDriver.has(did)) routeOrderByDriver.set(did, []);
+                routeOrderByDriver.get(did)!.push({ client_id: String(row.client_id) });
+            }
+        }
+        const stopByDriverAndClient = new Map<string, any>();
+        for (const [stopId, s] of stopById.entries()) {
+            if (s?.assigned_driver_id != null && s?.client_id != null) {
+                stopByDriverAndClient.set(`${String(s.assigned_driver_id)}|${String(s.client_id)}`, s);
+            }
+        }
+
         const driverIdToRouteIdx = new Map<string, number>();
-        
         const routes = drivers.map((d, idx) => {
             const driverId = String(d.id);
             driverIdToRouteIdx.set(driverId, idx);
-            
-            const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === "string" ? JSON.parse(d.stop_ids) : []);
-            const ids: any[] = Array.isArray(stopIds) ? stopIds : [];
             const stops: any[] = [];
-            const stopIdSet = new Set<string>(); // Track added stops to avoid duplicates
-            
-            // First, add stops from driver's stop_ids array (legacy method)
-            for (const raw of ids) {
-                const stopId = sid(raw);
-                const hyd = stopById.get(stopId);
-                if (hyd && !stopIdSet.has(stopId) && shouldShowStop(hyd)) {
-                    stops.push(hyd);
-                    stopIdSet.add(stopId);
+            const stopIdSet = new Set<string>();
+
+            const orderList = routeOrderByDriver.get(driverId);
+            if (orderList && orderList.length > 0 && normalizedDeliveryDate) {
+                for (const row of orderList) {
+                    const stop = stopByDriverAndClient.get(`${driverId}|${row.client_id}`);
+                    if (stop && !stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
+                        stops.push(stop);
+                        stopIdSet.add(sid(stop.id));
+                    }
+                }
+                // Tail: include any other stops for this driver/date not yet in list (e.g. assigned but not yet in driver_route_order)
+                for (const [_, stop] of stopById.entries()) {
+                    const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
+                    if (assignedDriverId === driverId && !stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
+                        stops.push(stop);
+                        stopIdSet.add(sid(stop.id));
+                    }
                 }
             }
-            
-            // Then, add stops that have assigned_driver_id matching this driver (new method)
-            for (const [stopId, stop] of stopById.entries()) {
-                const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
-                if (assignedDriverId === driverId && !stopIdSet.has(stopId) && shouldShowStop(stop)) {
-                    stops.push(stop);
-                    stopIdSet.add(stopId);
+            if (stops.length === 0) {
+                const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === "string" ? JSON.parse(d.stop_ids || "[]") : []);
+                const ids: any[] = Array.isArray(stopIds) ? stopIds : [];
+                for (const raw of ids) {
+                    const stopId = sid(raw);
+                    const hyd = stopById.get(stopId);
+                    if (hyd && !stopIdSet.has(stopId) && shouldShowStop(hyd)) {
+                        stops.push(hyd);
+                        stopIdSet.add(stopId);
+                    }
+                }
+                for (const [stopIdKey, stop] of stopById.entries()) {
+                    const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
+                    if (assignedDriverId === driverId && !stopIdSet.has(stopIdKey) && shouldShowStop(stop)) {
+                        stops.push(stop);
+                        stopIdSet.add(stopIdKey);
+                    }
                 }
             }
-            
+
             // Ensure color is always set - use driver color or fallback to palette
             const driverColor = (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey" && d.color !== null && d.color !== undefined)
                 ? d.color

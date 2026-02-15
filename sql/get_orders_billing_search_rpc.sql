@@ -1,7 +1,7 @@
 -- RPC for orders billing list: search/filter in DB and return paginated order ids + total.
 -- Run this in Supabase SQL Editor once to create the function.
 -- Search matches: client full_name, order_number (as text), vendor names (via order_vendor_selections + order_box_selections).
--- If your orders table does not have creation_id, remove the "AND (p_creation_id IS NULL OR o.creation_id = p_creation_id)" line below.
+-- If your orders table has creation_id, uncomment the creation_id line in the WHERE clause below.
 
 CREATE OR REPLACE FUNCTION get_orders_billing_search(
     p_search text DEFAULT NULL,
@@ -38,7 +38,7 @@ BEGIN
                 OR (v.vendor_name IS NOT NULL AND v.vendor_name ILIKE '%' || trim(p_search) || '%')
             ))
             AND (p_status IS NULL OR trim(p_status) = '' OR p_status = 'all' OR o.status = p_status)
-            AND (p_creation_id IS NULL OR o.creation_id = p_creation_id)
+            -- AND (p_creation_id IS NULL OR o.creation_id = p_creation_id)  -- Uncomment if orders.creation_id exists
     ),
     ordered AS (
         SELECT f.id

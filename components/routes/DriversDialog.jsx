@@ -876,15 +876,15 @@ export default function DriversDialog({
                         {/* CENTER: Generate + Driver Management */}
                         <Box sx={{ justifySelf: "center", display: "flex", flexDirection: "column", gap: 1, alignItems: "center" }}>
                             <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-                                <Button
-                                    onClick={regenerateRoutes}
-                                    variant="contained"
-                                    color="error"
-                                    disabled={busy || isReadOnlyMode}
-                                    sx={{ fontWeight: 700, borderRadius: 2 }}
-                                >
-                                    Generate New Route
-                                </Button>
+                                {/*<Button*/}
+                                {/*    onClick={regenerateRoutes}*/}
+                                {/*    variant="contained"*/}
+                                {/*    color="error"*/}
+                                {/*    disabled={busy || isReadOnlyMode}*/}
+                                {/*    sx={{ fontWeight: 700, borderRadius: 2 }}*/}
+                                {/*>*/}
+                                {/*    Generate New Route*/}
+                                {/*</Button>*/}
                             </Box>
 
                             <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>

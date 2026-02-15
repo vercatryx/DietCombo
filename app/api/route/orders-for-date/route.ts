@@ -33,9 +33,13 @@ export async function GET(req: Request) {
             { p_delivery_date: deliveryDate }
         );
 
+        console.log("[orders-for-date] Request:", { deliveryDate, rpcError: rpcError?.message, rpcDataKeys: rpcData ? Object.keys(rpcData) : null });
+        if (rpcError) console.log("[orders-for-date] RPC error details:", rpcError);
+
         if (!rpcError && rpcData) {
             orderIds = Array.isArray(rpcData.order_ids) ? rpcData.order_ids : [];
             clientIds = Array.isArray(rpcData.client_ids) ? rpcData.client_ids : [];
+            console.log("[orders-for-date] RPC success:", { orderCount: orderIds.length, clientCount: clientIds.length });
         } else {
             const { data: orders } = await supabase
                 .from("orders")

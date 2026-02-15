@@ -1,7 +1,7 @@
 'use server';
 
 import { getCurrentTime } from './time';
-import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz } from './timezone';
+import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from './timezone';
 import { revalidatePath } from 'next/cache';
 import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment, MealCategory, MealItem, ClientFoodOrder, ClientMealOrder, ClientBoxOrder } from './types';
 import { randomUUID } from 'crypto';
@@ -1819,8 +1819,16 @@ export async function getMealPlannerItemCountsByDate(
         for (const row of data || []) {
             const d = row.calendar_date;
             if (d != null) {
-                const key = typeof d === 'string' ? mealPlannerDateOnly(d) : String(d).slice(0, 10);
-                counts[key] = (counts[key] ?? 0) + 1;
+                // Use ISO date part for Date objects to avoid timezone shift (String(d).slice(0,10) can produce "Sat Feb 15")
+                const key =
+                    typeof d === 'string'
+                        ? mealPlannerDateOnly(d)
+                        : d instanceof Date
+                          ? d.toISOString().slice(0, 10)
+                          : String(d).slice(0, 10);
+                if (key && /^\d{4}-\d{2}-\d{2}$/.test(key)) {
+                    counts[key] = (counts[key] ?? 0) + 1;
+                }
             }
         }
         return counts;
@@ -3404,6 +3412,61 @@ export async function getClients() {
         }
         return [];
     }
+}
+
+/**
+ * Fetch ALL clients (bypasses Supabase 1000-row limit).
+ * Use for exports and API routes that need every client to avoid "Unknown Client".
+ */
+export async function getClientsUnlimited(): Promise<ClientProfile[]> {
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        const list = await getClients();
+        return list.filter((c): c is ClientProfile => c != null);
+    }
+    const admin = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    return getClientsForAdmin(admin);
+}
+
+/**
+ * Fetch ALL clients using the given Supabase client (e.g. service role).
+ * Paginates to bypass the default 1000-row limit.
+ * Use for API routes that need to process every client (e.g. create-expired-meal-planner-orders).
+ */
+export async function getClientsForAdmin(supabaseClient: { from: (table: string) => any }): Promise<ClientProfile[]> {
+    const PAGE_SIZE = 1000;
+    const allRows: any[] = [];
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+        const { data, error } = await supabaseClient
+            .from('clients')
+            .select('*')
+            .range(offset, offset + PAGE_SIZE - 1)
+            .order('id', { ascending: true });
+
+        if (error) {
+            console.error('[getClientsForAdmin] Error fetching clients:', error);
+            break;
+        }
+        const chunk = data || [];
+        allRows.push(...chunk);
+        hasMore = chunk.length === PAGE_SIZE;
+        offset += PAGE_SIZE;
+    }
+
+    const mapped = allRows.map((c: any) => {
+        try {
+            return mapClientFromDB(c);
+        } catch (error) {
+            console.error(`[getClientsForAdmin] Error mapping client ${c?.id}:`, error);
+            return null;
+        }
+    }).filter((c): c is ClientProfile => c !== null);
+    return mapped;
 }
 
 export async function getClient(id: string) {
@@ -7151,22 +7214,26 @@ export async function processUpcomingOrders() {
                             .insert([{ id: newVsId, order_id: newOrder.id, vendor_id: vs.vendor_id }]);
                         const newVs = { id: newVsId, order_id: newOrder.id, vendor_id: vs.vendor_id };
 
-                        // Copy items
+                        // Copy items — upcoming_order_items link by upcoming_vendor_selection_id, not vendor_selection_id
                         const { data: items } = await supabase
                             .from('upcoming_order_items')
                             .select('*')
-                            .eq('vendor_selection_id', vs.id);
+                            .eq('upcoming_vendor_selection_id', vs.id);
 
                         if (items && items.length > 0) {
-                            const itemsToInsert = items.map(item => ({
-                                id: randomUUID(),
-                                vendor_selection_id: newVs.id,
-                                menu_item_id: item.menu_item_id,
-                                quantity: item.quantity
-                            }));
-                            await supabase
-                                .from('order_items')
-                                .insert(itemsToInsert);
+                            const itemsToInsert = items
+                                .map((item: any) => ({
+                                    id: randomUUID(),
+                                    vendor_selection_id: newVs.id,
+                                    menu_item_id: item.menu_item_id ?? item.meal_item_id ?? '',
+                                    quantity: item.quantity ?? 0
+                                }))
+                                .filter((item: any) => item.menu_item_id);
+                            if (itemsToInsert.length > 0) {
+                                await supabase
+                                    .from('order_items')
+                                    .insert(itemsToInsert);
+                            }
                         }
                     } catch (vsError) {
                         console.error('Error creating vendor selection:', vsError);
@@ -8449,6 +8516,116 @@ export async function getClientProfilePageData(clientId: string) {
 /** Single vendor in the app; vendor page is always this id so we allow orders without session. */
 const SINGLE_VENDOR_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
+/** Color palette for drivers without a color (matches routes API) */
+const DRIVER_COLOR_PALETTE = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#17becf', '#bcbd22', '#393b79',
+    '#ad494a', '#637939', '#ce6dbd', '#8c6d31', '#7f7f7f',
+];
+
+/** Extract numeric rank from "Driver X" name; unknowns go to end */
+function driverRankByName(name: string | null | undefined): number {
+    if (!name) return Number.MAX_SAFE_INTEGER;
+    const m = /driver\s+(\d+)/i.exec(String(name));
+    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Get drivers for a delivery date. Used for vendor exports (labels, breakdown, etc.)
+ * Returns drivers where day = dayOfWeek(deliveryDate) OR day = 'all', plus routes table (legacy).
+ */
+export async function getDriversForDate(deliveryDate: string | null): Promise<{ id: string; name: string; color: string }[]> {
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const day = deliveryDate && /^\d{4}-\d{2}-\d{2}/.test(deliveryDate)
+        ? dayNames[new Date(deliveryDate + 'T12:00:00').getDay()]
+        : 'all';
+
+    try {
+        let driversQuery = supabase
+            .from('drivers')
+            .select('id, name, color')
+            .order('id', { ascending: true });
+        if (day !== 'all') {
+            driversQuery = driversQuery.or(`day.eq.${day},day.eq.all`);
+        }
+        const { data: driversRaw } = await driversQuery;
+
+        const { data: routesRaw } = await supabase
+            .from('routes')
+            .select('id, name, color')
+            .order('id', { ascending: true });
+        const routesAsDrivers = (routesRaw || []).map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            color: r.color,
+        }));
+
+        const allDriversRaw = [...(driversRaw || []), ...routesAsDrivers];
+        const sorted = [...allDriversRaw].sort((a, b) => driverRankByName(a.name) - driverRankByName(b.name));
+
+        return sorted.map((d, idx) => {
+            const c = d.color;
+            const validColor = c && c !== '#666' && c !== 'gray' && c !== 'grey' && c !== null && c !== undefined;
+            const color = validColor ? c : DRIVER_COLOR_PALETTE[idx % DRIVER_COLOR_PALETTE.length];
+            return { id: d.id, name: d.name, color };
+        });
+    } catch (err) {
+        console.error('[getDriversForDate] Error:', err);
+        return [];
+    }
+}
+
+/**
+ * Get 1-based stop number per client for a delivery date (from driver_route_order + stops).
+ * Used for vendor labels so each label can show "Driver X, Stop Y".
+ * Returns {} if no date or table missing.
+ */
+export async function getStopNumbersForDeliveryDate(deliveryDate: string | null): Promise<Record<string, number>> {
+    if (!deliveryDate || !/^\d{4}-\d{2}-\d{2}/.test(deliveryDate)) return {};
+    const dateOnly = deliveryDate.split('T')[0].split(' ')[0];
+    try {
+        const { data: stopsRows } = await supabase
+            .from('stops')
+            .select('client_id, assigned_driver_id')
+            .eq('delivery_date', dateOnly)
+            .not('assigned_driver_id', 'is', null)
+            .not('client_id', 'is', null);
+        if (!stopsRows?.length) return {};
+        const driverIds = [...new Set(stopsRows.map((s: any) => String(s.assigned_driver_id)).filter(Boolean))];
+        const clientHasStopForDriver = new Set<string>();
+        for (const s of stopsRows) {
+            clientHasStopForDriver.add(`${String(s.assigned_driver_id)}|${String(s.client_id)}`);
+        }
+        const { data: orderRows } = await supabase
+            .from('driver_route_order')
+            .select('driver_id, client_id, position')
+            .in('driver_id', driverIds)
+            .order('position', { ascending: true })
+            .order('client_id', { ascending: true });
+        if (!orderRows?.length) return {};
+        const clientToStopNumber: Record<string, number> = {};
+        const byDriver = new Map<string, { client_id: string; position: number }[]>();
+        for (const row of orderRows) {
+            const did = String(row.driver_id);
+            if (!byDriver.has(did)) byDriver.set(did, []);
+            byDriver.get(did)!.push({ client_id: String(row.client_id), position: row.position ?? 0 });
+        }
+        for (const [driverId, list] of byDriver.entries()) {
+            let stopNum = 0;
+            for (const { client_id } of list) {
+                if (clientHasStopForDriver.has(`${driverId}|${client_id}`)) {
+                    stopNum += 1;
+                    clientToStopNumber[client_id] = stopNum;
+                }
+            }
+        }
+        return clientToStopNumber;
+    } catch (err) {
+        console.error('[getStopNumbersForDeliveryDate] Error:', err);
+        return {};
+    }
+}
+
 /**
  * Get orders for a vendor from the orders table only (not upcoming_orders).
  * Produce orders are excluded; they are shown on produce-specific pages.
@@ -8471,52 +8648,79 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string)
         ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
         : supabase;
 
-    try {
-        // 1. Primary source: all orders from the database orders table for this vendor
-        const { data: directOrders, error: directErr } = await db
-            .from('orders')
-            .select('*')
-            .eq('vendor_id', vendorId)
-            .order('created_at', { ascending: false });
+    // Chunk size for Supabase/PostgREST (default max rows is often 500 or 1000 per request)
+    const ROW_CHUNK = 500;
 
-        if (directErr) {
-            console.error('getOrdersByVendor: error fetching orders by vendor_id:', directErr);
+    try {
+        // 1. Primary source: all orders from the database orders table for this vendor (chunked to support 2000+ per day)
+        const ordersFromTable: any[] = [];
+        let offset = 0;
+        let hasMore = true;
+        while (hasMore) {
+            const { data: chunk, error: directErr } = await db
+                .from('orders')
+                .select('*')
+                .eq('vendor_id', vendorId)
+                .order('created_at', { ascending: false })
+                .range(offset, offset + ROW_CHUNK - 1);
+
+            if (directErr) {
+                console.error('getOrdersByVendor: error fetching orders by vendor_id:', directErr);
+                break;
+            }
+            const rows = chunk || [];
+            ordersFromTable.push(...rows);
+            hasMore = rows.length === ROW_CHUNK;
+            offset += ROW_CHUNK;
         }
 
-        // 2. Also include orders linked via junction tables (in case vendor_id is null on order)
-        const { data: foodOrderIds } = await db
-            .from('order_vendor_selections')
-            .select('order_id')
-            .eq('vendor_id', vendorId);
+        // 2. Also include orders linked via junction tables (in case vendor_id is null on order) — fetch in chunks
+        const foodOrderIds: string[] = [];
+        let foodOffset = 0;
+        while (true) {
+            const { data: chunk } = await db
+                .from('order_vendor_selections')
+                .select('order_id')
+                .eq('vendor_id', vendorId)
+                .range(foodOffset, foodOffset + ROW_CHUNK - 1);
+            const rows = chunk || [];
+            foodOrderIds.push(...rows.map((o: { order_id: string }) => o.order_id));
+            if (rows.length < ROW_CHUNK) break;
+            foodOffset += ROW_CHUNK;
+        }
+        const boxOrderIds: string[] = [];
+        let boxOffset = 0;
+        while (true) {
+            const { data: chunk } = await db
+                .from('order_box_selections')
+                .select('order_id')
+                .eq('vendor_id', vendorId)
+                .range(boxOffset, boxOffset + ROW_CHUNK - 1);
+            const rows = chunk || [];
+            boxOrderIds.push(...rows.map((o: { order_id: string }) => o.order_id));
+            if (rows.length < ROW_CHUNK) break;
+            boxOffset += ROW_CHUNK;
+        }
 
-        const { data: boxOrderIds } = await db
-            .from('order_box_selections')
-            .select('order_id')
-            .eq('vendor_id', vendorId);
+        const junctionOrderIds = Array.from(new Set([...foodOrderIds, ...boxOrderIds]));
 
-        const junctionOrderIds = Array.from(new Set([
-            ...(foodOrderIds?.map((o: { order_id: string }) => o.order_id) || []),
-            ...(boxOrderIds?.map((o: { order_id: string }) => o.order_id) || [])
-        ]));
-
-        // If we got orders directly from orders table, use them and add any from junction not already present
-        const directIdSet = new Set((directOrders || []).map((o: { id: string }) => o.id));
-        const ordersFromTable = directOrders || [];
+        const directIdSet = new Set(ordersFromTable.map((o: { id: string }) => o.id));
         let ordersData = [...ordersFromTable];
 
         if (junctionOrderIds.length > 0) {
             const missingIds = junctionOrderIds.filter(id => !directIdSet.has(id));
-            if (missingIds.length > 0) {
+            for (let i = 0; i < missingIds.length; i += ROW_CHUNK) {
+                const batch = missingIds.slice(i, i + ROW_CHUNK);
                 const { data: extraOrders } = await db
                     .from('orders')
                     .select('*')
-                    .in('id', missingIds)
+                    .in('id', batch)
                     .order('created_at', { ascending: false });
                 if (extraOrders?.length) {
                     ordersData = [...ordersData, ...extraOrders];
-                    ordersData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
                 }
             }
+            ordersData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         }
 
         // Filter: only orders from orders table; exclude Produce (handled on produce pages)
@@ -8536,19 +8740,18 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string)
         });
 
         // When deliveryDate provided, filter early to avoid processing thousands of orders (stack overflow)
-        // dateKey from URL = same as VendorDetail.groupOrdersByDeliveryDate uses (toDateStringInAppTz of order dates)
-        // Use deliveryDate as-is (it came from that grouping) and toDateStringInAppTz for order dates to match
+        // dateKey from URL = same as VendorDetail.groupOrdersByDeliveryDate (toCalendarDateKeyInAppTz so date-only stays correct)
         if (deliveryDate) {
-            const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
+            const dateKey = toCalendarDateKeyInAppTz(deliveryDate) ?? deliveryDate;
             filteredOrders = filteredOrders.filter((order: any) => {
                 if (!order.scheduled_delivery_date) return false;
-                const orderDateKey = toDateStringInAppTz(new Date(order.scheduled_delivery_date));
-                return orderDateKey === dateKey;
+                const orderDateKey = toCalendarDateKeyInAppTz(order.scheduled_delivery_date);
+                return orderDateKey != null && orderDateKey === dateKey;
             });
         }
 
         const completedOrders = await Promise.all(filteredOrders.map(async (order: any) => {
-            const processed = await processVendorOrderDetails(order, vendorId, false);
+            const processed = await processVendorOrderDetails(order, vendorId, false, db);
             return { ...processed, orderType: 'completed' };
         }));
 
@@ -8650,7 +8853,8 @@ export async function getOrdersByServiceType(serviceType: string) {
     }
 }
 
-async function processVendorOrderDetails(order: any, vendorId: string, isUpcoming: boolean) {
+async function processVendorOrderDetails(order: any, vendorId: string, isUpcoming: boolean, dbClient?: any) {
+    const client = dbClient ?? supabase;
     const orderIdField = isUpcoming ? 'upcoming_order_id' : 'order_id';
     const vendorSelectionsTable = isUpcoming ? 'upcoming_order_vendor_selections' : 'order_vendor_selections';
     const itemsTable = isUpcoming ? 'upcoming_order_items' : 'order_items';
@@ -8665,7 +8869,7 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
     };
 
     if (order.service_type === 'Food') {
-        const { data: vs } = await supabase
+        const { data: vs } = await client
             .from(vendorSelectionsTable)
             .select('id')
             .eq(orderIdField, order.id)
@@ -8675,44 +8879,14 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
         if (vs) {
             // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
             const selectionIdField = isUpcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
-            const { data: items } = await supabase
+            const { data: items } = await client
                 .from(itemsTable)
                 .select('*')
                 .eq(selectionIdField, vs.id);
 
             result.items = items || [];
         }
-
-        // Fallback: for single vendor, if no order_items, try meal_planner_orders (same client + date)
-        if (result.items.length === 0 && vendorId === SINGLE_VENDOR_ID && order.client_id && order.scheduled_delivery_date) {
-            const dateOnly = mealPlannerDateOnly(order.scheduled_delivery_date);
-            const supabaseVendor = process.env.SUPABASE_SERVICE_ROLE_KEY
-                ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
-                : supabase;
-            const { data: mpoRows } = await supabaseVendor
-                .from('meal_planner_orders')
-                .select('id')
-                .eq('client_id', order.client_id)
-                .eq('scheduled_delivery_date', dateOnly)
-                .in('status', ['draft', 'scheduled', 'saved']);
-            const mpoIds = (mpoRows || []).map((r: { id: string }) => r.id);
-            if (mpoIds.length > 0) {
-                const { data: mpoItems } = await supabaseVendor
-                    .from('meal_planner_order_items')
-                    .select('id, menu_item_id, meal_item_id, quantity, notes, custom_name')
-                    .in('meal_planner_order_id', mpoIds);
-                if (mpoItems && mpoItems.length > 0) {
-                    result.items = mpoItems.map((row: any) => ({
-                        id: row.id,
-                        menu_item_id: row.menu_item_id ?? null,
-                        meal_item_id: row.meal_item_id ?? null,
-                        quantity: row.quantity ?? 0,
-                        notes: row.notes ?? null,
-                        custom_name: row.custom_name ?? null
-                    }));
-                }
-            }
-        }
+        // Only source of truth: order_vendor_selections + order_items. No fallbacks.
     } else if (order.service_type === 'Equipment') {
         // Parse equipment details from notes
         // Note: Orders are already filtered by vendor in getOrdersByVendor, so we can trust the vendorId
@@ -8730,7 +8904,7 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
             console.error('Error parsing equipment order notes:', e);
         }
     } else if (order.service_type === 'Boxes') {
-        const { data: bs } = await supabase
+        const { data: bs } = await client
             .from(boxSelectionsTable)
             .select('*')
             .eq(orderIdField, order.id)
@@ -8743,7 +8917,7 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
             // If items field is empty, try to fetch from client's upcoming_order (same source as client profile uses)
             if (!bs.items || Object.keys(bs.items).length === 0) {
                 // Get the client's upcoming_order from clients table (UPCOMING_ORDER_SCHEMA)
-                const { data: clientData } = await supabase
+                const { data: clientData } = await client
                     .from('clients')
                     .select('upcoming_order')
                     .eq('id', order.client_id)
@@ -8764,7 +8938,7 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
                 // If still empty, try to fetch items from order_items table as fallback (for migrated data)
                 if ((!result.boxSelection.items || Object.keys(result.boxSelection.items).length === 0) && bs.vendor_id) {
                     // Find the vendor_selection for the box vendor in this order
-                    const { data: vendorSelection } = await supabase
+                    const { data: vendorSelection } = await client
                         .from(vendorSelectionsTable)
                         .select('id')
                         .eq(orderIdField, order.id)
@@ -8774,7 +8948,7 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
                     if (vendorSelection) {
                         // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
                         const selectionIdField = isUpcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
-                        const { data: boxItems } = await supabase
+                        const { data: boxItems } = await client
                             .from(itemsTable)
                             .select('*')
                             .eq(selectionIdField, vendorSelection.id);

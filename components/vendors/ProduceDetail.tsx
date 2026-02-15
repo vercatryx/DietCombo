@@ -4,9 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ClientProfile, MenuItem, BoxType } from '@/lib/types';
 import { getClients, getMenuItems, getBoxTypes } from '@/lib/cached-data';
-import { ArrowLeft, Package, Download, FileText, Search, User } from 'lucide-react';
+import { Package, FileText, Search, User } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
-import { getTodayInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
 export function ProduceDetail() {
@@ -69,97 +68,6 @@ export function ProduceDetail() {
         return matchesSearch;
     });
 
-    function escapeCSV(value: any): string {
-        if (value === null || value === undefined) return '';
-        const stringValue = String(value);
-        // If value contains comma, newline, or quote, wrap in quotes and escape quotes
-        if (stringValue.includes(',') || stringValue.includes('\n') || stringValue.includes('"')) {
-            return `"${stringValue.replace(/"/g, '""')}"`;
-        }
-        return stringValue;
-    }
-
-    function formatDate(dateString: string | null | undefined) {
-        if (!dateString) return '-';
-        try {
-            return new Date(dateString).toLocaleDateString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                timeZone: 'America/New_York'
-            });
-        } catch {
-            return dateString;
-        }
-    }
-
-    function exportClientsToCSV() {
-        if (filteredClients.length === 0) {
-            alert('No clients to export');
-            return;
-        }
-
-        // Define CSV headers
-        const headers = [
-            'Client ID',
-            'Full Name',
-            'Email',
-            'Phone Number',
-            'Secondary Phone',
-            'Address',
-            'Apt',
-            'City',
-            'State',
-            'Zip',
-            'County',
-            'Service Type',
-            'Status ID',
-            'Navigator ID',
-            'End Date',
-            'Created At',
-            'Updated At'
-        ];
-
-        // Convert clients to CSV rows
-        const rows = filteredClients.map(client => [
-            client.id || '',
-            client.fullName || '',
-            client.email || '',
-            client.phoneNumber || '',
-            client.secondaryPhoneNumber || '',
-            client.address || '',
-            client.apt || '',
-            client.city || '',
-            client.state || '',
-            client.zip || '',
-            client.county || '',
-            client.serviceType || '',
-            client.statusId || '',
-            client.navigatorId || '',
-            client.endDate || '',
-            client.createdAt || '',
-            client.updatedAt || ''
-        ]);
-
-        // Combine headers and rows
-        const csvContent = [
-            headers.map(escapeCSV).join(','),
-            ...rows.map(row => row.map(escapeCSV).join(','))
-        ].join('\n');
-
-        // Create blob and download
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        link.setAttribute('href', url);
-        link.setAttribute('download', `produce_clients_${getTodayInAppTz()}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-    }
-
     async function exportLabelsPDF() {
         if (filteredClients.length === 0) {
             alert('No clients to export');
@@ -217,13 +125,6 @@ export function ProduceDetail() {
                             style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                         >
                             <FileText size={20} /> Download Labels
-                        </button>
-                        <button
-                            className="btn btn-secondary"
-                            onClick={exportClientsToCSV}
-                            style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                        >
-                            <Download size={20} /> Export CSV
                         </button>
                     </div>
                 </div>

@@ -47,9 +47,15 @@ export async function POST(req: Request) {
             );
         }
 
-        // Get stop IDs from this driver
-        const stopIds = Array.isArray(driver.stop_ids) 
-            ? driver.stop_ids 
+        // Clear clients.assigned_driver_id for all clients assigned to this driver (CASCADE will remove driver_route_order rows)
+        await supabase
+            .from('clients')
+            .update({ assigned_driver_id: null })
+            .eq('assigned_driver_id', driverId);
+
+        // Get stop IDs from this driver (for backward compatibility and stops cleanup)
+        const stopIds = Array.isArray(driver.stop_ids)
+            ? driver.stop_ids
             : (typeof driver.stop_ids === "string" ? JSON.parse(driver.stop_ids || "[]") : []);
 
         // Clear assigned_driver_id from stops
@@ -60,7 +66,7 @@ export async function POST(req: Request) {
                 .in('id', stopIds);
         }
 
-        // Delete the driver
+        // Delete the driver (CASCADE removes driver_route_order rows)
         await supabase
             .from('drivers')
             .delete()

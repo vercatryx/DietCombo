@@ -151,8 +151,9 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
                     : 0;
                 const pctSigs = total > 0 ? (sigUsersDone / total) * 100 : 0;
 
-                // Unique addresses for this driver (ignoring apt#)
+                // Unique addresses for this driver (ignoring apt#). When stops not yet loaded, use total from API.
                 const uniqueAddrCount = (() => {
+                    if (cardStops.length === 0) return total;
                     const set = new Set();
                     for (const s of cardStops) {
                         const key = makeAddressKey(s);

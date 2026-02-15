@@ -10,7 +10,8 @@
     "import-all": "node scripts/import-all-clients.js",
     "import-signatures": "node scripts/import-signatures-from-backup.js",
     "debug-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/debug-client-portal-food.ts",
-    "test-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-portal-food-selections.ts"
+    "test-portal-food": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-portal-food-selections.ts",
+    "backfill-driver-route-order": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/backfill-driver-route-order.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

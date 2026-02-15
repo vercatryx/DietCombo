@@ -78,7 +78,6 @@ function setProduceBillAmountCache(amount: number): void {
     try {
         localStorage.setItem(PRODUCE_BILL_AMOUNT_CACHE_KEY, String(amount));
     } catch {
-        // ignore
     }
 }
 
@@ -310,7 +309,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 (formData.navigatorId !== undefined && formData.navigatorId !== client.navigatorId) ||
                 (formData.serviceType !== undefined && formData.serviceType !== client.serviceType) ||
                 (formData.approvedMealsPerWeek !== undefined && formData.approvedMealsPerWeek !== client.approvedMealsPerWeek) ||
-                (formData.notes !== undefined && formData.notes !== client.notes) ||
+                (formData.notes !== undefined && formData.notes !== (client.dislikes ?? '')) ||
                 (formData.endDate !== undefined && formData.endDate !== client.endDate);
             
             if (formChanged) return true;
@@ -1451,7 +1450,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
     function hydrateFromInitialData(data: ClientFullDetails) {
         setClient(data.client);
-        setFormData(data.client);
+        setFormData({ ...data.client, notes: data.client.dislikes ?? '' });
 
         // Set active order, history, order history, billing history, and meal plan if available
         setActiveOrder(data.activeOrder || null);
@@ -4200,7 +4199,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     endDate: formData.endDate ?? '',
                     screeningTookPlace: formData.screeningTookPlace ?? false,
                     screeningSigned: formData.screeningSigned ?? false,
-                    notes: formData.notes ?? '',
+                    notes: '',
+                    dislikes: formData.notes ?? null,
                     statusId: formData.statusId ?? initialStatusId,
                     serviceType: formData.serviceType ?? 'Food',
                     approvedMealsPerWeek: defaultApprovedMeals,
@@ -4221,7 +4221,6 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     complex: formData.complex ?? false,
                     bill: formData.bill ?? true,
                     delivery: formData.delivery ?? true,
-                    dislikes: formData.dislikes ?? null,
                     latitude: formData.latitude ?? null,
                     longitude: formData.longitude ?? null,
                     lat: formData.lat ?? null,
@@ -4401,7 +4400,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             if ((client.secondaryPhoneNumber || '') !== (formData.secondaryPhoneNumber || '')) {
                 changes.push(`Secondary Phone: "${client.secondaryPhoneNumber || ''}" -> "${formData.secondaryPhoneNumber || ''}"`);
             }
-            if (client.notes !== formData.notes) changes.push('Notes updated');
+            if ((client.dislikes ?? '') !== (formData.notes ?? '')) changes.push('Notes updated');
             if (client.statusId !== formData.statusId) {
                 const oldStatus = statuses.find(s => s.id === client.statusId)?.name || 'Unknown';
                 const newStatus = statuses.find(s => s.id === formData.statusId)?.name || 'Unknown';
@@ -4451,6 +4450,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             // This means we need to restructure a bit.
 
             let updateData: Partial<ClientProfile> = { ...formData };
+            updateData.dislikes = formData.notes ?? null;
+            delete (updateData as any).notes;
 
             // When saving details only (e.g. sidebar), never include activeOrder so we only update the client table.
             if (saveDetailsOnly) {
@@ -4860,10 +4861,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                             <section className={styles.card}>
                                 <h3 className={styles.sectionTitle}>Client Details</h3>
 
-                                {(client?.dislikes != null && String(client.dislikes).trim() !== '') && (
+                                {(client?.dislikes ?? '').trim() !== '' && (
                                     <div className={styles.formGroup} style={{ marginBottom: '1rem', padding: '12px', backgroundColor: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--color-primary)' }}>
-                                        <label className="label" style={{ marginBottom: '4px' }}>Dislikes / Dietary Restrictions</label>
-                                        <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{client.dislikes}</div>
+                                        <label className="label" style={{ marginBottom: '4px' }}>Notes</label>
+                                        <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{client?.dislikes}</div>
                                     </div>
                                 )}
 
@@ -5171,10 +5172,9 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     </div>
                                 </div>
 
-                                {/* Dietary Preferences from dietfantasy */}
                                 <div className={styles.formGroup}>
-                                    <label className="label">Dislikes / Dietary Restrictions</label>
-                                    <textarea className="input" style={{ height: '80px' }} value={formData.dislikes || ''} onChange={e => setFormData({ ...formData, dislikes: e.target.value })} placeholder="Enter any food dislikes or dietary restrictions" />
+                                    <label className="label">Notes</label>
+                                    <textarea className="input" style={{ height: '100px' }} value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} placeholder="Notes, dietary restrictions, or other info" />
                                 </div>
 
                                 <div className={styles.formGroup}>
@@ -5208,11 +5208,6 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                         })()}
                                         onChange={e => setFormData({ ...formData, expirationDate: e.target.value || null })}
                                     />
-                                </div>
-
-                                <div className={styles.formGroup}>
-                                    <label className="label">General Notes</label>
-                                    <textarea className="input" style={{ height: '100px' }} value={formData.notes || ''} onChange={e => setFormData({ ...formData, notes: e.target.value })} />
                                 </div>
 
                                 <div className={styles.formGroup}>

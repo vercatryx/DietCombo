@@ -1997,7 +1997,7 @@ export default function DriversMapLeaflet({
                     <CheckRow
                         id="toggle-routes"
                         checked={showRouteLines}
-                        onChange={setShowRouteLines}
+                        onChange={(checked) => setShowRouteLines(!!checked)}
                         label="Show route lines"
                         title="Draw a line connecting stops in order for each driver"
                     />
@@ -2271,15 +2271,16 @@ export default function DriversMapLeaflet({
                         />
                     )}
 
-                    {/* route lines */}
+                    {/* route lines - key by stop order so they redraw when route is reorganized */}
                     {showRouteLines &&
                         visibleDrivers.map((d, index) => {
                             const pts = (d.stops || []).map(getLL).filter(Boolean);
                             if (pts.length < 2) return null;
                             const driverId = Number.isFinite(d.driverId) ? String(d.driverId) : `unknown-${index}`;
+                            const stopOrderKey = (d.stops || []).map((s) => sid(s.id)).join("-");
                             return (
                                 <Polyline
-                                    key={`route-${driverId}-${index}`}
+                                    key={`route-${driverId}-${stopOrderKey}`}
                                     positions={pts}
                                     pathOptions={{
                                         color: d.color || "#1f77b4",

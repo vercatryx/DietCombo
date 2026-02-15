@@ -233,6 +233,21 @@ CREATE TRIGGER update_drivers_updated_at BEFORE UPDATE ON drivers
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================
+-- Table: driver_route_order (stable route: ordered list of clients per driver)
+-- ============================================
+CREATE TABLE IF NOT EXISTS driver_route_order (
+    driver_id VARCHAR(36) NOT NULL,
+    client_id VARCHAR(36) NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (driver_id, client_id),
+    CONSTRAINT fk_driver_route_order_driver FOREIGN KEY (driver_id) REFERENCES drivers(id) ON DELETE CASCADE,
+    CONSTRAINT fk_driver_route_order_client FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_driver_route_order_driver_position ON driver_route_order(driver_id, position);
+CREATE INDEX IF NOT EXISTS idx_driver_route_order_client ON driver_route_order(client_id);
+
+-- ============================================
 -- Table: equipment
 -- ============================================
 CREATE TABLE IF NOT EXISTS equipment (

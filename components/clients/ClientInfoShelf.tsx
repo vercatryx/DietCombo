@@ -59,8 +59,7 @@ export function ClientInfoShelf({
         state: c.state || '',
         zip: c.zip || '',
         county: c.county || '',
-        notes: c.notes,
-        dislikes: c.dislikes || '',
+        notes: c.dislikes ?? '',
         caseIdExternal: c.caseIdExternal || '',
         authorizedAmount: c.authorizedAmount || 0,
         expirationDate: c.expirationDate || '',
@@ -163,8 +162,7 @@ export function ClientInfoShelf({
                     state: editForm.state || null,
                     zip: editForm.zip || null,
                     county: editForm.county || null,
-                    notes: editForm.notes,
-                    dislikes: editForm.dislikes || null,
+                    dislikes: editForm.notes || null,
                     caseIdExternal: editForm.caseIdExternal || null,
                     authorizedAmount: editForm.authorizedAmount,
                     expirationDate: editForm.expirationDate || null,
@@ -492,24 +490,8 @@ export function ClientInfoShelf({
                                             className={styles.editTextarea}
                                             value={editForm.notes}
                                             onChange={e => setEditForm({ ...editForm, notes: e.target.value })}
-                                            rows={2}
-                                            placeholder="General notes"
-                                        />
-                                    ) : (
-                                        <span style={{ whiteSpace: 'pre-wrap' }}>{client.notes?.trim() || '—'}</span>
-                                    )}
-                                </div>
-                            </div>
-                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                <div className={styles.label}>Dislikes / Dietary</div>
-                                <div className={styles.value}>
-                                    {isEditing ? (
-                                        <textarea
-                                            className={styles.editTextarea}
-                                            value={editForm.dislikes}
-                                            onChange={e => setEditForm({ ...editForm, dislikes: e.target.value })}
-                                            rows={2}
-                                            placeholder="Dislikes / dietary restrictions"
+                                            rows={3}
+                                            placeholder="Notes, dietary restrictions, or other info"
                                         />
                                     ) : (
                                         <span style={{ whiteSpace: 'pre-wrap' }}>{client.dislikes?.trim() || '—'}</span>

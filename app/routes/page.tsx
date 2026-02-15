@@ -16,6 +16,7 @@ import {
     InputLabel,
     Select,
     MenuItem,
+    CircularProgress,
 } from "@mui/material";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -189,6 +190,7 @@ export default function RoutesPage() {
     const [ordersViewDate, setOrdersViewDate] = React.useState<string | null>(null);
 
     const [busy, setBusy] = React.useState(false);
+    const [reorganizing, setReorganizing] = React.useState(false);
     const [activeTab, setActiveTab] = React.useState("clients"); // "map" or "clients" — default: Client Assignment
 
 
@@ -268,6 +270,13 @@ export default function RoutesPage() {
         })();
     }, [selectedDay]);
 
+    // Load routes when Client Assignment or Map tab is active so route order (driver_route_order) is fresh for map lines and buttons.
+    React.useEffect(() => {
+        if (activeTab === "clients" || activeTab === "map") {
+            loadRoutes();
+        }
+    }, [activeTab, selectedDay, selectedDeliveryDate, loadRoutes]);
+
     const refreshAssignmentData = React.useCallback(async () => {
         try {
             const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
@@ -289,6 +298,12 @@ export default function RoutesPage() {
                 const ordRes = await fetch(`/api/route/orders-for-date?date=${ordersViewDate}`, { cache: "no-store" });
                 if (ordRes.ok) {
                     const ordData = await ordRes.json();
+                    console.log("[Routes Orders View] Fetched orders-for-date:", {
+                        requestedDate: ordersViewDate,
+                        delivery_date: ordData.delivery_date,
+                        orderCount: (ordData.order_ids || []).length,
+                        clientCount: (ordData.client_ids || []).length,
+                    });
                     setOrdersForDate({
                         order_ids: ordData.order_ids || [],
                         client_ids: ordData.client_ids || [],
@@ -538,6 +553,14 @@ export default function RoutesPage() {
             return { id: driverId, driverId, name: d.name || `Driver ${i}`, color, polygon: [], stops };
         });
     }, [assignmentData?.drivers, ordersViewClients]);
+
+    // Debug: log Orders View stop counts per driver
+    React.useEffect(() => {
+        if (activeTab === "map" && mapDriversOrdersView?.length > 0) {
+            const counts = mapDriversOrdersView.map((r: any) => `${r.name}: ${r.stops?.length ?? 0}`);
+            console.log("[Routes Orders View] mapDriversOrdersView stop counts:", counts);
+        }
+    }, [activeTab, mapDriversOrdersView]);
 
     const enrichedUnroutedOrdersView = React.useMemo(() => {
         const noDriver = ordersViewClients.filter(
@@ -794,6 +817,34 @@ export default function RoutesPage() {
         }
     }
 
+    // Reorganize routes - optimize stop order per driver by geolocation
+    async function handleReorganizeRoutes() {
+        setBusy(true);
+        setReorganizing(true);
+        try {
+            const res = await fetch("/api/route/reorganize", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    day: selectedDay,
+                    delivery_date: selectedDeliveryDate || undefined,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Failed to reorganize routes");
+            await loadRoutes();
+            saveCurrentRun(true);
+            alert("Routes reorganized successfully.");
+        } catch (e: any) {
+            console.error("Reorganize routes failed:", e);
+            alert("Failed to reorganize routes: " + (e?.message || "Unknown error"));
+            await loadRoutes();
+        } finally {
+            setBusy(false);
+            setReorganizing(false);
+        }
+    }
+
     // Rename a driver
     async function handleRenameDriver(driverId: any, newNumber: any) {
         try {
@@ -922,8 +973,10 @@ export default function RoutesPage() {
                             {(() => {
                                 const Component = DriversMapLeaflet as any;
                                 const useOrdersViewData = activeTab === "map" && ordersForDate?.client_ids != null;
+                                // Use mapDrivers (from routes API / driver_route_order) whenever we have routes so route lines show correct order and update after Reorganize
+                                const mapDriversForMap = routes.length > 0 ? mapDrivers : (useOrdersViewData ? mapDriversOrdersView : mapDrivers);
                                 return <Component
-                                    drivers={useOrdersViewData ? mapDriversOrdersView : mapDrivers}
+                                    drivers={mapDriversForMap}
                                     unrouted={useOrdersViewData ? enrichedUnroutedOrdersView : enrichedUnrouted}
                                     onReassign={handleReassign}
                                     onRenameDriver={handleRenameDriver}
@@ -951,15 +1004,15 @@ export default function RoutesPage() {
                             position: 'relative',
                             flexWrap: 'wrap'
                         }}>
-                            <Button
-                                onClick={regenerateRoutes}
-                                variant="contained"
-                                color="error"
-                                disabled={busy}
-                                sx={{ fontWeight: 700, borderRadius: 2 }}
-                            >
-                                Generate New Route
-                            </Button>
+                            {/*<Button*/}
+                            {/*    onClick={regenerateRoutes}*/}
+                            {/*    variant="contained"*/}
+                            {/*    color="error"*/}
+                            {/*    disabled={busy}*/}
+                            {/*    sx={{ fontWeight: 700, borderRadius: 2 }}*/}
+                            {/*>*/}
+                            {/*    Generate New Route*/}
+                            {/*</Button>*/}
                             <Button
                                 onClick={handleAddDriver}
                                 variant="outlined"
@@ -1077,11 +1130,20 @@ export default function RoutesPage() {
                     onClick={async () => {
                         setBusy(true);
                         try {
-                            const activeClients = assignmentData?.clients ?? [];
+                            let activeClients = assignmentData?.clients ?? [];
                             const driverList = assignmentData?.drivers ?? [];
                             if (activeClients.length === 0) {
                                 alert('No client data loaded. Please wait for the page to load.');
                                 return;
+                            }
+                            // Filter to clients with orders on selected date when Orders View has a date (match Orders View)
+                            if (ordersForDate?.client_ids?.length && ordersViewDate) {
+                                const clientIdsWithOrders = new Set((ordersForDate.client_ids || []).map((id: string) => String(id)));
+                                activeClients = activeClients.filter((c: any) => clientIdsWithOrders.has(String(c.id)));
+                                if (activeClients.length === 0) {
+                                    alert(`No clients with orders on ${ordersViewDate}. Select a date with orders in Orders View, or clear the date filter to include all assigned clients.`);
+                                    return;
+                                }
                             }
                             // Build driver map from assignment-data (id -> { color, name, number })
                             const driverMap = new Map<string, { color: string; name: string; number: number }>();
@@ -1179,6 +1241,15 @@ export default function RoutesPage() {
                     disabled={busy || !assignmentData || assignmentData.clients.length === 0}
                 >
                     Download Labels
+                </Button>
+
+                <Button
+                    onClick={handleReorganizeRoutes}
+                    variant="outlined"
+                    disabled={busy || routes.length === 0 || reorganizing}
+                    startIcon={reorganizing ? <CircularProgress size={16} color="inherit" /> : null}
+                >
+                    {reorganizing ? "Reorganizing…" : "Reorganize Routes"}
                 </Button>
 
             </div>

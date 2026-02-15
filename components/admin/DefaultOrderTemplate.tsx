@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate, addMenuItem, updateMenuItem, deleteMenuItem, updateMenuItemOrder } from '@/lib/actions';
 import { clearDefaultOrderTemplateCache } from '@/lib/default-order-template-cache';
-import { getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
+import { getTodayInAppTz, getDatePartsInAppTz, getCalendarDaysForMonthInAppTz } from '@/lib/timezone';
 import { Save, Loader2, Plus, Trash2, Package, ChevronLeft, ChevronRight, X, Check, GripVertical, Edit2 } from 'lucide-react';
 import {
     DndContext,
@@ -216,8 +216,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
     const [mealPlannerPopupStatus, setMealPlannerPopupStatus] = useState<string | null>(null);
     const [mealPlannerItemCounts, setMealPlannerItemCounts] = useState<Record<string, number>>({});
     const [mealPlannerMonth, setMealPlannerMonth] = useState(() => {
-        const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth(), 1);
+        const { year, month } = getDatePartsInAppTz();
+        return new Date(year, month, 1);
     });
     // Menu item add/edit (combined with default order list)
     const [isAddingItem, setIsAddingItem] = useState(false);
@@ -720,17 +720,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         );
     }
 
-    // Meal Planner calendar: days for current month (with leading empty cells)
+    // Meal Planner calendar: days for current month in EST (with leading empty cells)
     const mealPlannerDays = useMemo(() => {
         const year = mealPlannerMonth.getFullYear();
         const month = mealPlannerMonth.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const firstWeekday = firstDay.getDay();
-        const lastDay = new Date(year, month + 1, 0).getDate();
-        const days: (Date | null)[] = [];
-        for (let i = 0; i < firstWeekday; i++) days.push(null);
-        for (let d = 1; d <= lastDay; d++) days.push(new Date(year, month, d));
-        return days;
+        return getCalendarDaysForMonthInAppTz(year, month);
     }, [mealPlannerMonth]);
 
     const mealPlannerMonthYear = mealPlannerMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -746,20 +740,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         const endDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         getMealPlannerItemCountsByDate(startDate, endDate, null).then(setMealPlannerItemCounts);
     }, [mealPlannerMonth, template.serviceType]);
-
-    /** Calendar date key (YYYY-MM-DD). For calendar cells we use (year, month, day) so the displayed day number always matches the stored date in EST. */
-    function dateKeyForCalendarDay(year: number, month: number, day: number): string {
-        return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    }
-
-    /** Date key from a Date (EST). Use for "today" and other single dates. */
-    function formatDateKey(d: Date): string {
-        return toDateStringInAppTz(d);
-    }
-
-    function isToday(d: Date): boolean {
-        return toDateStringInAppTz(d) === getTodayInAppTz();
-    }
 
     /** Check if a date is in the past (before today in EST) */
     function isDatePast(dateKey: string): boolean {
@@ -1141,8 +1121,9 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                             ))}
                         </div>
                         <div className={styles.calendarGrid}>
-                            {mealPlannerDays.map((date, index) => {
-                                const dateKey = date ? dateKeyForCalendarDay(date.getFullYear(), date.getMonth(), date.getDate()) : null;
+                            {mealPlannerDays.map((cell, index) => {
+                                const dateKey = cell ? cell.dateKey : null;
+                                const dayNum = cell ? cell.dayNum : null;
                                 const indicator = dateKey != null ? (mealPlannerItemCounts[dateKey] ?? null) : null;
                                 const hasPlan = indicator != null;
                                 const isTodayCell = dateKey === getTodayInAppTz();
@@ -1150,24 +1131,24 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                     <div
                                         key={dateKey ?? `empty-${index}`}
                                         className={[
-                                            date ? styles.calendarDay : styles.calendarDayEmpty,
-                                            date && hasPlan && styles.calendarDayHasPlan,
-                                            date && isTodayCell && styles.calendarDayToday,
+                                            cell ? styles.calendarDay : styles.calendarDayEmpty,
+                                            cell && hasPlan && styles.calendarDayHasPlan,
+                                            cell && isTodayCell && styles.calendarDayToday,
                                         ].filter(Boolean).join(' ')}
                                         onClick={dateKey ? () => openMealPlannerPopup(dateKey) : undefined}
-                                        role={date ? 'button' : undefined}
-                                        tabIndex={date ? 0 : undefined}
+                                        role={cell ? 'button' : undefined}
+                                        tabIndex={cell ? 0 : undefined}
                                         onKeyDown={dateKey ? (e) => { if (e.key === 'Enter' || e.key === ' ') openMealPlannerPopup(dateKey); } : undefined}
-                                        title={date && hasPlan ? `Meal plan saved · ${indicator} item${indicator !== 1 ? 's' : ''}` : undefined}
+                                        title={cell && hasPlan ? `Meal plan saved · ${indicator} item${indicator !== 1 ? 's' : ''}` : undefined}
                                     >
-                                        {date && (
+                                        {cell && (
                                             <>
                                                 {hasPlan && (
                                                     <span className={styles.calendarDayCheck} aria-hidden>
                                                         <Check size={12} strokeWidth={2.5} />
                                                     </span>
                                                 )}
-                                                <span className={styles.calendarDayNum}>{date.getDate()}</span>
+                                                <span className={styles.calendarDayNum}>{dayNum}</span>
                                                 {hasPlan && (
                                                     <span className={styles.calendarDayIndicator} aria-hidden>
                                                         {indicator}

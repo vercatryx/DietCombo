@@ -632,7 +632,7 @@ export default function StopPreviewDialog({ open, onClose, stop, boxTypes: propB
                         </>
                     )}
 
-                    {/* Dislikes/Notes */}
+                    {/* Notes */}
                     {stop.dislikes && (
                         <>
                             <Divider />

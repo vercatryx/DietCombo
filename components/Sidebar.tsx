@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, ChevronLeft, ChevronRight, LogOut, Store, History, Settings, Route, Package } from 'lucide-react';
+import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -12,7 +12,7 @@ import { getNavigatorLogs } from '@/lib/actions';
 const navItems = [
     { label: 'Client Dashboard', href: '/clients', icon: Users },
     { label: 'My History', href: '/navigator-history', icon: History, role: 'navigator' },
-    { label: 'Vendors', href: '/vendors', icon: Store },
+    { label: 'Downloads', href: '/vendors', icon: Download },
     { label: 'Produce', href: '/vendors/produce', icon: Package },
     { label: 'Routes', href: '/routes', icon: Route },
     { label: 'Admin Control', href: '/admin', icon: Settings },
@@ -137,7 +137,7 @@ export function Sidebar({
                     if (item.label === 'Admin Control') {
                         return userRole === 'admin' || userRole === 'super-admin';
                     }
-                    if (item.label === 'Vendors') {
+                    if (item.label === 'Downloads') {
                         return userRole === 'admin' || userRole === 'super-admin';
                     }
                     if (item.label === 'Produce') {

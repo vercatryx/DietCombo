@@ -1,24 +1,24 @@
 // app/api/stops/dates/route.ts
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { toCalendarDateKeyInAppTz } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
  * GET /api/stops/dates
- * 
+ *
  * Returns all unique delivery dates that have registered stops with their stop counts.
  * Used to show indicators and counts on calendar dates.
- * 
- * This matches the logic in /api/route/routes to ensure calendar counts match map counts:
- * - Only counts stops with valid lat/lng coordinates (map only shows geocoded stops)
- * - Only counts stops with explicit delivery_date (when day="all", routes API only filters by delivery_date)
+ *
+ * Uses app timezone (America/New_York) so calendar dates match what the routes API uses.
+ * - Only counts stops with valid lat/lng (matching map behavior)
+ * - Only counts stops with explicit delivery_date
  */
 export async function GET(req: Request) {
     try {
-        // Get all stops (both with and without delivery_date)
-        // We need both to match the routes API logic
-        // Also include lat/lng to filter out stops without geocoding (matching map behavior)
         const { data: allStops, error } = await supabase
             .from('stops')
             .select('delivery_date, day, lat, lng');
@@ -31,16 +31,6 @@ export async function GET(req: Request) {
             );
         }
 
-        // Helper to format date as YYYY-MM-DD
-        const formatDateKey = (date: Date): string => {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        };
-
-        // Helper to check if stop has valid lat/lng (matching map's hasLL logic)
-        // The map only shows stops with valid coordinates, so calendar should match
         const hasValidCoordinates = (stop: any): boolean => {
             if (!stop) return false;
             const lat = typeof stop.lat === 'number' ? stop.lat : (typeof stop.latitude === 'number' ? stop.latitude : null);
@@ -48,26 +38,22 @@ export async function GET(req: Request) {
             return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
         };
 
-        // Count stops per date
-        // Only count stops with:
-        // 1. Valid coordinates (matching map behavior - map only shows geocoded stops)
-        // 2. Explicit delivery_date (matching routes API when day="all" - it only filters by delivery_date)
+        /** Normalize DB delivery_date to YYYY-MM-DD in app timezone (no UTC shift). */
+        const toDateKey = (raw: string | null | undefined): string | null => {
+            if (raw == null || typeof raw !== 'string') return null;
+            const s = raw.trim();
+            if (DATE_ONLY_REGEX.test(s)) return s;
+            return toCalendarDateKeyInAppTz(s);
+        };
+
         const dateCounts = new Map<string, number>();
-        
+
         (allStops || []).forEach((stop: any) => {
-            // Skip stops without geocoding (matching map's hasLL filter)
             if (!hasValidCoordinates(stop)) return;
-            
-            // Only count stops with explicit delivery_date
-            // When day="all", routes API only filters by delivery_date, not NULL delivery_date stops
-            if (stop.delivery_date) {
-                // Convert to YYYY-MM-DD format
-                const date = new Date(stop.delivery_date);
-                if (!isNaN(date.getTime())) {
-                    const dateKey = formatDateKey(date);
-                    // Increment count for this date
-                    dateCounts.set(dateKey, (dateCounts.get(dateKey) || 0) + 1);
-                }
+            if (!stop.delivery_date) return;
+            const dateKey = toDateKey(stop.delivery_date);
+            if (dateKey) {
+                dateCounts.set(dateKey, (dateCounts.get(dateKey) || 0) + 1);
             }
         });
 

@@ -4,7 +4,6 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
-const sid = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 const s = (v: unknown) => (v == null ? "" : String(v));
 const n = (v: unknown) => (typeof v === "number" ? v : null);
 
@@ -276,34 +275,32 @@ export async function POST(req: Request) {
             }
         }
 
-        // Create missing stops
+        // Step 1: Create missing stops — one stop per (client_id, delivery_date) to respect UNIQUE(client_id, delivery_date)
         let stopsCreated = 0;
-        if (stopsToCreate.length > 0) {
+        const deliveryDatesTouched = new Set<string>();
+        const seenClientDate = new Set<string>();
+        const stopsToCreateDeduped: typeof stopsToCreate = [];
+        for (const stopData of stopsToCreate) {
+            const key = `${stopData.client_id}|${stopData.delivery_date}`;
+            if (seenClientDate.has(key)) continue;
+            seenClientDate.add(key);
+            stopsToCreateDeduped.push(stopData);
+        }
+
+        if (stopsToCreateDeduped.length > 0) {
             try {
-                // Deduplicate by order_id: only one stop per order
-                const seenOrderIds = new Set<string>();
-                const stopsToCreateDeduped = stopsToCreate.filter((s) => {
-                    if (!s.order_id) return true;
-                    if (seenOrderIds.has(s.order_id)) return false;
-                    seenOrderIds.add(s.order_id);
-                    return true;
-                });
-                // Insert stops one at a time to handle duplicates gracefully
                 for (const stopData of stopsToCreateDeduped) {
                     try {
-                        // Skip if a stop already exists for this order_id (never create a second stop per order)
-                        if (stopData.order_id) {
-                            const { data: existingByOrderId } = await supabase
-                                .from('stops')
-                                .select('id')
-                                .eq('order_id', stopData.order_id)
-                                .limit(1)
-                                .maybeSingle();
-                            if (existingByOrderId) continue;
-                        }
+                        const { data: existing } = await supabase
+                            .from('stops')
+                            .select('id')
+                            .eq('client_id', stopData.client_id)
+                            .eq('delivery_date', stopData.delivery_date)
+                            .maybeSingle();
+                        if (existing) continue;
                         const { error: insertError } = await supabase
                             .from('stops')
-                            .upsert({
+                            .insert({
                                 id: stopData.id,
                                 day: stopData.day,
                                 delivery_date: stopData.delivery_date,
@@ -319,14 +316,19 @@ export async function POST(req: Request) {
                                 dislikes: stopData.dislikes,
                                 lat: stopData.lat,
                                 lng: stopData.lng,
-                                assigned_driver_id: stopData.assigned_driver_id, // Set from client
-                            }, { onConflict: 'id' });
-                        if (insertError) throw insertError;
+                                assigned_driver_id: stopData.assigned_driver_id,
+                            });
+                        if (insertError) {
+                            if (insertError.code !== "23505" && !insertError.message?.includes("duplicate")) {
+                                console.error(`[route/cleanup] Failed to create stop:`, insertError?.message);
+                            }
+                            continue;
+                        }
                         stopsCreated++;
+                        deliveryDatesTouched.add(stopData.delivery_date);
                     } catch (createError: any) {
-                        // Skip if stop already exists (duplicate key)
-                        if (createError?.code !== "23505" && !createError?.message?.includes('duplicate')) {
-                            console.error(`[route/cleanup] Failed to create stop for client ${stopData.client_id}:`, createError?.message);
+                        if (createError?.code !== "23505" && !createError?.message?.includes("duplicate")) {
+                            console.error(`[route/cleanup] Failed to create stop:`, createError?.message);
                         }
                     }
                 }
@@ -335,8 +337,85 @@ export async function POST(req: Request) {
             }
         }
 
+        // Step 2: Sync driver_route_order — every client with assigned_driver_id must have a row (INSERT ON CONFLICT DO NOTHING)
+        let listSynced = 0;
+        const assigned = (allClients || []).filter((c: any) => c.assigned_driver_id != null);
+        for (const client of assigned) {
+            const driverId = String(client.assigned_driver_id);
+            const clientId = String(client.id);
+            const { data: existing } = await supabase
+                .from('driver_route_order')
+                .select('driver_id')
+                .eq('driver_id', driverId)
+                .eq('client_id', clientId)
+                .maybeSingle();
+            if (existing) continue;
+            const { data: maxRow } = await supabase
+                .from('driver_route_order')
+                .select('position')
+                .eq('driver_id', driverId)
+                .order('position', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            const pos = (maxRow?.position != null ? Number(maxRow.position) + 1 : 1);
+            const { error: insErr } = await supabase
+                .from('driver_route_order')
+                .insert({ driver_id: driverId, client_id: clientId, position: pos });
+            if (!insErr) listSynced++;
+            if (insErr && insErr.code !== "23505") console.warn('[route/cleanup] driver_route_order insert:', insErr?.message);
+        }
+
+        // Step 3: Set stops.order from driver_route_order (idempotent). Run for delivery_date param or dates we touched.
+        const datesForOrder = deliveryDate ? [deliveryDate.split('T')[0]] : Array.from(deliveryDatesTouched);
+        if (datesForOrder.length === 0 && deliveryDate) datesForOrder.push(deliveryDate.split('T')[0]);
+        let ordersSet = 0;
+        for (const dateStr of datesForOrder) {
+            if (!dateStr) continue;
+            const { data: stopsForDate } = await supabase
+                .from('stops')
+                .select('id, client_id, assigned_driver_id, order')
+                .eq('delivery_date', dateStr)
+                .not('assigned_driver_id', 'is', null);
+            if (!stopsForDate?.length) continue;
+            const byDriver = new Map<string, typeof stopsForDate>();
+            for (const st of stopsForDate) {
+                const d = String(st.assigned_driver_id);
+                if (!byDriver.has(d)) byDriver.set(d, []);
+                byDriver.get(d)!.push(st);
+            }
+            for (const [driverId, driverStops] of byDriver.entries()) {
+                const { data: routeOrder } = await supabase
+                    .from('driver_route_order')
+                    .select('client_id, position')
+                    .eq('driver_id', driverId)
+                    .order('position', { ascending: true })
+                    .order('client_id', { ascending: true });
+                const clientToSeq = new Map<string, number>();
+                let seq = 1;
+                for (const row of routeOrder || []) {
+                    const cid = String(row.client_id);
+                    if (driverStops.some((s: any) => String(s.client_id) === cid)) {
+                        clientToSeq.set(cid, seq++);
+                    }
+                }
+                const maxFromList = clientToSeq.size > 0 ? Math.max(...clientToSeq.values()) : 0;
+                let tailSeq = maxFromList + 1;
+                for (const st of driverStops) {
+                    const cid = String(st.client_id);
+                    const orderVal = clientToSeq.get(cid) ?? tailSeq++;
+                    const { error: upErr } = await supabase.from('stops').update({ order: orderVal }).eq('id', st.id);
+                    if (!upErr) ordersSet++;
+                }
+            }
+        }
+
         return NextResponse.json(
-            { stopsCreated, message: `Created ${stopsCreated} missing stops for day "${day}"` },
+            {
+                stopsCreated,
+                listSynced,
+                ordersSet,
+                message: `Created ${stopsCreated} stops; synced ${listSynced} driver_route_order rows; set order for ${ordersSet} stops.`,
+            },
             { headers: { "Cache-Control": "no-store" } }
         );
     } catch (e: any) {

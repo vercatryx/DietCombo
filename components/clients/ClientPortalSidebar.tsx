@@ -72,7 +72,7 @@ export default function ClientPortalSidebar({ client }: Props) {
                         </div>
                     </div>
 
-                    {/* Dislikes / Dietary Restrictions */}
+                    {/* Notes */}
                     {(client.dislikes != null && client.dislikes.trim() !== '') && (
                         <div className="section">
                             <h3 style={{
@@ -83,7 +83,7 @@ export default function ClientPortalSidebar({ client }: Props) {
                                 marginBottom: '12px',
                                 fontWeight: 600
                             }}>
-                                Dislikes / Dietary Restrictions
+                                Notes
                             </h3>
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '0.9rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                 <UtensilsCrossed size={16} style={{ marginTop: '2px', flexShrink: 0 }} />

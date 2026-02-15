@@ -64,23 +64,22 @@ const isComplexFallback = (u = {}) =>
     toBool(u?.User?.complex) ||
     toBool(u?.client?.complex);
 
-/* ---------- Dislikes (localized fallback only) ---------- */
-// Prefer top-level, but fall back to common nests.
-// Keep this tiny and local since the rest of the label is rendering fine.
-function getDislikes(u = {}) {
+/* ---------- Notes (from dislikes/notes fields; label shows "Notes:") ---------- */
+function getNotes(u = {}) {
     const v =
         u.dislikes ??
         u?.user?.dislikes ??
         u?.User?.dislikes ??
         u?.client?.dislikes ??
         u?.flags?.dislikes ??
+        u.notes ??
+        u?.user?.notes ??
+        u?.client?.notes ??
         "";
 
     const s = (v == null ? "" : String(v)).trim();
-    // Treat common "empty" indicators as none
     if (/^(none|no|n\/a|na|nil|-|—|not applicable)$/i.test(s)) return "";
-    // If data was typed as "Dislikes: X", strip prefix
-    return s.replace(/^dislikes\s*:\s*/i, "").trim();
+    return s.replace(/^(?:dislikes|notes)\s*:\s*/i, "").trim();
 }
 
 /* ---------- Driver/stop numbering helpers (zero-based safe) ---------- */
@@ -285,14 +284,14 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
             }
 
             // Print non-complex stops in route order (first line = client name only, never address)
-            const dislikeText = getDislikes(u);
+            const notesText = getNotes(u);
 
             const lines = [
                 clientName(u),
                 `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
                 `${u.city ?? ""} ${u.state ?? ""}`.trim(),
                 (u.phone ? `Phone: ${u.phone}` : "").trim(),
-                dislikeText ? `Dislikes: ${dislikeText}` : "",
+                notesText ? `Notes: ${notesText}` : "",
             ].filter(Boolean);
 
             // --- driver badge: just show driver number (count) ---
@@ -372,13 +371,13 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
             drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}`, colorRGB);
 
             // Prepare label content (first line = client name only, never address)
-            const dislikeText = getDislikes(u);
+            const notesText = getNotes(u);
             const lines = [
                 clientName(u),
                 `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
                 `${u.city ?? ""} ${u.state ?? ""}`.trim(),
                 (u.phone ? `Phone: ${u.phone}` : "").trim(),
-                dislikeText ? `Dislikes: ${dislikeText}` : "",
+                notesText ? `Notes: ${notesText}` : "",
             ].filter(Boolean);
 
             // Draw the label content

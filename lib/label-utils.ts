@@ -20,6 +20,10 @@ interface LabelGenerationOptions {
     formatDate: (dateString: string | null | undefined) => string;
     vendorName?: string;
     deliveryDate?: string;
+    /** When provided, shows driver (and optional stop number) below QR (in driver color) instead of order number */
+    getDriverInfo?: (order: Order) => { driverNumber: number | string; driverColor: string; stopNumber?: number } | null;
+    /** When provided, displays notes after items on each label (e.g. for Labels Alt) */
+    getNotes?: (clientId: string) => string;
 }
 
 export async function generateLabelsPDF(options: LabelGenerationOptions): Promise<void> {
@@ -30,7 +34,9 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         formatOrderedItemsForCSV,
         formatDate,
         vendorName,
-        deliveryDate
+        deliveryDate,
+        getDriverInfo,
+        getNotes
     } = options;
 
     if (orders.length === 0) {
@@ -53,8 +59,6 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         headerSize: 12, // Slightly smaller header to fit more
         smallSize: 8,
         padding: 0.15,
-        // Split layout
-        qrZoneWidth: 1.3, // Reserved right side width
     };
 
     const doc = new jsPDF({
@@ -86,100 +90,203 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         doc.setLineWidth(0.01);
         doc.rect(labelX, labelY, PROPS.labelWidth, PROPS.labelHeight);
 
-        // -- ZONES --
+        // -- ZONES -- QR block is permanently reserved (same on every label). Rest of label is for text.
         const contentX = labelX + PROPS.padding;
         const contentY = labelY + PROPS.padding;
-        // Left Zone Width (Total - QR Zone - Padding)
-        const textZoneWidth = PROPS.labelWidth - PROPS.qrZoneWidth - (PROPS.padding * 2);
+        const qrMargin = 0.1;
+        const qrPaddingLeft = 0.12;  // extra space between text and QR
+        const qrPaddingBottom = 0.1; // extra space below QR
+        const qrSize = 0.85;
+        const qrZoneWidth = qrSize + 2 * qrMargin + qrPaddingLeft;
+        const qrZoneX = labelX + PROPS.labelWidth - qrZoneWidth - PROPS.padding;
+        const driverLabelHeight = 0.22;
+        const qrY = labelY + PROPS.padding + driverLabelHeight;
+        const qrX = qrZoneX + qrMargin + qrPaddingLeft; // QR sits after left padding
+        const qrBlockBottom = qrY + qrSize + qrMargin + qrPaddingBottom;
+        // QR block = [qrZoneX, labelY] to [labelX+labelWidth, qrBlockBottom]. Nothing draws here.
 
-        // Right Zone (QR)
-        const qrZoneX = labelX + PROPS.labelWidth - PROPS.qrZoneWidth - PROPS.padding;
+        const gapBetweenTextAndQr = 0.12;
+        const contentRightPhase1 = qrZoneX - gapBetweenTextAndQr; // left column must stop here (above and left of QR)
+        const textZoneWidth = contentRightPhase1 - contentX;
 
-        let currentY = contentY + 0.15; // Start Y
+        const rightEdgeSafety = 0.06; // keep text off the next label
+        const contentRightPhase2 = labelX + PROPS.labelWidth - PROPS.padding - rightEdgeSafety; // below QR: use rest of label
+        const textZoneWidthFull = contentRightPhase2 - contentX;
 
-        // 1. Client Name (Bold)
+        // Hard boundaries: nothing must be drawn past these (stay inside this label only)
+        const labelBottom = labelY + PROPS.labelHeight - PROPS.padding; // absolute bottom of content area
+        const labelBottomSafe = labelBottom - 0.04; // safety margin so we never bleed onto next label
+        const maxYPhase1 = qrBlockBottom; // left-column text must stop above QR block
+        const phase2StartY = qrBlockBottom + 0.05; // below-QR zone starts here
+        const lineHeight = 0.14;
+        const headerLineHeight = 0.2;
+        const addressLineHeight = 0.16;
+
+        // Driver color for all text (when getDriverInfo provided)
+        const driverInfo = getDriverInfo?.(order);
+        const setDriverColor = () => {
+            if (driverInfo?.driverColor) {
+                const hex = driverInfo.driverColor.replace('#', '');
+                const r = parseInt(hex.slice(0, 2), 16) || 0;
+                const g = parseInt(hex.slice(2, 4), 16) || 0;
+                const b = parseInt(hex.slice(4, 6), 16) || 0;
+                doc.setTextColor(r, g, b);
+            } else {
+                doc.setTextColor(0, 0, 0);
+            }
+        };
+        const resetColor = () => doc.setTextColor(0, 0, 0);
+
+        // Helper: clamp so (startY + numLines * lineH) <= maxY
+        const maxLinesThatFit = (startY: number, maxY: number, lineH: number) =>
+            Math.max(0, Math.floor((maxY - startY) / lineH));
+
+        let currentY = contentY + 0.15; // Start Y (must stay <= labelBottom)
+
+        // 1. Client Name (Bold) — only lines that fit in left column above QR
         doc.setFontSize(PROPS.headerSize);
         doc.setFont('helvetica', 'bold');
+        setDriverColor();
         const clientName = getClientName(order.client_id).toUpperCase();
-
-        // Wrap text
         const splitName = doc.splitTextToSize(clientName, textZoneWidth);
-        doc.text(splitName, contentX, currentY);
+        const nameLinesToShow = Math.min(splitName.length, maxLinesThatFit(currentY, maxYPhase1, headerLineHeight));
+        if (nameLinesToShow > 0) {
+            const nameLines = splitName.slice(0, nameLinesToShow);
+            doc.text(nameLines, contentX, currentY);
+            currentY += nameLines.length * headerLineHeight;
+        }
 
-        // Increment Y based on lines used
-        currentY += (splitName.length * 0.2);
-
-        // 2. Address (Normal)
+        // 2. Address (Normal) — only lines that fit in left column above QR
         doc.setFontSize(PROPS.fontSize);
         doc.setFont('helvetica', 'normal');
+        setDriverColor();
         const address = getClientAddress(order.client_id);
-
         if (address && address !== '-') {
             const splitAddress = doc.splitTextToSize(address, textZoneWidth);
-            doc.text(splitAddress, contentX, currentY);
-            currentY += (splitAddress.length * 0.16) + 0.1; // Add extra gap after address
+            const addrLinesToShow = Math.min(splitAddress.length, maxLinesThatFit(currentY + 0.05, maxYPhase1, addressLineHeight));
+            if (addrLinesToShow > 0) {
+                const addrLines = splitAddress.slice(0, addrLinesToShow);
+                doc.text(addrLines, contentX, currentY + 0.05);
+                currentY += 0.05 + addrLines.length * addressLineHeight + 0.08;
+            } else {
+                currentY += 0.05;
+            }
         } else {
             currentY += 0.1;
         }
+        currentY = Math.min(currentY, maxYPhase1); // never go past QR block in phase 1
 
-        // 3. Ordered Items
+        // 3. Ordered Items — phase 1: left of QR (strictly above qrBlockBottom); phase 2: below QR (strictly above labelBottom)
         doc.setFontSize(PROPS.smallSize);
-        // Process items string: replace ; with |
+        setDriverColor();
         const itemsText = formatOrderedItemsForCSV(order).split('; ').join(' | ');
         const itemsDisplay = itemsText || 'No items';
 
-        // Calculate remaining height for text
-        const maxY = labelY + PROPS.labelHeight - PROPS.padding;
-        const remainingHeight = maxY - currentY;
+        const remainingHeight1 = maxYPhase1 - currentY;
+        if (remainingHeight1 > 0.2) {
+            const splitItems1 = doc.splitTextToSize(itemsDisplay, textZoneWidth);
+            const maxLines1 = maxLinesThatFit(currentY, maxYPhase1, lineHeight);
+            const linesPhase1 = splitItems1.slice(0, maxLines1);
+            const restItems = splitItems1.length > maxLines1 ? splitItems1.slice(maxLines1).join(' ') : null;
 
-        if (remainingHeight > 0.2) {
-            const splitItems = doc.splitTextToSize(itemsDisplay, textZoneWidth);
+            if (linesPhase1.length > 0) {
+                doc.text(linesPhase1, contentX, currentY);
+                currentY += linesPhase1.length * lineHeight + 0.06;
+            }
+            currentY = Math.min(currentY, maxYPhase1);
 
-            // Check if it fits, otherwise simple truncation (no fancy ellipsing for multi-line block for now)
-            // jsPDF overflow handling is manual.
-            const lineHeight = 0.14;
-            const maxLines = Math.floor(remainingHeight / lineHeight);
+            // Phase 2: only in the strip [phase2StartY, labelBottomSafe]; never draw past labelBottomSafe
+            const phase2AvailableHeight = labelBottomSafe - phase2StartY;
+            const notesTextPhase2 = getNotes?.(order.client_id)?.trim() ?? '';
+            const hasNotesPhase2 = notesTextPhase2.length > 0;
+            if (restItems && phase2AvailableHeight > lineHeight) {
+                const splitItems2 = doc.splitTextToSize(restItems, textZoneWidthFull);
+                const reservedForNotes = hasNotesPhase2 ? lineHeight * 2.5 : 0;
+                const maxLines2 = maxLinesThatFit(phase2StartY, labelBottomSafe - reservedForNotes, lineHeight);
 
-            if (splitItems.length > maxLines) {
-                const visible = splitItems.slice(0, maxLines);
-                // Add ... to last visible line
-                if (visible.length > 0) {
-                    const last = visible[visible.length - 1];
-                    visible[visible.length - 1] = last.substring(0, last.length - 3) + '...';
+                if (maxLines2 > 0) {
+                    const linesPhase2 = splitItems2.slice(0, maxLines2);
+                    const truncated = splitItems2.length > maxLines2;
+                    if (linesPhase2.length > 0) {
+                        if (truncated) {
+                            const last = linesPhase2[linesPhase2.length - 1];
+                            linesPhase2[linesPhase2.length - 1] = last.substring(0, Math.max(0, last.length - 3)) + '...';
+                        }
+                        doc.text(linesPhase2, contentX, phase2StartY);
+                        let phase2Y = phase2StartY + linesPhase2.length * lineHeight + 0.06;
+
+                        if (hasNotesPhase2 && phase2Y + lineHeight <= labelBottomSafe) {
+                            doc.setFontSize(PROPS.smallSize);
+                            setDriverColor();
+                            const notesDisplay = `Notes: ${notesTextPhase2}`;
+                            const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
+                            const maxNotesLines = maxLinesThatFit(phase2Y, labelBottomSafe, lineHeight);
+                            const visibleNotes = splitNotes.slice(0, maxNotesLines);
+                            if (visibleNotes.length > 0) {
+                                doc.text(visibleNotes, contentX, phase2Y);
+                            }
+                        }
+                    }
+                } else if (hasNotesPhase2 && phase2AvailableHeight > lineHeight) {
+                    doc.setFontSize(PROPS.smallSize);
+                    setDriverColor();
+                    const notesDisplay = `Notes: ${notesTextPhase2}`;
+                    const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
+                    const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, lineHeight);
+                    const visibleNotes = splitNotes.slice(0, maxNotesLines);
+                    if (visibleNotes.length > 0) {
+                        doc.text(visibleNotes, contentX, phase2StartY);
+                    }
                 }
-                doc.text(visible, contentX, currentY);
-            } else {
-                doc.text(splitItems, contentX, currentY);
+            } else if (hasNotesPhase2 && phase2AvailableHeight > lineHeight) {
+                doc.setFontSize(PROPS.smallSize);
+                setDriverColor();
+                const notesDisplay = `Notes: ${notesTextPhase2}`;
+                const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
+                const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, lineHeight);
+                const visibleNotes = splitNotes.slice(0, maxNotesLines);
+                if (visibleNotes.length > 0) {
+                    doc.text(visibleNotes, contentX, phase2StartY);
+                }
+            }
+        } else {
+            const notesText = getNotes?.(order.client_id)?.trim();
+            if (notesText && phase2StartY + lineHeight <= labelBottomSafe) {
+                doc.setFontSize(PROPS.smallSize);
+                setDriverColor();
+                const notesDisplay = `Notes: ${notesText}`;
+                const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
+                const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, lineHeight);
+                const visibleNotes = splitNotes.slice(0, maxNotesLines);
+                if (visibleNotes.length > 0) {
+                    doc.text(visibleNotes, contentX, phase2StartY);
+                }
             }
         }
+        resetColor();
 
-
-        // 4. QR Code & ID (Right Side - Vertical Center)
+        // 4. Driver number above QR, then QR (top-right with margin)
         try {
-            // Use client ID to link to produce page
             const produceUrl = `${origin}/produce/${order.client_id}`;
+            const driverOrOrderText = driverInfo
+                ? (driverInfo.stopNumber != null
+                    ? `${driverInfo.driverNumber} - ${driverInfo.stopNumber}`
+                    : String(driverInfo.driverNumber))
+                : `#${order.orderNumber || order.id.slice(0, 6)}`;
 
-            const qrSize = 1.1;
-            // Center in the reserved zone
-            const qrX = qrZoneX + ((PROPS.qrZoneWidth - qrSize) / 2);
-
-            // Vertically center in label
-            const qrY = labelY + ((PROPS.labelHeight - qrSize) / 2) - 0.1;
+            // Driver number on top of QR (centered in QR zone)
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            setDriverColor();
+            doc.text(driverOrOrderText, qrZoneX + qrZoneWidth / 2, labelY + PROPS.padding + 0.12, { align: 'center' });
+            resetColor();
 
             const qrDataUrl = await QRCode.toDataURL(produceUrl, {
                 errorCorrectionLevel: 'M',
                 margin: 0,
-                width: 300
+                width: 280
             });
-
             doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
-
-            // Order Number below QR
-            const orderNum = order.orderNumber || order.id.slice(0, 6);
-            doc.setFontSize(10);
-            doc.setFont('helvetica', 'bold');
-            doc.text(`#${orderNum}`, qrX + (qrSize / 2), qrY + qrSize + 0.15, { align: 'center' });
-
         } catch (e) {
             console.error("QR generation failed", e);
             doc.text("Error", qrZoneX, labelY + 1);

@@ -2049,7 +2049,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
                             <span style={{ minWidth: '200px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('dislikes')}>
-                                Dislikes {getSortIcon('dislikes')}
+                                Notes {getSortIcon('dislikes')}
                             </span>
                         </>
                     )}

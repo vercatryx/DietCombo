@@ -198,7 +198,8 @@ export async function getOrdersPaginatedBilling(
             return { orders: enriched, total };
         }
         if (rpcResult.error) {
-            console.warn('get_orders_billing_search RPC failed (run sql/get_orders_billing_search_rpc.sql?), falling back:', rpcResult.error.message);
+            console.warn('get_orders_billing_search RPC failed (run sql/get_orders_billing_search_rpc.sql?), falling back to application-level search:', rpcResult.error.message);
+            return getOrdersWithSearchFallback(db, page, pageSize, filters);
         }
     }
 
@@ -233,6 +234,79 @@ export async function getOrdersPaginatedBilling(
     const orders = dataResult.data || [];
     const enriched = await enrichOrdersPage(db, orders);
 
+    return { orders: enriched, total };
+}
+
+/** Fallback when get_orders_billing_search RPC is unavailable. Applies search, status, creation_id via separate queries. */
+async function getOrdersWithSearchFallback(
+    db: SupabaseClient,
+    page: number,
+    pageSize: number,
+    filters?: GetOrdersBillingFilters,
+): Promise<{ orders: any[]; total: number }> {
+    const search = filters?.search?.trim() || '';
+    const statusFilter = filters?.statusFilter && filters.statusFilter !== 'all' ? filters.statusFilter : null;
+    // creation_id skipped in fallback - column may not exist on all deployments
+
+    let orderIds: string[] | null = null;
+
+    if (search) {
+        const term = `%${search}%`;
+        const [clientsRes, vendorsRes] = await Promise.all([
+            db.from('clients').select('id').ilike('full_name', term),
+            db.from('vendors').select('id').ilike('name', term),
+        ]);
+
+        const clientIds = new Set((clientsRes.data || []).map((r: any) => r.id));
+        const vendorIds = new Set((vendorsRes.data || []).map((r: any) => r.id));
+
+        const orderIdsByNumber = new Set<string>();
+        const numericSearch = /^\d+$/.test(search);
+        if (numericSearch) {
+            const num = parseInt(search, 10);
+            const { data: byNum } = await db.from('orders').select('id').eq('order_number', num);
+            (byNum || []).forEach((r: any) => orderIdsByNumber.add(r.id));
+        }
+
+        let orderIdsByVendor = new Set<string>();
+        if (vendorIds.size > 0) {
+            const [ovsRes, obsRes] = await Promise.all([
+                db.from('order_vendor_selections').select('order_id').in('vendor_id', Array.from(vendorIds)),
+                db.from('order_box_selections').select('order_id').in('vendor_id', Array.from(vendorIds)),
+            ]);
+            (ovsRes.data || []).forEach((r: any) => orderIdsByVendor.add(r.order_id));
+            (obsRes.data || []).forEach((r: any) => orderIdsByVendor.add(r.order_id));
+        }
+
+        const matchedIds = new Set<string>([...orderIdsByNumber, ...orderIdsByVendor]);
+        if (clientIds.size > 0) {
+            const { data: byClient } = await db.from('orders').select('id').in('client_id', Array.from(clientIds));
+            (byClient || []).forEach((r: any) => matchedIds.add(r.id));
+        }
+        orderIds = Array.from(matchedIds);
+    }
+
+    let baseQuery = db.from('orders').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+
+    if (orderIds !== null) {
+        if (orderIds.length === 0) return { orders: [], total: 0 };
+        baseQuery = baseQuery.in('id', orderIds);
+    }
+    if (statusFilter) baseQuery = baseQuery.eq('status', statusFilter);
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data: ordersData, error, count } = await baseQuery.range(from, to);
+
+    if (error) {
+        console.error('Search fallback error:', error);
+        return { orders: [], total: 0 };
+    }
+
+    const total = count ?? 0;
+    const orders = ordersData || [];
+    const enriched = await enrichOrdersPage(db, orders);
     return { orders: enriched, total };
 }
 

@@ -2,35 +2,59 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { toCalendarDateKeyInAppTz } from "@/lib/timezone";
+
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Normalize DB date to YYYY-MM-DD in app timezone (no UTC shift). */
+function toDateKey(raw: string | null | undefined): string | null {
+    if (raw == null || typeof raw !== "string") return null;
+    const s = String(raw).trim();
+    if (DATE_ONLY_REGEX.test(s)) return s;
+    return toCalendarDateKeyInAppTz(s);
+}
 
 /**
  * GET /api/route/orders-dates
- * Returns dates that have orders (from orders table) with counts.
- * Used by Orders View calendar to show which days have orders (not stops).
- * Excludes cancelled and produce.
+ * Returns dates that have orders (and upcoming_orders) with counts.
+ * Used by Drivers calendar so dates/amounts match "orders for that day" (America/New_York).
+ * Excludes cancelled and produce from orders.
  */
 export async function GET() {
     try {
-        const { data, error } = await supabase
+        const dateCounts: Record<string, number> = {};
+
+        // 1) orders: scheduled_delivery_date, exclude cancelled and produce
+        const { data: ordersData, error: ordersError } = await supabase
             .from("orders")
             .select("scheduled_delivery_date, service_type")
             .not("status", "eq", "cancelled")
             .not("scheduled_delivery_date", "is", null);
 
-        if (error) {
-            console.error("[/api/route/orders-dates] Error:", error);
-            return NextResponse.json({ error: error.message }, { status: 500 });
+        if (ordersError) {
+            console.error("[/api/route/orders-dates] orders error:", ordersError);
+            return NextResponse.json({ error: ordersError.message }, { status: 500 });
         }
 
-        const dateCounts: Record<string, number> = {};
-        (data || []).forEach((row: any) => {
+        (ordersData || []).forEach((row: any) => {
             if (row.service_type != null && String(row.service_type).toLowerCase().trim() === "produce") return;
-            const st = row.scheduled_delivery_date;
-            if (!st) return;
-            const dateStr = typeof st === "string" ? st.split("T")[0].split(" ")[0] : null;
-            if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return;
-            dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
+            const key = toDateKey(row.scheduled_delivery_date);
+            if (key) dateCounts[key] = (dateCounts[key] || 0) + 1;
         });
+
+        // 2) upcoming_orders: scheduled_delivery_date when set (scheduled status)
+        const { data: upcomingData, error: upcomingError } = await supabase
+            .from("upcoming_orders")
+            .select("scheduled_delivery_date")
+            .eq("status", "scheduled")
+            .not("scheduled_delivery_date", "is", null);
+
+        if (!upcomingError && upcomingData) {
+            upcomingData.forEach((row: any) => {
+                const key = toDateKey(row.scheduled_delivery_date);
+                if (key) dateCounts[key] = (dateCounts[key] || 0) + 1;
+            });
+        }
 
         return NextResponse.json(
             { dates: dateCounts },

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { fetchDrivers, fetchStops } from "../../lib/api";
+import { useState, useEffect } from "react";
+import { fetchDrivers, fetchStops, fetchDriversPageData } from "../../lib/api";
 import { Truck, RefreshCw } from "lucide-react";
 import SearchStops from "../../components/drivers/SearchStops";
 import DriversGrid from "../../components/drivers/DriversGrid";
@@ -9,42 +9,79 @@ import { DateFilter } from "../../components/routes/DateFilter";
 import { getTodayInAppTz } from "@/lib/timezone";
 
 export default function DriversHome() {
-    const [drivers, setDrivers] = useState([]);
-    const [allStops, setAllStops] = useState([]);
+    const [drivers, setDrivers] = useState<any[]>([]);
+    const [allStops, setAllStops] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState(false);
     const [selectedDate, setSelectedDate] = useState<string>(() => {
         return getTodayInAppTz();
     });
-
+    // Use route API (driver_route_order) when date is set: one request, ordered routes.
+    // Otherwise fall back to mobile routes + stops. Cleanup runs in background then refetch.
     const loadData = async (showRefreshSpinner = false) => {
         if (showRefreshSpinner) setRefreshing(true);
         else setLoading(true);
         setError(false);
+        const dateParam = selectedDate || null;
+        const dateForCleanup = dateParam;
 
         try {
-            // Call cleanup first to ensure data is up to date
-            let cleanupUrl = "/api/route/cleanup?day=all";
-            if (selectedDate) {
-                cleanupUrl += `&delivery_date=${selectedDate}`;
+            if (dateParam) {
+                const dateNorm = dateParam.split('T')[0].split(' ')[0];
+                const pageData = await fetchDriversPageData(dateNorm);
+                if (pageData && pageData.drivers.length > 0) {
+                    setDrivers(pageData.drivers);
+                    setAllStops(pageData.allStops);
+                } else {
+                    const [d, s] = await Promise.all([
+                        fetchDrivers(dateNorm as any),
+                        fetchStops(dateNorm as any),
+                    ]);
+                    setDrivers(Array.isArray(d) ? d : []);
+                    setAllStops(Array.isArray(s) ? s : []);
+                }
+            } else {
+                const driversData = await fetchDrivers(null);
+                setDrivers(driversData);
+                const stopsData = await fetchStops(null);
+                setAllStops(stopsData);
             }
-            await fetch(cleanupUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-            }).catch(() => {}); // Silently fail if cleanup errors
+            setLoading(false);
+            setRefreshing(false);
 
-            // Then fetch the cleaned data with date filtering
-            const [driversData, stopsData] = await Promise.all([
-                fetchDrivers((selectedDate || null) as any),
-                fetchStops((selectedDate || null) as any)
-            ]);
-            setDrivers(driversData);
-            setAllStops(stopsData);
+            // Cleanup in background (creates missing stops), then refetch same source
+            let cleanupUrl = "/api/route/cleanup?day=all";
+            if (dateForCleanup) cleanupUrl += `&delivery_date=${encodeURIComponent(dateForCleanup)}`;
+            fetch(cleanupUrl, { method: "POST", headers: { "Content-Type": "application/json" } })
+                .catch(() => {})
+                .then(async () => {
+                    if (dateParam) {
+                        const dateNorm = dateParam.split('T')[0].split(' ')[0];
+                        const pageData = await fetchDriversPageData(dateNorm);
+                        if (pageData && pageData.drivers.length > 0) {
+                            setDrivers(pageData.drivers);
+                            setAllStops(pageData.allStops);
+                        } else {
+                            const [d, s] = await Promise.all([
+                                fetchDrivers(dateNorm as any),
+                                fetchStops(dateNorm as any),
+                            ]);
+                            setDrivers(Array.isArray(d) ? d : []);
+                            setAllStops(Array.isArray(s) ? s : []);
+                        }
+                    } else {
+                        const [d, s] = await Promise.all([
+                            fetchDrivers(null),
+                            fetchStops(null),
+                        ]);
+                        setDrivers(d);
+                        setAllStops(s);
+                    }
+                });
         } catch (err) {
             console.error("Failed to load data:", err);
             setError(true);
-        } finally {
             setLoading(false);
             setRefreshing(false);
         }
@@ -143,6 +180,7 @@ export default function DriversHome() {
                         selectedDate={selectedDate}
                         onDateChange={setSelectedDate}
                         onClear={() => setSelectedDate('')}
+                        datesSource="orders"
                     />
 
                     <div className="search-wrap">

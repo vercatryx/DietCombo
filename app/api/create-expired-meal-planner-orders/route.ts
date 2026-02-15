@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { getCurrentTime } from '@/lib/time';
 import { getTodayInAppTz } from '@/lib/timezone';
 import {
-    getClients,
+    getClientsForAdmin,
     getDefaultOrderTemplate,
     getMenuItems,
     getDefaultVendorId,
@@ -103,8 +103,9 @@ export async function POST(request: NextRequest) {
         console.log(`[Create Expired Meal Planner Orders] Found ${expiredItems.length} expired items across ${expiredDates.length} date(s)`);
 
         // 2. Pre-fetch all reference data in parallel
+        // Use getClientsForAdmin to bypass Supabase's 1000-row limit - avoids "Unknown Client" on vendor sheets
         const [allClients, defaultTemplate, menuItems, defaultVendorId] = await Promise.all([
-            getClients(),
+            getClientsForAdmin(supabaseAdmin),
             getDefaultOrderTemplate('Food'),
             getMenuItems(),
             getDefaultVendorId()

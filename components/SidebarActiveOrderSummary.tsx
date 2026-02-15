@@ -78,7 +78,7 @@ export function SidebarActiveOrderSummary() {
         () => client ? getOrderSummary(client, vendors, menuItems, boxTypes) : null,
         [client, vendors, menuItems, boxTypes]
     );
-    const hasDislikes = client != null && client.dislikes != null && String(client.dislikes).trim() !== '';
+    const hasNotes = client != null && (client.dislikes != null && String(client.dislikes).trim() !== '');
 
     if (!clientId || !client) {
         return null;
@@ -188,14 +188,7 @@ export function SidebarActiveOrderSummary() {
                         <User size={12} className={styles.orderSummaryInfoIcon} />
                         <span>{navigator?.name ?? '—'}</span>
                     </div>
-                    {client.notes?.trim() && (
-                        <div className={styles.orderSummaryInfoRow}>
-                            <StickyNote size={12} className={styles.orderSummaryInfoIcon} />
-                            <span className={styles.orderSummaryNotes} title={client.notes}>
-                                {client.notes.length > 60 ? client.notes.slice(0, 57) + '…' : client.notes}
-                            </span>
-                        </div>
-                    )}
+                    {/* Notes shown in block below when present */}
                     {hasNonDefaultFlags(client) && (
                         <div className={styles.orderSummaryFlags}>
                             <span className={styles.orderSummaryFlagLabel}>Flags:</span>
@@ -249,9 +242,9 @@ export function SidebarActiveOrderSummary() {
                     </div>
                 </>
             ) : null}
-            {hasDislikes && (
+            {hasNotes && (
                 <div style={{ marginTop: (orderSummary || !!client) ? '12px' : 0, padding: '10px 12px', backgroundColor: 'var(--bg-surface-hover)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--color-primary)' }}>
-                    <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', marginBottom: '6px', fontWeight: 600 }}>Dislikes / Dietary</div>
+                    <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', marginBottom: '6px', fontWeight: 600 }}>Notes</div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{client.dislikes}</div>
                 </div>
             )}
