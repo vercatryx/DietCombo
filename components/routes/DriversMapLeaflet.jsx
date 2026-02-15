@@ -336,6 +336,7 @@ const formatDate = (dateStr) => {
 /** Preview popup showing stop details */
 async function openPreviewPopup({ map, stop, color, drivers, onDriverChange, isOrdersViewTab = false }) {
     if (!map || !stop) return;
+    console.log("[openPreviewPopup] stop from:", stop.__source ?? "marker-click", "stop:", { id: stop.id, name: stop.name, __driverName: stop.__driverName, __driverId: stop.__driverId, orderNumber: stop.orderNumber, order_number: stop.order_number });
     const ll = getLL(stop);
     if (!ll) return;
 
@@ -678,7 +679,7 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     container.style.padding = "6px";
     container.style.boxShadow = "0 6px 24px rgba(0,0,0,0.15)";
     
-    const orderIdDisplay = stop.orderId || "N/A";
+    const orderDisplay = stop.orderNumber ? `#${stop.orderNumber}` : "N/A";
     
     container.innerHTML = `
     <div style="font-weight:700">${stop.name || "Unnamed"}</div>
@@ -686,7 +687,7 @@ function openAssignPopup({ map, stop, color, drivers, onAssign }) {
     <div>${stop.city || ""} ${stop.state || ""} ${stop.zip || ""}</div>
     ${stop.phone ? `<div style="margin-top:4px">${stop.phone}</div>` : ""}
     <div style="margin-top:8px;padding:6px;background:#f3f4f6;border-radius:6px;font-size:11px;line-height:1.4">
-      <div><strong>Order ID:</strong> ${orderIdDisplay}</div>
+      <div><strong>Order #:</strong> ${orderDisplay}</div>
     </div>
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
       <label style="font-size:12px">Assign to:</label>
@@ -799,6 +800,7 @@ export default function DriversMapLeaflet({
                                               logoSrc, // optional loading logo (path or URL)
                                               readonly = false, // disable all editing interactions
                                               isOrdersViewTab = false, // whether we're in the Orders View tab
+                                              dataSourceLabel, // optional: for debug logging where map data came from
                                           }) {
     const mapRef = useRef(null);
     const [mapReady, setMapReady] = useState(false);
@@ -1112,51 +1114,41 @@ export default function DriversMapLeaflet({
                     .filter(Boolean)
                     .join(" ")
                     .toLowerCase();
-                if (hay.includes(needle))
-                    rows.push({
-                        ...s,
-                        __driverId: d.driverId,
-                        __driverName: d.name,
-                        __unrouted: false,
-                        __color: d.color,
-                    });
+                if (hay.includes(needle)) {
+                    const r = { ...s, __driverId: d.driverId, __driverName: d.name, __unrouted: false, __color: d.color, __source: `driver:${d.name}` };
+                    rows.push(r);
+                }
             }
         for (const s of unroutedFiltered) {
             const hay = [s.name, s.address, s.city, s.state, s.zip, s.phone]
                 .filter(Boolean)
                 .join(" ")
                 .toLowerCase();
-            if (hay.includes(needle))
-                rows.push({
-                    ...s,
-                    __driverId: null,
-                    __driverName: "Unrouted",
-                    __unrouted: true,
-                    __color: "#666",
-                });
+            if (hay.includes(needle)) {
+                const r = { ...s, __driverId: null, __driverName: "Unrouted", __unrouted: true, __color: "#666", __source: "unrouted" };
+                rows.push(r);
+            }
         }
         setResults(rows.slice(0, 50));
     }, [q, sortedDrivers, unroutedFiltered]);
 
     const focusResult = useCallback(
-        (row, { clear = false } = {}) => {
+        async (row, { clear = false } = {}) => {
             if (!row) return;
+            console.log("[focusResult] map data from:", dataSourceLabel ?? "?", "search hit:", row.__source ?? (row.__unrouted ? "unrouted" : `driver:${row.__driverName}`), "row:", { id: row.id, name: row.name, __driverName: row.__driverName, __driverId: row.__driverId, orderNumber: row.orderNumber ?? row.order_number });
             const map = mapRef.current;
             const ll = getLL(row);
             if (!map || !ll) return;
             map.setView(ll, Math.max(map.getZoom(), 14), { animate: true });
 
-            // Disable assign driver feature for stops - driver assignment is now done directly to clients
-            // const { stop, color } = findStopByIdLocal(
-            //     row.id,
-            //     localDriversRef.current,
-            //     localUnroutedRef.current
-            // );
-            // openAssignForStop(stop || row, color || row.__color || "#1f77b4");
+            // Open stop preview popup (same as clicking the marker)
+            const stop = { ...row, __driverId: row.__driverId, __driverName: row.__driverName };
+            const color = row.__color || "#1f77b4";
+            await openPreviewPopup({ map, stop, color, drivers: driversForAssignment, onDriverChange, isOrdersViewTab });
 
             if (clear) clearSearch();
         },
-        [openAssignForStop, clearSearch]
+        [clearSearch, driversForAssignment, onDriverChange, isOrdersViewTab, dataSourceLabel]
     );
 
     /* ------- selection helpers ------- */

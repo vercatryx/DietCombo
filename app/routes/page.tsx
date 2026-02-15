@@ -209,9 +209,11 @@ export default function RoutesPage() {
     const loadRoutes = React.useCallback(async () => {
         setBusy(true);
         try {
-            let url = `/api/route/routes?day=${selectedDay}`;
-            if (selectedDeliveryDate) {
-                url += `&delivery_date=${selectedDeliveryDate}`;
+            // Same API as driver page: /api/route/routes with delivery_date for driver_route_order ordering
+            const dateNorm = selectedDeliveryDate ? selectedDeliveryDate.split("T")[0].split(" ")[0] : null;
+            let url = `/api/route/routes?day=${selectedDay}&light=1`;
+            if (dateNorm) {
+                url += `&delivery_date=${encodeURIComponent(dateNorm)}`;
             }
             const res = await fetch(url, { cache: "no-store" });
             const data = await res.json();
@@ -975,6 +977,8 @@ export default function RoutesPage() {
                                 const useOrdersViewData = activeTab === "map" && ordersForDate?.client_ids != null;
                                 // Use mapDrivers (from routes API / driver_route_order) whenever we have routes so route lines show correct order and update after Reorganize
                                 const mapDriversForMap = routes.length > 0 ? mapDrivers : (useOrdersViewData ? mapDriversOrdersView : mapDrivers);
+                                const dataSource = routes.length > 0 ? "mapDrivers (routes API)" : (useOrdersViewData ? "mapDriversOrdersView (orders-for-date)" : "mapDrivers");
+                                console.log("[RoutesPage] map data source:", dataSource, "routes.length:", routes.length, "useOrdersViewData:", useOrdersViewData, "stops total:", mapDriversForMap?.reduce((n: number, r: any) => n + (r.stops?.length ?? 0), 0));
                                 return <Component
                                     drivers={mapDriversForMap}
                                     unrouted={useOrdersViewData ? enrichedUnroutedOrdersView : enrichedUnrouted}
@@ -987,6 +991,7 @@ export default function RoutesPage() {
                                     initialCenter={[40.7128, -74.006]}
                                     initialZoom={5}
                                     isOrdersViewTab={activeTab === "map"}
+                                    dataSourceLabel={dataSource}
                                 />;
                             })()}
                         </div>
@@ -1004,15 +1009,19 @@ export default function RoutesPage() {
                             position: 'relative',
                             flexWrap: 'wrap'
                         }}>
-                            {/*<Button*/}
-                            {/*    onClick={regenerateRoutes}*/}
-                            {/*    variant="contained"*/}
-                            {/*    color="error"*/}
-                            {/*    disabled={busy}*/}
-                            {/*    sx={{ fontWeight: 700, borderRadius: 2 }}*/}
-                            {/*>*/}
-                            {/*    Generate New Route*/}
-                            {/*</Button>*/}
+                            <DateFilter
+                                selectedDate={selectedDeliveryDate}
+                                onDateChange={(date) => {
+                                    setSelectedDeliveryDate(date);
+                                    setOrdersViewDate(date);
+                                }}
+                                datesSource="orders"
+                                onClear={() => {
+                                    const today = getTodayDate();
+                                    setSelectedDeliveryDate(today);
+                                    setOrdersViewDate(today);
+                                }}
+                            />
                             <Button
                                 onClick={handleAddDriver}
                                 variant="outlined"

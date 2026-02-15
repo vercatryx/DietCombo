@@ -25,6 +25,16 @@ export async function GET(req: Request) {
         const day = (searchParams.get("day") || "all").toLowerCase();
         const deliveryDate = searchParams.get("delivery_date") || null;
         const light = searchParams.get("light") === "1" || searchParams.get("light") === "true";
+        const debug = searchParams.get("debug") === "1" || searchParams.get("debug") === "true";
+        let debugOrderNumbersByClientCount = 0;
+        const serverLog: string[] = [];
+        const log = (msg: string) => {
+            serverLog.push(msg);
+            console.log(msg);
+        };
+
+        const normalizedDeliveryDate = deliveryDate ? deliveryDate.split('T')[0].split(' ')[0] : null;
+        log(`[route/routes] GET delivery_date=${deliveryDate ?? 'none'} normalized=${normalizedDeliveryDate ?? 'null'} day=${day}`);
 
         // 1) Drivers filtered by day (if not "all")
         let driversQuery = supabase
@@ -66,12 +76,10 @@ export async function GET(req: Request) {
         }
 
         // 2) All stops - filter by delivery_date if provided
-        // Normalize delivery_date to YYYY-MM-DD format for proper comparison
-        const normalizedDeliveryDate = deliveryDate ? deliveryDate.split('T')[0].split(' ')[0] : null;
-        
+        // Normalize delivery_date to YYYY-MM-DD format for proper comparison (already set above)
         let stopsQuery = supabase
             .from('stops')
-            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
+            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
             .order('id', { ascending: true });
         
         // Filter by delivery_date if provided (date-only comparison so DATE and TIMESTAMP both match)
@@ -101,7 +109,7 @@ export async function GET(req: Request) {
         if (normalizedDeliveryDate && day !== "all") {
             const { data: nullDateStops } = await supabase
                 .from('stops')
-                .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, day, assigned_driver_id, order_id')
+                .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
                 .is('delivery_date', null)
                 .eq('day', day);
             
@@ -157,12 +165,56 @@ export async function GET(req: Request) {
         console.log(`[route/routes] After sorting: ${drivers.length} drivers (${driversRaw?.length || 0} from drivers table, ${routesRaw?.length || 0} from routes table)`);
 
         // 5) Fetch order information for all stops
-        // Priority: Use stop.order_id to directly look up orders from upcoming_orders first, then orders table
-        // Fallback: Create maps keyed by "client_id|delivery_date" and "client_id" for stops without order_id
+        // Same source as /orders page: orders table. When we have a delivery_date, also do a direct lookup
+        // so order_number always comes from orders for that date.
         const orderMapById = new Map<string, any>(); // key: order_id (direct lookup)
         const orderMapByClientAndDate = new Map<string, any>(); // key: "client_id|delivery_date"
         const orderMapByClient = new Map<string, any>(); // key: "client_id" (fallback to most recent)
-        
+        const orderNumberByClientForDate = new Map<string, number>(); // key: client_id -> order_number (orders table, for normalizedDeliveryDate only)
+        const ORDERS_BATCH = 80; // avoid URL/request size limits when querying many ids
+
+        if (normalizedDeliveryDate && clientIds.length > 0) {
+            const normalizeDateForOrders = (dateStr: string | null | undefined): string | null => {
+                if (!dateStr) return null;
+                return String(dateStr).split('T')[0].split(' ')[0];
+            };
+            let ordersForDateError: Error | null = null;
+            for (let i = 0; i < clientIds.length; i += ORDERS_BATCH) {
+                const batch = clientIds.slice(i, i + ORDERS_BATCH);
+                const res = await supabase
+                    .from('orders')
+                    .select('id, client_id, scheduled_delivery_date, order_number, proof_of_delivery_url')
+                    .eq('scheduled_delivery_date', normalizedDeliveryDate)
+                    .in('client_id', batch);
+                if (res.error) {
+                    ordersForDateError = res.error;
+                    serverLog.push(`[route/routes] Direct orders-by-date batch failed: ${res.error.message}`);
+                    break;
+                }
+                for (const row of res.data || []) {
+                    const cid = String(row.client_id);
+                    const num = row.order_number != null && row.order_number !== '' ? Number(row.order_number) : null;
+                    if (cid && num != null && Number.isFinite(num)) {
+                        orderNumberByClientForDate.set(cid, num);
+                    }
+                    const dateStr = normalizeDateForOrders(row.scheduled_delivery_date);
+                    if (cid && dateStr) {
+                        const key = `${cid}|${dateStr}`;
+                        if (!orderMapByClientAndDate.has(key)) orderMapByClientAndDate.set(key, row);
+                    }
+                }
+            }
+            if (ordersForDateError) {
+                serverLog.push(`[route/routes] Direct orders-by-date query failed: ${ordersForDateError.message}`);
+            }
+            if (orderNumberByClientForDate.size > 0) {
+                debugOrderNumbersByClientCount = orderNumberByClientForDate.size;
+                log(`[route/routes] Direct orders-by-date (${normalizedDeliveryDate}): ${orderNumberByClientForDate.size} client_ids with order_number, orderMapByClientAndDate has ${orderMapByClientAndDate.size} entries (orders table, batched)`);
+            } else {
+                log(`[route/routes] Direct orders-by-date (${normalizedDeliveryDate}): 0 rows (error=${ordersForDateError?.message ?? 'none'})`);
+            }
+        }
+
         // Collect all unique order_ids from stops
         const orderIds = new Set<string>();
         for (const s of allStopsCombined) {
@@ -171,40 +223,53 @@ export async function GET(req: Request) {
             }
         }
         
-        // Fetch orders by order_id - check upcoming_orders first, then orders
+        // Fetch orders by order_id — batched to avoid URL/request size limits (550+ ids).
         if (orderIds.size > 0) {
             const orderIdsArray = Array.from(orderIds);
-            
-            // First check upcoming_orders table
-            const { data: upcomingOrdersById } = await supabase
-                .from('upcoming_orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
-                .in('id', orderIdsArray);
-            
-            if (upcomingOrdersById) {
-                for (const order of upcomingOrdersById) {
+            let ordersByIdError: Error | null = null;
+            for (let i = 0; i < orderIdsArray.length; i += ORDERS_BATCH) {
+                const batch = orderIdsArray.slice(i, i + ORDERS_BATCH);
+                const res = await supabase
+                    .from('orders')
+                    .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number, proof_of_delivery_url')
+                    .in('id', batch);
+                if (res.error) {
+                    ordersByIdError = res.error;
+                    serverLog.push(`[route/routes] orders by id batch failed: ${res.error.message}`);
+                    break;
+                }
+                for (const order of res.data || []) {
                     orderMapById.set(String(order.id), order);
                 }
             }
-            
-            // Then check orders table for any order_ids not found in upcoming_orders
-            const foundOrderIds = new Set(upcomingOrdersById?.map(o => String(o.id)) || []);
-            const missingOrderIds = orderIdsArray.filter(id => !foundOrderIds.has(id));
-            
-            if (missingOrderIds.length > 0) {
-                const { data: ordersById } = await supabase
-                    .from('orders')
+            const ordersFromOrdersTable = orderMapById.size;
+            const withOrderNumber = Array.from(orderMapById.values()).filter((o: any) => o?.order_number != null && o?.order_number !== '').length;
+            if (ordersByIdError) {
+                serverLog.push(`[route/routes] orders by id (orders table) error: ${ordersByIdError.message}`);
+            }
+            let fromUpcoming = 0;
+            for (let i = 0; i < orderIdsArray.length; i += ORDERS_BATCH) {
+                const batch = orderIdsArray.slice(i, i + ORDERS_BATCH);
+                const res = await supabase
+                    .from('upcoming_orders')
                     .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
-                    .in('id', missingOrderIds);
-                
-                if (ordersById) {
-                    for (const order of ordersById) {
-                        orderMapById.set(String(order.id), order);
+                    .in('id', batch);
+                for (const order of res.data || []) {
+                    const oid = String(order.id);
+                    if (!orderMapById.has(oid)) {
+                        orderMapById.set(oid, order);
+                        fromUpcoming++;
                     }
                 }
             }
-            
-            console.log(`[route/routes] Found ${orderMapById.size} orders by order_id (${upcomingOrdersById?.length || 0} from upcoming_orders, ${missingOrderIds.length > 0 ? orderMapById.size - (upcomingOrdersById?.length || 0) : 0} from orders)`);
+            log(`[route/routes] order_id lookup: ${orderIdsArray.length} unique order_ids from stops; ${ordersFromOrdersTable} rows from orders table (${withOrderNumber} with order_number), ${fromUpcoming} extra from upcoming_orders; orderMapById.size=${orderMapById.size}`);
+            if (orderIdsArray.length > 0) {
+                const sample = orderIdsArray.slice(0, 5);
+                for (const oid of sample) {
+                    const o = orderMapById.get(oid);
+                    log(`[route/routes]   sample order_id=${oid.slice(0, 8)}... → order_number=${o?.order_number ?? 'null'} (from ${o ? 'orders/upcoming' : 'NOT FOUND'})`);
+                }
+            }
         }
         
         // Also fetch orders by client_id for fallback matching (for stops without order_id)
@@ -213,7 +278,7 @@ export async function GET(req: Request) {
             // Also check upcoming_orders table
             const { data: orders } = await supabase
                 .from('orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
+                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number, proof_of_delivery_url')
                 .in('client_id', clientIds)
                 .not('status', 'eq', 'cancelled')
                 .order('created_at', { ascending: false });
@@ -228,37 +293,34 @@ export async function GET(req: Request) {
             
             console.log(`[route/routes] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients (for fallback matching)`);
             
-            // Combine both order sources, prioritizing regular orders
-            const allOrders = [...(orders || []), ...(upcomingOrders || [])];
-            
-            if (allOrders.length > 0) {
-                // Helper to normalize date strings (handle both DATE and TIMESTAMP formats)
-                const normalizeDate = (dateStr: string | null | undefined): string | null => {
-                    if (!dateStr) return null;
-                    // Handle both "YYYY-MM-DD" and "YYYY-MM-DDTHH:MM:SS" and "YYYY-MM-DD HH:MM:SS" formats
-                    return dateStr.split('T')[0].split(' ')[0];
-                };
-                
-                // Build maps: one for exact client_id + delivery_date matches, one for client_id fallback
-                for (const order of allOrders) {
-                    const cid = String(order.client_id);
-                    
-                    // Store most recent order per client (fallback)
-                    if (!orderMapByClient.has(cid)) {
-                        orderMapByClient.set(cid, order);
-                    }
-                    
-                    // Store order by client_id + delivery_date for exact matching
-                    const deliveryDateStr = normalizeDate(order.scheduled_delivery_date);
-                    if (deliveryDateStr) {
-                        const key = `${cid}|${deliveryDateStr}`;
-                        // Prefer orders table over upcoming_orders if there's a conflict
-                        if (!orderMapByClientAndDate.has(key)) {
-                            orderMapByClientAndDate.set(key, order);
-                        }
-                    }
+            // Use same source as /orders page: prefer orders table, then fill gaps from upcoming_orders
+            const normalizeDate = (dateStr: string | null | undefined): string | null => {
+                if (!dateStr) return null;
+                return String(dateStr).split('T')[0].split(' ')[0];
+            };
+            // 1) Fill from orders table first (same as getOrdersPaginatedBilling on /orders)
+            for (const order of orders || []) {
+                const cid = String(order.client_id);
+                if (!orderMapByClient.has(cid)) orderMapByClient.set(cid, order);
+                const deliveryDateStr = normalizeDate(order.scheduled_delivery_date);
+                if (deliveryDateStr) {
+                    const key = `${cid}|${deliveryDateStr}`;
+                    if (!orderMapByClientAndDate.has(key)) orderMapByClientAndDate.set(key, order);
                 }
-                console.log(`[route/routes] Mapped ${orderMapByClientAndDate.size} orders by date and ${orderMapByClient.size} orders by client (for fallback)`);
+            }
+            // 2) Fill gaps from upcoming_orders
+            for (const order of upcomingOrders || []) {
+                const cid = String(order.client_id);
+                if (!orderMapByClient.has(cid)) orderMapByClient.set(cid, order);
+                const deliveryDateStr = normalizeDate(order.scheduled_delivery_date);
+                if (deliveryDateStr) {
+                    const key = `${cid}|${deliveryDateStr}`;
+                    if (!orderMapByClientAndDate.has(key)) orderMapByClientAndDate.set(key, order);
+                }
+            }
+
+            if ((orders?.length || 0) + (upcomingOrders?.length || 0) > 0) {
+                console.log(`[route/routes] Mapped ${orderMapByClientAndDate.size} orders by date and ${orderMapByClient.size} orders by client (orders table preferred, same as /orders page)`);
             } else {
                 console.warn(`[route/routes] No orders found for any of the ${clientIds.length} clients`);
             }
@@ -290,40 +352,36 @@ export async function GET(req: Request) {
             // First priority: Check if stop has order_id and look it up directly
             if (s.order_id) {
                 order = orderMapById.get(String(s.order_id)) || null;
-                if (order) {
-                    console.log(`[route/routes] Found order ${order.id} for stop ${s.id} via order_id`);
-                }
             }
             
             // Fallback: Match by client_id + delivery_date if no direct order_id match
-            if (!order && s.client_id) {
+            // Also: when order from order_id has no order_number (e.g. upcoming_order), try client+date to get order with order_number (e.g. from orders table)
+            const normalizeDateForStop = (dateStr: string | null | undefined): string | null => {
+                if (!dateStr) return null;
+                return String(dateStr).split('T')[0].split(' ')[0];
+            };
+            if (s.client_id) {
                 const cid = String(s.client_id);
-                
-                // Helper to normalize date strings (handle both DATE and TIMESTAMP formats)
-                const normalizeDate = (dateStr: string | null | undefined): string | null => {
-                    if (!dateStr) return null;
-                    // Handle both "YYYY-MM-DD" and "YYYY-MM-DDTHH:MM:SS" formats
-                    return dateStr.split('T')[0].split(' ')[0];
-                };
-                
-                // If stop has delivery_date, try exact match first
-                if (s.delivery_date) {
-                    const stopDeliveryDate = normalizeDate(s.delivery_date);
-                    if (stopDeliveryDate) {
-                        const exactKey = `${cid}|${stopDeliveryDate}`;
-                        order = orderMapByClientAndDate.get(exactKey) || null;
+                const orderFromClientAndDate = s.delivery_date
+                    ? orderMapByClientAndDate.get(`${cid}|${normalizeDateForStop(s.delivery_date) || ''}`) || null
+                    : null;
+                const orderFromClient = orderMapByClient.get(cid) || null;
+                // If primary order lacks order_number, prefer one that has it (e.g. processed order in orders table)
+                if (order && (order.order_number == null || order.order_number === '')) {
+                    const better = orderFromClientAndDate ?? orderFromClient;
+                    if (better?.order_number != null && better.order_number !== '') {
+                        order = better;
                     }
                 }
-                
-                // Fallback to most recent order for this client
                 if (!order) {
-                    order = orderMapByClient.get(cid) || null;
+                    order = orderFromClientAndDate ?? orderFromClient ?? null;
                 }
             }
 
             stopById.set(sid(s.id), {
                 id: s.id,
                 userId: s.client_id ?? null,
+                client_id: s.client_id ?? null,
                 name: (name && String(name).trim()) ? String(name).trim() : "Unnamed",
 
                 // Preserve first and last name fields for proper client name reconstruction
@@ -355,19 +413,50 @@ export async function GET(req: Request) {
                 // Add delivery_date from stop
                 delivery_date: s.delivery_date || null,
                 
-                // Add assigned_driver_id from stop (prefer stop's assigned_driver_id over client's)
-                assigned_driver_id: s.assigned_driver_id || c?.assigned_driver_id || null,
+                // Proof of delivery: same resolution as order_number — orders table by client+date (orderMapByClientAndDate), then by order_id, then by client (orderMapByClient), then stops.proof_url
+                proofUrl: (() => {
+                    const fromStop = (s.proof_url && String(s.proof_url).trim()) || null;
+                    const cid = s.client_id ? String(s.client_id) : '';
+                    const dateKey = cid && s.delivery_date ? `${cid}|${normalizeDateForStop(s.delivery_date) || ''}` : '';
+                    const orderByClientAndDate = dateKey ? orderMapByClientAndDate.get(dateKey) : null;
+                    const orderByClient = cid ? orderMapByClient.get(cid) : null;
+                    const fromOrderById = (order?.proof_of_delivery_url && String(order.proof_of_delivery_url).trim()) || null;
+                    const fromOrderByClientDate = (orderByClientAndDate?.proof_of_delivery_url && String(orderByClientAndDate.proof_of_delivery_url).trim()) || null;
+                    const fromOrderByClient = (orderByClient?.proof_of_delivery_url && String(orderByClient.proof_of_delivery_url).trim()) || null;
+                    return fromStop || fromOrderById || fromOrderByClientDate || fromOrderByClient || null;
+                })(),
+                
+                // Prefer client.assigned_driver_id; fallback to stop when client null (stops often have it from creation)
+                assigned_driver_id: c?.assigned_driver_id ?? s.assigned_driver_id ?? null,
                 
                 // Add order_id from stops table (source of truth for order relationship)
                 order_id: s.order_id || null,
                 
-                // Add order tracking fields including status
-                // Note: orderId is the resolved order's ID from the lookup, order_id is the FK from stops table
+                // order_number: same source as /orders page. We already have order from order_id lookup (orders table first).
                 orderId: order?.id || s.order_id || null,
+                orderNumber: (() => {
+                    const fromOrder = order?.order_number != null && order?.order_number !== '' ? Number(order.order_number) : null;
+                    if (fromOrder != null) return fromOrder;
+                    const cid = s.client_id ? String(s.client_id) : null;
+                    if (cid) {
+                        const fromDirect = orderNumberByClientForDate.get(cid);
+                        if (fromDirect != null) return fromDirect;
+                    }
+                    return null;
+                })(),
                 orderDate: order?.created_at || null,
                 deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
                 orderStatus: order?.status || null,
             });
+        }
+
+        const stopsWithOrderNumber = Array.from(stopById.values()).filter((s: any) => (s?.orderNumber ?? s?.order_number) != null && (s?.orderNumber ?? s?.order_number) !== '');
+        log(`[route/routes] orderNumber summary: ${stopsWithOrderNumber.length}/${stopById.size} stops have orderNumber set`);
+        const stopsWithProof = Array.from(stopById.values()).filter((s: any) => !!((s?.proofUrl ?? s?.proof_url) || '').trim());
+        log(`[route/routes] proof summary: ${stopsWithProof.length}/${stopById.size} stops have proofUrl (from orders.proof_of_delivery_url or stops.proof_url)`);
+        const firstStops = Array.from(stopById.values()).slice(0, 6);
+        for (const st of firstStops) {
+            log(`[route/routes]   stop id=${(st?.id ?? '').toString().slice(0, 8)}... client_id=${(st?.userId ?? st?.client_id ?? '').toString().slice(0, 8)}... order_id=${(st?.order_id ?? '').toString().slice(0, 8)}... → orderNumber=${st?.orderNumber ?? st?.order_number ?? 'null'}`);
         }
 
         // 7) Build driver routes. Route order source: driver_route_order (when delivery_date set); drivers.stop_ids / routes.stop_ids deprecated for order (Phase 6).
@@ -392,10 +481,18 @@ export async function GET(req: Request) {
                 routeOrderByDriver.get(did)!.push({ client_id: String(row.client_id) });
             }
         }
+        // Prefer client.assigned_driver_id; fallback to stop when client null (stops often populated from creation)
+        // Use client_id or userId (hydrated stop may use either)
         const stopByDriverAndClient = new Map<string, any>();
         for (const [stopId, s] of stopById.entries()) {
-            if (s?.assigned_driver_id != null && s?.client_id != null) {
-                stopByDriverAndClient.set(`${String(s.assigned_driver_id)}|${String(s.client_id)}`, s);
+            const cid = s?.client_id ?? s?.userId ?? null;
+            const client = cid ? clientById.get(String(cid)) : undefined;
+            const driverId = client?.assigned_driver_id ?? s?.assigned_driver_id;
+            if (driverId != null && cid != null) {
+                // When multiple stops per (driver, client): keep first by position in driver_route_order.
+                // For now we overwrite; route build iterates driver_route_order so we get one per client.
+                // If multiple stops per client, we pick last-seen (id order) — improve later with stop[].
+                stopByDriverAndClient.set(`${String(driverId)}|${String(cid)}`, s);
             }
         }
 
@@ -415,34 +512,17 @@ export async function GET(req: Request) {
                         stopIdSet.add(sid(stop.id));
                     }
                 }
-                // Tail: include any other stops for this driver/date not yet in list (e.g. assigned but not yet in driver_route_order)
+                // Tail: include any other stops for this driver/date not yet in list (prefer client, fallback to stop)
                 for (const [_, stop] of stopById.entries()) {
-                    const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
+                    const client = stop?.client_id ? clientById.get(String(stop.client_id)) : undefined;
+                    const assignedDriverId = (client?.assigned_driver_id ?? stop?.assigned_driver_id) ? String(client?.assigned_driver_id ?? stop.assigned_driver_id) : null;
                     if (assignedDriverId === driverId && !stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
                         stops.push(stop);
                         stopIdSet.add(sid(stop.id));
                     }
                 }
             }
-            if (stops.length === 0) {
-                const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === "string" ? JSON.parse(d.stop_ids || "[]") : []);
-                const ids: any[] = Array.isArray(stopIds) ? stopIds : [];
-                for (const raw of ids) {
-                    const stopId = sid(raw);
-                    const hyd = stopById.get(stopId);
-                    if (hyd && !stopIdSet.has(stopId) && shouldShowStop(hyd)) {
-                        stops.push(hyd);
-                        stopIdSet.add(stopId);
-                    }
-                }
-                for (const [stopIdKey, stop] of stopById.entries()) {
-                    const assignedDriverId = stop?.assigned_driver_id ? String(stop.assigned_driver_id) : null;
-                    if (assignedDriverId === driverId && !stopIdSet.has(stopIdKey) && shouldShowStop(stop)) {
-                        stops.push(stop);
-                        stopIdSet.add(stopIdKey);
-                    }
-                }
-            }
+            // No stop_ids fallback — driver_route_order + client.assigned_driver_id only (allows DB column removal)
 
             // Ensure color is always set - use driver color or fallback to palette
             const driverColor = (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey" && d.color !== null && d.color !== undefined)
@@ -460,16 +540,15 @@ export async function GET(req: Request) {
         console.log(`[route/routes] Stops per route:`, routes.map(r => ({ driver: r.driverName, stops: r.stops.length })));
 
         // 8) Unrouted = all hydrated stops not referenced by any driver's current list
-        // This includes stops that are not in any driver's stop_ids AND don't have assigned_driver_id
+        // Use client.assigned_driver_id for consistency with vendor export
         const claimed = new Set(routes.flatMap((r) => r.stops.map((s) => sid(s.id))));
         const driverIds = new Set(drivers.map(d => String(d.id)));
         const unrouted: any[] = [];
         for (const [k, v] of stopById.entries()) {
             if (!shouldShowStop(v)) continue; // exclude paused / delivery-off clients
-            // A stop is unrouted if:
-            // 1. It's not in any driver's route (claimed set)
-            // 2. It doesn't have an assigned_driver_id that matches a driver
-            const hasAssignedDriver = v?.assigned_driver_id && driverIds.has(String(v.assigned_driver_id));
+            const client = v?.client_id ? clientById.get(String(v.client_id)) : undefined;
+            const driverId = client?.assigned_driver_id ?? v?.assigned_driver_id ?? null;
+            const hasAssignedDriver = driverId && driverIds.has(String(driverId));
             if (!claimed.has(k) && !hasAssignedDriver) {
                 unrouted.push(v);
             }
@@ -478,8 +557,9 @@ export async function GET(req: Request) {
         const skipStopCreation = light || (normalizedDeliveryDate != null && normalizedDeliveryDate !== "");
         if (skipStopCreation) {
             console.log(`[route/routes] Returning ${routes.length} routes, ${unrouted.length} unrouted (no stop-creation: light=${light}, delivery_date=${deliveryDate ?? "none"})`);
+            serverLog.push(`[route/routes] (early return: light=${light}, skipStopCreation=true)`);
             return NextResponse.json(
-                { routes, unrouted, usersWithoutStops: [] },
+                { routes, unrouted, usersWithoutStops: [], _serverLog: serverLog },
                 { headers: { "Cache-Control": "no-store" } }
             );
         }
@@ -1000,8 +1080,11 @@ export async function GET(req: Request) {
 
         console.log(`[route/routes] Returning ${routes.length} routes, ${unrouted.length} unrouted stops`);
         
+        const payload: Record<string, unknown> = { routes, unrouted, usersWithoutStops };
+        if (debug) payload._debug = { orderNumbersByClientCount: debugOrderNumbersByClientCount };
+        payload._serverLog = serverLog;
         return NextResponse.json(
-            { routes, unrouted, usersWithoutStops },
+            payload,
             { headers: { "Cache-Control": "no-store" } }
         );
     } catch (e: any) {

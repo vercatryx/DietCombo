@@ -8577,7 +8577,7 @@ export async function getDriversForDate(deliveryDate: string | null): Promise<{ 
 
 /**
  * Get 1-based stop number per client for a delivery date (from driver_route_order + stops).
- * Used for vendor labels so each label can show "Driver X, Stop Y".
+ * Uses client.assigned_driver_id as source of truth (matches vendor export and routes page).
  * Returns {} if no date or table missing.
  */
 export async function getStopNumbersForDeliveryDate(deliveryDate: string | null): Promise<Record<string, number>> {
@@ -8588,13 +8588,22 @@ export async function getStopNumbersForDeliveryDate(deliveryDate: string | null)
             .from('stops')
             .select('client_id, assigned_driver_id')
             .eq('delivery_date', dateOnly)
-            .not('assigned_driver_id', 'is', null)
             .not('client_id', 'is', null);
         if (!stopsRows?.length) return {};
-        const driverIds = [...new Set(stopsRows.map((s: any) => String(s.assigned_driver_id)).filter(Boolean))];
+        const clientIds = [...new Set(stopsRows.map((s: any) => String(s.client_id)).filter(Boolean))];
+        const { data: clients } = clientIds.length > 0
+            ? await supabase.from('clients').select('id, assigned_driver_id').in('id', clientIds)
+            : { data: [] };
+        const clientById = new Map((clients || []).map((c: any) => [String(c.id), c]));
+        const driverIds = [...new Set([
+            ...(clients || []).map((c: any) => c?.assigned_driver_id).filter(Boolean).map(String),
+            ...(stopsRows || []).map((s: any) => s?.assigned_driver_id).filter(Boolean).map(String)
+        ])];
         const clientHasStopForDriver = new Set<string>();
         for (const s of stopsRows) {
-            clientHasStopForDriver.add(`${String(s.assigned_driver_id)}|${String(s.client_id)}`);
+            const c = clientById.get(String(s.client_id));
+            const driverId = (c?.assigned_driver_id ?? (s as any).assigned_driver_id) ? String(c?.assigned_driver_id ?? (s as any).assigned_driver_id) : null;
+            if (driverId) clientHasStopForDriver.add(`${driverId}|${String(s.client_id)}`);
         }
         const { data: orderRows } = await supabase
             .from('driver_route_order')
@@ -8631,8 +8640,9 @@ export async function getStopNumbersForDeliveryDate(deliveryDate: string | null)
  * Produce orders are excluded; they are shown on produce-specific pages.
  * Optionally filter by deliveryDate to reduce payload (avoids stack overflow
  * when returning huge result sets to client for vendors like cccccccc-cccc-cccc-cccc-cccccccccccc).
+ * When options.db is provided (e.g. from API route), that client is used to avoid serialization/env issues.
  */
-export async function getOrdersByVendor(vendorId: string, deliveryDate?: string) {
+export async function getOrdersByVendor(vendorId: string, deliveryDate?: string, options?: { db?: ReturnType<typeof createClient> }) {
     if (!vendorId) return [];
 
     const session = await getSession();
@@ -8643,10 +8653,12 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string)
         return [];
     }
 
-    // Use service role client so RLS cannot block (e.g. when admin views a vendor's orders)
-    const db = process.env.SUPABASE_SERVICE_ROLE_KEY
-        ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
-        : supabase;
+    // Use provided client (e.g. from API route with service role) or create one
+    const db = options?.db ?? (
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
+            : supabase
+    );
 
     // Chunk size for Supabase/PostgREST (default max rows is often 500 or 1000 per request)
     const ROW_CHUNK = 500;
@@ -8750,10 +8762,24 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string)
             });
         }
 
-        const completedOrders = await Promise.all(filteredOrders.map(async (order: any) => {
-            const processed = await processVendorOrderDetails(order, vendorId, false, db);
-            return { ...processed, orderType: 'completed' };
-        }));
+        const usedServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+        const dbProvided = !!options?.db;
+        console.log('[getOrdersByVendor] Processing orders', { vendorId, deliveryDate, filteredCount: filteredOrders.length, usedServiceRole, dbProvided });
+
+        // Process in batches to avoid overwhelming Supabase (hundreds of concurrent vs/items queries can return empty)
+        const BATCH_SIZE = 25;
+        const completedOrders: any[] = [];
+        for (let i = 0; i < filteredOrders.length; i += BATCH_SIZE) {
+            const batch = filteredOrders.slice(i, i + BATCH_SIZE);
+            const processed = await Promise.all(batch.map(async (order: any) => {
+                const p = await processVendorOrderDetails(order, vendorId, false, db);
+                return { ...p, orderType: 'completed' as const };
+            }));
+            completedOrders.push(...processed);
+        }
+
+        const withItems = completedOrders.filter((o: any) => (o.items?.length ?? 0) > 0).length;
+        console.log('[getOrdersByVendor] Done', { total: completedOrders.length, withItems });
 
         // Vendor page shows only placed orders from the orders table (not upcoming_orders/drafts)
         completedOrders.sort((a: any, b: any) => {
@@ -8869,22 +8895,60 @@ async function processVendorOrderDetails(order: any, vendorId: string, isUpcomin
     };
 
     if (order.service_type === 'Food') {
-        const { data: vs } = await client
-            .from(vendorSelectionsTable)
-            .select('id')
-            .eq(orderIdField, order.id)
-            .eq('vendor_id', vendorId)
-            .maybeSingle();
+        const orderId = order.id;
+        if (typeof orderId !== 'string' || !orderId) {
+            console.warn('[processVendorOrderDetails] Food order missing or invalid id', { orderId, keys: order ? Object.keys(order).slice(0, 15) : [] });
+        }
+        let vs: { id: string } | null = null;
+        // Use literal table/column names for completed orders to avoid any variable/bundling issues
+        if (!isUpcoming) {
+            const { data: vsData, error: vsError } = await client
+                .from('order_vendor_selections')
+                .select('id')
+                .eq('order_id', orderId)
+                .eq('vendor_id', vendorId)
+                .maybeSingle();
+            vs = vsData ?? null;
+            if (vsError) {
+                console.error('[processVendorOrderDetails] Food order vs query error', { orderId: orderId, vendorId, error: vsError.message, code: vsError.code });
+            }
+            if (!vs && vendorId === SINGLE_VENDOR_ID) {
+                const { data: vsFallback } = await client
+                    .from('order_vendor_selections')
+                    .select('id')
+                    .eq('order_id', orderId)
+                    .limit(1)
+                    .maybeSingle();
+                vs = vsFallback ?? null;
+            }
+        } else {
+            const { data: vsData, error: vsError } = await client
+                .from(vendorSelectionsTable)
+                .select('id')
+                .eq(orderIdField, orderId)
+                .eq('vendor_id', vendorId)
+                .maybeSingle();
+            vs = vsData ?? null;
+            if (vsError) console.error('[processVendorOrderDetails] Food vs (upcoming) error', { orderId: orderId, error: vsError.message });
+        }
 
         if (vs) {
-            // For upcoming orders, use upcoming_vendor_selection_id; for regular orders, use vendor_selection_id
             const selectionIdField = isUpcoming ? 'upcoming_vendor_selection_id' : 'vendor_selection_id';
-            const { data: items } = await client
-                .from(itemsTable)
+            const { data: items, error: itemsError } = await client
+                .from(isUpcoming ? 'upcoming_order_items' : 'order_items')
                 .select('*')
                 .eq(selectionIdField, vs.id);
 
+            if (itemsError) {
+                console.error('[processVendorOrderDetails] order_items query error', { orderId: order.id, vsId: vs.id, selectionIdField, table: itemsTable, error: itemsError.message, code: itemsError.code });
+            }
             result.items = items || [];
+            // Log when we expect items but get none (helps debug missing items)
+            if ((!items || items.length === 0) && !itemsError) {
+                console.warn('[processVendorOrderDetails] Food order has no items in DB', { orderId: order.id, vsId: vs.id });
+            }
+        } else {
+            console.warn('[processVendorOrderDetails] No vendor selection for Food order', { orderId: order.id, vendorId, orderIdField });
         }
         // Only source of truth: order_vendor_selections + order_items. No fallbacks.
     } else if (order.service_type === 'Equipment') {

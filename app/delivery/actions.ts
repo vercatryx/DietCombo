@@ -116,6 +116,8 @@ export async function processDeliveryProof(formData: FormData) {
             if (!result.success) {
                 return { success: false, error: result.error || 'Failed to process order' };
             }
+            // Sync proof to stops so driver app shows proof for this order
+            await supabaseAdmin.from('stops').update({ proof_url: publicUrl }).eq('order_id', orderId);
             revalidatePath('/admin');
             return { success: true, url: publicUrl };
         }
@@ -136,6 +138,12 @@ export async function processDeliveryProof(formData: FormData) {
             console.error('Error updating order:', updateError);
             return { success: false, error: 'Failed to update order status' };
         }
+
+        // Sync proof to stops so driver app shows proof for this order
+        await supabaseAdmin
+            .from('stops')
+            .update({ proof_url: publicUrl })
+            .eq('order_id', orderId);
 
         // Create billing record if it doesn't exist (similar to updateOrderDeliveryProof)
         const { data: orderDetails } = await supabaseAdmin

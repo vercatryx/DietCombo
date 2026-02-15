@@ -32,6 +32,43 @@ function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 
 type ClientWithCoords = { client_id: string; lat: number | null; lng: number | null };
 
+/** Round coords to ~1m so same address = same key. Missing coords => client_id so stay alone. */
+function addressKey(client_id: string, lat: number | null, lng: number | null): string {
+    if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+        return `${Number(lat.toFixed(5))},${Number(lng.toFixed(5))}`;
+    }
+    return client_id;
+}
+
+/**
+ * After geographic sort: group stops at the same address together.
+ * Preserves route order by placing each "same-address" block at the position of its first occurrence.
+ */
+function groupSameAddressTogether(
+    orderedClientIds: string[],
+    clientById: Map<string, { lat: number | null; lng: number | null }>
+): string[] {
+    if (orderedClientIds.length <= 1) return orderedClientIds;
+
+    const firstIndexByKey = new Map<string, number>();
+    const groupByKey = new Map<string, string[]>();
+
+    for (let i = 0; i < orderedClientIds.length; i++) {
+        const cid = orderedClientIds[i];
+        const coords = clientById.get(cid);
+        const key = addressKey(cid, coords?.lat ?? null, coords?.lng ?? null);
+
+        if (!firstIndexByKey.has(key)) firstIndexByKey.set(key, i);
+        if (!groupByKey.has(key)) groupByKey.set(key, []);
+        groupByKey.get(key)!.push(cid);
+    }
+
+    const keysByFirstIndex = [...groupByKey.keys()].sort(
+        (a, b) => (firstIndexByKey.get(a) ?? 0) - (firstIndexByKey.get(b) ?? 0)
+    );
+    return keysByFirstIndex.flatMap((k) => groupByKey.get(k)!);
+}
+
 // Nearest neighbor algorithm - start from southernmost stop (min latitude)
 function optimizeRouteOrder(clients: ClientWithCoords[]): string[] {
     if (clients.length <= 1) {
@@ -229,7 +266,9 @@ export async function POST(request: NextRequest) {
             }));
 
             const optimizedOrder = optimizeRouteOrder(withCoords);
-            optimizedOrder.forEach((cid, pos) => {
+            // Final step: group stops at the same address together (same lat/lng = same address)
+            const finalOrder = groupSameAddressTogether(optimizedOrder, clientById);
+            finalOrder.forEach((cid, pos) => {
                 updates.push({ driver_id: did, client_id: cid, position: pos });
             });
         }

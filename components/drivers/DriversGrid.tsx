@@ -1,18 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
-import { MapPin, ChevronRight, Hash, User, PenLine } from "lucide-react";
-
-/* ---------------- signatures: always fetch fresh ---------------- */
-async function fetchSignStatusClient() {
-    const res = await fetch("/api/signatures/status", {
-        cache: "no-store",
-        headers: { "cache-control": "no-store" },
-    });
-    if (!res.ok) return [];
-    return res.json();
-}
+import { MapPin, ChevronRight, Hash, User, ImageIcon } from "lucide-react";
 
 /** Build a normalized address key that ignores apt/unit and collapses spacing/case. */
 function makeAddressKey(stop: any) {
@@ -54,21 +44,6 @@ function makeAddressKey(stop: any) {
 }
 
 export default function DriversGrid({ drivers = [], allStops = [], selectedDate = '' }: { drivers?: any[]; allStops?: any[]; selectedDate?: string }) {
-    const [sigRows, setSigRows] = useState<any[]>([]);
-
-    useEffect(() => {
-        let active = true;
-        (async () => {
-            try {
-                const rows = await fetchSignStatusClient();
-                if (active) setSigRows(rows);
-            } catch {
-                if (active) setSigRows([]);
-            }
-        })();
-        return () => { active = false; };
-    }, []);
-
     // Filter stops by selected date if a date is provided
     const filteredStops = useMemo(() => {
         if (!selectedDate) return allStops;
@@ -88,10 +63,6 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
     }, [allStops, selectedDate]);
 
     const stopsById = useMemo(() => new Map(filteredStops.map((s) => [String(s.id), s])), [filteredStops]);
-    const sigMap = useMemo(
-        () => new Map(sigRows.map((r) => [String(r.userId), Number(r.collected || 0)])),
-        [sigRows]
-    );
 
     const getStopsForDriver = useMemo(() => {
         return (d: any) => {
@@ -146,10 +117,10 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
                     : (d.completedStops ?? 0);
                 const pct = total > 0 ? (done / total) * 100 : 0;
 
-                const sigUsersDone = cardStops.length > 0
-                    ? cardStops.filter((s: any) => (sigMap.get(String(s?.userId)) ?? 0) >= 5).length
+                const proofCount = cardStops.length > 0
+                    ? cardStops.filter((s: any) => !!((s?.proofUrl ?? s?.proof_url) || "").trim()).length
                     : 0;
-                const pctSigs = total > 0 ? (sigUsersDone / total) * 100 : 0;
+                const pctProof = total > 0 ? (proofCount / total) * 100 : 0;
 
                 // Unique addresses for this driver (ignoring apt#). When stops not yet loaded, use total from API.
                 const uniqueAddrCount = (() => {
@@ -208,13 +179,13 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
                                 <span style={{ width: `${pct}%`, background: color }} />
                             </div>
 
-                            {/* Signatures complete */}
+                            {/* Proof images */}
                             <div className="flex muted" style={{ marginTop: 10 }}>
-                                <PenLine style={{ width: 16, height: 16 }} />
-                                <span>{sigUsersDone} / {total} signatures</span>
+                                <ImageIcon style={{ width: 16, height: 16 }} />
+                                <span>{proofCount} / {total} proof</span>
                             </div>
-                            <div className="progress sig" style={{ marginTop: 8 }}>
-                                <span style={{ width: `${pctSigs}%`, background: color }} />
+                            <div className="progress proof" style={{ marginTop: 8 }}>
+                                <span style={{ width: `${pctProof}%`, background: color }} />
                             </div>
                         </div>
                     </Link>

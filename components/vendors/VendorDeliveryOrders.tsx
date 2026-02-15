@@ -32,6 +32,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
     const [proofUrls, setProofUrls] = useState<Record<string, string>>({});
     const [isSaving, setIsSaving] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+    const [displayOrders, setDisplayOrders] = useState<any[]>([]); // Sorted by driver + stop (matches export)
     const [summaryModal, setSummaryModal] = useState<{
         show: boolean;
         results?: Array<{ success: boolean; orderId: string; error?: string; summary?: any }>;
@@ -77,9 +78,13 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
     async function loadData() {
         setIsLoading(true);
         try {
+            // Fetch orders via API when we have a date so items are returned (avoids server-action serialization issues)
+            const ordersPromise = deliveryDate
+                ? fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(deliveryDate)}`, { credentials: 'include' }).then(r => r.ok ? r.json() : [])
+                : getOrdersByVendor(vendorId, deliveryDate);
             const [vendorsData, ordersData, clientsData, menuItemsData, mealItemsData, boxTypesData, categoriesData, /* template preloaded */] = await Promise.all([
                 getVendors(),
-                getOrdersByVendor(vendorId, deliveryDate),
+                ordersPromise,
                 getClients(),
                 getMenuItems(),
                 getMealItems(),
@@ -119,6 +124,15 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                 }
             });
             setProofUrls(initialProofUrls);
+
+            if (filteredOrders.length > 0 && clientsData?.length) {
+                const drivers = await getDriversForDate(deliveryDate);
+                const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : undefined;
+                const { sortedOrders } = sortOrdersByDriver(filteredOrders, clientsData, drivers, clientIdToStopNumber);
+                setDisplayOrders(sortedOrders);
+            } else {
+                setDisplayOrders(filteredOrders);
+            }
         } catch (error) {
             console.error('Error loading vendor delivery orders:', error);
         } finally {
@@ -396,8 +410,10 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         }
         setIsExporting(true);
         try {
-        // Re-fetch full orders for this delivery date so labels always have complete order data (items, boxSelection, etc.)
-        const freshOrders = await getOrdersByVendor(vendorId, deliveryDate);
+        // Re-fetch full orders via API so items are included (avoids server-action serialization issues)
+        const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(deliveryDate)}`, { credentials: 'include' });
+        if (!res.ok) throw new Error('Failed to fetch orders for export');
+        const freshOrders = await res.json();
         if (freshOrders.length === 0) {
             alert('No orders to export');
             return;
@@ -1186,7 +1202,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                         <span style={{ minWidth: '150px', flex: 1.2 }}>Updated By</span>
                         <span style={{ minWidth: '150px', flex: 1.2 }}>Created</span>
                     </div>
-                    {orders.map((order) => {
+                    {(displayOrders.length > 0 ? displayOrders : orders).map((order) => {
                         const orderKey = `${order.orderType}-${order.id}`;
                         const isExpanded = expandedOrders.has(orderKey);
 

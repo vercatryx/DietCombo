@@ -3,13 +3,13 @@
 
 import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MapPin, Link as LinkIcon, Search } from "lucide-react";
+import { MapPin, Search, ExternalLink } from "lucide-react";
 import { mapsUrlFromAddress } from "@/lib/maps";
 
 /**
  * Props:
- *  - allStops: array of stop objects returned by /api/mobile/stops
- *      Must include: id, name, address, city, state, zip, signToken, sigCollected, completed, userId, (optional: phone, dislikes)
+ *  - allStops: array of stop objects returned by /api/mobile/stops or route API
+ *      Must include: id, name, address, city, state, zip, proofUrl (or proof_url), completed, (optional: phone, dislikes)
  *  - drivers: array of route objects, each with { id, name, color, stopIds, routeNumber }
  *  - themeColor: optional string to tint accents
  */
@@ -99,9 +99,9 @@ export default function SearchStops({ allStops = [], drivers = [], themeColor = 
                                     </div>
 
                                     <div className="meta">
-                    <span className="chip" title="Collected signatures">
-                      {(s.sigCollected ?? 0)}/5 sigs
-                    </span>
+                                        <span className={`chip ${(s.proofUrl || s.proof_url) ? "chip-ok" : ""}`} title={(s.proofUrl || s.proof_url) ? "Proof uploaded" : "No proof yet"}>
+                                            {(s.proofUrl || s.proof_url) ? "Proof ✓" : "No proof"}
+                                        </span>
                                         {s.completed ? <span className="done">Completed</span> : null}
                                     </div>
                                 </div>
@@ -110,21 +110,14 @@ export default function SearchStops({ allStops = [], drivers = [], themeColor = 
                                     <a className="btn small" href={mapsUrl} target="_blank" rel="noreferrer">
                                         Open in Maps
                                     </a>
-                                    <button
-                                        className="btn outline small"
-                                        onClick={() => {
-                                            if (!s.signToken) {
-                                                alert("No signature link for this customer.");
-                                                return;
-                                            }
-                                            window.open(`/sign/${s.signToken}`, "_blank", "noopener,noreferrer");
-                                        }}
-                                        title="Open the public signature page"
-                                        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-                                    >
-                                        <LinkIcon style={{ width: 16, height: 16 }} />
-                                        Collect
-                                    </button>
+                                    {(s.proofUrl || s.proof_url) ? (
+                                        <a className="btn outline small" href={s.proofUrl || s.proof_url} target="_blank" rel="noopener noreferrer" title="View proof image" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                            <ExternalLink style={{ width: 16, height: 16 }} />
+                                            View proof
+                                        </a>
+                                    ) : (
+                                        <span className="muted-small">Go to route to add proof</span>
+                                    )}
                                 </div>
                             </div>
                         );
@@ -148,7 +141,9 @@ export default function SearchStops({ allStops = [], drivers = [], themeColor = 
           .sub{display:flex;align-items:center;gap:6px;color:#6b7280;font-size:13px;margin-top:4px}
           .meta{display:flex;align-items:center;gap:8px;margin-top:6px}
           .chip{border:1px solid #e5e7eb;border-radius:999px;font-size:12px;padding:2px 8px;background:#f8fafc}
+          .chip.chip-ok{background:#ecfdf5;border-color:#10b981;color:#059669}
           .done{color:#16a34a;font-weight:600}
+          .muted-small{color:#6b7280;font-size:12px}
           .actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
           .btn{border:1px solid #111;background:#111;color:#fff;border-radius:10px;padding:8px 10px;cursor:pointer}
           .btn.small{padding:6px 10px;font-size:13px}

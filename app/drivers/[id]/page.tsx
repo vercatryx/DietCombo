@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
-import { fetchDriver, fetchStops, fetchDriversPageData, setStopCompleted } from "../../../lib/api";
+import { fetchDriver, fetchStops, fetchDriversPageData } from "../../../lib/api";
 import { mapsUrlFromAddress } from "../../../lib/maps";
 import {
-    CheckCircle2, MapPin, Phone, Clock, Hash, ArrowLeft, Link as LinkIcon, X, Map as MapIcon, Crosshair
+    MapPin, Phone, Hash, ArrowLeft, X, Map as MapIcon, Crosshair, Camera, ExternalLink
 } from "lucide-react";
 import SearchStops from "../../../components/drivers/SearchStops";
 import { DateFilter } from "../../../components/routes/DateFilter";
@@ -14,22 +14,6 @@ import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from "
 
 /** Lazy-load the shared Leaflet map */
 const DriversMapLeaflet = dynamic(() => import("../../../components/routes/DriversMapLeaflet"), { ssr: false });
-
-/** Fetch signature status — never cached */
-async function fetchSignStatus() {
-    const res = await fetch("/api/signatures/status", {
-        cache: "no-store",
-        headers: { "cache-control": "no-store" },
-    });
-    if (!res.ok) return [];
-    return res.json(); // [{ userId, collected }]
-}
-
-/** Merge {userId → collected} onto stops as s.sigCollected */
-function mergeSigCounts(stops: any[], sigRows: any[]) {
-    const sigMap = new Map(sigRows.map((r) => [String(r.userId), Number(r.collected || 0)]));
-    return stops.map((s) => ({ ...s, sigCollected: sigMap.get(String(s.userId)) ?? 0 }));
-}
 
 /** Normalize address for duplicate detection (ignoring unit/apt) */
 function makeAddressKey(stop: any) {
@@ -70,19 +54,6 @@ function makeAddressKey(stop: any) {
     return addrNoUnit;
 }
 
-/** Listen for postMessage from the sign iframe */
-function InlineMessageListener({ onDone }: { onDone?: () => void | Promise<void> }) {
-    useEffect(() => {
-        const handler = async (e: MessageEvent) => {
-            if (!e?.data || e.data.type !== "signatures:done") return;
-            try { await onDone?.(); } catch {}
-        };
-        window.addEventListener("message", handler);
-        return () => window.removeEventListener("message", handler);
-    }, [onDone]);
-    return null;
-}
-
 export default function DriverDetailPage() {
     const { id } = useParams(); // driver id
     const router = useRouter();
@@ -116,9 +87,10 @@ export default function DriverDetailPage() {
     }, []);
 
     const [driver, setDriver] = useState<any>(null);
-    const [stops, setStops] = useState<any[]>([]);       // ordered, server-truth only, with sigCollected
-    const [allStops, setAllStops] = useState<any[]>([]); // for SearchStops, with sigCollected
+    const [stops, setStops] = useState<any[]>([]);       // ordered, server-truth only (proofUrl from API)
+    const [allStops, setAllStops] = useState<any[]>([]); // for SearchStops
     const [loading, setLoading] = useState(true);
+    const [proofModalStop, setProofModalStop] = useState<any>(null);
 
     // Map sheet state + API from Leaflet
     const [mapOpen, setMapOpen] = useState(false);
@@ -130,20 +102,10 @@ export default function DriverDetailPage() {
     const [myLoc, setMyLoc] = useState<{ lat: number; lng: number; acc?: number } | null>(null); // { lat, lng, acc } or null
     const askedOnceRef = useRef(false);
 
-    // Signature sheet state
-    const [sheetOpen, setSheetOpen] = useState(false);
-    const [sheetTitle, setSheetTitle] = useState("");
-    const [sheetToken, setSheetToken] = useState<string | null>(null);
-    const [sheetUrl, setSheetUrl] = useState("");
+    // Reverse button was removed; keep variable so any stale reference does not throw
+    const reversing = false;
 
-    // Per-stop state
-    const [completingId, setCompletingId] = useState(null);
-    const [sigOpeningId, setSigOpeningId] = useState(null);
-
-    // Reverse button state
-    const [reversing, setReversing] = useState(false);
-
-    /** Order "every" by the driver's stopIds without any local overlay */
+    /** Order "every" by the driver's stopIds (used only when no date or fallback path). */
     function orderByDriverStopIds(route: any, every: any[]) {
         const byId = new Map(every.map((s: any) => [String(s.id), s]));
         return (route?.stopIds ?? [])
@@ -152,22 +114,11 @@ export default function DriverDetailPage() {
             .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
     }
 
-    async function reverseOnServer(routeId: string) {
-        const res = await fetch("/api/route/reverse", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "cache-control": "no-store" },
-            body: JSON.stringify({ routeId }),
-            cache: "no-store",
-        });
-        return res.json();
-    }
-
-    /** Centralized reload — use route API (driver_route_order) when date set, else mobile APIs */
+    /** Centralized reload. When delivery_date is set we use route API (GET /api/route/routes) which orders stops by driver_route_order (same as Reorganize Routes). Otherwise we use mobile APIs and order by route.stopIds. */
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
             const dateParam = selectedDate || null;
-            const sigRows = await fetchSignStatus().catch(() => []);
 
             if (dateParam) {
                 const dateNorm = dateParam.split('T')[0].split(' ')[0];
@@ -178,11 +129,9 @@ export default function DriverDetailPage() {
                     const orderedServer = (dFromPage.stopIds || [])
                         .map((sid: any) => stopsById.get(String(sid)))
                         .filter(Boolean);
-                    const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
-                    const allWithSigs = mergeSigCounts(pageData.allStops, sigRows);
                     setDriver({ id: dFromPage.id, name: dFromPage.name, color: dFromPage.color, stopIds: dFromPage.stopIds });
-                    setAllStops(allWithSigs);
-                    setStops(orderedWithSigs);
+                    setAllStops(pageData.allStops);
+                    setStops(orderedServer);
                 } else {
                     const d = await fetchDriver(id as string, dateNorm as any);
                     const every = await fetchStops(dateNorm as any);
@@ -193,21 +142,17 @@ export default function DriverDetailPage() {
                         return key === dateNorm;
                     });
                     const orderedServer = orderByDriverStopIds(d, filteredEvery);
-                    const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
-                    const allWithSigs = mergeSigCounts(filteredEvery, sigRows);
                     setDriver(d);
-                    setAllStops(allWithSigs);
-                    setStops(orderedWithSigs);
+                    setAllStops(filteredEvery);
+                    setStops(orderedServer);
                 }
             } else {
                 const d = await fetchDriver(id as string, null);
                 const every = await fetchStops(null);
                 const orderedServer = orderByDriverStopIds(d, every);
-                const orderedWithSigs = mergeSigCounts(orderedServer, sigRows);
-                const allWithSigs = mergeSigCounts(every, sigRows);
                 setDriver(d);
-                setAllStops(allWithSigs);
-                setStops(orderedWithSigs);
+                setAllStops(every);
+                setStops(orderedServer);
             }
         } finally {
             setLoading(false);
@@ -236,32 +181,11 @@ export default function DriverDetailPage() {
         return () => { active = false; };
     }, [loadData]);
 
-    /* ================== Progress counts ================== */
+    /* ================== Progress (proof only) ================== */
     const total = stops.length;
-    const doneCount = useMemo(() => stops.filter((s) => !!s?.completed).length, [stops]);
-    const pctDone = total > 0 ? Math.min(100, Math.max(0, (doneCount / total) * 100)) : 0;
-
-    // A "signature complete user" = sigCollected >= 5
-    const sigUsersDone = useMemo(() => stops.filter((s) => Number(s?.sigCollected ?? 0) >= 5).length, [stops]);
-    const pctSigs = total > 0 ? Math.min(100, Math.max(0, (sigUsersDone / total) * 100)) : 0;
-
-    // Ensure progress values are valid numbers for rendering
-    const safePctDone = Number.isFinite(pctDone) ? pctDone : 0;
-    const safePctSigs = Number.isFinite(pctSigs) ? pctSigs : 0;
-
-    // Debug logging (remove in production)
-    useEffect(() => {
-        if (stops.length > 0) {
-            console.log('[Driver Progress]', {
-                total: stops.length,
-                doneCount,
-                sigUsersDone,
-                pctDone: safePctDone,
-                pctSigs: safePctSigs,
-                sampleStop: stops[0]
-            });
-        }
-    }, [stops.length, doneCount, sigUsersDone, safePctDone, safePctSigs]);
+    const proofCount = useMemo(() => stops.filter((s) => !!(s?.proofUrl || s?.proof_url)?.trim()).length, [stops]);
+    const pctProof = total > 0 ? Math.min(100, Math.max(0, (proofCount / total) * 100)) : 0;
+    const safePctProof = Number.isFinite(pctProof) ? pctProof : 0;
 
     /* ================== Duplicate address detection ================== */
     const addressGroups = useMemo(() => {
@@ -286,36 +210,14 @@ export default function DriverDetailPage() {
         });
     }, [stops, addressGroups]);
 
-    const reverseRoute = async () => {
-        if (reversing) return;
-        setReversing(true);
-        try {
-            const r = await reverseOnServer(id as string);
-            if (!r?.ok) console.error("Reverse failed:", r?.error);
-            await loadData(); // fresh after reverse
-        } finally {
-            setReversing(false);
-        }
+    /** Take photo = open delivery page for this order (same flow as /delivery/100992). Uses order number or order ID (UUID). */
+    const deliveryProofUrl = (orderNumber: string | number | null | undefined, orderId: string | null | undefined) => {
+        const num = orderNumber != null && String(orderNumber).trim() !== "" ? String(orderNumber) : null;
+        const id = orderId != null && String(orderId).trim() !== "" ? String(orderId) : null;
+        if (num) return `/delivery/${encodeURIComponent(num)}`;
+        if (id) return `/delivery/${encodeURIComponent(id)}`;
+        return null;
     };
-
-    const closeSignSheet = async () => {
-        setSheetOpen(false);
-        setSheetToken(null);
-        setSheetUrl("");
-        try {
-            await loadData(); // fresh sig counts after collection
-        } catch {}
-    };
-
-    // Same endpoint your UsersTable uses
-    async function ensureTokenForUser(userId: string) {
-        const url = `/api/signatures/ensure-token/${encodeURIComponent(userId)}`;
-        const res = await fetch(url, { method: "POST", headers: { "cache-control": "no-store" }, cache: "no-store" });
-        const raw = await res.text();
-        let json = null;
-        try { json = JSON.parse(raw); } catch {}
-        return { ok: res.ok, status: res.status, raw, json, url };
-    }
 
     // Single-driver payload for Leaflet
     const mapDrivers = useMemo(() => {
@@ -468,11 +370,7 @@ export default function DriverDetailPage() {
         );
     }, []);
 
-    if (loading || !driver) {
-        return <div className="muted" style={{ padding: 16 }}>Loading route…</div>;
-    }
-
-    const brandColor = driver.color || "#3665F3";
+    const brandColor = (driver?.color || "#3665F3") as string;
     
     return (
         <div className="container theme" style={{ "--brand": brandColor } as React.CSSProperties}>
@@ -484,55 +382,59 @@ export default function DriverDetailPage() {
                 <div className="hdr-center">
                     <div className="hdr-top">
                         <div className="hdr-pill"><Hash /></div>
-                        <div className="hdr-txt"><div className="title">Route {driver.name}</div></div>
+                        <div className="hdr-txt"><div className="title">Route {driver?.name ?? "…"}</div></div>
                     </div>
 
-                    {/* Progress #1: Completed stops */}
-                    <div className="progress"><span style={{ width: `${safePctDone}%`, background: brandColor, display: 'block', height: '100%', borderRadius: '999px' }} /></div>
-
-                    {/* Progress #2: Signature-complete users */}
-                    <div className="progress sig"><span style={{ width: `${safePctSigs}%`, background: '#0ea5e9', display: 'block', height: '100%', borderRadius: '999px' }} /></div>
+                    {/* Proof progress — hide when loading */}
+                    {!loading && driver && (
+                        <>
+                            <div className="progress proof"><span style={{ width: `${safePctProof}%`, background: '#0ea5e9', display: 'block', height: '100%', borderRadius: '999px' }} /></div>
+                        </>
+                    )}
                 </div>
                 <div className="hdr-count">
-                    <div className="strong">{doneCount}/{stops.length}</div>
-                    <div className="muted tiny">Bags</div>
-                    <div className="strong sig-ct">{sigUsersDone}/{stops.length}</div>
-                    <div className="muted tiny">Sigs</div>
+                    {loading ? (
+                        <div className="muted tiny">Loading…</div>
+                    ) : (
+                        <>
+                            <div className="strong proof-ct">{proofCount}/{stops.length}</div>
+                            <div className="muted tiny">Proof</div>
+                        </>
+                    )}
                 </div>
             </header>
 
             {/* Desktop banner (hidden on small) */}
-            <div
-                className="card banner desktop-only"
-                style={{ background: `linear-gradient(0deg, ${driver.color || "#3665F3"}, ${driver.color || "#3665F3"})`, color: "#fff" }}
-            >
-                <div className="card-content">
-                    <div className="row">
-                        <div className="flex">
-                            <button className="icon-back" onClick={() => router.push("/drivers")} aria-label="Back to routes">
-                                <ArrowLeft />
-                            </button>
-                            <div className="hdr-badge" style={{ background: "#fff", color: "var(--brand)" }}>
-                                <Hash />
+            {!loading && driver && (
+                <div
+                    className="card banner desktop-only"
+                    style={{ background: `linear-gradient(0deg, ${driver.color || "#3665F3"}, ${driver.color || "#3665F3"})`, color: "#fff" }}
+                >
+                    <div className="card-content">
+                        <div className="row">
+                            <div className="flex">
+                                <button className="icon-back" onClick={() => router.push("/drivers")} aria-label="Back to routes">
+                                    <ArrowLeft />
+                                </button>
+                                <div className="hdr-badge" style={{ background: "#fff", color: "var(--brand)" }}>
+                                    <Hash />
+                                </div>
+                                <div><h1 className="h1" style={{ color: "#fff" }}>{driver.name}</h1></div>
                             </div>
-                            <div><h1 className="h1" style={{ color: "#fff" }}>{driver.name}</h1></div>
+                            <div className="flex" />
+                            <div style={{ textAlign: "right" }}>
+                                <div className="xxl">{proofCount}/{stops.length}</div>
+                                <div className="muted white">Proof</div>
+                            </div>
                         </div>
-                        <div className="flex" />
-                        <div style={{ textAlign: "right" }}>
-                            <div className="xxl">{doneCount}/{stops.length}</div>
-                            <div className="muted white">Bags</div>
-                            <div className="xxl" style={{ marginTop: 6 }}>{sigUsersDone}/{stops.length}</div>
-                            <div className="muted white">Signatures</div>
-                        </div>
-                    </div>
 
-                    <div className="banner-progress">
-                        <div className="muted white mb8">Progress</div>
-                        <div className="progress"><span style={{ width: `${safePctDone}%`, background: "#fff", display: 'block', height: '100%', borderRadius: '999px' }} /></div>
-                        <div className="progress sig" style={{ marginTop: 8 }}><span style={{ width: `${safePctSigs}%`, background: "#fff", display: 'block', height: '100%', borderRadius: '999px' }} /></div>
+                        <div className="banner-progress">
+                            <div className="muted white mb8">Progress</div>
+                            <div className="progress proof"><span style={{ width: `${safePctProof}%`, background: "#fff", display: 'block', height: '100%', borderRadius: '999px' }} /></div>
+                        </div>
                     </div>
                 </div>
-            </div>
+            )}
 
             {/* Date Filter */}
             <div style={{ marginBottom: 12, padding: '0 12px' }}>
@@ -559,25 +461,38 @@ export default function DriverDetailPage() {
                 />
             </div>
 
-            {/* Search */}
-            <div className="search-wrap">
-                <SearchStops allStops={allStops} drivers={[driver]} themeColor={driver.color || "#3665F3"} />
-            </div>
+            {/* Search — only when we have driver and stops data */}
+            {!loading && driver && (
+                <div className="search-wrap">
+                    <SearchStops allStops={allStops} drivers={[driver]} themeColor={driver.color || "#3665F3"} />
+                </div>
+            )}
 
-            {/* View Map button — requests geolocation on click, then opens sheet */}
-            <div style={{ textAlign: "center", marginBottom: 12 }}>
-                <button
-                    className="btn btn-primary"
-                    onClick={() => { requestGeolocationOnce(); setMapOpen(true); }}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
-                >
-                    <MapIcon className="i16" /> View Map
-                </button>
-            </div>
+            {/* View Map button — only when we have driver */}
+            {!loading && driver && (
+                <div style={{ textAlign: "center", marginBottom: 12 }}>
+                    <button
+                        className="btn btn-primary"
+                        onClick={() => { requestGeolocationOnce(); setMapOpen(true); }}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+                    >
+                        <MapIcon className="i16" /> View Map
+                    </button>
+                </div>
+            )}
 
-            {/* Stops list */}
+            {/* Stops list — show loading state while fetching */}
             <section className="grid">
-                {stopsWithDuplicateFlag.length === 0 ? (
+                {loading ? (
+                    <div className="loading-stops" style={{ textAlign: "center", padding: "48px 24px", color: "var(--muted, #6b7280)" }}>
+                        <div className="loading-spinner" style={{ width: 32, height: 32, margin: "0 auto 12px", border: "3px solid var(--border)", borderTopColor: "var(--brand)", borderRadius: "50%", animation: "spin .7s linear infinite" }} />
+                        <p style={{ fontSize: "16px", fontWeight: 500 }}>Loading stops…</p>
+                    </div>
+                ) : !driver ? (
+                    <div style={{ textAlign: "center", padding: "48px 24px", color: "var(--muted, #6b7280)" }}>
+                        <p style={{ fontSize: "16px", fontWeight: 500 }}>Route not found.</p>
+                    </div>
+                ) : stopsWithDuplicateFlag.length === 0 ? (
                     <div style={{
                         textAlign: "center",
                         padding: "48px 24px",
@@ -588,35 +503,26 @@ export default function DriverDetailPage() {
                     </div>
                 ) : (
                     stopsWithDuplicateFlag.map((s, idx) => {
-                    const done = !!s.completed;
-                    const sigs = Number(s.sigCollected ?? 0);
-                    const sigDone = sigs >= 5;
-                    const isLoading = completingId === s.id;
+                    const hasProof = !!((s.proofUrl || s.proof_url) || "").trim();
+                    const proofUrl = (s.proofUrl || s.proof_url) || "";
+                    const takePhotoUrl = deliveryProofUrl(s.orderNumber ?? s.order_number, s.orderId);
 
                     const mapsUrl = mapsUrlFromAddress({
                         address: s.address, city: s.city, state: s.state, zip: s.zip,
                     });
 
-                    let completeLabel = "Mark Complete";
-                    let completeClass = "btn btn-outline";
-                    let completeDisabled = false;
-                    if (done) { completeLabel = "Completed"; completeClass = "btn btn-outline btn-muted"; completeDisabled = true; }
-                    else if (isLoading) { completeLabel = "Saving…"; completeClass = "btn btn-outline btn-loading"; completeDisabled = true; }
-
-                    const showSigBtn = !sigDone;
-                    const sigBtnIsOpening = sigOpeningId === s.id;
-
                     return (
-                        <div key={s.id} id={`stop-${s.id}`} className={`card stop-card ${done ? "done-bg" : ""} ${s.hasDuplicateAtAddress ? "duplicate-address" : ""}`}>
-                            <div className="color-rail" style={{ background: "var(--brand)" }} />
+                        <div key={s.id} id={`stop-${s.id}`} className={`card stop-card ${hasProof ? "stop-card-has-proof" : ""} ${s.hasDuplicateAtAddress ? "duplicate-address" : ""}`}>
+                            <div className="color-rail" style={{ background: hasProof ? "#059669" : "var(--brand)" }} />
                             <div className="card-content">
                                 <div className="row top">
                                     <div className="main">
                                         <div className="flex head">
-                                            {done ? <CheckCircle2 color="var(--success)" /> : <span className="pill">{idx + 1}</span>}
+                                            <span className="pill">{idx + 1}</span>
                                             <h2 className="title2" title={s.name}>{s.name}</h2>
-                                            <span className="chip" title="Collected signatures for this customer">{sigs}/5 sigs</span>
-                                            {done && <span className="muted d14">Done</span>}
+                                            <span className={`chip ${hasProof ? "chip-ok" : ""}`} title={hasProof ? "Proof image uploaded" : "No proof yet"}>
+                                                {hasProof ? "Proof ✓" : "No proof"}
+                                            </span>
                                         </div>
 
                                         <div className="kv">
@@ -646,15 +552,9 @@ export default function DriverDetailPage() {
                                                 })()}
                                             </div>
 
-                                            {/* Temporarily add order tracking info - always show for debugging */}
+                                            {/* Order tracking info */}
                                             <div className="flex muted wrap" style={{ fontSize: 12, marginTop: 4, padding: 6, background: "#f3f4f6", borderRadius: 6 }}>
-                                                <span><strong>Order ID:</strong> {s.orderId ? s.orderId.substring(0, 8) + "..." : "N/A"}</span>
-                                                <span style={{ marginLeft: 8 }}>
-                                                    <strong>Order Date:</strong> {s.orderDate ? new Date(s.orderDate).toLocaleDateString() : "N/A"}
-                                                </span>
-                                                <span style={{ marginLeft: 8 }}>
-                                                    <strong>Delivery Date:</strong> {s.deliveryDate ? new Date(s.deliveryDate).toLocaleDateString() : "N/A"}
-                                                </span>
+                                                <span><strong>Order #:</strong> {(s.orderNumber ?? s.order_number) ? `#${s.orderNumber ?? s.order_number}` : "N/A"}</span>
                                             </div>
 
                                             {s.phone && (
@@ -669,80 +569,43 @@ export default function DriverDetailPage() {
                                                     <span>{s.dislikes}</span>
                                                 </div>
                                             )}
-                                            {done && (
-                                                <div className="flex muted wrap">
-                                                    <Clock className="i16" />
-                                                    <span>Completed</span>
-                                                </div>
-                                            )}
                                         </div>
                                     </div>
 
-                                    {/* Actions */}
+                                    {/* Two actions: Maps + Take photo (opens same delivery page as /delivery/100992) */}
                                     <div className="mobile-actions">
                                         <a className="btn btn-primary block" href={mapsUrl} target="_blank" rel="noreferrer">
-                                            Open in Maps
+                                            Maps
                                         </a>
 
-                                        {showSigBtn && (
-                                            <button
-                                                className={`${sigBtnIsOpening ? "btn btn-outline btn-loading" : "btn btn-outline"} block`}
-                                                onClick={async () => {
-                                                    setSigOpeningId(s.id);
-
-                                                    // Open sheet immediately
-                                                    setSheetTitle(s.name || "Sign");
-                                                    setSheetOpen(true);
-                                                    setSheetToken(null);
-                                                    setSheetUrl("");
-
-                                                    try {
-                                                        const result = await ensureTokenForUser(s.userId);
-                                                        if (!result.ok || !result.json?.sign_token) {
-                                                            setSheetUrl("/sign/INVALID_TOKEN");
-                                                        } else {
-                                                            const token = String(result.json.sign_token);
-                                                            setSheetToken(token);
-                                                            setSheetUrl(`/sign/${token}`);
-                                                        }
-                                                    } catch (e) {
-                                                        setSheetUrl("/sign/INVALID_TOKEN");
-                                                    } finally {
-                                                        setSigOpeningId(null);
-                                                    }
-                                                }}
-                                                disabled={sigBtnIsOpening}
-                                                title="Open the public signature page"
+                                        {!hasProof ? (
+                                            takePhotoUrl ? (
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-outline block"
+                                                    title="Take photo"
+                                                    onClick={() => setProofModalStop(s)}
+                                                >
+                                                    <Camera style={{ height: 16, width: 16 }} />
+                                                    Take photo
+                                                </button>
+                                            ) : (
+                                                <span className="no-camera-msg" title="No order linked to this stop">
+                                                    No order linked — can&apos;t add proof
+                                                </span>
+                                            )
+                                        ) : (
+                                            <a
+                                                className="btn btn-outline block"
+                                                href={proofUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                title="View proof image"
                                             >
-                                                <LinkIcon style={{ height: 16, width: 16 }} />
-                                                {sigBtnIsOpening ? "Opening…" : "Collect Signatures"}
-                                            </button>
+                                                <ExternalLink style={{ height: 16, width: 16 }} />
+                                                View proof
+                                            </a>
                                         )}
-
-                                        <button
-                                            className={`${completeClass} block`}
-                                            onClick={async () => {
-                                                if (completeDisabled) return;
-                                                setCompletingId(s.id);
-
-                                                try {
-                                                    const res = await setStopCompleted(s.userId, s.id, true);
-                                                    if (res?.ok && res?.stop?.completed) {
-                                                        setStops(prev => prev.map(x => (x.id === s.id ? { ...x, completed: true } : x)));
-                                                    } else {
-                                                        console.error("setStopCompleted failed", res);
-                                                    }
-                                                } catch (err) {
-                                                    console.error("setStopCompleted error", err);
-                                                } finally {
-                                                    setCompletingId(null);
-                                                }
-                                            }}
-                                            disabled={completeDisabled}
-                                            title={done ? "Completed" : "Mark this stop as completed"}
-                                        >
-                                            {completeLabel}
-                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -752,17 +615,66 @@ export default function DriverDetailPage() {
                 )}
             </section>
 
-            <div style={{ marginTop: 24, textAlign: "center", width: "80%" }}>
-                <button
-                    className={`btn btn-outline ${reversing ? "btn-loading" : ""}`}
-                    onClick={reverseRoute}
-                    disabled={reversing}
-                    aria-disabled={reversing}
-                    title={reversing ? "Reversing…" : "Reverse the order of this route"}
-                >
-                    {reversing ? "Reversing…" : "Reverse Route"}
-                </button>
-            </div>
+            {/* Bottom sheet: delivery page in bottom 2/3; click top to close */}
+            {proofModalStop && (() => {
+                const sheetUrl = deliveryProofUrl(proofModalStop.orderNumber ?? proofModalStop.order_number, proofModalStop.orderId);
+                if (!sheetUrl) return null;
+                return (
+                    <div
+                        style={{
+                            position: "fixed",
+                            inset: 0,
+                            zIndex: 100,
+                            display: "flex",
+                            flexDirection: "column",
+                        }}
+                        aria-modal="true"
+                        role="dialog"
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setProofModalStop(null)}
+                            style={{
+                                flex: "0 0 12.5%",
+                                minHeight: "12.5%",
+                                width: "100%",
+                                background: "rgba(0,0,0,0.6)",
+                                border: "none",
+                                cursor: "pointer",
+                                padding: 0,
+                                color: "#e5e7eb",
+                                fontSize: 15,
+                                fontWeight: 500,
+                            }}
+                            aria-label="Close"
+                        >
+                            Click here to close
+                        </button>
+                        <div
+                            style={{
+                                flex: "1 1 87.5%",
+                                minHeight: 0,
+                                background: "#fff",
+                                borderTopLeftRadius: 12,
+                                borderTopRightRadius: 12,
+                                overflow: "hidden",
+                                boxShadow: "0 -4px 20px rgba(0,0,0,0.15)",
+                            }}
+                        >
+                            <iframe
+                                title="Take delivery proof"
+                                src={sheetUrl}
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    border: "none",
+                                    display: "block",
+                                }}
+                            />
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* MAP Full-screen Sheet */}
             {mapOpen && (
@@ -794,28 +706,6 @@ export default function DriverDetailPage() {
                 </div>
             )}
 
-            {/* SIGNATURE Bottom Sheet */}
-            {sheetOpen && (
-                <div className="sheet">
-                    <div className="sheet-backdrop" onClick={closeSignSheet} />
-                    <div className="sheet-panel">
-                        <div className="sheet-header">
-                            <div className="sheet-title">{sheetTitle}</div>
-                            <button className="icon-btn" onClick={closeSignSheet} aria-label="Close"><X /></button>
-                        </div>
-
-                        <iframe
-                            src={sheetUrl || "about:blank"}
-                            className="sheet-frame"
-                            title="Signature"
-                            sandbox="allow-scripts allow-same-origin allow-forms"
-                        />
-                    </div>
-                </div>
-            )}
-
-            <InlineMessageListener onDone={closeSignSheet} />
-
             {/* Page CSS */}
             <style
                 dangerouslySetInnerHTML={{
@@ -823,7 +713,7 @@ export default function DriverDetailPage() {
   --bg:#f7f8fb; --border:#e8eaef; --muted:#6b7280; --radius:14px;
   --shadow:0 6px 18px rgba(16,24,40,.06), 0 1px 6px rgba(16,24,40,.05);
   --success:#16a34a; --tap: rgba(0,0,0,.06);
-  --sigbar:#0ea5e9;
+  --proofbar:#0ea5e9;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:#111;
@@ -842,12 +732,19 @@ html,body{margin:0;padding:0;background:var(--bg);color:#111;
 .hdr-txt .title{font-weight:800; font-size:16px; line-height:1.1}
 .hdr-count{min-width:64px; text-align:right}
 .hdr-count .strong{font-weight:800}
-.hdr-count .sig-ct{margin-top:4px}
+.hdr-count .proof-ct{margin-top:4px}
 .tiny{font-size:11px}
 .progress{width:100%;height:6px;border-radius:999px;background:#f1f5f9;overflow:hidden;margin-top:6px}
 .progress>span{display:block;height:100%;border-radius:999px;background:var(--brand);transition:width .25s ease}
-.progress.sig{background:#eef6fb}
-.progress.sig>span{background:var(--sigbar)}
+.progress.proof{background:#eef6fb}
+.progress.proof>span{background:var(--proofbar)}
+.proof-actions{display:flex;flex-direction:column;gap:6px}
+.proof-actions .btn{margin:0}
+.hidden-input{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
+.chip.chip-ok{background:#ecfdf5;border-color:#10b981;color:#059669}
+.stop-card-has-proof{border-color:#a7f3d0;background:linear-gradient(to right, #ecfdf5 0%, transparent 8px)}
+.stop-card-has-proof .color-rail{background:#059669}
+.no-camera-msg{display:block;padding:10px 14px;font-size:13px;color:var(--muted);background:#f8fafc;border-radius:12px;border:1px solid var(--border)}
 
 .desktop-only{display:none}
 @media (min-width: 780px){
@@ -910,16 +807,6 @@ html,body{margin:0;padding:0;background:var(--bg);color:#111;
 }
 
 .search-wrap{margin:10px 0 14px}
-
-/* SIGNATURE Bottom sheet */
-.sheet{position:fixed;inset:0;z-index:1000;display:grid}
-.sheet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.35)}
-.sheet-panel{position:absolute;left:0;right:0;bottom:0;height:92vh;max-height:760px;background:#fff;
-  border-top-left-radius:18px;border-top-right-radius:18px;box-shadow:0 -10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;}
-.sheet-header{display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid #eee}
-.sheet-title{font-weight:700}
-.icon-btn{border:1px solid #e5e7eb;background:#fff;border-radius:10px;padding:8px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
-.sheet-frame{border:0;width:100%;height:100%;border-bottom-left-radius:18px;border-bottom-right-radius:18px}
 
 /* MAP Full-screen sheet */
 .mapsheet{position:fixed;inset:0;z-index:1200;display:grid}

@@ -187,7 +187,7 @@ export default function DriversHome() {
                         <SearchStops allStops={allStops} drivers={drivers} themeColor="#3665F3" />
                     </div>
 
-                    {/* Renders the route cards + signature bars */}
+                    {/* Route cards + proof progress */}
                     <DriversGrid drivers={drivers} allStops={allStops} selectedDate={selectedDate} />
                 </div>
             </div>
@@ -198,7 +198,7 @@ export default function DriversHome() {
 :root{
   --bg:#eef2f7; --border:#e5e7eb; --muted:#6b7280; --radius:14px;
   --shadow:0 8px 22px rgba(16,24,40,.06), 0 2px 8px rgba(16,24,40,.04);
-  --sigbar:#0ea5e9;
+  --proofbar:#0ea5e9;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:#111;
@@ -219,8 +219,8 @@ html,body{margin:0;padding:0;background:var(--bg);color:#111;
   box-shadow:inset 0 0 0 1px rgba(39,72,216,.12)}
 .progress{width:100%;height:10px;border-radius:999px;background:#f1f5f9;overflow:hidden}
 .progress>span{display:block;height:100%;border-radius:999px;transition:width .25s ease}
-.progress.sig{height:8px;background:#eef6fb}
-.progress.sig>span{background:var(--sigbar)}
+.progress.proof{height:8px;background:#eef6fb}
+.progress.proof>span{background:var(--proofbar)}
 .search-wrap{margin-bottom:16px}
 @keyframes spin { to { transform: rotate(360deg); } }
         `,

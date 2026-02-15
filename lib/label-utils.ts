@@ -105,22 +105,31 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         const qrBlockBottom = qrY + qrSize + qrMargin + qrPaddingBottom;
         // QR block = [qrZoneX, labelY] to [labelX+labelWidth, qrBlockBottom]. Nothing draws here.
 
-        const gapBetweenTextAndQr = 0.12;
-        const contentRightPhase1 = qrZoneX - gapBetweenTextAndQr; // left column must stop here (above and left of QR)
-        const textZoneWidth = contentRightPhase1 - contentX;
+        // Boundary line: text must not cross this x. Same rule for all label text left of QR.
+        const textRightEdge = qrZoneX - 0.2;
+        const textZoneMax = textRightEdge - contentX;
+        // Use only this width for any text left of QR so it never crosses the line (conservative factor)
+        const textZoneWidth = Math.max(0.5, textZoneMax * 0.58);
 
-        const rightEdgeSafety = 0.06; // keep text off the next label
-        const contentRightPhase2 = labelX + PROPS.labelWidth - PROPS.padding - rightEdgeSafety; // below QR: use rest of label
-        const textZoneWidthFull = contentRightPhase2 - contentX;
+        // Right edge of label: Phase 2 (below QR) must not go past end of label
+        const labelRightEdge = labelX + PROPS.labelWidth - PROPS.padding - 0.1;
+        const phase2MaxWidth = Math.max(0.5, (labelRightEdge - contentX) * 0.58);
 
-        // Hard boundaries: nothing must be drawn past these (stay inside this label only)
-        const labelBottom = labelY + PROPS.labelHeight - PROPS.padding; // absolute bottom of content area
-        const labelBottomSafe = labelBottom - 0.04; // safety margin so we never bleed onto next label
-        const maxYPhase1 = qrBlockBottom; // left-column text must stop above QR block
-        const phase2StartY = qrBlockBottom + 0.05; // below-QR zone starts here
+        const labelBottom = labelY + PROPS.labelHeight - PROPS.padding;
+        const labelBottomSafe = labelBottom - 0.06;
+        // Phase 1: left column only; stop with margin above bottom of QR block
+        const maxYPhase1 = qrBlockBottom - 0.08;
+        // Below QR: continuation items + notes (when present)
+        const phase2StartY = qrBlockBottom + 0.05;
         const lineHeight = 0.14;
+        const phase2LineHeight = 0.12; // tighter so more continuation items fit (use with smaller font below)
         const headerLineHeight = 0.2;
         const addressLineHeight = 0.16;
+
+        // Draw boundary line: text does not cross this (same as labels)
+        doc.setDrawColor(180, 180, 180);
+        doc.setLineWidth(0.006);
+        doc.line(textRightEdge, labelY, textRightEdge, maxYPhase1);
 
         // Driver color for all text (when getDriverInfo provided)
         const driverInfo = getDriverInfo?.(order);
@@ -143,7 +152,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
 
         let currentY = contentY + 0.15; // Start Y (must stay <= labelBottom)
 
-        // 1. Client Name (Bold) — only lines that fit in left column above QR
+        // 1. Client Name (Bold) — splitTextToSize so lines stay left of hard line
         doc.setFontSize(PROPS.headerSize);
         doc.setFont('helvetica', 'bold');
         setDriverColor();
@@ -156,7 +165,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
             currentY += nameLines.length * headerLineHeight;
         }
 
-        // 2. Address (Normal) — only lines that fit in left column above QR
+        // 2. Address (Normal) — splitTextToSize so lines stay left of hard line
         doc.setFontSize(PROPS.fontSize);
         doc.setFont('helvetica', 'normal');
         setDriverColor();
@@ -183,84 +192,60 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         const itemsDisplay = itemsText || 'No items';
 
         const remainingHeight1 = maxYPhase1 - currentY;
+        let restItems: string | null = null;
         if (remainingHeight1 > 0.2) {
             const splitItems1 = doc.splitTextToSize(itemsDisplay, textZoneWidth);
             const maxLines1 = maxLinesThatFit(currentY, maxYPhase1, lineHeight);
             const linesPhase1 = splitItems1.slice(0, maxLines1);
-            const restItems = splitItems1.length > maxLines1 ? splitItems1.slice(maxLines1).join(' ') : null;
 
             if (linesPhase1.length > 0) {
                 doc.text(linesPhase1, contentX, currentY);
                 currentY += linesPhase1.length * lineHeight + 0.06;
+                if (splitItems1.length > maxLines1) {
+                    restItems = splitItems1.slice(maxLines1).join(' ');
+                }
             }
             currentY = Math.min(currentY, maxYPhase1);
+        }
 
-            // Phase 2: only in the strip [phase2StartY, labelBottomSafe]; never draw past labelBottomSafe
-            const phase2AvailableHeight = labelBottomSafe - phase2StartY;
-            const notesTextPhase2 = getNotes?.(order.client_id)?.trim() ?? '';
-            const hasNotesPhase2 = notesTextPhase2.length > 0;
-            if (restItems && phase2AvailableHeight > lineHeight) {
-                const splitItems2 = doc.splitTextToSize(restItems, textZoneWidthFull);
-                const reservedForNotes = hasNotesPhase2 ? lineHeight * 2.5 : 0;
-                const maxLines2 = maxLinesThatFit(phase2StartY, labelBottomSafe - reservedForNotes, lineHeight);
+        // Below QR: continuation items (if any), then notes (when present)
+        const phase2AvailableHeight = labelBottomSafe - phase2StartY;
+        const notesText = getNotes?.(order.client_id)?.trim() ?? '';
+        const hasNotes = notesText.length > 0;
+        let phase2Y = phase2StartY;
 
-                if (maxLines2 > 0) {
-                    const linesPhase2 = splitItems2.slice(0, maxLines2);
-                    const truncated = splitItems2.length > maxLines2;
-                    if (linesPhase2.length > 0) {
-                        if (truncated) {
-                            const last = linesPhase2[linesPhase2.length - 1];
-                            linesPhase2[linesPhase2.length - 1] = last.substring(0, Math.max(0, last.length - 3)) + '...';
-                        }
-                        doc.text(linesPhase2, contentX, phase2StartY);
-                        let phase2Y = phase2StartY + linesPhase2.length * lineHeight + 0.06;
-
-                        if (hasNotesPhase2 && phase2Y + lineHeight <= labelBottomSafe) {
-                            doc.setFontSize(PROPS.smallSize);
-                            setDriverColor();
-                            const notesDisplay = `Notes: ${notesTextPhase2}`;
-                            const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
-                            const maxNotesLines = maxLinesThatFit(phase2Y, labelBottomSafe, lineHeight);
-                            const visibleNotes = splitNotes.slice(0, maxNotesLines);
-                            if (visibleNotes.length > 0) {
-                                doc.text(visibleNotes, contentX, phase2Y);
-                            }
-                        }
-                    }
-                } else if (hasNotesPhase2 && phase2AvailableHeight > lineHeight) {
-                    doc.setFontSize(PROPS.smallSize);
-                    setDriverColor();
-                    const notesDisplay = `Notes: ${notesTextPhase2}`;
-                    const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
-                    const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, lineHeight);
-                    const visibleNotes = splitNotes.slice(0, maxNotesLines);
-                    if (visibleNotes.length > 0) {
-                        doc.text(visibleNotes, contentX, phase2StartY);
-                    }
-                }
-            } else if (hasNotesPhase2 && phase2AvailableHeight > lineHeight) {
-                doc.setFontSize(PROPS.smallSize);
-                setDriverColor();
-                const notesDisplay = `Notes: ${notesTextPhase2}`;
-                const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
-                const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, lineHeight);
-                const visibleNotes = splitNotes.slice(0, maxNotesLines);
-                if (visibleNotes.length > 0) {
-                    doc.text(visibleNotes, contentX, phase2StartY);
-                }
+        if (restItems && phase2AvailableHeight > phase2LineHeight) {
+            doc.setFontSize(PROPS.smallSize - 1); // 7pt so more lines fit below QR
+            const splitItems2 = doc.splitTextToSize(restItems, phase2MaxWidth);
+            const reservedForNotes = hasNotes ? phase2LineHeight * 2.5 : 0;
+            const maxLines2 = maxLinesThatFit(phase2StartY, labelBottomSafe - reservedForNotes, phase2LineHeight);
+            const linesPhase2 = splitItems2.slice(0, maxLines2);
+            if (linesPhase2.length > 0) {
+                doc.text(linesPhase2, contentX, phase2Y);
+                phase2Y += linesPhase2.length * phase2LineHeight + 0.04;
             }
-        } else {
-            const notesText = getNotes?.(order.client_id)?.trim();
-            if (notesText && phase2StartY + lineHeight <= labelBottomSafe) {
-                doc.setFontSize(PROPS.smallSize);
-                setDriverColor();
-                const notesDisplay = `Notes: ${notesText}`;
-                const splitNotes = doc.splitTextToSize(notesDisplay, textZoneWidthFull);
-                const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, lineHeight);
-                const visibleNotes = splitNotes.slice(0, maxNotesLines);
-                if (visibleNotes.length > 0) {
-                    doc.text(visibleNotes, contentX, phase2StartY);
-                }
+            doc.setFontSize(PROPS.smallSize);
+        }
+
+        if (hasNotes && phase2Y + phase2LineHeight <= labelBottomSafe) {
+            doc.setFontSize(PROPS.smallSize);
+            setDriverColor();
+            const notesDisplay = `Notes: ${notesText}`;
+            const splitNotes = doc.splitTextToSize(notesDisplay, phase2MaxWidth);
+            const maxNotesLines = maxLinesThatFit(phase2Y, labelBottomSafe, phase2LineHeight);
+            const visibleNotes = splitNotes.slice(0, maxNotesLines);
+            if (visibleNotes.length > 0) {
+                doc.text(visibleNotes, contentX, phase2Y);
+            }
+        } else if (hasNotes && !restItems && phase2AvailableHeight > phase2LineHeight) {
+            doc.setFontSize(PROPS.smallSize);
+            setDriverColor();
+            const notesDisplay = `Notes: ${notesText}`;
+            const splitNotes = doc.splitTextToSize(notesDisplay, phase2MaxWidth);
+            const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, phase2LineHeight);
+            const visibleNotes = splitNotes.slice(0, maxNotesLines);
+            if (visibleNotes.length > 0) {
+                doc.text(visibleNotes, contentX, phase2StartY);
             }
         }
         resetColor();

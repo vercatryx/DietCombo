@@ -876,9 +876,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         setIsExporting(true);
         try {
         // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
-        const freshOrders = dateKey === 'no-date'
-            ? (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date)
-            : await getOrdersByVendor(vendorId, dateKey);
+        // Use API route when we have a date to avoid server-action response size/serialization issues with items
+        let freshOrders: any[];
+        if (dateKey === 'no-date') {
+            freshOrders = (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date);
+        } else {
+            const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateKey)}`, { credentials: 'include' });
+            if (!res.ok) throw new Error('Failed to fetch orders for export');
+            freshOrders = await res.json();
+        }
         if (freshOrders.length === 0) {
             alert('No orders to export for this date');
             return;
@@ -924,16 +930,21 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         }
         setIsExporting(true);
         try {
-            // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
-            const freshOrders = dateKey === 'no-date'
-                ? (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date)
-                : await getOrdersByVendor(vendorId, dateKey);
-            if (freshOrders.length === 0) {
+            // Re-fetch full orders for this date (use API to avoid server-action serialization issues with items)
+            let freshOrdersAlt: any[];
+            if (dateKey === 'no-date') {
+                freshOrdersAlt = (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date);
+            } else {
+                const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateKey)}`, { credentials: 'include' });
+                if (!res.ok) throw new Error('Failed to fetch orders for export');
+                freshOrdersAlt = await res.json();
+            }
+            if (freshOrdersAlt.length === 0) {
                 alert('No orders to export for this date');
                 return;
             }
             const clientsForExport = await getClientsUnlimited();
-            const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsForExport);
+            const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrdersAlt, clientsForExport);
             const clientById = new Map(clientsForExport.map(c => [c.id, c]));
             const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
             const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};

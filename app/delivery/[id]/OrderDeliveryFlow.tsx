@@ -1,10 +1,13 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, X, PenTool, ExternalLink } from 'lucide-react';
 import '../delivery.css';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface OrderDetails {
     id: string;
@@ -17,12 +20,53 @@ interface OrderDetails {
 }
 
 export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
+    const pathname = usePathname();
+    const router = useRouter();
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>(
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
     const [imageSrc, setImageSrc] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
+    const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
+
+    // If we landed with UUID in URL but order has order_number, show order number in URL (e.g. /delivery/100992)
+    useEffect(() => {
+        const orderNum = order?.orderNumber;
+        if (!orderNum || typeof window === 'undefined' || !pathname) return;
+        const segment = pathname.replace(/^\/delivery\/?/, '').split('/')[0] || '';
+        if (UUID_REGEX.test(segment)) {
+            const canonical = `/delivery/${encodeURIComponent(String(orderNum))}`;
+            if (pathname !== canonical) router.replace(canonical);
+        }
+    }, [order?.orderNumber, pathname, router]);
+
+    // When showing camera step, detect if device has a camera. Do not fall back to file upload.
+    useEffect(() => {
+        if (step !== 'CAPTURE') return;
+        let cancelled = false;
+        setHasCamera(null);
+        (async () => {
+            try {
+                if (!navigator.mediaDevices?.getUserMedia) {
+                    if (!cancelled) setHasCamera(false);
+                    return;
+                }
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+                if (videoInputs.length === 0) {
+                    if (!cancelled) setHasCamera(false);
+                    return;
+                }
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                stream.getTracks().forEach((t) => t.stop());
+                if (!cancelled) setHasCamera(true);
+            } catch {
+                if (!cancelled) setHasCamera(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [step]);
 
     const capture = useCallback(() => {
         const imageSrc = webcamRef.current?.getScreenshot();
@@ -121,6 +165,34 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     }
 
     if (step === 'CAPTURE') {
+        if (hasCamera === false) {
+            return (
+                <div className="delivery-card text-center" style={{ marginTop: '2.5rem', borderColor: 'rgba(234, 179, 8, 0.4)' }}>
+                    <div className="error-icon" style={{ color: '#fbbf24' }}>
+                        <Camera size={40} />
+                    </div>
+                    <h2 className="text-title" style={{ fontSize: '1.25rem' }}>No camera available</h2>
+                    <p className="text-subtitle" style={{ marginTop: '0.5rem' }}>
+                        This device doesn&apos;t have a camera. Use a device with a camera to take delivery proof.
+                    </p>
+                    <button
+                        onClick={() => setStep('VERIFY')}
+                        className="btn-secondary"
+                        style={{ width: '100%', marginTop: '1.5rem' }}
+                    >
+                        Back
+                    </button>
+                </div>
+            );
+        }
+        if (hasCamera === null) {
+            return (
+                <div className="delivery-card text-center" style={{ marginTop: '2.5rem' }}>
+                    <div className="spinner" style={{ margin: '0 auto', width: '3rem', height: '3rem', borderTopColor: 'var(--color-primary)' }}></div>
+                    <p className="text-subtitle" style={{ marginTop: '1rem' }}>Checking for camera…</p>
+                </div>
+            );
+        }
         return (
             <div className="camera-overlay-full">
                 <div className="camera-view">

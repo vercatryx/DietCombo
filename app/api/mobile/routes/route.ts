@@ -32,7 +32,7 @@ export async function GET(req: Request) {
         // 1) Fetch drivers (include day="all" when a specific day is requested)
         let driversQuery = supabase
             .from('drivers')
-            .select('id, name, color, stop_ids')
+            .select('id, name, color')
             .order('id', { ascending: true });
         
         if (dayParam !== "all") {
@@ -54,7 +54,7 @@ export async function GET(req: Request) {
             // Try to query with driver_id if the column exists
             const { data, error } = await supabase
                 .from('routes')
-                .select('id, name, color, stop_ids, driver_id')
+                .select('id, name, color, driver_id')
                 .order('id', { ascending: true });
             if (error) throw error;
             routesRaw = data || [];
@@ -63,7 +63,7 @@ export async function GET(req: Request) {
             if (e?.message?.includes('driver_id') || e?.code === 'PGRST116') {
                 const { data, error: retryError } = await supabase
                     .from('routes')
-                    .select('id, name, color, stop_ids')
+                    .select('id, name, color')
                     .order('id', { ascending: true });
                 if (retryError) throw retryError;
                 routesRaw = data || [];
@@ -102,11 +102,11 @@ export async function GET(req: Request) {
         const driverIds = drivers.map(d => String(d.id));
         console.log("[mobile/routes] total (drivers + routes):", drivers.length);
 
-        // When delivery_date is provided, build order from driver_route_order + stops (set-based). Otherwise fall back to stop_ids + assigned_driver_id.
+        // driver_route_order + client.assigned_driver_id only (no stop_ids — allows DB column removal)
         let stops: any[] = [];
         let routeOrderByDriver: Map<string, { client_id: string }[]> = new Map();
 
-        if (deliveryDateParam && driverIds.length > 0) {
+        if (driverIds.length > 0) {
             const { data: routeOrderRows } = await supabase
                 .from('driver_route_order')
                 .select('driver_id, client_id, position')
@@ -118,66 +118,71 @@ export async function GET(req: Request) {
                 if (!routeOrderByDriver.has(did)) routeOrderByDriver.set(did, []);
                 routeOrderByDriver.get(did)!.push({ client_id: String(row.client_id) });
             }
+            let rawStops: any[] = [];
+            if (deliveryDateParam) {
             const { data: stopsForDate } = await supabase
                 .from('stops')
-                .select('id, completed, assigned_driver_id, delivery_date, client_id')
-                .in('assigned_driver_id', driverIds)
+                .select('id, completed, delivery_date, client_id, assigned_driver_id')
                 .eq('delivery_date', deliveryDateParam);
-            stops = stopsForDate || [];
-        } else {
-            const allStopIds = Array.from(
-                new Set(
-                    drivers.flatMap((d: any) => {
-                        try {
-                            const stopIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === 'string' ? JSON.parse(d.stop_ids || '[]') : []);
-                            return stopIds.map((id: any) => String(id)).filter((id: string) => id && id.trim().length > 0);
-                        } catch { return []; }
-                    })
-                )
-            );
-            if (allStopIds.length > 0) {
-                let q = supabase.from('stops').select('id, completed, assigned_driver_id, delivery_date, client_id').in('id', allStopIds);
-                if (deliveryDateParam) q = q.eq('delivery_date', deliveryDateParam);
-                const { data: byId } = await q;
-                stops = byId || [];
+                rawStops = stopsForDate || [];
+            } else {
+                // No delivery_date: get stops by day (no stop_ids)
+                let stopsQuery = supabase.from('stops').select('id, completed, delivery_date, client_id, assigned_driver_id');
+                if (dayParam !== "all") stopsQuery = stopsQuery.eq('day', dayParam);
+                const { data: byDay } = await stopsQuery;
+                rawStops = byDay || [];
             }
-            if (stops.length === 0 && driverIds.length > 0) {
-                let q = supabase.from('stops').select('id, completed, assigned_driver_id, delivery_date, client_id').in('assigned_driver_id', driverIds);
-                if (deliveryDateParam) q = q.eq('delivery_date', deliveryDateParam);
-                const { data: byDriver } = await q;
-                const existingIds = new Set(stops.map((s: any) => String(s.id)));
-                const extra = (byDriver || []).filter((s: any) => !existingIds.has(String(s.id)));
-                stops = [...stops, ...extra];
-            }
+            const cids = [...new Set(rawStops.map((s: any) => s.client_id).filter(Boolean))];
+            const { data: clients } = cids.length > 0
+                ? await supabase.from('clients').select('id, assigned_driver_id').in('id', cids)
+                : { data: [] };
+            const clientById = new Map((clients || []).map((c: any) => [String(c.id), c]));
+            stops = rawStops.filter((s: any) => {
+                const c = clientById.get(String(s.client_id));
+                const driverId = (c?.assigned_driver_id ?? s?.assigned_driver_id) ? String(c?.assigned_driver_id ?? s.assigned_driver_id) : null;
+                return driverId && driverIds.includes(driverId);
+            });
         }
 
         const stopById = new Map<string, any>();
-        const stopByDriverAndClient = new Map<string, any>(); // key: `${driverId}|${clientId}`
+        const stopByDriverAndClient = new Map<string, any>(); // key: `${driverId}|${clientId}` - uses client.assigned_driver_id
+        const clientByIdForStops = new Map<string, any>();
+        if (stops.length > 0) {
+            const cids = [...new Set(stops.map((s: any) => s.client_id).filter(Boolean))];
+            const { data: clientsForStops } = cids.length > 0
+                ? await supabase.from('clients').select('id, assigned_driver_id').in('id', cids)
+                : { data: [] };
+            (clientsForStops || []).forEach((c: any) => clientByIdForStops.set(String(c.id), c));
+        }
         for (const s of stops) {
             stopById.set(String(s.id), s);
-            if (s.assigned_driver_id != null && s.client_id != null) {
-                stopByDriverAndClient.set(`${String(s.assigned_driver_id)}|${String(s.client_id)}`, s);
+            const c = clientByIdForStops.get(String(s.client_id));
+            const driverId = c?.assigned_driver_id ?? s?.assigned_driver_id ?? null;
+            if (driverId != null && s.client_id != null) {
+                stopByDriverAndClient.set(`${String(driverId)}|${String(s.client_id)}`, s);
             }
         }
         console.log("[mobile/routes] Total unique stops loaded:", stopById.size);
 
-        // Shape per driver: use driver_route_order order when available, else legacy stop_ids + assigned_driver_id
+        // Shape per driver: driver_route_order order when available, else client.assigned_driver_id only
         const shaped = drivers.map((d) => {
             const did = String(d.id);
             let filteredIds: string[];
             const orderList = routeOrderByDriver.get(did);
-            if (orderList && orderList.length > 0 && deliveryDateParam) {
+            if (orderList && orderList.length > 0) {
                 filteredIds = orderList
                     .map((row) => stopByDriverAndClient.get(`${did}|${row.client_id}`))
                     .filter(Boolean)
                     .map((s: any) => String(s.id));
             } else {
-                const rawIds = Array.isArray(d.stop_ids) ? d.stop_ids : (typeof d.stop_ids === 'string' ? JSON.parse(d.stop_ids || '[]') : []);
-                const stopIdsFromField = rawIds.map((id: any) => String(id)).filter((id: string) => id && id.trim().length > 0);
-                const stopsByDriver = Array.from(stopById.values())
-                    .filter((s: any) => String(s.assigned_driver_id) === did)
+                // No stop_ids — use client.assigned_driver_id only (allows DB column removal)
+                filteredIds = Array.from(stopById.values())
+                    .filter((s: any) => {
+                        const c = clientByIdForStops.get(String(s.client_id));
+                        const driverId = (c?.assigned_driver_id ?? s?.assigned_driver_id) ? String(c?.assigned_driver_id ?? s.assigned_driver_id) : null;
+                        return driverId === did;
+                    })
                     .map((s: any) => String(s.id));
-                filteredIds = Array.from(new Set([...stopIdsFromField, ...stopsByDriver])).filter((id: string) => stopById.has(id));
             }
             let completed = 0;
             for (const sid of filteredIds) {

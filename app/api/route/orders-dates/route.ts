@@ -16,15 +16,16 @@ function toDateKey(raw: string | null | undefined): string | null {
 
 /**
  * GET /api/route/orders-dates
- * Returns dates that have orders (and upcoming_orders) with counts.
+ * Returns dates that have orders with counts (actual orders only, not upcoming_orders).
  * Used by Drivers calendar so dates/amounts match "orders for that day" (America/New_York).
- * Excludes cancelled and produce from orders.
+ * Excludes cancelled and produce. Does not include upcoming_orders so the calendar
+ * only shows days with real deliverable orders (avoids phantom counts from scheduled placeholders).
  */
 export async function GET() {
     try {
         const dateCounts: Record<string, number> = {};
 
-        // 1) orders: scheduled_delivery_date, exclude cancelled and produce
+        // orders only: scheduled_delivery_date, exclude cancelled and produce
         const { data: ordersData, error: ordersError } = await supabase
             .from("orders")
             .select("scheduled_delivery_date, service_type")
@@ -41,20 +42,6 @@ export async function GET() {
             const key = toDateKey(row.scheduled_delivery_date);
             if (key) dateCounts[key] = (dateCounts[key] || 0) + 1;
         });
-
-        // 2) upcoming_orders: scheduled_delivery_date when set (scheduled status)
-        const { data: upcomingData, error: upcomingError } = await supabase
-            .from("upcoming_orders")
-            .select("scheduled_delivery_date")
-            .eq("status", "scheduled")
-            .not("scheduled_delivery_date", "is", null);
-
-        if (!upcomingError && upcomingData) {
-            upcomingData.forEach((row: any) => {
-                const key = toDateKey(row.scheduled_delivery_date);
-                if (key) dateCounts[key] = (dateCounts[key] || 0) + 1;
-            });
-        }
 
         return NextResponse.json(
             { dates: dateCounts },
