@@ -285,11 +285,11 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
 
             // Print non-complex stops in route order (first line = client name only, never address)
             const notesText = getNotes(u);
-
+            const cityStateZip = [u.city, u.state, u.zip].filter(Boolean).join(", ");
             const lines = [
                 clientName(u),
                 `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
-                `${u.city ?? ""} ${u.state ?? ""}`.trim(),
+                cityStateZip,
                 (u.phone ? `Phone: ${u.phone}` : "").trim(),
                 notesText ? `Notes: ${notesText}` : "",
             ].filter(Boolean);
@@ -372,10 +372,11 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
 
             // Prepare label content (first line = client name only, never address)
             const notesText = getNotes(u);
+            const cityStateZip = [u.city, u.state, u.zip].filter(Boolean).join(", ");
             const lines = [
                 clientName(u),
                 `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim(),
-                `${u.city ?? ""} ${u.state ?? ""}`.trim(),
+                cityStateZip,
                 (u.phone ? `Phone: ${u.phone}` : "").trim(),
                 notesText ? `Notes: ${notesText}` : "",
             ].filter(Boolean);

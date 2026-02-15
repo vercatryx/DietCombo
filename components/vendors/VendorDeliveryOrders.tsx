@@ -8,6 +8,7 @@ import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, ge
 import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
 import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText, Loader2 } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { formatFullAddress } from '@/lib/addressHelpers';
 import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { toDateStringInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
@@ -147,7 +148,9 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
 
     function getClientAddress(clientId: string) {
         const client = clients.find(c => c.id === clientId);
-        return client?.address || '-';
+        if (!client) return '-';
+        const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
+        return full || client.address || '-';
     }
 
     function getClientPhone(clientId: string) {
@@ -349,7 +352,12 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             return '';
         };
         const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
-        const getClientAddressForExport = (id: string) => clientById.get(id)?.address || '-';
+        const getClientAddressForExport = (id: string) => {
+            const c = clientById.get(id);
+            if (!c) return '-';
+            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
+            return full || c.address || '-';
+        };
         const getClientPhoneForExport = (id: string) => clientById.get(id)?.phoneNumber || '-';
 
         const headers = [
@@ -423,7 +431,12 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         const clientById = new Map(clientsForExport.map(c => [c.id, c]));
         const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : {};
         const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
-        const getClientAddressForExport = (clientId: string) => clientById.get(clientId)?.address || '-';
+        const getClientAddressForExport = (clientId: string) => {
+            const c = clientById.get(clientId);
+            if (!c) return '-';
+            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
+            return full || c.address || '-';
+        };
         await generateLabelsPDF({
             orders: sortedOrders,
             getClientName: getClientNameForExport,

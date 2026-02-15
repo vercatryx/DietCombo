@@ -9,6 +9,7 @@ import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, ge
 import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { generateLabelsPDF, generateTablePDF } from '@/lib/label-utils';
+import { formatFullAddress } from '@/lib/addressHelpers';
 import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { logout } from '@/lib/auth-actions';
 import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from '@/lib/timezone';
@@ -129,7 +130,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
 
     function getClientAddress(clientId: string) {
         const client = clients.find(c => c.id === clientId);
-        return client?.address || '-';
+        if (!client) return '-';
+        const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
+        return full || client.address || '-';
     }
 
     function getClientPhone(clientId: string) {
@@ -778,7 +781,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             return '';
         };
         const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
-        const getClientAddressForExport = (id: string) => clientById.get(id)?.address || '-';
+        const getClientAddressForExport = (id: string) => {
+            const c = clientById.get(id);
+            if (!c) return '-';
+            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
+            return full || c.address || '-';
+        };
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}`;
 
@@ -830,7 +838,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             return '';
         };
         const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
-        const getClientAddressForExport = (id: string) => clientById.get(id)?.address || '-';
+        const getClientAddressForExport = (id: string) => {
+            const c = clientById.get(id);
+            if (!c) return '-';
+            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
+            return full || c.address || '-';
+        };
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}_breakdown`;
         generateTablePDF({
@@ -896,7 +909,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
         const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
-        const getClientAddressForExport = (clientId: string) => clientById.get(clientId)?.address || '-';
+        const getClientAddressForExport = (clientId: string) => {
+            const c = clientById.get(clientId);
+            if (!c) return '-';
+            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
+            return full || c.address || '-';
+        };
         await generateLabelsPDF({
             orders: sortedOrders,
             getClientName: getClientNameForExport,
@@ -949,7 +967,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
             const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
             const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
-            const getClientAddressForExport = (clientId: string) => clientById.get(clientId)?.address || '-';
+            const getClientAddressForExport = (clientId: string) => {
+            const c = clientById.get(clientId);
+            if (!c) return '-';
+            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
+            return full || c.address || '-';
+        };
             await generateLabelsPDF({
                 orders: sortedOrders,
                 getClientName: getClientNameForExport,

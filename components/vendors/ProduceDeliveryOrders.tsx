@@ -7,6 +7,7 @@ import { getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cach
 import { getOrdersByServiceType, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
 import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { formatFullAddress } from '@/lib/addressHelpers';
 import { toDateStringInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
@@ -127,7 +128,9 @@ export function ProduceDeliveryOrders({ deliveryDate }: Props) {
 
     function getClientAddress(clientId: string) {
         const client = clients.find(c => c.id === clientId);
-        return client?.address || '-';
+        if (!client) return '-';
+        const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
+        return full || client.address || '-';
     }
 
     function getClientPhone(clientId: string) {

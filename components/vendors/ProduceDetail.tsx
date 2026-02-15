@@ -6,6 +6,7 @@ import { ClientProfile, MenuItem, BoxType } from '@/lib/types';
 import { getClients, getMenuItems, getBoxTypes } from '@/lib/cached-data';
 import { Package, FileText, Search, User } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
+import { formatFullAddress } from '@/lib/addressHelpers';
 import styles from './VendorDetail.module.css';
 
 export function ProduceDetail() {
@@ -51,7 +52,9 @@ export function ProduceDetail() {
 
     function getClientAddress(clientId: string) {
         const client = allClients.find(c => c.id === clientId);
-        return client?.address || '-';
+        if (!client) return '-';
+        const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
+        return full || client.address || '-';
     }
 
     function getClientPhone(clientId: string) {
@@ -90,7 +93,9 @@ export function ProduceDetail() {
             },
             getClientAddress: (clientId: string) => {
                 const client = allClients.find(c => c.id === clientId);
-                return client?.address || '-';
+                if (!client) return '-';
+                const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
+                return full || client.address || '-';
             },
             formatOrderedItemsForCSV: () => 'Produce Client',
             formatDate: () => '',
