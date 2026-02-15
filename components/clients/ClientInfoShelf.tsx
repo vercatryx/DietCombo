@@ -80,7 +80,9 @@ export function ClientInfoShelf({
     const [dependentDob, setDependentDob] = useState('');
     const [dependentCin, setDependentCin] = useState('');
     const [creatingDependent, setCreatingDependent] = useState(false);
+    const [loadingDependents, setLoadingDependents] = useState(false);
     const [localDependents, setLocalDependents] = useState<ClientProfile[]>([]);
+    const [deletingDependentId, setDeletingDependentId] = useState<string | null>(null);
 
     // Screening State
     const [loadingForm, setLoadingForm] = useState(false);
@@ -98,14 +100,18 @@ export function ClientInfoShelf({
     useEffect(() => {
         if (allClients.length > 0) {
             setLocalDependents(allClients.filter(c => c.parentClientId === client.id));
+            setLoadingDependents(false);
         } else {
             // Fetch if not provided (fallback)
+            setLoadingDependents(true);
             const fetchDependents = async () => {
                 try {
                     const deps = await getDependentsByParentId(client.id);
                     setLocalDependents(deps);
                 } catch (error) {
                     console.error('Error fetching dependents:', error);
+                } finally {
+                    setLoadingDependents(false);
                 }
             };
             fetchDependents();
@@ -230,6 +236,21 @@ export function ClientInfoShelf({
             alert(error instanceof Error ? error.message : 'Failed to create dependent');
         } finally {
             setCreatingDependent(false);
+        }
+    };
+
+    const handleDeleteDependent = async (dep: ClientProfile) => {
+        if (!confirm(`Delete dependent "${dep.fullName}"? This cannot be undone.`)) return;
+        setDeletingDependentId(dep.id);
+        try {
+            await deleteClient(dep.id);
+            setLocalDependents(prev => prev.filter(d => d.id !== dep.id));
+            if (onClientUpdated) onClientUpdated(undefined);
+        } catch (error) {
+            console.error('Error deleting dependent:', error);
+            alert(error instanceof Error ? error.message : 'Failed to delete dependent');
+        } finally {
+            setDeletingDependentId(null);
         }
     };
 
@@ -808,8 +829,13 @@ export function ClientInfoShelf({
                                 </div>
                             )}
 
-                            {localDependents.length === 0 ? (
-                                <div className={styles.emptyText}>No dependents</div>
+                            {loadingDependents ? (
+                                <div className={styles.emptyText} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <Loader2 size={16} className="animate-spin" />
+                                    Loading dependants…
+                                </div>
+                            ) : localDependents.length === 0 ? (
+                                <div className={styles.emptyText}>No dependants</div>
                             ) : (
                                 <div className={styles.dependentsList}>
                                     {localDependents.map(dep => (
@@ -817,12 +843,33 @@ export function ClientInfoShelf({
                                             key={dep.id}
                                             className={styles.dependentCard}
                                             onClick={() => onOpenProfile(dep.id)}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                                         >
-                                            <div className={styles.depName}>{dep.fullName}</div>
-                                            <div className={styles.depInfo}>
-                                                {dep.dob && <span>DOB: {new Date(dep.dob).toLocaleDateString()}</span>}
-                                                {dep.cin && <span> | CIN: {dep.cin}</span>}
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div className={styles.depName}>{dep.fullName}</div>
+                                                <div className={styles.depInfo}>
+                                                    {dep.dob && <span>DOB: {new Date(dep.dob).toLocaleDateString()}</span>}
+                                                    {dep.cin && <span> | CIN: {dep.cin}</span>}
+                                                </div>
                                             </div>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                style={{ flexShrink: 0, padding: '4px 8px' }}
+                                                title="Delete dependent"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDeleteDependent(dep);
+                                                }}
+                                                disabled={deletingDependentId === dep.id}
+                                                aria-label={`Delete ${dep.fullName}`}
+                                            >
+                                                {deletingDependentId === dep.id ? (
+                                                    <Loader2 size={14} className="animate-spin" />
+                                                ) : (
+                                                    <Trash2 size={14} />
+                                                )}
+                                            </button>
                                         </div>
                                     ))}
                                 </div>

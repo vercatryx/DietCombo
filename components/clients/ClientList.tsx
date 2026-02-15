@@ -737,7 +737,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setSelectedParentClientId('');
             setParentClientSearch('');
             setEditingDependentId(null);
-            window.location.reload(); // Reload to refresh the list
+            // Refresh list so the new dependent appears; show dependents so it's visible
+            setShowDependents(true);
+            await refreshDataInBackground();
         } catch (error) {
             console.error('Error saving dependent:', error);
             alert(error instanceof Error ? error.message : 'Failed to save dependent');

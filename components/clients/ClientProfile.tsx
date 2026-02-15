@@ -3829,16 +3829,17 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             const cinValue = dependentCin.trim() ? parseFloat(dependentCin.trim()) : null;
             const newDependent = await addDependent(dependentName.trim(), client.id, dobValue, cinValue);
             if (newDependent) {
-                // Refresh dependents list
-                const dependentsData = await getDependentsByParentId(client.id);
-                setDependents(dependentsData);
+                // Show new dependent immediately (optimistic update) so it appears without refresh
+                setDependents(prev => [...prev, newDependent]);
                 // Reset form
                 setDependentName('');
                 setDependentDob('');
                 setDependentCin('');
                 setShowAddDependentForm(false);
-                // Invalidate cache to refresh list in parent component
+                // Invalidate cache so parent list can refresh when profile is closed
                 invalidateClientData();
+                // Refetch in background to stay in sync (e.g. server-side defaults)
+                getDependentsByParentId(client.id).then(setDependents).catch(() => {});
             }
         } catch (error) {
             console.error('Error creating dependent:', error);
