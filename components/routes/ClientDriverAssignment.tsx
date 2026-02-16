@@ -33,11 +33,22 @@ interface DriverInfo {
     color?: string | null;
 }
 
+export interface ClientStatsForRoutes {
+    total_clients: number;
+    total_dependants: number;
+    total_primaries_food: number;
+    total_produce: number;
+    primary_paused_or_delivery_off: number;
+    primary_food_missing_geo: number;
+}
+
 interface ClientDriverAssignmentProps {
     /** Clients from assignment-data API (with assigned_driver_id). No fetch inside. */
     initialClients: any[];
     /** Drivers from assignment-data API: id, name, color. */
     drivers: DriverInfo[];
+    /** Summary counts for routes page (all clients, dependants, primaries food, produce, etc.). */
+    stats?: ClientStatsForRoutes | null;
     assignmentDataLoading?: boolean;
     selectedDay: string;
     selectedDeliveryDate?: string;
@@ -54,6 +65,7 @@ const DEFAULT_PALETTE = [
 export default function ClientDriverAssignment({
     initialClients,
     drivers,
+    stats = null,
     assignmentDataLoading = false,
     selectedDay,
     selectedDeliveryDate,
@@ -109,13 +121,10 @@ export default function ClientDriverAssignment({
         name: d.name,
         driverId: d.id
     })), [drivers]);
-    const totalCustomers = clients.length;
-
     // When parent refreshes assignment data, clear optimistic overrides
     useEffect(() => {
         setAssignmentOverride(new Map());
     }, [initialClients]);
-    const skippedPausedOrDeliveryOff = 0;
 
     async function handleDriverChange(clientId: string, driverId: string) {
         setSavingClientId(clientId);
@@ -349,7 +358,7 @@ export default function ClientDriverAssignment({
         await handleDriverChange(clientId, toDriverId || '');
     };
 
-    const clientsWithoutGeo = filteredClients.length - mapStops.length;
+    const primaryFoodMissingGeo = stats?.primary_food_missing_geo ?? 0;
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
@@ -357,20 +366,35 @@ export default function ClientDriverAssignment({
                 <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
                     Client Driver Assignment
                 </Typography>
-                <Typography variant="body2" sx={{ color: '#6b7280', mb: 1 }}>
-                    Showing {mapStops.length} of {filteredClients.length} clients with geolocation
-                    {totalCustomers > 0 && (
-                        <> • {totalCustomers} total customer{totalCustomers !== 1 ? 's' : ''}</>
-                    )}
-                    {skippedPausedOrDeliveryOff > 0 && (
-                        <> • {skippedPausedOrDeliveryOff} skipped (paused or delivery off)</>
-                    )}
-                    {selectedClientIds.size > 0 && ` • ${selectedClientIds.size} selected`}
-                </Typography>
-                {clientsWithoutGeo > 0 && (
-                    <Typography variant="caption" sx={{ color: '#f59e0b', display: 'block', mb: 1 }}>
-                        ⚠️ {clientsWithoutGeo} client{clientsWithoutGeo !== 1 ? 's' : ''} without geolocation {clientsWithoutGeo !== 1 ? 'are' : 'is'} not shown on map
-                    </Typography>
+                {stats != null ? (
+                    <>
+                        <Typography variant="body2" sx={{ color: '#6b7280', mb: 1 }}>
+                            <strong>Delivery eligible clients:</strong> {mapStops.length}
+                            {' · '}
+                            <strong>Total clients:</strong> {stats.total_clients}
+                            {' · '}
+                            <strong>Dependants:</strong> {stats.total_dependants}
+                            {' · '}
+                            <strong>Primaries (food only):</strong> {stats.total_primaries_food}
+                            {' · '}
+                            <strong>Produce:</strong> {stats.total_produce}
+                            {' · '}
+                            <strong>Primary paused or delivery off</strong> (not produce): {stats.primary_paused_or_delivery_off}
+                            {selectedClientIds.size > 0 && ` · ${selectedClientIds.size} selected`}
+                        </Typography>
+                        {primaryFoodMissingGeo > 0 && (
+                            <Typography variant="caption" sx={{ color: '#f59e0b', display: 'block', mb: 1 }}>
+                                ⚠️ <strong>Primary food only:</strong> {primaryFoodMissingGeo} primary food client{primaryFoodMissingGeo !== 1 ? 's' : ''} without geolocation {primaryFoodMissingGeo !== 1 ? 'are' : 'is'} not shown on map (this count includes those paused or delivery off).
+                            </Typography>
+                        )}
+                    </>
+                ) : (
+                    <>
+                        <Typography variant="body2" sx={{ color: '#6b7280', mb: 1 }}>
+                            Showing {mapStops.length} of {filteredClients.length} clients with geolocation on map
+                            {selectedClientIds.size > 0 && ` · ${selectedClientIds.size} selected`}
+                        </Typography>
+                    </>
                 )}
             </Box>
 

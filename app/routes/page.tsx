@@ -183,7 +183,18 @@ export default function RoutesPage() {
     const [routes, setRoutes] = React.useState<any[]>([]);
     const [unrouted, setUnrouted] = React.useState<any[]>([]);
     /** Lightweight data for Client Assignment: clients (with assigned_driver_id) + driver id→name (+ color). Loaded once. */
-    const [assignmentData, setAssignmentData] = React.useState<{ clients: any[]; drivers: { id: string; name: string; color: string | null }[] } | null>(null);
+    const [assignmentData, setAssignmentData] = React.useState<{
+        clients: any[];
+        drivers: { id: string; name: string; color: string | null }[];
+        stats?: {
+            total_clients: number;
+            total_dependants: number;
+            total_primaries_food: number;
+            total_produce: number;
+            primary_paused_or_delivery_off: number;
+            primary_food_missing_geo: number;
+        } | null;
+    } | null>(null);
     const [assignmentDataLoading, setAssignmentDataLoading] = React.useState(true);
     /** Orders for selected delivery date (DB-side via RPC). Fetched when Orders View tab is active. */
     const [ordersForDate, setOrdersForDate] = React.useState<{ order_ids: string[]; client_ids: string[] } | null>(null);
@@ -262,7 +273,7 @@ export default function RoutesPage() {
                 const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
                 if (!res.ok) throw new Error("Failed to load assignment data");
                 const data = await res.json();
-                setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [] });
+                setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [], stats: data.stats ?? null });
                 // Load ungeocoded list from clients table so count is correct
                 const missingRes = await fetch("/api/route/clients-missing-geocode", { cache: "no-store" });
                 if (missingRes.ok) {
@@ -286,7 +297,7 @@ export default function RoutesPage() {
                 }
             } catch (e) {
                 console.error("Failed to load assignment data", e);
-                setAssignmentData({ clients: [], drivers: [] });
+                setAssignmentData({ clients: [], drivers: [], stats: null });
                 setMissingBatch([]);
             } finally {
                 setAssignmentDataLoading(false);
@@ -306,7 +317,7 @@ export default function RoutesPage() {
             const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
             if (res.ok) {
                 const data = await res.json();
-                setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [] });
+                setAssignmentData({ clients: data.clients || [], drivers: data.drivers || [], stats: data.stats ?? null });
             }
             const missingRes = await fetch("/api/route/clients-missing-geocode", { cache: "no-store" });
             if (missingRes.ok) {
@@ -1131,6 +1142,7 @@ export default function RoutesPage() {
                             <ClientDriverAssignment
                                 initialClients={assignmentData?.clients ?? []}
                                 drivers={assignmentData?.drivers ?? []}
+                                stats={assignmentData?.stats ?? null}
                                 assignmentDataLoading={assignmentDataLoading}
                                 selectedDay={selectedDay}
                                 selectedDeliveryDate={selectedDeliveryDate}

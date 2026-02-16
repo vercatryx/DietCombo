@@ -32,6 +32,33 @@ export async function GET(req: Request) {
             );
         }
 
+        // 1b) Client stats (all clients, no filter) for routes page summary
+        const { data: statsRows } = await supabase
+            .from("clients")
+            .select("id, parent_client_id, service_type, paused, delivery, lat, lng");
+        const rows = (statsRows || []) as { parent_client_id: string | null; service_type: string | null; paused: boolean; delivery: boolean; lat: number | null; lng: number | null }[];
+        const hasFood = (st: string | null) => (st ?? "").toLowerCase().includes("food");
+        const hasProduce = (st: string | null) => (st ?? "").toLowerCase().includes("produce");
+        const isProduceOnly = (st: string | null) => (st ?? "").trim().toLowerCase() === "produce";
+        const stats = {
+            total_clients: rows.length,
+            total_dependants: rows.filter((r) => r.parent_client_id != null && r.parent_client_id !== "").length,
+            total_primaries_food: rows.filter((r) => !r.parent_client_id && hasFood(r.service_type)).length,
+            total_produce: rows.filter((r) => hasProduce(r.service_type)).length,
+            primary_paused_or_delivery_off: rows.filter(
+                (r) =>
+                    !r.parent_client_id &&
+                    (r.paused === true || r.delivery === false) &&
+                    !isProduceOnly(r.service_type)
+            ).length,
+            primary_food_missing_geo: rows.filter(
+                (r) =>
+                    !r.parent_client_id &&
+                    hasFood(r.service_type) &&
+                    (r.lat == null || r.lng == null)
+            ).length,
+        };
+
         // Read from row with fallbacks for casing (Supabase/Postgres typically use lowercase)
         const pick = (row: any, ...keys: string[]) => {
             for (const k of keys) {
@@ -103,7 +130,7 @@ export async function GET(req: Request) {
         });
 
         return NextResponse.json(
-            { clients, drivers: driverList },
+            { clients, drivers: driverList, stats },
             { headers: { "Cache-Control": "no-store" } }
         );
     } catch (e: any) {
