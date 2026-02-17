@@ -64,15 +64,16 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                 type="number"
                 className="input"
                 placeholder="Qty"
-                value={item.quantity}
-                onChange={(e) =>
+                value={item.quantity ?? 0}
+                onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
                     onUpdate(item.id, {
-                        quantity: Math.max(1, parseInt(e.target.value, 10) || 1)
-                    })
-                }
-                min={1}
+                        quantity: Number.isNaN(n) ? 0 : Math.max(0, n)
+                    });
+                }}
+                min={0}
                 style={{ width: '60px', textAlign: 'center' }}
-                aria-label="Quantity"
+                aria-label="Quantity (default 0)"
                 disabled={disabled}
             />
             <input
@@ -81,15 +82,15 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                 placeholder="Meals"
                 step="0.01"
                 min="0"
-                value={item.value ?? ''}
+                value={item.value ?? 1}
                 onChange={(e) => {
                     const v = e.target.value;
                     onUpdate(item.id, {
-                        value: v === '' ? null : parseFloat(v) || 0
+                        value: v === '' ? 1 : (parseFloat(v) || 1)
                     });
                 }}
                 style={{ width: '70px', textAlign: 'right' }}
-                aria-label="Meals count"
+                aria-label="Meals per item (default 1)"
                 disabled={disabled}
             />
             {!disabled && (
@@ -210,6 +211,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
     const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
     const [mealPlannerDraftItems, setMealPlannerDraftItems] = useState<MealPlannerCustomItem[]>([]);
     const [mealPlannerExpirationDate, setMealPlannerExpirationDate] = useState<string>('');
+    const [mealPlannerExpectedTotalMeals, setMealPlannerExpectedTotalMeals] = useState<string>('');
     const [mealPlannerPopupLoading, setMealPlannerPopupLoading] = useState(false);
     const [mealPlannerPopupSaving, setMealPlannerPopupSaving] = useState(false);
     /** Message shown inside the meal planner popup (Saving… / Saved / error) so user always sees feedback. */
@@ -760,18 +762,20 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         setMealPlannerDraftItems([]);
         setMealPlannerExpirationDate('');
         try {
-            const { items, expirationDate } = await getMealPlannerCustomItems(dateKey, null);
+            const { items, expirationDate, expectedTotalMeals } = await getMealPlannerCustomItems(dateKey, null);
+            // Default quantity to 0 and value to 1 in the UI when loading (backend stores as-is)
             setMealPlannerDraftItems(
                 items.map((i) => ({
                     id: i.id,
                     name: i.name,
-                    quantity: i.quantity,
-                    value: i.value ?? null,
+                    quantity: i.quantity ?? 0,
+                    value: i.value ?? 1,
                     sortOrder: i.sortOrder ?? 0
                 }))
             );
             const loadedExp = expirationDate ?? dateKey;
             setMealPlannerExpirationDate(loadedExp > dateKey ? dateKey : loadedExp);
+            setMealPlannerExpectedTotalMeals(expectedTotalMeals != null ? String(expectedTotalMeals) : '10');
         } catch (e) {
             setMessage('Error loading meal planner items.');
             setTimeout(() => setMessage(null), 3000);
@@ -787,8 +791,8 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
             {
                 id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`,
                 name: '',
-                quantity: 1,
-                value: null,
+                quantity: 0,
+                value: 1,
                 sortOrder: maxSort + 1
             }
         ]);
@@ -823,15 +827,15 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                 return;
             }
             const valid = mealPlannerDraftItems.filter(
-                (i) => (i.name ?? '').trim().length > 0 && (i.quantity ?? 0) > 0
+                (i) => (i.name ?? '').trim().length > 0
             );
             const savePayload = {
                 date: mealPlannerPopupDate,
                 items: valid.map((i) => ({
                     id: i.id,
                     name: i.name,
-                    quantity: i.quantity,
-                    value: i.value ?? null,
+                    quantity: i.quantity ?? 0,
+                    value: i.value ?? 1,
                     sortOrder: i.sortOrder ?? 0
                 })),
                 exp: expTrim || null
@@ -839,11 +843,16 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
             if (typeof window !== 'undefined') {
                 console.log('[Meal planner] Calling saveMealPlannerCustomItems...', savePayload.date, 'items:', savePayload.items.length);
             }
+            const expectedTotal =
+                mealPlannerExpectedTotalMeals.trim() === ''
+                    ? null
+                    : Math.max(0, parseInt(mealPlannerExpectedTotalMeals, 10) || 0);
             const savePromise = saveMealPlannerCustomItems(
                 mealPlannerPopupDate,
                 savePayload.items,
                 null,
-                savePayload.exp
+                savePayload.exp,
+                expectedTotal
             );
             const timeoutMs = 20000;
             const timeoutPromise = new Promise<never>((_, reject) => {
@@ -906,6 +915,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         setMealPlannerPopupDate(null);
         setMealPlannerDraftItems([]);
         setMealPlannerExpirationDate('');
+        setMealPlannerExpectedTotalMeals('');
     }
 
     function handleMealPlannerDragEnd(event: DragEndEvent) {
@@ -1226,22 +1236,41 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                 ? `${mealPlannerDraftItems.length} saved item(s) for this date. ${isPast ? 'View only.' : 'Edit below or add more.'}`
                                                 : isPast ? 'No items for this date. View only.' : 'Add custom items for this date. Drag rows to reorder.'}
                                         </p>
-                                        <div className={styles.popupSection} style={{ marginBottom: 'var(--spacing-lg)' }}>
-                                            <label htmlFor="meal-planner-expiration-date" className={styles.popupSectionLabel}>
-                                                Expiration date
-                                            </label>
-                                            <input
-                                                id="meal-planner-expiration-date"
-                                                type="date"
-                                                className="input"
-                                                value={mealPlannerExpirationDate}
-                                                onChange={(e) => setMealPlannerExpirationDate(e.target.value)}
-                                                min={getTodayDateKey()}
-                                                max={mealPlannerPopupDate}
-                                                disabled={isPast}
-                                                style={{ maxWidth: '12rem' }}
-                                                aria-label="Expiration date"
-                                            />
+                                        <div className={styles.popupSection} style={{ marginBottom: 'var(--spacing-lg)', display: 'flex', flexWrap: 'wrap', gap: 'var(--spacing-lg)', alignItems: 'flex-end' }}>
+                                            <div>
+                                                <label htmlFor="meal-planner-expiration-date" className={styles.popupSectionLabel}>
+                                                    Expiration date
+                                                </label>
+                                                <input
+                                                    id="meal-planner-expiration-date"
+                                                    type="date"
+                                                    className="input"
+                                                    value={mealPlannerExpirationDate}
+                                                    onChange={(e) => setMealPlannerExpirationDate(e.target.value)}
+                                                    min={getTodayDateKey()}
+                                                    max={mealPlannerPopupDate}
+                                                    disabled={isPast}
+                                                    style={{ maxWidth: '12rem' }}
+                                                    aria-label="Expiration date"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="meal-planner-expected-total" className={styles.popupSectionLabel}>
+                                                    Expected total meals (max items for this date)
+                                                </label>
+                                                <input
+                                                    id="meal-planner-expected-total"
+                                                    type="number"
+                                                    className="input"
+                                                    min={0}
+                                                    placeholder="e.g. 7"
+                                                    value={mealPlannerExpectedTotalMeals}
+                                                    onChange={(e) => setMealPlannerExpectedTotalMeals(e.target.value)}
+                                                    disabled={isPast}
+                                                    style={{ maxWidth: '8rem' }}
+                                                    aria-label="Expected total meals for this date"
+                                                />
+                                            </div>
                                         </div>
                                         {mealPlannerPopupLoading ? (
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: 'var(--spacing-lg)', color: 'var(--text-secondary)' }}>
@@ -1268,7 +1297,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                         <span className={styles.popupCustomItemName}>Name</span>
                                         <span style={{ width: '60px', textAlign: 'center' }}>Qty</span>
                                         <span style={{ width: '70px', textAlign: 'right' }}>Value</span>
-                                        <span style={{ width: '80px', textAlign: 'right' }}>Price</span>
                                         {!isPast && <span style={{ width: '40px' }} />}
                                     </div>
                                 )}

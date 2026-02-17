@@ -5,6 +5,7 @@ import { CalendarDays, UtensilsCrossed, ChevronLeft, ChevronRight, Check } from 
 import {
   getClientMealPlannerData,
   getAvailableMealPlanTemplateWithAllDates,
+  getAvailableMealPlanTemplateWithAllDatesIncludingRecurring,
   saveClientMealPlannerData,
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
@@ -61,6 +62,8 @@ export interface SavedMealPlanMonthProps {
   autoSave?: boolean;
   /** When this value changes (e.g. increment after save), component clears session-edited dates so parent can hide save button. */
   editedDatesResetTrigger?: number;
+  /** When true, template for each day = recurring (Food default) + day-specific. Use for client portal day-only view. */
+  includeRecurringInTemplate?: boolean;
 }
 
 function applyOrdersAndSelectFirst(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void, setSelectedDate: (d: string | null) => void) {
@@ -72,7 +75,7 @@ function applyOrdersAndSelectFirst(orders: MealPlannerOrderResult[], setOrders: 
   setSelectedDate(firstDate);
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger }: SavedMealPlanMonthProps) {
+export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -103,12 +106,13 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
 
   // Load all available dates from default template when clientId is 'new' and no initialOrders.
   // When preloadInProgress is true, parent is fetching; don't fetch here to avoid duplicate request.
+  const getTemplateFn = includeRecurringInTemplate ? getAvailableMealPlanTemplateWithAllDatesIncludingRecurring : getAvailableMealPlanTemplateWithAllDates;
   useEffect(() => {
     if (clientId !== 'new' || preloadInProgress || (initialOrders != null && initialOrders.length > 0)) return;
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
-    getAvailableMealPlanTemplateWithAllDates()
+    getTemplateFn()
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
         applyOrdersAndSelectFirst(list, setOrders, setSelectedDate);
@@ -121,7 +125,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [clientId, initialOrders, preloadInProgress]);
+  }, [clientId, initialOrders, preloadInProgress, includeRecurringInTemplate]);
 
   // Load meal plan data for existing client: show ALL dates from settings (default template),
   // merged with this client's saved data per date. So every configured date appears; client's
@@ -181,7 +185,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       setLoadingDates(true);
       const thisFetchId = fetchIdRef.current + 1;
       fetchIdRef.current = thisFetchId;
-        getAvailableMealPlanTemplateWithAllDates()
+      (includeRecurringInTemplate ? getAvailableMealPlanTemplateWithAllDatesIncludingRecurring() : getAvailableMealPlanTemplateWithAllDates())
         .then((templateList) => {
           if (fetchIdRef.current !== thisFetchId) return;
           clientEditedDatesRef.current = new Set(initialOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean));
@@ -202,7 +206,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     fetchIdRef.current = thisFetchId;
 
     Promise.all([
-      getAvailableMealPlanTemplateWithAllDates(),
+      includeRecurringInTemplate ? getAvailableMealPlanTemplateWithAllDatesIncludingRecurring() : getAvailableMealPlanTemplateWithAllDates(),
       getClientMealPlannerData(effectiveClientId)
     ])
       .then(([templateList, clientSavedList]) => {
@@ -219,7 +223,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [effectiveClientId, initialOrders]);
+  }, [effectiveClientId, initialOrders, includeRecurringInTemplate]);
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
@@ -482,7 +486,26 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                           </tr>
                         </thead>
                         <tbody>
-                          {selectedOrder.items.map((item) => {
+                          {(() => {
+                            const items = selectedOrder.items;
+                            // Hide placeholder rows: backend uses name "Item" when item has no custom_name/menu_item (stray "item qt 2" at top)
+                            const isPlaceholder = (i: typeof items[0]) => (i.name ?? '').trim().toLowerCase() === 'item';
+                            const filteredItems = items.filter((i) => !isPlaceholder(i));
+                            const recurringItems = includeRecurringInTemplate ? filteredItems.filter((i) => String(i.id || '').startsWith('recurring-')) : filteredItems;
+                            const daySpecificItems = includeRecurringInTemplate ? filteredItems.filter((i) => !String(i.id || '').startsWith('recurring-')) : filteredItems;
+                            const showSeparator = includeRecurringInTemplate && recurringItems.length > 0 && daySpecificItems.length > 0;
+                            const itemsToRender = includeRecurringInTemplate ? [...recurringItems, ...(showSeparator ? [{ _separator: true }] : []), ...daySpecificItems] : filteredItems;
+                            return itemsToRender.map((itemOrSep, idx) => {
+                            if ((itemOrSep as any)._separator) {
+                              return (
+                                <tr key={`sep-${idx}`} className={styles.separatorRow} aria-hidden>
+                                  <td colSpan={3}>
+                                    <span className={styles.separatorLine} />
+                                  </td>
+                                </tr>
+                              );
+                            }
+                            const item = itemOrSep as typeof selectedOrder.items[0];
                             const unitValue = item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : 1;
                             const lineTotal = unitValue * getItemQty(item);
                             return (
@@ -589,7 +612,8 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                                 <td className={styles.itemValue}>{lineTotal}</td>
                               </tr>
                             );
-                          })}
+                          });
+                          })()}
                         </tbody>
                         <tfoot>
                           <tr className={styles.totalRow}>

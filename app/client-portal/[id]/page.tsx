@@ -35,14 +35,14 @@ export default async function ClientPortalPage({ params }: Props) {
     redirect(`/client-portal/${session.userId}`);
   }
 
-  // Use getClient (same as client profile) so client.activeOrder comes from clients.upcoming_order
   const client = await getClient(id);
   if (!client) {
     notFound();
   }
 
-  // Upcoming order from same source as profile: clients.upcoming_order via client.activeOrder
-  const upcomingOrder = client.activeOrder ?? null;
+  // For Food clients, portal uses only day-based meal plan (clients.meal_planner_data). Do not pass
+  // upcoming_order so we never read or write it for the client's order.
+  const upcomingOrder = client.serviceType === 'Food' ? null : (client.activeOrder ?? null);
 
   // Portal-specific data fetch (independent of admin getClientProfilePageData)
   const [

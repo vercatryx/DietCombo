@@ -20,11 +20,9 @@ import {
  * - Defaults (single source of truth, not per-client):
  *   - Default food menu: settings.default_order_template (Food).
  *   - Default meal planner: meal_planner_custom_items where client_id IS NULL (per calendar_date).
- * - Client overrides (only when we want to change from default):
- *   - Stored in clients.upcoming_order (JSON). If present and non-empty, use it for food; else use default.
- *   - Meal planner overrides: meal_planner_custom_items where client_id = client.id (merged with default by name).
- * - When creating orders by expiration date:
- *   - Scan all Food clients. For each client: if no upcoming_order (or empty) → use default food template; if they have one → use that client's profile. Meal planner = default template + client overrides merged (client wins by name).
+ * - Client overrides (day-based): clients.meal_planner_data is the source for the client's order per date.
+ *   - When client has meal_planner_data for the expired date, use that to build the order (items by name → menu_item_id or custom).
+ *   - When client has no meal_planner_data for that date, fall back to clients.upcoming_order (or default) for migration period.
  *   - Always default to defaults when client has nothing.
  * - Created orders are immutable snapshots: we write into orders + order_vendor_selections + order_items the exact items and quantities at creation time. They do not change when defaults or clients.upcoming_order change later.
  * - All dates are in EST (America/New_York). The ?date= param is a calendar date (YYYY-MM-DD) in EST; when omitted, "today" is taken in EST.
@@ -32,7 +30,7 @@ import {
  * Logic:
  * 1. Check if today is the expiration date for any meals in the meal planner (default template only).
  * 2. Batch fetch defaults and client overrides.
- * 3. Per client: food from clients.upcoming_order or default; meal plan from default + client overrides.
+ * 3. Per client and date: prefer clients.meal_planner_data for that date; else upcoming_order or default.
  * 4. Insert snapshot rows into orders / order_vendor_selections / order_items (no references to templates).
  */
 export async function POST(request: NextRequest) {
@@ -68,7 +66,7 @@ export async function POST(request: NextRequest) {
         // 1. Fetch expired meal planner items (default template only - identifies which dates have expired items)
         const { data: expiredItems, error: expiredError } = await supabaseAdmin
             .from('meal_planner_custom_items')
-            .select('calendar_date, expiration_date, name, quantity, price')
+            .select('calendar_date, expiration_date, name, quantity')
             .is('client_id', null)
             .eq('expiration_date', expirationDateStr)
             .order('calendar_date', { ascending: true });
@@ -135,23 +133,22 @@ export async function POST(request: NextRequest) {
         // 3. Default meal plan items from meal_planner_custom_items (admin template). Client meal plan from clients.meal_planner_data.
         const { data: defaultMealItems } = await supabaseAdmin
             .from('meal_planner_custom_items')
-            .select('calendar_date, name, quantity, price')
+            .select('calendar_date, name, quantity')
             .is('client_id', null)
             .in('calendar_date', expiredDates)
             .order('sort_order', { ascending: true });
 
-        const defaultByDate = new Map<string, { name: string; quantity: number; price: number | null }[]>();
+        const defaultByDate = new Map<string, { name: string; quantity: number }[]>();
         for (const row of defaultMealItems || []) {
             const d = String(row.calendar_date).slice(0, 10);
             if (!defaultByDate.has(d)) defaultByDate.set(d, []);
             defaultByDate.get(d)!.push({
                 name: row.name,
-                quantity: row.quantity ?? 1,
-                price: row.price != null ? Number(row.price) : null
+                quantity: row.quantity ?? 1
             });
         }
 
-        const clientByDate = new Map<string, Map<string, { name: string; quantity: number; price: number | null }[]>>();
+        const clientByDate = new Map<string, Map<string, { name: string; quantity: number }[]>>();
         for (const client of foodClients) {
             if (!client) continue;
             const raw = (client as any).mealPlannerData;
@@ -165,8 +162,7 @@ export async function POST(request: NextRequest) {
                 const m = clientByDate.get(client.id)!;
                 m.set(d, items.map((it: any) => ({
                     name: (it?.name ?? 'Item').trim() || 'Item',
-                    quantity: Math.max(1, Number(it?.quantity) ?? 1),
-                    price: it?.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null
+                    quantity: Number(it?.quantity) ?? 1
                 })));
             }
         }
@@ -203,7 +199,7 @@ export async function POST(request: NextRequest) {
         const ordersToInsert: any[] = [];
         const vendorSelectionsToInsert: { id: string; order_id: string; vendor_id: string }[] = [];
         const menuItemsToInsert: { id: string; vendor_selection_id: string; menu_item_id: string; quantity: number }[] = [];
-        const customItemsToInsert: { id: string; vendor_selection_id: string; menu_item_id: null; quantity: number; custom_name: string; custom_price: number }[] = [];
+        const customItemsToInsert: { id: string; vendor_selection_id: string; menu_item_id: null; quantity: number; custom_name: string; custom_price: number | null }[] = [];
         const orderIdToFirstVsId = new Map<string, string>();
 
         let clientsProcessed = 0;
@@ -212,26 +208,17 @@ export async function POST(request: NextRequest) {
         for (const client of foodClients) {
             if (!client) continue;
             clientsProcessed++;
-            // Always default to defaults: use client's upcoming_order (clients.upcoming_order) only if present and non-empty; else use default food template from settings.
+            // Prefer day-based data: use client's meal_planner_data for each date when present; else fall back to upcoming_order or default.
             const hasClientFoodOverride =
                 client.activeOrder &&
                 ((client.activeOrder.vendorSelections && client.activeOrder.vendorSelections.length > 0) ||
                     (client.activeOrder.deliveryDayOrders && Object.keys(client.activeOrder.deliveryDayOrders).length > 0));
-            const clientFoodOrder = hasClientFoodOverride ? client.activeOrder : defaultTemplate;
-            if (
-                !clientFoodOrder ||
-                ((!clientFoodOrder.vendorSelections || clientFoodOrder.vendorSelections.length === 0) &&
-                    (!clientFoodOrder.deliveryDayOrders || Object.keys(clientFoodOrder.deliveryDayOrders).length === 0))
-            ) {
-                skippedReasons.push(`Client ${client.id} (${client.fullName}): No food order template available (client has none and default template is also empty or has no vendor/delivery structure)`);
-                continue;
-            }
+            const clientFoodOrderFallback = hasClientFoodOverride ? client.activeOrder : defaultTemplate;
 
             for (const expiredDateStr of expiredDates) {
-                // Dates come from the meal planner (expired default items). Every eligible client gets an order for each such date.
                 const defaultItems = defaultByDate.get(expiredDateStr) || [];
                 const clientItems = clientByDate.get(client.id)?.get(expiredDateStr) || [];
-                const mealPlanMap = new Map<string, { name: string; quantity: number; price: number | null }>();
+                const mealPlanMap = new Map<string, { name: string; quantity: number }>();
                 for (const i of defaultItems) mealPlanMap.set(i.name, i);
                 for (const i of clientItems) mealPlanMap.set(i.name, i);
                 const mealPlanItems = Array.from(mealPlanMap.values());
@@ -246,21 +233,61 @@ export async function POST(request: NextRequest) {
                 }
 
                 let vendorSelections: any[] = [];
-                if (clientFoodOrder.deliveryDayOrders) {
-                    if (deliveryDay && clientFoodOrder.deliveryDayOrders[deliveryDay]) {
-                        vendorSelections = clientFoodOrder.deliveryDayOrders[deliveryDay].vendorSelections || [];
-                    } else {
-                        const firstDay = Object.keys(clientFoodOrder.deliveryDayOrders)[0];
-                        if (firstDay) {
-                            vendorSelections = clientFoodOrder.deliveryDayOrders[firstDay].vendorSelections || [];
+                if (clientItems.length > 0) {
+                    // Day-based source: build from meal_planner_data for this date. Match item names to menu items; rest as custom.
+                    const itemsByMenuId: Record<string, number> = {};
+                    const customItems: { name: string; quantity: number }[] = [];
+                    const nameToMenu = new Map((menuItems as any[]).map((m: any) => [String(m.name || '').trim().toLowerCase(), m]));
+                    for (const item of clientItems) {
+                        const name = (item.name || '').trim();
+                        const qty = Math.max(0, Number(item.quantity) ?? 0);
+                        if (qty === 0) continue;
+                        const menuItem = nameToMenu.get(name.toLowerCase());
+                        if (menuItem) {
+                            itemsByMenuId[menuItem.id] = (itemsByMenuId[menuItem.id] || 0) + qty;
+                        } else {
+                            customItems.push({ name: item.name || 'Item', quantity: qty });
                         }
                     }
-                } else if (clientFoodOrder.vendorSelections) {
-                    vendorSelections = clientFoodOrder.vendorSelections;
+                    for (const item of defaultItems) {
+                        if (mealPlanMap.get(item.name) !== item) continue;
+                        const name = (item.name || '').trim();
+                        const qty = Math.max(0, Number(item.quantity) ?? 0);
+                        if (qty === 0) continue;
+                        const menuItem = nameToMenu.get(name.toLowerCase());
+                        if (menuItem && !itemsByMenuId[menuItem.id]) {
+                            itemsByMenuId[menuItem.id] = qty;
+                        } else if (!menuItem) {
+                            customItems.push({ name: item.name || 'Item', quantity: qty });
+                        }
+                    }
+                    if (Object.keys(itemsByMenuId).length > 0 || customItems.length > 0) {
+                        vendorSelections = [{ vendorId: defaultVendorId, items: itemsByMenuId }];
+                        if (customItems.length > 0) {
+                            for (const c of customItems) {
+                                mealPlanMap.set(c.name, { name: c.name, quantity: c.quantity });
+                            }
+                        }
+                    }
+                }
+                if (vendorSelections.length === 0 && clientFoodOrderFallback) {
+                    if (clientFoodOrderFallback.deliveryDayOrders) {
+                        if (deliveryDay && clientFoodOrderFallback.deliveryDayOrders[deliveryDay]) {
+                            vendorSelections = clientFoodOrderFallback.deliveryDayOrders[deliveryDay].vendorSelections || [];
+                        } else {
+                            const firstDay = Object.keys(clientFoodOrderFallback.deliveryDayOrders)[0];
+                            if (firstDay) {
+                                vendorSelections = clientFoodOrderFallback.deliveryDayOrders[firstDay].vendorSelections || [];
+                            }
+                        }
+                    } else if (clientFoodOrderFallback.vendorSelections) {
+                        vendorSelections = clientFoodOrderFallback.vendorSelections;
+                    }
                 }
 
+                const mealPlanItemsFinal = Array.from(mealPlanMap.values());
                 if (!vendorSelections || vendorSelections.length === 0) {
-                    skippedReasons.push(`Client ${client.id} (${client.fullName}): No vendor selections found`);
+                    skippedReasons.push(`Client ${client.id} (${client.fullName}): No vendor selections or meal plan items for ${expiredDateStr}`);
                     continue;
                 }
 
@@ -279,8 +306,7 @@ export async function POST(request: NextRequest) {
                         }
                     }
                 }
-                for (const item of mealPlanItems) {
-                    totalValue += (item.price || 0) * item.quantity;
+                for (const item of mealPlanItemsFinal) {
                     totalItems += item.quantity;
                 }
 
@@ -303,7 +329,7 @@ export async function POST(request: NextRequest) {
                     updated_by: 'System',
                     vendor_id: defaultVendorId,
                     _vendorSelections: vendorSelections,
-                    _mealPlanItems: mealPlanItems,
+                    _mealPlanItems: mealPlanItemsFinal,
                     _orderId: orderId
                 });
             }
@@ -392,14 +418,13 @@ export async function POST(request: NextRequest) {
             const fid = orderIdToFirstVsId.get(o.id);
             if (fid && o._mealPlanItems?.length) {
                 for (const item of o._mealPlanItems) {
-                    const price = item.price || 0;
                     customItemsToInsert.push({
                         id: randomUUID(),
                         vendor_selection_id: fid,
                         menu_item_id: null,
                         quantity: item.quantity,
                         custom_name: item.name,
-                        custom_price: price
+                        custom_price: null
                     });
                 }
             }

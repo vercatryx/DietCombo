@@ -5495,6 +5495,9 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                     />
                                                 </div>
 
+                                                {/* Recurring order block hidden: client plan is day-only (one menu per day); combined template used in SavedMealPlanMonth below. */}
+                                                {false && (
+                                                <>
                                                 <div className={styles.divider} />
 
                                                 <div className={styles.orderHeader}>
@@ -5503,8 +5506,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                         {/* Show indicator only when displaying default template with no edits yet; hide as soon as user changes anything */}
                                                         {(() => {
                                                             const hasNoSavedOrder = !client?.activeOrder || 
-                                                                (!(client.activeOrder as any)?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items).length > 0) &&
-                                                                 !(client.activeOrder as any)?.deliveryDayOrders);
+                                                                (!(client?.activeOrder as any)?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items).length > 0) &&
+                                                                 !(client?.activeOrder as any)?.deliveryDayOrders);
                                                             const hasTemplateData = orderConfig?.vendorSelections?.some((vs: any) => vs.items && Object.keys(vs.items || {}).length > 0) ||
                                                                 (orderConfig?.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0);
                                                             const userHasEditedOrder = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
@@ -5945,6 +5948,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                         </div>
                                                     );
                                                 })()}
+                                                </>)}
                                                 </div>
                                             </div>
                                         )}
@@ -6780,8 +6784,8 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
                             {formData.serviceType === 'Food' && (
                                 <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
-                                    <h3 className={styles.sectionTitle}>Day-specific meal plan</h3>
-                                    <p style={{ margin: '0 0 var(--spacing-md) 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Different selections per delivery date.</p>
+                                    <h3 className={styles.sectionTitle}>Your meal plan</h3>
+                                    <p style={{ margin: '0 0 var(--spacing-md) 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Selections per delivery date (recurring + day-specific items combined).</p>
                                     <SavedMealPlanMonth
                                         clientId={clientId}
                                         onOrdersChange={(orders) => { mealPlanOrdersRef.current = orders; }}
@@ -6789,6 +6793,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                         initialOrders={initialData?.mealPlanData ?? mealPlanInitialOrders}
                                         preloadInProgress={mealPlanPreloading}
                                         editedDatesResetTrigger={mealPlanEditedResetTrigger}
+                                        includeRecurringInTemplate={true}
                                     />
                                 </section>
                             )}

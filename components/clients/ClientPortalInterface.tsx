@@ -518,14 +518,15 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 validationErrors.push('Please select at least one item before saving');
             }
 
-            // Check total order value against approved meals per week - must be exact match
-            const totalValue = getTotalMealCountAllDays();
-            const approvedMeals = client.approvedMealsPerWeek || 0;
-            if (approvedMeals > 0 && totalValue !== approvedMeals) {
-                if (totalValue > approvedMeals) {
-                    validationErrors.push(`Total order value (${totalValue}) exceeds approved meals per week (${approvedMeals}). Please reduce your order to exactly match the limit.`);
+            // Check total meal count: use per-date expected totals from meal plan (no longer approvedMealsPerWeek)
+            const totalValueFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
+            const totalValue = mealPlanOrders.length > 0 ? totalValueFromPlan : getTotalMealCountAllDays();
+            const totalExpectedFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0);
+            if (totalExpectedFromPlan > 0 && totalValue !== totalExpectedFromPlan) {
+                if (totalValue > totalExpectedFromPlan) {
+                    validationErrors.push(`Total meals (${totalValue}) exceeds the expected total for your delivery dates (${totalExpectedFromPlan}). Please reduce to match.`);
                 } else {
-                    validationErrors.push(`Total order value (${totalValue}) is less than approved meals per week (${approvedMeals}). Please add items to exactly match the limit.`);
+                    validationErrors.push(`Total meals (${totalValue}) is less than the expected total for your delivery dates (${totalExpectedFromPlan}). Please add items to match.`);
                 }
             }
 
@@ -816,8 +817,9 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
             setSaving(true);
             setMessage('Saving...');
 
-            // Only persist to clients.upcoming_order when the recurring order (top) was actually changed.
-            if (configChanged) {
+            // Portal (orderAndMealPlanOnly): do not write to clients.upcoming_order; only day-based meal plan is saved below.
+            // Admin or non-Food: persist to clients.upcoming_order when the recurring order was actually changed.
+            if (configChanged && !orderAndMealPlanOnly) {
                 // Debug logging
                 console.log('[ClientPortalInterface] About to save order:', {
                     clientId: client.id,
@@ -1796,7 +1798,8 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 </div>
                 )}
 
-                {/* Current Order Request - Editable */}
+                {/* Current Order Request - Editable (hidden in portal for Food; portal shows only day-based meal plan) */}
+                {!(orderAndMealPlanOnly && client.serviceType === 'Food') && (
                 <div className={styles.card} style={{ marginTop: orderAndMealPlanOnly ? 0 : '6rem' }}>
                     <div className={styles.sectionTitle} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2378,10 +2381,31 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         <div style={{ height: 'clamp(140px, 20vh, 200px)' }} />
                     )}
                 </div>
+                )}
 
                 {orderAndMealPlanOnly && client.serviceType === 'Food' && (
-                    <section className={styles.card} style={{ marginTop: 'var(--spacing-lg)' }}>
-                        <h3 className={styles.sectionTitle}>Day-specific meal plan</h3>
+                    <section className={styles.card} style={{ marginTop: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <h3 className={styles.sectionTitle} style={{ marginBottom: 0 }}>Your meal plan</h3>
+                            <div className={styles.budget} style={{
+                                color: (() => {
+                                    const total = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
+                                    const expected = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0);
+                                    return expected > 0 && total !== expected ? 'white' : 'inherit';
+                                })(),
+                                backgroundColor: (() => {
+                                    const total = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
+                                    const expected = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0);
+                                    return expected > 0 && total !== expected ? 'var(--color-danger)' : 'var(--bg-surface-hover)';
+                                })(),
+                                padding: '8px 12px',
+                                borderRadius: '6px',
+                                fontSize: '1rem',
+                                fontWeight: 700
+                            }}>
+                                Meals: {mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0)} / {mealPlanOrders.reduce((s, o) => s + (o.expectedTotalMeals ?? 0), 0) || '—'}
+                            </div>
+                        </div>
                         <SavedMealPlanMonth
                             clientId={client.id}
                             onOrdersChange={setMealPlanOrders}
@@ -2389,6 +2413,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                             initialOrders={initialMealPlanOrders ?? undefined}
                             autoSave={false}
                             editedDatesResetTrigger={mealPlanEditedResetTrigger}
+                            includeRecurringInTemplate={true}
                         />
                     </section>
                 )}

@@ -238,6 +238,22 @@
   border-bottom: none;
 }
 
+/* Subtle line between recurring (top) and day-specific (bottom) items when both are present */
+.separatorRow td {
+  padding: 0.4rem 0.75rem;
+  border-bottom: none;
+  border-top: 1px solid var(--border-color-light);
+  background: var(--bg-surface-hover);
+  vertical-align: middle;
+}
+
+.separatorLine {
+  display: block;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border-color), transparent);
+  margin: 0.25rem 0;
+}
+
 .itemName {
   color: var(--text-primary);
 }
