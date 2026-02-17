@@ -1,7 +1,7 @@
 /**
  * GET /api/vendors/[vendorId]/orders?date=YYYY-MM-DD
  * Returns full orders with items for the vendor on the given date.
- * Creates service-role client here so items are always loaded (avoids env/module issues in server actions).
+ * Enriches Food order items with menuItemName (like orders page) so labels/CSV show names.
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -30,5 +30,31 @@ export async function GET(
     });
 
     const orders = await getOrdersByVendor(vendorId, date ?? undefined, { db });
-    return Response.json(orders);
+
+    // Enrich Food order items with menuItemName using service-role db (avoids RLS)
+    const [{ data: menuRows }, { data: mealRows }] = await Promise.all([
+        db.from('menu_items').select('id, name'),
+        db.from('breakfast_items').select('id, name'),
+    ]);
+    const menuByName = new Map<string, string>((menuRows || []).map((r: { id: string; name: string }) => [r.id, r.name]));
+    const mealByName = new Map<string, string>((mealRows || []).map((r: { id: string; name: string }) => [r.id, r.name]));
+
+    const enrichedOrders = orders.map((order: any) => {
+        if (order.service_type !== 'Food' || !Array.isArray(order.items) || order.items.length === 0) {
+            return order;
+        }
+        return {
+            ...order,
+            items: order.items.map((item: any) => {
+                const name = (item.custom_name && String(item.custom_name).trim())
+                    || (item.menu_item_id && menuByName.get(item.menu_item_id))
+                    || (item.meal_item_id && mealByName.get(item.meal_item_id))
+                    || item.menuItemName
+                    || 'Unknown Item';
+                return { ...item, menuItemName: name };
+            }),
+        };
+    });
+
+    return Response.json(enrichedOrders);
 }

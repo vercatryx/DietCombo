@@ -255,7 +255,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
             const produceUrl = `${origin}/produce/${order.client_id}`;
             const driverOrOrderText = driverInfo
                 ? (driverInfo.stopNumber != null
-                    ? `${driverInfo.driverNumber} - ${driverInfo.stopNumber}`
+                    ? `${driverInfo.driverNumber}.${driverInfo.stopNumber}`
                     : String(driverInfo.driverNumber))
                 : `#${order.orderNumber || order.id.slice(0, 6)}`;
 
@@ -390,7 +390,7 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
 
         let currentY = leftContentY + 0.15;
 
-        // Left: Name
+        // Left: Name only (no driver/stop or order number on left label)
         doc.setFontSize(PROPS.headerSize);
         doc.setFont('helvetica', 'bold');
         setDriverColor();
@@ -433,11 +433,11 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
         }
         resetColor();
 
-        // Left: Driver/order above QR, then QR
+        // Left: Above QR show "0.1" (driver.stop) or order number only
         try {
             const produceUrl = `${origin}/produce/${order.client_id}`;
             const driverOrOrderText = driverInfo
-                ? (driverInfo.stopNumber != null ? `${driverInfo.driverNumber} - ${driverInfo.stopNumber}` : String(driverInfo.driverNumber))
+                ? (driverInfo.stopNumber != null ? `${driverInfo.driverNumber}.${driverInfo.stopNumber}` : String(driverInfo.driverNumber))
                 : `#${order.orderNumber || order.id.slice(0, 6)}`;
             doc.setFontSize(10);
             doc.setFont('helvetica', 'bold');
@@ -458,34 +458,31 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
 
         const rightContentX = rightX + PROPS.padding;
         const rightContentY = labelY + PROPS.padding;
-        const rightTextEdge = rightX + PROPS.labelWidth - PROPS.padding - 0.1;
-        const rightTextZoneWidth = Math.max(0.5, (rightTextEdge - rightContentX) * 0.9);
+        // Keep text well inside right label (same conservative factor as left so it doesn't go past edge)
+        const rightTextEdge = rightX + PROPS.labelWidth - PROPS.padding - 0.2;
+        const rightTextZoneWidth = Math.max(0.5, (rightTextEdge - rightContentX) * 0.58);
 
         let rightY = rightContentY + 0.1;
 
-        // Right: Name
+        // Right: Name + "0.1" + order number on one line (no separate "Driver 0 – Stop 1" line)
         doc.setFontSize(PROPS.headerSize);
         doc.setFont('helvetica', 'bold');
         setDriverColor();
-        const rightNameLines = doc.splitTextToSize(clientName, rightTextZoneWidth);
+        const rightDriverStopSuffix = driverInfo != null && driverInfo.stopNumber != null
+            ? ` ${driverInfo.driverNumber}.${driverInfo.stopNumber}`
+            : driverInfo != null
+                ? ` ${driverInfo.driverNumber}`
+                : '';
+        const rightOrderNumSuffix = ` #${order.orderNumber || order.id.slice(0, 6)}`;
+        const rightNameLine1 = clientName + rightDriverStopSuffix + rightOrderNumSuffix;
+        const rightNameLines = doc.splitTextToSize(rightNameLine1, rightTextZoneWidth);
         const rightNameShow = rightNameLines.slice(0, Math.min(2, rightNameLines.length));
         if (rightNameShow.length > 0) {
             doc.text(rightNameShow, rightContentX, rightY);
             rightY += rightNameShow.length * headerLineHeight + 0.05;
         }
 
-        // Right: Driver # – Stop #
-        if (driverInfo) {
-            doc.setFontSize(PROPS.fontSize);
-            doc.setFont('helvetica', 'bold');
-            const driverStopText = driverInfo.stopNumber != null
-                ? `Driver ${driverInfo.driverNumber} – Stop ${driverInfo.stopNumber}`
-                : `Driver ${driverInfo.driverNumber}`;
-            doc.text(driverStopText, rightContentX, rightY);
-            rightY += lineHeight + 0.05;
-        }
-
-        // Right: Full order details (items)
+        // Right: Full order details (items) — respect label bottom
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(PROPS.smallSize);
         setDriverColor();

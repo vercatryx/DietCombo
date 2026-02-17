@@ -3688,17 +3688,18 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
     // Get default approved meals per week from template for Food serviceType only
     const defaultApprovedMeals = serviceType === 'Food' ? await getDefaultApprovedMealsPerWeek() : null;
 
+    // Copy address, geocode, and notes from parent by default (dependants often share same household)
     const payload: any = {
         full_name: name.trim(),
         email: null,
-        address: '',
+        address: parentClient.address ?? '',
         phone_number: '',
         secondary_phone_number: null,
         navigator_id: null,
         end_date: null,
         screening_took_place: false,
         screening_signed: false,
-        notes: '',
+        notes: parentClient.dislikes ?? '',
         status_id: null,
         service_type: serviceType,
         approved_meals_per_week: defaultApprovedMeals,
@@ -3707,7 +3708,16 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         upcoming_order: {},
         parent_client_id: parentClientId,
         dob: dob || null,
-        cin: cin ?? null
+        cin: cin ?? null,
+        apt: parentClient.apt ?? null,
+        city: parentClient.city ?? null,
+        state: parentClient.state ?? null,
+        zip: parentClient.zip ?? null,
+        county: parentClient.county ?? null,
+        dislikes: parentClient.dislikes ?? null,
+        lat: parentClient.lat ?? null,
+        lng: parentClient.lng ?? null,
+        geocoded_at: parentClient.geocodedAt ?? null
     };
 
     const id = randomUUID();
@@ -3731,7 +3741,16 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         upcoming_order: payload.upcoming_order || {},
         parent_client_id: payload.parent_client_id,
         dob: payload.dob,
-        cin: payload.cin
+        cin: payload.cin,
+        apt: payload.apt,
+        city: payload.city,
+        state: payload.state,
+        zip: payload.zip,
+        county: payload.county,
+        dislikes: payload.dislikes,
+        lat: payload.lat,
+        lng: payload.lng,
+        geocoded_at: payload.geocoded_at
     };
     const { data: res, error: insertError } = await supabase
         .from('clients')

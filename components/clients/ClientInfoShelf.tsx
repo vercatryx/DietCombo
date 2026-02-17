@@ -27,6 +27,8 @@ interface ClientInfoShelfProps {
     allClients?: ClientProfile[];
     onClose: () => void;
     onOpenProfile: (clientId: string) => void;
+    /** When provided, clicking a dependant in the list opens the dependant sidebar instead of full profile. */
+    onOpenDependantShelf?: (clientId: string) => void;
     /** Called after save; pass updated client to update list for that client only. */
     onClientUpdated?: (updatedClient?: ClientProfile) => void;
     onClientDeleted?: () => void;
@@ -40,6 +42,7 @@ export function ClientInfoShelf({
     allClients = [],
     onClose,
     onOpenProfile,
+    onOpenDependantShelf,
     onClientUpdated,
     onClientDeleted
 }: ClientInfoShelfProps) {
@@ -857,7 +860,7 @@ export function ClientInfoShelf({
                                         <div
                                             key={dep.id}
                                             className={styles.dependentCard}
-                                            onClick={() => onOpenProfile(dep.id)}
+                                            onClick={() => onOpenDependantShelf ? onOpenDependantShelf(dep.id) : onOpenProfile(dep.id)}
                                             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                                         >
                                             <div style={{ flex: 1, minWidth: 0 }}>
@@ -871,12 +874,12 @@ export function ClientInfoShelf({
                                                 type="button"
                                                 className="btn btn-secondary btn-sm"
                                                 style={{ flexShrink: 0, padding: '4px 8px' }}
-                                                title="Edit dependent"
+                                                title={onOpenDependantShelf ? 'Open dependent sidebar' : 'Edit dependent'}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    onOpenProfile(dep.id);
+                                                    onOpenDependantShelf ? onOpenDependantShelf(dep.id) : onOpenProfile(dep.id);
                                                 }}
-                                                aria-label={`Edit ${dep.fullName}`}
+                                                aria-label={onOpenDependantShelf ? `Open ${dep.fullName} sidebar` : `Edit ${dep.fullName}`}
                                             >
                                                 <Pencil size={14} />
                                             </button>

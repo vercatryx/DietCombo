@@ -2,6 +2,7 @@
 
 import { ClientProfileDetail, type ClientProfileDetailHandle } from './ClientProfile';
 import { ClientInfoShelf } from './ClientInfoShelf';
+import { DependantInfoShelf } from './DependantInfoShelf';
 
 import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType } from '@/lib/types';
@@ -101,8 +102,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [profileServiceConfigOnly, setProfileServiceConfigOnly] = useState(false);
     const profileDetailRef = useRef<ClientProfileDetailHandle>(null);
 
-    // Info Shelf State
+    // Info Shelf State (primary client sidebar)
     const [infoShelfClientId, setInfoShelfClientId] = useState<string | null>(null);
+    // Dependant sidebar (different UI: address, notes, order details only)
+    const [infoShelfDependantId, setInfoShelfDependantId] = useState<string | null>(null);
 
     // Order Details Visibility Toggle
     const [showOrderDetails, setShowOrderDetails] = useState(false);
@@ -313,6 +316,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             prefetchClient(infoShelfClientId);
         }
     }, [infoShelfClientId, detailsCache]);
+
+    // Load client details when dependant shelf opens
+    useEffect(() => {
+        if (infoShelfDependantId && !detailsCache[infoShelfDependantId] && !pendingPrefetches.current.has(infoShelfDependantId)) {
+            prefetchClient(infoShelfDependantId);
+        }
+    }, [infoShelfDependantId, detailsCache]);
 
     // Fetch parent names when clients list grows (e.g. from progressive loading)
     useEffect(() => {
@@ -2131,24 +2141,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             }}
                             onClick={() => {
                                 if (isDependent) {
-                                    setEditingDependentId(client.id);
-                                    setDependentName(client.fullName);
-                                    setDependentDob(client.dob || '');
-                                    setDependentCin(client.cin?.toString() || '');
-                                    setDependentServiceType(client.serviceType === 'Produce' ? 'Produce' : 'Food');
-                                    setSelectedParentClientId(client.parentClientId || '');
-                                    const parentName = parentNamesMap[client.parentClientId!];
-                                    if (parentName) {
-                                        setParentClientSearch(parentName);
-                                    } else {
-                                        getClientNamesByIds([client.parentClientId!]).then(map => {
-                                            const name = map[client.parentClientId!];
-                                            if (name) setParentClientSearch(name);
-                                        });
+                                    setInfoShelfDependantId(client.id);
+                                    setInfoShelfClientId(null);
+                                    if (!detailsCache[client.id]) {
+                                        prefetchClient(client.id);
                                     }
-                                    setIsAddingDependent(true);
                                 } else {
                                     setInfoShelfClientId(client.id);
+                                    setInfoShelfDependantId(null);
                                     if (!detailsCache[client.id]) {
                                         prefetchClient(client.id);
                                     }
@@ -2313,6 +2313,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         setProfileServiceConfigOnly(true);
                         setSelectedClientId(clientId);
                     }}
+                    onOpenDependantShelf={(clientId) => {
+                        setInfoShelfClientId(null);
+                        setInfoShelfDependantId(clientId);
+                        if (!detailsCache[clientId]) prefetchClient(clientId);
+                    }}
                     onClientUpdated={(updatedClient) => {
                         const id = infoShelfClientId;
                         if (updatedClient && id && updatedClient.id === id) {
@@ -2334,6 +2339,39 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     }}
                     onClientDeleted={() => {
                         setInfoShelfClientId(null);
+                        refreshDataInBackground();
+                    }}
+                />
+            )}
+
+            {infoShelfDependantId && clients.find(c => c.id === infoShelfDependantId) && (
+                <DependantInfoShelf
+                    client={detailsCache[infoShelfDependantId]?.client || clients.find(c => c.id === infoShelfDependantId)!}
+                    onClose={() => setInfoShelfDependantId(null)}
+                    onOpenProfile={(clientId) => {
+                        setInfoShelfDependantId(null);
+                        setProfileServiceConfigOnly(true);
+                        setSelectedClientId(clientId);
+                    }}
+                    onClientUpdated={(updatedClient) => {
+                        const id = infoShelfDependantId;
+                        if (updatedClient && id && updatedClient.id === id) {
+                            setClients(prev => prev.map(c => (c.id === id ? updatedClient : c)));
+                            setDetailsCache(prev => ({
+                                ...prev,
+                                [id]: { ...(prev[id] || {}), client: updatedClient } as any,
+                            }));
+                        } else if (id) {
+                            setDetailsCache(prev => {
+                                const next = { ...prev };
+                                delete next[id];
+                                return next;
+                            });
+                            refreshDataInBackground();
+                        }
+                    }}
+                    onClientDeleted={() => {
+                        setInfoShelfDependantId(null);
                         refreshDataInBackground();
                     }}
                 />
