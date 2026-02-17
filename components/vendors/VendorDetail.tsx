@@ -8,7 +8,7 @@ import { getClientsUnlimited } from '@/lib/actions';
 import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, isOrderUnderVendor, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
 import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { generateLabelsPDF, generateTablePDF } from '@/lib/label-utils';
+import { generateLabelsPDF, generateLabelsPDFTwoPerCustomer, generateTablePDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
 import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { logout } from '@/lib/auth-actions';
@@ -973,7 +973,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
             return full || c.address || '-';
         };
-            await generateLabelsPDF({
+            await generateLabelsPDFTwoPerCustomer({
                 orders: sortedOrders,
                 getClientName: getClientNameForExport,
                 getClientAddress: getClientAddressForExport,
@@ -1578,7 +1578,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                                         <FileText size={14} /> Download Labels
                                                     </button>
                                                     <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDateAlt(dateKey, dateOrders)}>
-                                                        <FileText size={14} /> Labels – with notes
+                                                        <FileText size={14} /> Labels – address + order details (2 per customer)
                                                     </button>
                                                     <div style={{ display: 'flex', gap: '0.35rem' }}>
                                                         <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate(dateKey, dateOrders, 'breakdown')}>
@@ -1628,7 +1628,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                                     <FileText size={14} /> Download Labels
                                                 </button>
                                                 <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDateAlt('no-date', noDate)}>
-                                                    <FileText size={14} /> Labels – with notes
+                                                    <FileText size={14} /> Labels – address + order details (2 per customer)
                                                 </button>
                                                 <div style={{ display: 'flex', gap: '0.35rem' }}>
                                                     <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportExcelForDate('no-date', noDate, 'breakdown')}>

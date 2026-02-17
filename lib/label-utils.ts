@@ -68,7 +68,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
     });
 
     // Determine Base URL
-    const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://vercatryx-triangle.vercel.app';
+    const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://customer.thedietfantasy.com';
 
     for (let index = 0; index < orders.length; index++) {
         const order = orders[index];
@@ -280,6 +280,226 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
 
     // Generate filename (sanitize so browser uses it instead of "unnamed")
     let filename = `${vendorName || 'vendor'}_labels`;
+    if (deliveryDate) {
+        const formattedDate = formatDate(deliveryDate).replace(/\s/g, '_').replace(/[/\\:*?"<>|]/g, '_');
+        filename += `_${formattedDate}`;
+    }
+    filename += '.pdf';
+
+    const blob = doc.output('blob');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Generate labels PDF where each customer gets one row: left label (name, address, QR, notes) and right label (name, driver #, stop #, full order details).
+ * Uses same Avery 5163 layout: 2 columns × 5 rows per page; each row = one customer with two labels.
+ */
+export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOptions): Promise<void> {
+    const {
+        orders,
+        getClientName,
+        getClientAddress,
+        formatOrderedItemsForCSV,
+        formatDate,
+        vendorName,
+        deliveryDate,
+        getDriverInfo,
+        getNotes
+    } = options;
+
+    if (orders.length === 0) {
+        alert('No orders to export');
+        return;
+    }
+
+    const PROPS = {
+        pageWidth: 8.5,
+        pageHeight: 11,
+        marginTop: 0.5,
+        marginLeft: 0.156,
+        labelWidth: 4,
+        labelHeight: 2,
+        hGap: 0.188,
+        vGap: 0,
+        fontSize: 10,
+        headerSize: 12,
+        smallSize: 8,
+        padding: 0.15,
+    };
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
+    const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://customer.thedietfantasy.com';
+
+    const lineHeight = 0.14;
+    const headerLineHeight = 0.2;
+    const addressLineHeight = 0.16;
+    const phase2LineHeight = 0.12;
+    const qrSize = 0.85;
+    const qrMargin = 0.1;
+    const qrPaddingLeft = 0.12;
+    const qrPaddingBottom = 0.1;
+    const qrZoneWidth = qrSize + 2 * qrMargin + qrPaddingLeft;
+    const driverLabelHeight = 0.22;
+
+    for (let index = 0; index < orders.length; index++) {
+        const order = orders[index];
+        const rowOnPage = index % 5;
+        if (index > 0 && rowOnPage === 0) {
+            doc.addPage();
+        }
+
+        const labelY = PROPS.marginTop + (rowOnPage * PROPS.labelHeight);
+        const labelBottom = labelY + PROPS.labelHeight - PROPS.padding;
+        const labelBottomSafe = labelBottom - 0.06;
+
+        // ---- LEFT LABEL: name, address, QR code, notes ----
+        const leftX = PROPS.marginLeft;
+        doc.setLineWidth(0.01);
+        doc.rect(leftX, labelY, PROPS.labelWidth, PROPS.labelHeight);
+
+        const leftContentX = leftX + PROPS.padding;
+        const leftContentY = labelY + PROPS.padding;
+        const textRightEdge = leftX + PROPS.labelWidth - qrZoneWidth - PROPS.padding - 0.2;
+        const textZoneWidth = Math.max(0.5, (textRightEdge - leftContentX) * 0.58);
+        const qrZoneX = leftX + PROPS.labelWidth - qrZoneWidth - PROPS.padding;
+        const qrY = labelY + PROPS.padding + driverLabelHeight;
+        const qrX = qrZoneX + qrMargin + qrPaddingLeft;
+        const qrBlockBottom = qrY + qrSize + qrMargin + qrPaddingBottom;
+        const maxYPhase1 = qrBlockBottom - 0.08;
+        const phase2StartY = qrBlockBottom + 0.05;
+        const phase2MaxWidth = Math.max(0.5, (leftX + PROPS.labelWidth - PROPS.padding - 0.1 - leftContentX) * 0.58);
+
+        const driverInfo = getDriverInfo?.(order);
+        const setDriverColor = () => {
+            if (driverInfo?.driverColor) {
+                const hex = driverInfo.driverColor.replace('#', '');
+                const r = parseInt(hex.slice(0, 2), 16) || 0;
+                const g = parseInt(hex.slice(2, 4), 16) || 0;
+                const b = parseInt(hex.slice(4, 6), 16) || 0;
+                doc.setTextColor(r, g, b);
+            } else {
+                doc.setTextColor(0, 0, 0);
+            }
+        };
+        const resetColor = () => doc.setTextColor(0, 0, 0);
+
+        let currentY = leftContentY + 0.15;
+
+        // Left: Name
+        doc.setFontSize(PROPS.headerSize);
+        doc.setFont('helvetica', 'bold');
+        setDriverColor();
+        const clientName = getClientName(order.client_id).toUpperCase();
+        const splitName = doc.splitTextToSize(clientName, textZoneWidth);
+        const nameLines = splitName.slice(0, Math.min(splitName.length, Math.max(0, Math.floor((maxYPhase1 - currentY) / headerLineHeight))));
+        if (nameLines.length > 0) {
+            doc.text(nameLines, leftContentX, currentY);
+            currentY += nameLines.length * headerLineHeight;
+        }
+
+        // Left: Address
+        doc.setFontSize(PROPS.fontSize);
+        doc.setFont('helvetica', 'normal');
+        setDriverColor();
+        const address = getClientAddress(order.client_id);
+        if (address && address !== '-') {
+            const splitAddress = doc.splitTextToSize(address, textZoneWidth);
+            const addrLines = splitAddress.slice(0, Math.min(splitAddress.length, Math.max(0, Math.floor((maxYPhase1 - currentY - 0.05) / addressLineHeight))));
+            if (addrLines.length > 0) {
+                doc.text(addrLines, leftContentX, currentY + 0.05);
+                currentY += 0.05 + addrLines.length * addressLineHeight + 0.08;
+            }
+        }
+        currentY = Math.min(currentY, maxYPhase1);
+
+        // Left: Notes below QR area
+        const notesText = (getNotes?.(order.client_id) ?? '').trim();
+        if (notesText && currentY < labelBottomSafe) {
+            const notesY = Math.max(phase2StartY, currentY + 0.1);
+            doc.setFontSize(PROPS.smallSize);
+            setDriverColor();
+            const notesDisplay = `Notes: ${notesText}`;
+            const splitNotes = doc.splitTextToSize(notesDisplay, phase2MaxWidth);
+            const maxNotesLines = Math.max(0, Math.floor((labelBottomSafe - notesY) / phase2LineHeight));
+            const visibleNotes = splitNotes.slice(0, maxNotesLines);
+            if (visibleNotes.length > 0) {
+                doc.text(visibleNotes, leftContentX, notesY);
+            }
+        }
+        resetColor();
+
+        // Left: Driver/order above QR, then QR
+        try {
+            const produceUrl = `${origin}/produce/${order.client_id}`;
+            const driverOrOrderText = driverInfo
+                ? (driverInfo.stopNumber != null ? `${driverInfo.driverNumber} - ${driverInfo.stopNumber}` : String(driverInfo.driverNumber))
+                : `#${order.orderNumber || order.id.slice(0, 6)}`;
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            setDriverColor();
+            doc.text(driverOrOrderText, qrZoneX + qrZoneWidth / 2, labelY + PROPS.padding + 0.12, { align: 'center' });
+            resetColor();
+            const qrDataUrl = await QRCode.toDataURL(produceUrl, { errorCorrectionLevel: 'M', margin: 0, width: 280 });
+            doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
+        } catch (e) {
+            console.error('QR generation failed', e);
+            doc.text('Error', qrZoneX, labelY + 1);
+        }
+
+        // ---- RIGHT LABEL: name, driver #, stop #, full order details ----
+        const rightX = PROPS.marginLeft + PROPS.labelWidth + PROPS.hGap;
+        doc.setLineWidth(0.01);
+        doc.rect(rightX, labelY, PROPS.labelWidth, PROPS.labelHeight);
+
+        const rightContentX = rightX + PROPS.padding;
+        const rightContentY = labelY + PROPS.padding;
+        const rightTextEdge = rightX + PROPS.labelWidth - PROPS.padding - 0.1;
+        const rightTextZoneWidth = Math.max(0.5, (rightTextEdge - rightContentX) * 0.9);
+
+        let rightY = rightContentY + 0.1;
+
+        // Right: Name
+        doc.setFontSize(PROPS.headerSize);
+        doc.setFont('helvetica', 'bold');
+        setDriverColor();
+        const rightNameLines = doc.splitTextToSize(clientName, rightTextZoneWidth);
+        const rightNameShow = rightNameLines.slice(0, Math.min(2, rightNameLines.length));
+        if (rightNameShow.length > 0) {
+            doc.text(rightNameShow, rightContentX, rightY);
+            rightY += rightNameShow.length * headerLineHeight + 0.05;
+        }
+
+        // Right: Driver # – Stop #
+        if (driverInfo) {
+            doc.setFontSize(PROPS.fontSize);
+            doc.setFont('helvetica', 'bold');
+            const driverStopText = driverInfo.stopNumber != null
+                ? `Driver ${driverInfo.driverNumber} – Stop ${driverInfo.stopNumber}`
+                : `Driver ${driverInfo.driverNumber}`;
+            doc.text(driverStopText, rightContentX, rightY);
+            rightY += lineHeight + 0.05;
+        }
+
+        // Right: Full order details (items)
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(PROPS.smallSize);
+        setDriverColor();
+        const itemsText = formatOrderedItemsForCSV(order).split('; ').join(' | ') || 'No items';
+        const splitItems = doc.splitTextToSize(itemsText, rightTextZoneWidth);
+        const maxLines = Math.max(0, Math.floor((labelBottomSafe - rightY) / phase2LineHeight));
+        const linesToShow = splitItems.slice(0, maxLines);
+        if (linesToShow.length > 0) {
+            doc.text(linesToShow, rightContentX, rightY);
+        }
+        resetColor();
+    }
+
+    let filename = `${vendorName || 'vendor'}_labels_two_per_customer`;
     if (deliveryDate) {
         const formattedDate = formatDate(deliveryDate).replace(/\s/g, '_').replace(/[/\\:*?"<>|]/g, '_');
         filename += `_${formattedDate}`;

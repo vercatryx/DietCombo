@@ -97,24 +97,22 @@ export function ClientInfoShelf({
         if (!isEditing) setEditForm(getInitialEditForm(client));
     }, [client, isEditing, getInitialEditForm]);
 
+    // Load dependents from allClients when provided (stable list = no refetch every render). When allClients empty, fetch once per client.id.
+    const lastFetchedParentIdRef = React.useRef<string | null>(null);
     useEffect(() => {
         if (allClients.length > 0) {
             setLocalDependents(allClients.filter(c => c.parentClientId === client.id));
             setLoadingDependents(false);
         } else {
-            // Fetch if not provided (fallback)
+            if (lastFetchedParentIdRef.current === client.id) return;
+            lastFetchedParentIdRef.current = client.id;
             setLoadingDependents(true);
-            const fetchDependents = async () => {
-                try {
-                    const deps = await getDependentsByParentId(client.id);
-                    setLocalDependents(deps);
-                } catch (error) {
+            getDependentsByParentId(client.id)
+                .then(setLocalDependents)
+                .catch((error) => {
                     console.error('Error fetching dependents:', error);
-                } finally {
-                    setLoadingDependents(false);
-                }
-            };
-            fetchDependents();
+                })
+                .finally(() => setLoadingDependents(false));
         }
     }, [allClients, client.id]);
 
@@ -852,6 +850,19 @@ export function ClientInfoShelf({
                                                     {dep.cin && <span> | CIN: {dep.cin}</span>}
                                                 </div>
                                             </div>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                style={{ flexShrink: 0, padding: '4px 8px' }}
+                                                title="Edit dependent"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onOpenProfile(dep.id);
+                                                }}
+                                                aria-label={`Edit ${dep.fullName}`}
+                                            >
+                                                <Pencil size={14} />
+                                            </button>
                                             <button
                                                 type="button"
                                                 className="btn btn-secondary btn-sm"

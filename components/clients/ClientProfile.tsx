@@ -264,6 +264,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     const [dependentName, setDependentName] = useState('');
     const [dependentDob, setDependentDob] = useState('');
     const [dependentCin, setDependentCin] = useState('');
+    const [dependentServiceType, setDependentServiceType] = useState<'Food' | 'Produce'>('Food');
     const [creatingDependent, setCreatingDependent] = useState(false);
 
     // Geolocation State
@@ -3827,7 +3828,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         try {
             const dobValue = dependentDob.trim() || null;
             const cinValue = dependentCin.trim() ? parseFloat(dependentCin.trim()) : null;
-            const newDependent = await addDependent(dependentName.trim(), client.id, dobValue, cinValue);
+            const newDependent = await addDependent(dependentName.trim(), client.id, dobValue, cinValue, dependentServiceType);
             if (newDependent) {
                 // Show new dependent immediately (optimistic update) so it appears without refresh
                 setDependents(prev => [...prev, newDependent]);
@@ -3835,6 +3836,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 setDependentName('');
                 setDependentDob('');
                 setDependentCin('');
+                setDependentServiceType('Food');
                 setShowAddDependentForm(false);
                 // Invalidate cache so parent list can refresh when profile is closed
                 invalidateClientData();
@@ -4792,6 +4794,18 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                 </div>
 
                                 <div className={styles.formGroup}>
+                                    <label className="label">Client type</label>
+                                    <select
+                                        className="input"
+                                        value={formData.serviceType === 'Produce' ? 'Produce' : 'Food'}
+                                        onChange={e => setFormData({ ...formData, serviceType: e.target.value as 'Food' | 'Produce' })}
+                                    >
+                                        <option value="Food">Food</option>
+                                        <option value="Produce">Produce</option>
+                                    </select>
+                                </div>
+
+                                <div className={styles.formGroup}>
                                     <label className="label">Parent Client</label>
                                     <div style={{ position: 'relative' }}>
                                         <input
@@ -5316,6 +5330,16 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                 onChange={e => setDependentCin(e.target.value)}
                                                 style={{ marginBottom: '0.75rem' }}
                                             />
+                                            <label className="label" style={{ marginBottom: '0.5rem' }}>Client type</label>
+                                            <select
+                                                className="input"
+                                                value={dependentServiceType}
+                                                onChange={e => setDependentServiceType(e.target.value as 'Food' | 'Produce')}
+                                                style={{ marginBottom: '0.75rem' }}
+                                            >
+                                                <option value="Food">Food</option>
+                                                <option value="Produce">Produce</option>
+                                            </select>
                                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                                                 <button
                                                     className="btn btn-secondary"
@@ -5324,6 +5348,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                         setDependentName('');
                                                         setDependentDob('');
                                                         setDependentCin('');
+                                                        setDependentServiceType('Food');
                                                     }}
                                                     disabled={creatingDependent}
                                                 >

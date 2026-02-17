@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { uploadFile } from "@/lib/storage";
 
 const R2_DELIVERY_BUCKET = process.env.R2_DELIVERY_BUCKET_NAME;
-const R2_PUBLIC_BASE = process.env.NEXT_PUBLIC_R2_DOMAIN || "";
+const R2_PUBLIC_BASE = process.env.NEXT_PUBLIC_R2_DOMAIN || "https://storage.thedietfantasy.com";
 
 function getPublicUrl(key: string): string {
     const base = (R2_PUBLIC_BASE || "").replace(/\/$/, "");

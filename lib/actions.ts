@@ -3671,7 +3671,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
     return newClient;
 }
 
-export async function addDependent(name: string, parentClientId: string, dob?: string | null, cin?: number | null) {
+export async function addDependent(name: string, parentClientId: string, dob?: string | null, cin?: number | null, serviceType: ServiceType = 'Food') {
     if (!name.trim() || !parentClientId) {
         throw new Error('Dependent name and parent client are required');
     }
@@ -3685,8 +3685,8 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         throw new Error('Cannot attach dependent to another dependent');
     }
 
-    // Get default approved meals per week from template for Food serviceType
-    const defaultApprovedMeals = await getDefaultApprovedMealsPerWeek();
+    // Get default approved meals per week from template for Food serviceType only
+    const defaultApprovedMeals = serviceType === 'Food' ? await getDefaultApprovedMealsPerWeek() : null;
 
     const payload: any = {
         full_name: name.trim(),
@@ -3700,7 +3700,7 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         screening_signed: false,
         notes: '',
         status_id: null,
-        service_type: 'Food' as ServiceType, // Default service type
+        service_type: serviceType,
         approved_meals_per_week: defaultApprovedMeals,
         authorized_amount: null,
         expiration_date: null,
@@ -10636,7 +10636,7 @@ export async function uploadMenuItemImage(formData: FormData) {
 
     // Construct public URL
     // Priority: Env Var -> Hardcoded fallback
-    const publicUrlBase = process.env.R2_PUBLIC_URL_BASE || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
+    const publicUrlBase = process.env.R2_PUBLIC_URL_BASE || 'https://storage.thedietfantasy.com';
     const publicUrl = `${publicUrlBase}/${key}`;
 
     return { success: true, url: publicUrl };

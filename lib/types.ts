@@ -25,8 +25,8 @@ export interface ClientProfile {
   statusId: string;
   serviceType: ServiceType;
 
-  // Food Specific
-  approvedMealsPerWeek?: number;
+  // Food Specific (null = clear/unset, e.g. when switching to Produce)
+  approvedMealsPerWeek?: number | null;
 
   // Dependent relationship - if set, this client is a dependent of another client
   parentClientId?: string | null;

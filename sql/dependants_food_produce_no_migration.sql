@@ -1,0 +1,18 @@
+-- Dependants: Food vs Produce client type
+--
+-- No database migration is required. The `clients` table already has:
+--   service_type VARCHAR(50) NOT NULL
+--
+-- Every client row (including dependants, which have parent_client_id set) has
+-- service_type. The app now lets you choose Food or Produce when creating or
+-- editing a dependent; values are stored in clients.service_type as before.
+--
+-- Optional: if you want to backfill existing dependants that were defaulted to
+-- Food but should be Produce, run something like:
+--
+--   UPDATE clients
+--   SET service_type = 'Produce', approved_meals_per_week = NULL
+--   WHERE parent_client_id IS NOT NULL
+--     AND id IN ('...');  -- only for specific dependent IDs you choose
+--
+-- Do not run the above unless you have specific dependants to change.

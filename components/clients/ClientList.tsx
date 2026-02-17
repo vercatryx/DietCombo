@@ -4,7 +4,7 @@ import { ClientProfileDetail, type ClientProfileDetailHandle } from './ClientPro
 import { ClientInfoShelf } from './ClientInfoShelf';
 
 import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
-import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType } from '@/lib/types';
 import {
     getClientsPaginated,
     getClientFullDetails,
@@ -87,6 +87,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [dependentName, setDependentName] = useState('');
     const [dependentDob, setDependentDob] = useState('');
     const [dependentCin, setDependentCin] = useState('');
+    const [dependentServiceType, setDependentServiceType] = useState<'Food' | 'Produce'>('Food');
     const [selectedParentClientId, setSelectedParentClientId] = useState<string>('');
     const [regularClients, setRegularClients] = useState<ClientProfile[]>([]);
     const [parentClientSearch, setParentClientSearch] = useState('');
@@ -717,15 +718,20 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             
             if (editingDependentId) {
                 // Update existing dependent
-                await updateClient(editingDependentId, {
+                const updatePayload: Parameters<typeof updateClient>[1] = {
                     fullName: dependentName.trim(),
                     parentClientId: selectedParentClientId,
                     dob: dobValue,
-                    cin: cinValue
-                });
+                    cin: cinValue,
+                    serviceType: dependentServiceType as ServiceType
+                };
+                if (dependentServiceType === 'Produce') {
+                    updatePayload.approvedMealsPerWeek = null;
+                }
+                await updateClient(editingDependentId, updatePayload);
             } else {
                 // Create new dependent
-                const newDependent = await addDependent(dependentName.trim(), selectedParentClientId, dobValue, cinValue);
+                const newDependent = await addDependent(dependentName.trim(), selectedParentClientId, dobValue, cinValue, dependentServiceType);
                 if (!newDependent) return;
             }
 
@@ -734,6 +740,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setDependentName('');
             setDependentDob('');
             setDependentCin('');
+            setDependentServiceType('Food');
             setSelectedParentClientId('');
             setParentClientSearch('');
             setEditingDependentId(null);
@@ -1789,6 +1796,17 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             />
                         </div>
                         <div className={styles.formGroup}>
+                            <label className="label">Client type</label>
+                            <select
+                                className="input"
+                                value={dependentServiceType}
+                                onChange={e => setDependentServiceType(e.target.value as 'Food' | 'Produce')}
+                            >
+                                <option value="Food">Food</option>
+                                <option value="Produce">Produce</option>
+                            </select>
+                        </div>
+                        <div className={styles.formGroup}>
                             <label className="label">Parent Client</label>
                             <div style={{ position: 'relative' }}>
                                 <input
@@ -1856,6 +1874,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 setDependentName('');
                                 setDependentDob('');
                                 setDependentCin('');
+                                setDependentServiceType('Food');
                                 setSelectedParentClientId('');
                                 setParentClientSearch('');
                                 setEditingDependentId(null);
@@ -1867,6 +1886,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         setDependentName('');
                         setDependentDob('');
                         setDependentCin('');
+                        setDependentServiceType('Food');
                         setSelectedParentClientId('');
                         setParentClientSearch('');
                         setEditingDependentId(null);
@@ -2115,6 +2135,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     setDependentName(client.fullName);
                                     setDependentDob(client.dob || '');
                                     setDependentCin(client.cin?.toString() || '');
+                                    setDependentServiceType(client.serviceType === 'Produce' ? 'Produce' : 'Food');
                                     setSelectedParentClientId(client.parentClientId || '');
                                     const parentName = parentNamesMap[client.parentClientId!];
                                     if (parentName) {
@@ -2285,7 +2306,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     statuses={statuses}
                     navigators={navigators}
                     submissions={detailsCache[infoShelfClientId]?.submissions || []}
-                    allClients={[]}
+                    allClients={clients}
                     onClose={() => setInfoShelfClientId(null)}
                     onOpenProfile={(clientId) => {
                         setInfoShelfClientId(null);

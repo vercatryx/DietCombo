@@ -105,7 +105,7 @@ export async function processProduceProof(formData: FormData) {
             const key = `produce-proof-${orderNumber}-${timestamp}.${extension}`;
 
             await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
-            const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
+            const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
             const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
             publicUrl = `${baseUrl}/${key}`;
         } else {
@@ -266,7 +266,7 @@ export async function uploadProduceProofOnly(formData: FormData) {
         const key = `produce-proof-${clientId}-${timestamp}.${extension}`;
 
         await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
-        const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://pub-820fa32211a14c0b8bdc7c41106bfa02.r2.dev';
+        const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
         const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
         const publicUrl = `${baseUrl}/${key}`;
 
