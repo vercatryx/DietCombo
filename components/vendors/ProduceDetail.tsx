@@ -31,7 +31,7 @@ export function ProduceDetail() {
                 getBoxTypes()
             ]);
 
-            // Filter clients with serviceType = 'Produce'
+            // Include all Produce clients: primary and dependants (each gets their own row and label)
             const produceClientsList = clientsData.filter(client => client.serviceType === 'Produce');
 
             setProduceClients(produceClientsList);
@@ -53,8 +53,12 @@ export function ProduceDetail() {
     function getClientAddress(clientId: string) {
         const client = allClients.find(c => c.id === clientId);
         if (!client) return '-';
-        const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
-        return full || client.address || '-';
+        // Dependants often have no address; use parent's address for delivery
+        const useClient = client.parentClientId && !(client.address?.trim()) && !client.apt && !client.city && !client.zip
+            ? allClients.find(c => c.id === client.parentClientId) || client
+            : client;
+        const full = formatFullAddress({ address: useClient.address, apt: useClient.apt, city: useClient.city, state: useClient.state, zip: useClient.zip });
+        return full || useClient.address || '-';
     }
 
     function getClientPhone(clientId: string) {
@@ -62,12 +66,15 @@ export function ProduceDetail() {
         return client?.phoneNumber || '-';
     }
 
-    // Filter clients based on search
+    // Filter clients based on search (include parent name for dependants)
     const filteredClients = produceClients.filter(client => {
+        const parent = client.parentClientId ? allClients.find(c => c.id === client.parentClientId) : null;
+        const parentName = parent?.fullName?.toLowerCase() ?? '';
         const matchesSearch = client.fullName.toLowerCase().includes(search.toLowerCase()) ||
             (client.email && client.email.toLowerCase().includes(search.toLowerCase())) ||
             (client.phoneNumber && client.phoneNumber.includes(search)) ||
-            (client.address && client.address.toLowerCase().includes(search.toLowerCase()));
+            (client.address && client.address.toLowerCase().includes(search.toLowerCase())) ||
+            (parentName && parentName.includes(search.toLowerCase()));
         return matchesSearch;
     });
 
@@ -87,16 +94,8 @@ export function ProduceDetail() {
 
         await generateLabelsPDF({
             orders: clientOrders,
-            getClientName: (clientId: string) => {
-                const client = allClients.find(c => c.id === clientId);
-                return client?.fullName || 'Unknown Client';
-            },
-            getClientAddress: (clientId: string) => {
-                const client = allClients.find(c => c.id === clientId);
-                if (!client) return '-';
-                const full = formatFullAddress({ address: client.address, apt: client.apt, city: client.city, state: client.state, zip: client.zip });
-                return full || client.address || '-';
-            },
+            getClientName: (clientId: string) => getClientName(clientId),
+            getClientAddress: (clientId: string) => getClientAddress(clientId),
             formatOrderedItemsForCSV: () => 'Produce Client',
             formatDate: () => '',
             vendorName: 'Produce'
@@ -138,7 +137,7 @@ export function ProduceDetail() {
             {/* Clients Section */}
             <div className={styles.ordersSection}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-lg)' }}>
-                    <h2 className={styles.sectionTitle}>Clients with Service Type: Produce</h2>
+                    <h2 className={styles.sectionTitle}>Clients and dependants with Service Type: Produce</h2>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <div style={{ position: 'relative' }}>
                             <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
@@ -168,31 +167,40 @@ export function ProduceDetail() {
                             <span style={{ flex: '1 1 100px', minWidth: 0 }}>Service Type</span>
                         </div>
 
-                        {filteredClients.map(client => (
-                            <div
-                                key={client.id}
-                                className={styles.orderRow}
-                                onClick={() => router.push(`/clients/${client.id}`)}
-                                style={{ cursor: 'pointer' }}
-                            >
-                                <span style={{ flex: '2 1 200px', minWidth: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <User size={16} style={{ color: 'var(--color-primary)' }} />
-                                    {client.fullName}
-                                </span>
-                                <span style={{ flex: '1.5 1 150px', minWidth: 0, fontSize: '0.9rem' }}>
-                                    {client.email || '-'}
-                                </span>
-                                <span style={{ flex: '1 1 120px', minWidth: 0, fontSize: '0.9rem' }}>
-                                    {client.phoneNumber || '-'}
-                                </span>
-                                <span style={{ flex: '2 1 250px', minWidth: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                                    {client.address || '-'}
-                                </span>
-                                <span style={{ flex: '1 1 100px', minWidth: 0 }}>
-                                    <span className="badge badge-info">{client.serviceType}</span>
-                                </span>
-                            </div>
-                        ))}
+                        {filteredClients.map(client => {
+                            const parent = client.parentClientId ? allClients.find(c => c.id === client.parentClientId) : null;
+                            const isDependent = !!client.parentClientId;
+                            return (
+                                <div
+                                    key={client.id}
+                                    className={styles.orderRow}
+                                    onClick={() => router.push(`/clients/${client.id}`)}
+                                    style={{ cursor: 'pointer' }}
+                                >
+                                    <span style={{ flex: '2 1 200px', minWidth: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                        <User size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                                        {client.fullName}
+                                        {isDependent && (
+                                            <span className="badge" style={{ backgroundColor: 'var(--text-tertiary)', color: 'var(--bg-panel)', fontWeight: 500 }}>
+                                                Dependent{parent ? ` of ${parent.fullName}` : ''}
+                                            </span>
+                                        )}
+                                    </span>
+                                    <span style={{ flex: '1.5 1 150px', minWidth: 0, fontSize: '0.9rem' }}>
+                                        {client.email || '-'}
+                                    </span>
+                                    <span style={{ flex: '1 1 120px', minWidth: 0, fontSize: '0.9rem' }}>
+                                        {client.phoneNumber || '-'}
+                                    </span>
+                                    <span style={{ flex: '2 1 250px', minWidth: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                                        {getClientAddress(client.id)}
+                                    </span>
+                                    <span style={{ flex: '1 1 100px', minWidth: 0 }}>
+                                        <span className="badge badge-info">{client.serviceType}</span>
+                                    </span>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>

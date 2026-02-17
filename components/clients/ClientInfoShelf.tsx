@@ -79,6 +79,7 @@ export function ClientInfoShelf({
     const [dependentName, setDependentName] = useState('');
     const [dependentDob, setDependentDob] = useState('');
     const [dependentCin, setDependentCin] = useState('');
+    const [dependentServiceType, setDependentServiceType] = useState<'Food' | 'Produce'>('Food');
     const [creatingDependent, setCreatingDependent] = useState(false);
     const [loadingDependents, setLoadingDependents] = useState(false);
     const [localDependents, setLocalDependents] = useState<ClientProfile[]>([]);
@@ -216,7 +217,8 @@ export function ClientInfoShelf({
                 dependentName.trim(),
                 client.id,
                 dependentDob || null,
-                dependentCin ? Number(dependentCin) : null
+                dependentCin ? Number(dependentCin) : null,
+                dependentServiceType
             );
             if (newDep) {
                 // Update local state
@@ -225,6 +227,7 @@ export function ClientInfoShelf({
                 setDependentName('');
                 setDependentDob('');
                 setDependentCin('');
+                setDependentServiceType('Food');
                 setShowAddDependentForm(false);
                 // Notify parent
                 if (onClientUpdated) onClientUpdated(undefined);
@@ -809,10 +812,24 @@ export function ClientInfoShelf({
                                             />
                                         </div>
                                     </div>
+                                    <div className={styles.formGroup} style={{ marginBottom: '12px' }}>
+                                        <label className="label" style={{ fontSize: '0.75rem' }}>Type</label>
+                                        <select
+                                            className="input input-sm"
+                                            value={dependentServiceType}
+                                            onChange={e => setDependentServiceType(e.target.value as 'Food' | 'Produce')}
+                                        >
+                                            <option value="Food">Food</option>
+                                            <option value="Produce">Produce</option>
+                                        </select>
+                                    </div>
                                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                                         <button
                                             className="btn btn-secondary btn-sm"
-                                            onClick={() => setShowAddDependentForm(false)}
+                                            onClick={() => {
+                                                setShowAddDependentForm(false);
+                                                setDependentServiceType('Food');
+                                            }}
                                         >
                                             Cancel
                                         </button>
