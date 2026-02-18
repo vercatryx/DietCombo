@@ -14,10 +14,10 @@ SMTP_USER=your-email@yourdomain.com
 SMTP_PASS=your-email-password
 ```
 
-Optional (sender display name; defaults to "Triangle Square System"):
+Optional (sender display name; defaults to "Diet Fantasy"):
 
 ```env
-SMTP_FROM_NAME=Triangle Square System
+SMTP_FROM_NAME=Diet Fantasy
 ```
 
 **Replace:**

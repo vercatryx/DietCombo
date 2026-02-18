@@ -1,6 +1,6 @@
-# Triangle Client Manager Chrome Extension
+# Diet Fantasy Client Manager Chrome Extension
 
-A Chrome extension that allows you to quickly add clients to the Triangle system. The extension opens as a side panel for a better user experience.
+A Chrome extension that allows you to quickly add clients to the Diet Fantasy system. The extension opens as a side panel for a better user experience.
 
 ## Setup
 

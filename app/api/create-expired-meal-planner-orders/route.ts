@@ -25,6 +25,7 @@ import {
  *   - When client has no meal_planner_data for that date, fall back to clients.upcoming_order (or default) for migration period.
  *   - Always default to defaults when client has nothing.
  * - Created orders are immutable snapshots: we write into orders + order_vendor_selections + order_items the exact items and quantities at creation time. They do not change when defaults or clients.upcoming_order change later.
+ * - Order items: names that match the menu are written only as menu items (order_items.menu_item_id); names that do not match are written only as custom (custom_name). No duplicate (same name as both menu and custom). Generic placeholder name "Item" is never written as a custom row.
  * - All dates are in EST (America/New_York). The ?date= param is a calendar date (YYYY-MM-DD) in EST; when omitted, "today" is taken in EST.
  *
  * Logic:
@@ -102,12 +103,15 @@ export async function POST(request: NextRequest) {
 
         // 2. Pre-fetch all reference data in parallel
         // Use getClientsForAdmin to bypass Supabase's 1000-row limit - avoids "Unknown Client" on vendor sheets
-        const [allClients, defaultTemplate, menuItems, defaultVendorId] = await Promise.all([
+        // Fetch menu_items with admin client so we have full list for name resolution and duplicate filter (getMenuItems uses anon and can be RLS-limited)
+        const [allClients, defaultTemplate, menuItemsFromLib, defaultVendorId, menuItemsAdmin] = await Promise.all([
             getClientsForAdmin(supabaseAdmin),
             getDefaultOrderTemplate('Food'),
             getMenuItems(),
-            getDefaultVendorId()
+            getDefaultVendorId(),
+            supabaseAdmin.from('menu_items').select('id, name, value, price_each').then((r) => (r.data || []).map((i: any) => ({ id: i.id, name: i.name, value: i.value, priceEach: i.price_each ?? i.value })))
         ]);
+        const menuItems = (menuItemsAdmin?.length ? menuItemsAdmin : menuItemsFromLib) as any[];
 
         const foodClientsAll = allClients.filter(
             (c: any) => c.serviceType === 'Food' || (c.serviceType && String(c.serviceType).includes('Food'))
@@ -233,6 +237,7 @@ export async function POST(request: NextRequest) {
                 }
 
                 let vendorSelections: any[] = [];
+                let mealPlanCustomOnly: { name: string; quantity: number }[] = [];
                 if (clientItems.length > 0) {
                     // Day-based source: build from meal_planner_data for this date. Match item names to menu items; rest as custom.
                     const itemsByMenuId: Record<string, number> = {};
@@ -263,6 +268,9 @@ export async function POST(request: NextRequest) {
                     }
                     if (Object.keys(itemsByMenuId).length > 0 || customItems.length > 0) {
                         vendorSelections = [{ vendorId: defaultVendorId, items: itemsByMenuId }];
+                        mealPlanCustomOnly = customItems.filter(
+                            (c) => (c.name || '').trim().toLowerCase() !== 'item'
+                        );
                         if (customItems.length > 0) {
                             for (const c of customItems) {
                                 mealPlanMap.set(c.name, { name: c.name, quantity: c.quantity });
@@ -285,7 +293,24 @@ export async function POST(request: NextRequest) {
                     }
                 }
 
-                const mealPlanItemsFinal = Array.from(mealPlanMap.values());
+                let mealPlanItemsFinal =
+                    mealPlanCustomOnly.length > 0
+                        ? mealPlanCustomOnly
+                        : Array.from(mealPlanMap.values());
+                mealPlanItemsFinal = mealPlanItemsFinal.filter(
+                    (item) => (item.name || '').trim().toLowerCase() !== 'item'
+                );
+                const menuNamesBeingWritten = new Set<string>();
+                for (const vs of vendorSelections || []) {
+                    if (!vs?.items || typeof vs.items !== 'object' || Array.isArray(vs.items)) continue;
+                    for (const itemId of Object.keys(vs.items)) {
+                        const mi = (menuItems as any[]).find((m: any) => m.id === itemId);
+                        if (mi?.name != null) menuNamesBeingWritten.add(String(mi.name).trim().toLowerCase());
+                    }
+                }
+                mealPlanItemsFinal = mealPlanItemsFinal.filter(
+                    (item) => !menuNamesBeingWritten.has((item.name || '').trim().toLowerCase())
+                );
                 if (!vendorSelections || vendorSelections.length === 0) {
                     skippedReasons.push(`Client ${client.id} (${client.fullName}): No vendor selections or meal plan items for ${expiredDateStr}`);
                     continue;

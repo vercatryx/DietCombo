@@ -906,34 +906,55 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsForExport);
         const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const dependantsByParentId = new Map<string, ClientProfile[]>();
+        for (const c of clientsForExport) {
+            if (c.parentClientId) {
+                const list = dependantsByParentId.get(c.parentClientId) ?? [];
+                list.push(c);
+                dependantsByParentId.set(c.parentClientId, list);
+            }
+        }
+        const ordersWithDependants: any[] = [];
+        for (const order of sortedOrders) {
+            ordersWithDependants.push(order);
+            const dependants = dependantsByParentId.get(order.client_id) ?? [];
+            for (const dep of dependants) {
+                ordersWithDependants.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
+            }
+        }
         const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
         const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
         const getClientAddressForExport = (clientId: string) => {
             const c = clientById.get(clientId);
             if (!c) return '-';
-            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
-            return full || c.address || '-';
+            const useClient = c.parentClientId && !(c.address?.trim()) && !c.apt && !c.city && !c.zip
+                ? clientById.get(c.parentClientId) ?? c
+                : c;
+            const full = formatFullAddress({ address: useClient.address, apt: useClient.apt, city: useClient.city, state: useClient.state, zip: useClient.zip });
+            return full || useClient.address || '-';
+        };
+        const getDriverInfoForOrder = (order: any) => {
+            const primaryId = (order as any)._primaryClientId ?? order.client_id;
+            const client = clientById.get(primaryId);
+            const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+            if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
+            const stopNumber = clientIdToStopNumber[primaryId];
+            return {
+                driverNumber: driverIdToNumber[driverId],
+                driverColor: driverIdToColor[driverId],
+                ...(stopNumber != null && { stopNumber })
+            };
         };
         await generateLabelsPDF({
-            orders: sortedOrders,
+            orders: ordersWithDependants,
             getClientName: getClientNameForExport,
             getClientAddress: getClientAddressForExport,
             formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             formatDate,
             vendorName: vendor?.name,
             deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
-            getDriverInfo: (order) => {
-                const client = clientById.get(order.client_id);
-                const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
-                if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
-                const stopNumber = clientIdToStopNumber[order.client_id];
-                return {
-                    driverNumber: driverIdToNumber[driverId],
-                    driverColor: driverIdToColor[driverId],
-                    ...(stopNumber != null && { stopNumber })
-                };
-            }
+            getDriverInfo: getDriverInfoForOrder
         });
         } finally {
             setIsExporting(false);
@@ -964,34 +985,55 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const clientsForExport = await getClientsUnlimited();
             const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrdersAlt, clientsForExport);
             const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+            const dependantsByParentIdAlt = new Map<string, ClientProfile[]>();
+            for (const c of clientsForExport) {
+                if (c.parentClientId) {
+                    const list = dependantsByParentIdAlt.get(c.parentClientId) ?? [];
+                    list.push(c);
+                    dependantsByParentIdAlt.set(c.parentClientId, list);
+                }
+            }
+            const ordersWithDependantsAlt: any[] = [];
+            for (const order of sortedOrders) {
+                ordersWithDependantsAlt.push(order);
+                const dependants = dependantsByParentIdAlt.get(order.client_id) ?? [];
+                for (const dep of dependants) {
+                    ordersWithDependantsAlt.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
+                }
+            }
             const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
             const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
-            const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
-            const getClientAddressForExport = (clientId: string) => {
-            const c = clientById.get(clientId);
-            if (!c) return '-';
-            const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
-            return full || c.address || '-';
-        };
+            const getClientNameForExportAlt = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
+            const getClientAddressForExportAlt = (clientId: string) => {
+                const c = clientById.get(clientId);
+                if (!c) return '-';
+                const useClient = c.parentClientId && !(c.address?.trim()) && !c.apt && !c.city && !c.zip
+                    ? clientById.get(c.parentClientId) ?? c
+                    : c;
+                const full = formatFullAddress({ address: useClient.address, apt: useClient.apt, city: useClient.city, state: useClient.state, zip: useClient.zip });
+                return full || useClient.address || '-';
+            };
+            const getDriverInfoForOrderAlt = (order: any) => {
+                const primaryId = (order as any)._primaryClientId ?? order.client_id;
+                const client = clientById.get(primaryId);
+                const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
+                if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
+                const stopNumber = clientIdToStopNumber[primaryId];
+                return {
+                    driverNumber: driverIdToNumber[driverId],
+                    driverColor: driverIdToColor[driverId],
+                    ...(stopNumber != null && { stopNumber })
+                };
+            };
             await generateLabelsPDFTwoPerCustomer({
-                orders: sortedOrders,
-                getClientName: getClientNameForExport,
-                getClientAddress: getClientAddressForExport,
+                orders: ordersWithDependantsAlt,
+                getClientName: getClientNameForExportAlt,
+                getClientAddress: getClientAddressForExportAlt,
                 formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
                 formatDate,
                 vendorName: vendor?.name,
                 deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
-                getDriverInfo: (order) => {
-                    const client = clientById.get(order.client_id);
-                    const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
-                    if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
-                    const stopNumber = clientIdToStopNumber[order.client_id];
-                    return {
-                        driverNumber: driverIdToNumber[driverId],
-                        driverColor: driverIdToColor[driverId],
-                        ...(stopNumber != null && { stopNumber })
-                    };
-                },
+                getDriverInfo: getDriverInfoForOrderAlt,
                 getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
             });
         } finally {
