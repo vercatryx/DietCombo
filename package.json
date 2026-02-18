@@ -14,7 +14,11 @@
 "backfill-driver-route-order": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/backfill-driver-route-order.ts",
     "verify-driver-order-numbers": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-order-numbers.ts",
     "test-driver-page-order-numbers": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-driver-page-order-numbers.ts",
-    "verify-driver-proof-urls": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-proof-urls.ts"
+    "verify-driver-proof-urls": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-proof-urls.ts",
+    "diagnose-expired-order-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-expired-order-client.ts",
+    "diagnose-order-items-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-order-items-doubles.ts",
+    "preview-order-for-client-date": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/preview-order-for-client-date.ts",
+    "fix-order-items-remove-item-and-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/fix-order-items-remove-item-and-doubles.ts"
 },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

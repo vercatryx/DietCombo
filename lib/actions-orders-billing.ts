@@ -74,8 +74,13 @@ async function enrichOrdersPage(
 
     let clientsMap = new Map<string, string>();
     if (clientIds.length > 0) {
-        const { data: clients } = await db.from('clients').select('id, full_name').in('id', clientIds);
-        if (clients) clients.forEach((c: any) => clientsMap.set(c.id, c.full_name || 'Unknown'));
+        // Batch client fetches to avoid URL length limits (PostgREST .in() in URL can hit 414 with many IDs)
+        const CLIENT_BATCH = 150;
+        for (let i = 0; i < clientIds.length; i += CLIENT_BATCH) {
+            const batch = clientIds.slice(i, i + CLIENT_BATCH);
+            const { data: clients } = await db.from('clients').select('id, full_name').in('id', batch);
+            if (clients) clients.forEach((c: any) => clientsMap.set(c.id, c.full_name || 'Unknown'));
+        }
     }
 
     const vendorNamesByOrderId = new Map<string, string[]>();
@@ -107,8 +112,13 @@ async function enrichOrdersPage(
 
     const vendorById = new Map<string, string>();
     if (allVendorIds.size > 0) {
-        const { data: vendors } = await db.from('vendors').select('id, name').in('id', Array.from(allVendorIds));
-        (vendors || []).forEach((v: any) => vendorById.set(v.id, v.name));
+        const vendorIdsArray = Array.from(allVendorIds);
+        const VENDOR_BATCH = 150;
+        for (let i = 0; i < vendorIdsArray.length; i += VENDOR_BATCH) {
+            const batch = vendorIdsArray.slice(i, i + VENDOR_BATCH);
+            const { data: vendors } = await db.from('vendors').select('id, name').in('id', batch);
+            (vendors || []).forEach((v: any) => vendorById.set(v.id, v.name));
+        }
     }
 
     const addVendor = (orderId: string, vendorId: string | null) => {
