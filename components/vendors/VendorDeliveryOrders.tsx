@@ -437,15 +437,17 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
             return full || c.address || '-';
         };
-        await generateLabelsPDF({
-            orders: sortedOrders,
+        const isComplex = (order: { client_id: string }) => !!(clientById.get(order.client_id)?.complex);
+        const ordersNonComplex = sortedOrders.filter(o => !isComplex(o));
+        const ordersComplex = sortedOrders.filter(o => isComplex(o));
+        const commonOpts = {
             getClientName: getClientNameForExport,
             getClientAddress: getClientAddressForExport,
-            formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
+            formatOrderedItemsForCSV: (order: typeof sortedOrders[0]) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             formatDate,
             vendorName: vendor?.name,
             deliveryDate,
-            getDriverInfo: (order) => {
+            getDriverInfo: (order: typeof sortedOrders[0]) => {
                 const client = clientById.get(order.client_id);
                 const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
                 if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
@@ -456,8 +458,14 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                     ...(stopNumber != null && { stopNumber })
                 };
             },
-            getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
-        });
+            getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+        };
+        if (ordersNonComplex.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersNonComplex });
+        }
+        if (ordersComplex.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersComplex, filenameSuffix: '_complex' });
+        }
         } finally {
             setIsExporting(false);
         }

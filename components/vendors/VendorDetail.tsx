@@ -946,17 +946,25 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 ...(stopNumber != null && { stopNumber })
             };
         };
-        await generateLabelsPDF({
-            orders: ordersWithDependants,
+        const isComplex = (order: any) => !!(clientById.get(order.client_id)?.complex);
+        const ordersWithDependantsNonComplex = ordersWithDependants.filter((o: any) => !isComplex(o));
+        const ordersWithDependantsComplex = ordersWithDependants.filter((o: any) => isComplex(o));
+        const commonOpts = {
             getClientName: getClientNameForExport,
             getClientAddress: getClientAddressForExport,
-            formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
+            formatOrderedItemsForCSV: (order: any) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
             formatDate,
             vendorName: vendor?.name,
             deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
             getDriverInfo: getDriverInfoForOrder,
-            getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
-        });
+            getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+        };
+        if (ordersWithDependantsNonComplex.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersWithDependantsNonComplex });
+        }
+        if (ordersWithDependantsComplex.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersWithDependantsComplex, filenameSuffix: '_complex' });
+        }
         } finally {
             setIsExporting(false);
         }

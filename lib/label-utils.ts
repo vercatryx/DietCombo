@@ -24,6 +24,8 @@ interface LabelGenerationOptions {
     getDriverInfo?: (order: Order) => { driverNumber: number | string; driverColor: string; stopNumber?: number } | null;
     /** When provided, displays notes after items on each label (e.g. for Labels Alt) */
     getNotes?: (clientId: string) => string;
+    /** Optional suffix for the download filename (e.g. '_complex' for a separate complex-only PDF) */
+    filenameSuffix?: string;
 }
 
 /** Line height factor for a given font size (inches per pt). Matches pdfRouteLabels behavior. */
@@ -76,7 +78,8 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         vendorName,
         deliveryDate,
         getDriverInfo,
-        getNotes
+        getNotes,
+        filenameSuffix
     } = options;
 
     if (orders.length === 0) {
@@ -312,7 +315,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         const formattedDate = formatDate(deliveryDate).replace(/\s/g, '_').replace(/[/\\:*?"<>|]/g, '_');
         filename += `_${formattedDate}`;
     }
-    filename += '.pdf';
+    filename += (filenameSuffix ?? '') + '.pdf';
 
     const blob = doc.output('blob');
     const url = URL.createObjectURL(blob);
