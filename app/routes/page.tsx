@@ -1204,13 +1204,14 @@ export default function RoutesPage() {
                     onClick={async () => {
                         setBusy(true);
                         try {
+                            // Include all delivery-eligible clients (primaries and dependants) from assignment-data
                             let activeClients = assignmentData?.clients ?? [];
                             const driverList = assignmentData?.drivers ?? [];
                             if (activeClients.length === 0) {
                                 alert('No client data loaded. Please wait for the page to load.');
                                 return;
                             }
-                            // Filter to clients with orders on selected date when Orders View has a date (match Orders View)
+                            // When Orders View date is set: filter to clients with orders on that date (client_ids include dependants who have their own orders)
                             if (ordersForDate?.client_ids?.length && ordersViewDate) {
                                 const clientIdsWithOrders = new Set((ordersForDate.client_ids || []).map((id: string) => String(id)));
                                 activeClients = activeClients.filter((c: any) => clientIdsWithOrders.has(String(c.id)));

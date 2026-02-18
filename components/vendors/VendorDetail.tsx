@@ -954,7 +954,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             formatDate,
             vendorName: vendor?.name,
             deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
-            getDriverInfo: getDriverInfoForOrder
+            getDriverInfo: getDriverInfoForOrder,
+            getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
         });
         } finally {
             setIsExporting(false);

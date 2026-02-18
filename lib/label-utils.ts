@@ -26,6 +26,46 @@ interface LabelGenerationOptions {
     getNotes?: (clientId: string) => string;
 }
 
+/** Line height factor for a given font size (inches per pt). Matches pdfRouteLabels behavior. */
+const lineHeightFromFont = (pt: number) => Math.max(0.14, pt * 0.017);
+
+/**
+ * Draw notes text, shrinking font from maxFont down to minFont until it fits in the available height.
+ * Same approach as inroutes (pdfRouteLabels) drawLines.
+ */
+function drawNotesToFit(
+    doc: jsPDF,
+    text: string,
+    x: number,
+    startY: number,
+    maxWidth: number,
+    maxHeight: number,
+    maxFont: number = 8,
+    minFont: number = 5
+): void {
+    const notesDisplay = `Notes: ${text}`;
+    const prevSize = doc.getFontSize();
+    let font = maxFont;
+    let lh = lineHeightFromFont(font);
+    doc.setFontSize(font);
+    let splitNotes = doc.splitTextToSize(notesDisplay, maxWidth);
+    let h = splitNotes.length * lh;
+    while (h > maxHeight && font > minFont) {
+        font -= 1;
+        lh = lineHeightFromFont(font);
+        doc.setFontSize(font);
+        splitNotes = doc.splitTextToSize(notesDisplay, maxWidth);
+        h = splitNotes.length * lh;
+    }
+    doc.setFontSize(font);
+    let yy = startY;
+    for (const ln of splitNotes) {
+        if (ln) doc.text(ln, x, yy);
+        yy += lh;
+    }
+    doc.setFontSize(prevSize);
+}
+
 export async function generateLabelsPDF(options: LabelGenerationOptions): Promise<void> {
     const {
         orders,
@@ -228,25 +268,13 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         }
 
         if (hasNotes && phase2Y + phase2LineHeight <= labelBottomSafe) {
-            doc.setFontSize(PROPS.smallSize);
             setDriverColor();
-            const notesDisplay = `Notes: ${notesText}`;
-            const splitNotes = doc.splitTextToSize(notesDisplay, phase2MaxWidth);
-            const maxNotesLines = maxLinesThatFit(phase2Y, labelBottomSafe, phase2LineHeight);
-            const visibleNotes = splitNotes.slice(0, maxNotesLines);
-            if (visibleNotes.length > 0) {
-                doc.text(visibleNotes, contentX, phase2Y);
-            }
+            const notesMaxHeight = labelBottomSafe - phase2Y;
+            drawNotesToFit(doc, notesText, contentX, phase2Y, phase2MaxWidth, notesMaxHeight, PROPS.smallSize);
         } else if (hasNotes && !restItems && phase2AvailableHeight > phase2LineHeight) {
-            doc.setFontSize(PROPS.smallSize);
             setDriverColor();
-            const notesDisplay = `Notes: ${notesText}`;
-            const splitNotes = doc.splitTextToSize(notesDisplay, phase2MaxWidth);
-            const maxNotesLines = maxLinesThatFit(phase2StartY, labelBottomSafe, phase2LineHeight);
-            const visibleNotes = splitNotes.slice(0, maxNotesLines);
-            if (visibleNotes.length > 0) {
-                doc.text(visibleNotes, contentX, phase2StartY);
-            }
+            const notesMaxHeight = labelBottomSafe - phase2StartY;
+            drawNotesToFit(doc, notesText, contentX, phase2StartY, phase2MaxWidth, notesMaxHeight, PROPS.smallSize);
         }
         resetColor();
 
@@ -417,19 +445,13 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
         }
         currentY = Math.min(currentY, maxYPhase1);
 
-        // Left: Notes below QR area
+        // Left: Notes below QR area (shrink font to fit like inroutes labels)
         const notesText = (getNotes?.(order.client_id) ?? '').trim();
         if (notesText && currentY < labelBottomSafe) {
             const notesY = Math.max(phase2StartY, currentY + 0.1);
-            doc.setFontSize(PROPS.smallSize);
+            const notesMaxHeight = labelBottomSafe - notesY;
             setDriverColor();
-            const notesDisplay = `Notes: ${notesText}`;
-            const splitNotes = doc.splitTextToSize(notesDisplay, phase2MaxWidth);
-            const maxNotesLines = Math.max(0, Math.floor((labelBottomSafe - notesY) / phase2LineHeight));
-            const visibleNotes = splitNotes.slice(0, maxNotesLines);
-            if (visibleNotes.length > 0) {
-                doc.text(visibleNotes, leftContentX, notesY);
-            }
+            drawNotesToFit(doc, notesText, leftContentX, notesY, phase2MaxWidth, notesMaxHeight, PROPS.smallSize);
         }
         resetColor();
 

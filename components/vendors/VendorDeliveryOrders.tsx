@@ -455,7 +455,8 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                     driverColor: driverIdToColor[driverId],
                     ...(stopNumber != null && { stopNumber })
                 };
-            }
+            },
+            getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
         });
         } finally {
             setIsExporting(false);
