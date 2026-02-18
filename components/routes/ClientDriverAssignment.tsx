@@ -40,6 +40,8 @@ export interface ClientStatsForRoutes {
     total_produce: number;
     primary_paused_or_delivery_off: number;
     primary_food_missing_geo: number;
+    /** Delivery-eligible dependants missing lat/lng (shown in Needs Geocoding tab). */
+    dependant_missing_geo?: number;
 }
 
 interface ClientDriverAssignmentProps {
@@ -359,6 +361,8 @@ export default function ClientDriverAssignment({
     };
 
     const primaryFoodMissingGeo = stats?.primary_food_missing_geo ?? 0;
+    const dependantMissingGeo = stats?.dependant_missing_geo ?? 0;
+    const totalMissingGeo = primaryFoodMissingGeo + dependantMissingGeo;
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
@@ -382,9 +386,16 @@ export default function ClientDriverAssignment({
                             <strong>Primary paused or delivery off</strong> (not produce): {stats.primary_paused_or_delivery_off}
                             {selectedClientIds.size > 0 && ` · ${selectedClientIds.size} selected`}
                         </Typography>
-                        {primaryFoodMissingGeo > 0 && (
+                        {totalMissingGeo > 0 && (
                             <Typography variant="caption" sx={{ color: '#f59e0b', display: 'block', mb: 1 }}>
-                                ⚠️ <strong>Primary food only:</strong> {primaryFoodMissingGeo} primary food client{primaryFoodMissingGeo !== 1 ? 's' : ''} without geolocation {primaryFoodMissingGeo !== 1 ? 'are' : 'is'} not shown on map (this count includes those paused or delivery off).
+                                ⚠️ <strong>Need geocoding:</strong> {totalMissingGeo} client{totalMissingGeo !== 1 ? 's' : ''} without geolocation {totalMissingGeo !== 1 ? 'are' : 'is'} not shown on map
+                                {primaryFoodMissingGeo > 0 && dependantMissingGeo > 0
+                                    ? ` (${primaryFoodMissingGeo} primary, ${dependantMissingGeo} dependant${dependantMissingGeo !== 1 ? 's' : ''}).`
+                                    : primaryFoodMissingGeo > 0
+                                        ? ' (primaries only).'
+                                        : ` (${dependantMissingGeo} dependant${dependantMissingGeo !== 1 ? 's' : ''}).`
+                                }
+                                {' '}Use &quot;Needs geocoding&quot; to fix.
                             </Typography>
                         )}
                     </>

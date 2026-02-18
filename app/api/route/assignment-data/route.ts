@@ -40,6 +40,7 @@ export async function GET(req: Request) {
         const hasFood = (st: string | null) => (st ?? "").toLowerCase().includes("food");
         const hasProduce = (st: string | null) => (st ?? "").toLowerCase().includes("produce");
         const isProduceOnly = (st: string | null) => (st ?? "").trim().toLowerCase() === "produce";
+        const isDeliveryEligible = (r: typeof rows[0]) => !r.paused && (r.delivery !== false);
         const stats = {
             total_clients: rows.length,
             total_dependants: rows.filter((r) => r.parent_client_id != null && r.parent_client_id !== "").length,
@@ -56,6 +57,14 @@ export async function GET(req: Request) {
                     !r.parent_client_id &&
                     hasFood(r.service_type) &&
                     (r.lat == null || r.lng == null)
+            ).length,
+            /** Delivery-eligible dependants missing lat/lng (shown in Needs Geocoding tab and on map when geocoded). */
+            dependant_missing_geo: rows.filter(
+                (r) =>
+                    r.parent_client_id != null &&
+                    r.parent_client_id !== "" &&
+                    (r.lat == null || r.lng == null) &&
+                    isDeliveryEligible(r)
             ).length,
         };
 

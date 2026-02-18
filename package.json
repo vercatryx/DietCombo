@@ -14,7 +14,8 @@
 "backfill-driver-route-order": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/backfill-driver-route-order.ts",
     "verify-driver-order-numbers": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-order-numbers.ts",
     "test-driver-page-order-numbers": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-driver-page-order-numbers.ts",
-    "verify-driver-proof-urls": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-proof-urls.ts"
+    "verify-driver-proof-urls": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-proof-urls.ts",
+    "sync-dependants-from-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/sync-dependants-from-parent.ts"
 },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",

@@ -193,6 +193,7 @@ export default function RoutesPage() {
             total_produce: number;
             primary_paused_or_delivery_off: number;
             primary_food_missing_geo: number;
+            dependant_missing_geo?: number;
         } | null;
     } | null>(null);
     const [assignmentDataLoading, setAssignmentDataLoading] = React.useState(true);

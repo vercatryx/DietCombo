@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 
 /**
  * Returns clients from the clients table that are missing lat/lng (for manual geocoding).
- * Excludes dependents (parent_client_id set) – only standalone/parent clients need geocoding.
+ * Includes both primary clients and dependants (dependants can have their own orders and need geocoding).
  * Same filters as assignment: not paused, delivery true or null.
  */
 export async function GET() {
@@ -13,12 +13,11 @@ export async function GET() {
         const { data: rows, error } = await supabase
             .from("clients")
             .select(
-                "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng"
+                "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id"
             )
             .eq("paused", false)
             .or("delivery.is.null,delivery.eq.true")
             .or("lat.is.null,lng.is.null")
-            .is("parent_client_id", null)
             .order("id", { ascending: true });
 
         if (error) {
@@ -51,6 +50,7 @@ export async function GET() {
             zip: get(c, "zip"),
             lat: c.lat != null ? Number(c.lat) : null,
             lng: c.lng != null ? Number(c.lng) : null,
+            parent_client_id: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
         }));
 
         return NextResponse.json(
