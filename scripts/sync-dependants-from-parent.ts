@@ -1,9 +1,11 @@
 /**
- * Copies parent's assigned_driver_id and geocoding (lat, lng, geocoded_at) to dependants
- * when the dependant doesn't already have their own.
+ * Copies parent's address, assigned_driver_id, and geocoding to dependants when the dependant
+ * doesn't already have their own.
  *
+ * - Address: address, apt, city, state, zip (and county if present) — only copied if dependant
+ *   has no address (all of address/city/state/zip empty).
  * - Driver: only copied if dependant's assigned_driver_id is null or empty.
- * - Geocoding: only copied if dependant is missing valid lat/lng (either null or not finite).
+ * - Geocoding: lat, lng, geocoded_at — only copied if dependant is missing valid lat/lng.
  *
  * Usage: npx ts-node --compiler-options '{"module":"CommonJS","moduleResolution":"node"}' scripts/sync-dependants-from-parent.ts
  * Or: npm run sync-dependants-from-parent
@@ -38,12 +40,20 @@ function hasDriver(id: unknown): boolean {
     return id != null && String(id).trim() !== "";
 }
 
+function hasAddress(c: { address?: unknown; city?: unknown; state?: unknown; zip?: unknown }): boolean {
+    const a = c.address != null ? String(c.address).trim() : "";
+    const city = c.city != null ? String(c.city).trim() : "";
+    const state = c.state != null ? String(c.state).trim() : "";
+    const zip = c.zip != null ? String(c.zip).trim() : "";
+    return a !== "" || city !== "" || state !== "" || zip !== "";
+}
+
 async function main() {
-    console.log("Syncing dependants from parent (driver + geocoding)...\n");
+    console.log("Syncing dependants from parent (address + driver + geocoding)...\n");
 
     const { data: dependants, error: depErr } = await supabase
         .from("clients")
-        .select("id, first_name, last_name, full_name, parent_client_id, assigned_driver_id, lat, lng, geocoded_at")
+        .select("id, first_name, last_name, full_name, parent_client_id, assigned_driver_id, address, apt, city, state, zip, county, lat, lng, geocoded_at")
         .not("parent_client_id", "is", null);
 
     if (depErr) {
@@ -60,7 +70,7 @@ async function main() {
     const parentIds = [...new Set(list.map((d: any) => String(d.parent_client_id)).filter(Boolean))];
     const { data: parents, error: parErr } = await supabase
         .from("clients")
-        .select("id, assigned_driver_id, lat, lng, geocoded_at")
+        .select("id, assigned_driver_id, address, apt, city, state, zip, county, lat, lng, geocoded_at")
         .in("id", parentIds);
 
     if (parErr) {
@@ -73,6 +83,7 @@ async function main() {
         parentById.set(String(p.id), p);
     }
 
+    let addressCopied = 0;
     let driverCopied = 0;
     let geoCopied = 0;
     const updates: { id: string; payload: Record<string, unknown> }[] = [];
@@ -85,6 +96,18 @@ async function main() {
         }
 
         const payload: Record<string, unknown> = {};
+        const dependantHasAddress = hasAddress(d);
+        const parentHasAddress = hasAddress(parent);
+        if (!dependantHasAddress && parentHasAddress) {
+            if (parent.address != null) payload.address = parent.address;
+            if (parent.apt != null) payload.apt = parent.apt;
+            if (parent.city != null) payload.city = parent.city;
+            if (parent.state != null) payload.state = parent.state;
+            if (parent.zip != null) payload.zip = parent.zip;
+            if (parent.county != null) payload.county = parent.county;
+            addressCopied++;
+        }
+
         let needDriver = !hasDriver(d.assigned_driver_id) && hasDriver(parent.assigned_driver_id);
         if (needDriver) {
             payload.assigned_driver_id = parent.assigned_driver_id;
@@ -106,11 +129,11 @@ async function main() {
     }
 
     if (updates.length === 0) {
-        console.log("No dependants need updates (all already have driver and/or geocoding).");
+        console.log("No dependants need updates (all already have address, driver, and/or geocoding).");
         return;
     }
 
-    console.log(`${DRY_RUN ? "[DRY RUN] Would update" : "Updating"} ${updates.length} dependant(s) (driver copied: ${driverCopied}, geocoding copied: ${geoCopied}).`);
+    console.log(`${DRY_RUN ? "[DRY RUN] Would update" : "Updating"} ${updates.length} dependant(s) (address: ${addressCopied}, driver: ${driverCopied}, geocoding: ${geoCopied}).`);
     if (DRY_RUN) {
         for (const { id, payload } of updates) {
             console.log(`  ${id}:`, payload);

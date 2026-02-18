@@ -870,6 +870,10 @@ export default function DriversMapLeaflet({
     const [driverFilter, setDriverFilter] = useState(() => new Set());
     const hasFilter = driverFilter.size > 0;
 
+    /* ===== Show only unrouted filter ===== */
+    const [showOnlyUnrouted, setShowOnlyUnrouted] = useState(false);
+    const clearShowOnlyUnrouted = useCallback(() => setShowOnlyUnrouted(false), []);
+
     const toggleDriverFilter = useCallback((driverId) => {
         setDriverFilter((prev) => {
             const next = new Set(prev);
@@ -883,19 +887,40 @@ export default function DriversMapLeaflet({
 
     const clearDriverFilter = useCallback(() => setDriverFilter(new Set()), []);
 
-    // Only show selected drivers when filtered; otherwise show all
+    // When "Show only unrouted" is on, hide all drivers; otherwise only show selected drivers when filtered
     const visibleDrivers = useMemo(
         () =>
-            hasFilter
-                ? sortedDrivers.filter((d) => driverFilter.has(String(d.driverId ?? d.id ?? "")))
-                : sortedDrivers,
-        [sortedDrivers, driverFilter, hasFilter]
+            showOnlyUnrouted
+                ? []
+                : hasFilter
+                    ? sortedDrivers.filter((d) => driverFilter.has(String(d.driverId ?? d.id ?? "")))
+                    : sortedDrivers,
+        [sortedDrivers, driverFilter, hasFilter, showOnlyUnrouted]
     );
 
     /* ------- derived ------- */
     const hasLL = (s) => !!getLL(s);
+
+    const assignedIdSet = useMemo(() => {
+        const set = new Set();
+        for (const d of sortedDrivers) for (const s of d.stops || []) set.add(sid(s.id));
+        return set;
+    }, [sortedDrivers]);
+
+    const unroutedFiltered = useMemo(
+        () => (localUnrouted || []).filter((s) => !assignedIdSet.has(sid(s.id))),
+        [localUnrouted, assignedIdSet]
+    );
+
     const allPoints = useMemo(() => {
         const pts = [];
+        if (showOnlyUnrouted) {
+            for (const s of unroutedFiltered) {
+                const ll = getLL(s);
+                if (ll) pts.push(ll);
+            }
+            return pts;
+        }
         for (const d of visibleDrivers)
             for (const s of d.stops || []) {
                 const ll = getLL(s);
@@ -909,23 +934,12 @@ export default function DriversMapLeaflet({
             }
         }
         return pts;
-    }, [visibleDrivers, localUnrouted, hasFilter]);
+    }, [visibleDrivers, localUnrouted, hasFilter, showOnlyUnrouted, unroutedFiltered]);
 
-    const assignedIdSet = useMemo(() => {
-        const set = new Set();
-        for (const d of sortedDrivers) for (const s of d.stops || []) set.add(sid(s.id));
-        return set;
-    }, [sortedDrivers]);
-
-    const unroutedFiltered = useMemo(
-        () => (localUnrouted || []).filter((s) => !assignedIdSet.has(sid(s.id))),
-        [localUnrouted, assignedIdSet]
-    );
-
-    // Only show unrouted when not filtering by driver
+    // Show unrouted when "Show only unrouted" is on, or when not filtering by driver
     const unroutedFilteredVisible = useMemo(
-        () => (hasFilter ? [] : unroutedFiltered),
-        [hasFilter, unroutedFiltered]
+        () => (showOnlyUnrouted || !hasFilter ? unroutedFiltered : []),
+        [hasFilter, showOnlyUnrouted, unroutedFiltered]
     );
 
     const indexItems = useMemo(
@@ -2009,7 +2023,7 @@ export default function DriversMapLeaflet({
                     />
 
                     {/* Filter status row */}
-                    {hasFilter && (
+                    {(hasFilter || showOnlyUnrouted) && (
                         <div
                             style={{
                                 display: "flex",
@@ -2023,11 +2037,14 @@ export default function DriversMapLeaflet({
                             }}
                         >
                             <div style={{ fontWeight: 700 }}>
-                                Filtering {driverFilter.size} driver{driverFilter.size > 1 ? "s" : ""}
+                                {showOnlyUnrouted ? "Showing only unrouted" : `Filtering ${driverFilter.size} driver${driverFilter.size > 1 ? "s" : ""}`}
                             </div>
                             <button
                                 type="button"
-                                onClick={clearDriverFilter}
+                                onClick={() => {
+                                    clearDriverFilter();
+                                    clearShowOnlyUnrouted();
+                                }}
                                 style={{
                                     marginLeft: "auto",
                                     padding: "4px 8px",
@@ -2045,7 +2062,7 @@ export default function DriversMapLeaflet({
                         </div>
                     )}
 
-                    {/* Unrouted summary + NEW "Select all unrouted" */}
+                    {/* Unrouted summary + "Select all unrouted" */}
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ fontSize: 12, opacity: 0.8 }}>
                             Unrouted (visible): {unroutedVisible}
@@ -2071,8 +2088,64 @@ export default function DriversMapLeaflet({
                         )}
                     </div>
 
-                    {/* Clickable driver index */}
+                    {/* Clickable driver index: Unrouted row first (same style as drivers), then drivers */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {/* Unrouted row - same look and behavior as driver rows */}
+                        {unroutedVisible > 0 && (
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    fontSize: 13,
+                                    width: "100%",
+                                    textAlign: "left",
+                                    padding: "8px 10px",
+                                    borderRadius: 10,
+                                    border: showOnlyUnrouted ? "1px solid #7db3ff" : "1px solid #ddd",
+                                    background: showOnlyUnrouted ? "#eef5ff" : "#fff",
+                                }}
+                            >
+                                <span
+                                    style={{
+                                        width: 16,
+                                        height: 16,
+                                        borderRadius: 4,
+                                        background: "#666",
+                                        border: "1px solid rgba(0,0,0,0.15)",
+                                        flexShrink: 0,
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowOnlyUnrouted((prev) => !prev)}
+                                    title={showOnlyUnrouted ? "Show all drivers" : "Show only unrouted"}
+                                    style={{
+                                        flex: 1,
+                                        background: "transparent",
+                                        border: "none",
+                                        textAlign: "left",
+                                        cursor: "pointer",
+                                        whiteSpace: "nowrap",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        fontWeight: showOnlyUnrouted ? 700 : 500,
+                                        padding: 0,
+                                    }}
+                                >
+                                    Unrouted
+                                </button>
+                                <div
+                                    style={{
+                                        fontVariantNumeric: "tabular-nums",
+                                        opacity: 0.85,
+                                        paddingLeft: 6,
+                                    }}
+                                >
+                                    {unroutedVisible}
+                                </div>
+                            </div>
+                        )}
                         {indexItems.map((it, idx) => {
                             const driverIdStr = it.driverId != null && it.driverId !== "" ? String(it.driverId) : null;
                             const active = driverIdStr != null && driverFilter.has(driverIdStr);
