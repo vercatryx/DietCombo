@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Triangle Client Manager",
+  "name": "Diet Fantasy Client Manager",
   "version": "1.0.0",
-  "description": "Add clients to Triangle system",
+  "description": "Add clients to Diet Fantasy system",
   "permissions": [
     "storage",
     "sidePanel",

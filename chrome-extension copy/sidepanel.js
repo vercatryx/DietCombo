@@ -1,6 +1,6 @@
 // Configuration
 let apiKey = '';
-let baseUrl = 'https://www.trianglesquareservices.com';
+let baseUrl = '';
 let statuses = [];
 let navigators = [];
 

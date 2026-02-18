@@ -93,7 +93,7 @@ function todayString() {
 
 async function fetchLogoBytes(): Promise<Uint8Array | null> {
     try {
-        const r = await fetch("/mainLogo.jpg", { cache: "reload" });
+        const r = await fetch("/diet-fantasy-logo.png", { cache: "reload" });
         if (!r.ok) return null;
         const buf = await r.arrayBuffer();
         return new Uint8Array(buf);
