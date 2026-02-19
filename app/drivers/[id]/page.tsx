@@ -371,6 +371,7 @@ export default function DriverDetailPage() {
     }, []);
 
     const brandColor = (driver?.color || "#3665F3") as string;
+    const uniqueAddressCount = addressGroups.size;
 
     return (
         <div className="container theme" style={{ "--brand": brandColor } as React.CSSProperties}>
@@ -382,7 +383,14 @@ export default function DriverDetailPage() {
                 <div className="hdr-center">
                     <div className="hdr-top">
                         <div className="hdr-pill"><Hash /></div>
-                        <div className="hdr-txt"><div className="title">Route {driver?.name ?? "…"}</div></div>
+                        <div className="hdr-txt">
+                            <div className="title">Route {driver?.name ?? "…"}</div>
+                            {!loading && driver && (
+                                <div className="muted tiny" style={{ marginTop: 2 }}>
+                                    {uniqueAddressCount} {uniqueAddressCount === 1 ? "address" : "addresses"}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Proof progress — hide when loading */}
@@ -419,7 +427,12 @@ export default function DriverDetailPage() {
                                 <div className="hdr-badge" style={{ background: "#fff", color: "var(--brand)" }}>
                                     <Hash />
                                 </div>
-                                <div><h1 className="h1" style={{ color: "#fff" }}>{driver.name}</h1></div>
+                                <div>
+                                    <h1 className="h1" style={{ color: "#fff" }}>{driver.name}</h1>
+                                    <div className="muted white" style={{ fontSize: "0.9rem", marginTop: 4 }}>
+                                        {uniqueAddressCount} {uniqueAddressCount === 1 ? "address" : "addresses"}
+                                    </div>
+                                </div>
                             </div>
                             <div className="flex" />
                             <div style={{ textAlign: "right" }}>

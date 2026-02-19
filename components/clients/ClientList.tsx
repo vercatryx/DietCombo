@@ -28,7 +28,8 @@ import {
 } from '@/lib/actions';
 import { invalidateClientData } from '@/lib/cached-data';
 import { hasNonDefaultFlags, getNonDefaultFlagLabels, clientMatchesFlagFilter, FLAGS_FILTER_OPTIONS, type FlagsFilterValue } from '@/lib/client-flags';
-import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag } from 'lucide-react';
+import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import styles from './ClientList.module.css';
 import { useRouter } from 'next/navigation';
 
@@ -788,6 +789,42 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     function getParentClientName(client: ClientProfile) {
         if (!client.parentClientId) return null;
         return parentNamesMap[client.parentClientId] ?? '...';
+    }
+
+    function handleExportExcel() {
+        if (filteredClients.length === 0) {
+            alert('No clients to export. Adjust filters or search to include clients.');
+            return;
+        }
+        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Notes', 'Status', 'Navigator', 'Service Type', 'Parent Client'];
+        const rows = filteredClients.map(client => [
+            client.fullName || '',
+            client.email ?? '',
+            client.phoneNumber ?? '',
+            client.secondaryPhoneNumber ?? '',
+            client.address ?? '',
+            client.city ?? '',
+            client.state ?? '',
+            client.zip ?? '',
+            client.notes ?? client.dislikes ?? '',
+            getStatusName(client.statusId),
+            client.parentClientId ? '' : getNavigatorName(client.navigatorId),
+            client.serviceType === 'Produce' ? 'Produce' : 'Food',
+            client.parentClientId ? (getParentClientName(client) ?? '') : '',
+        ]);
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Clients');
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `clients_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
     }
 
     function handleSort(column: string) {
@@ -1704,6 +1741,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     </div>
 
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button className="btn btn-secondary" onClick={handleExportExcel} title="Download current client list as Excel">
+                            <Download size={16} /> Export Excel
+                        </button>
                         <button className="btn btn-primary" onClick={handleCreate}>
                             <Plus size={16} /> New Client
                         </button>

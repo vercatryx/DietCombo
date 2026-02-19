@@ -113,21 +113,36 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
     // Determine Base URL
     const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://customer.thedietfantasy.com';
 
+    let prevDriverKey: string | null = null;
+    let labelsOnCurrentPage = 0;
+
     for (let index = 0; index < orders.length; index++) {
         const order = orders[index];
 
-        // Check for page break (every 10 labels)
-        if (index > 0 && index % 10 === 0) {
+        const driverInfo = getDriverInfo?.(order);
+        const driverKey = driverInfo != null ? `${driverInfo.driverNumber}:${driverInfo.driverColor}` : null;
+
+        // When getDriverInfo is provided: each driver starts on a new page (leave bottom of previous page blank)
+        if (getDriverInfo && index > 0 && driverKey != null && driverKey !== prevDriverKey) {
             doc.addPage();
+            labelsOnCurrentPage = 0;
+        }
+        if (driverKey != null) prevDriverKey = driverKey;
+
+        // Full page (10 labels): add new page before placing this label
+        if (labelsOnCurrentPage === 10) {
+            doc.addPage();
+            labelsOnCurrentPage = 0;
         }
 
-        // Calculate position
-        const posOnPage = index % 10;
-        const col = posOnPage % 2;
-        const row = Math.floor(posOnPage / 2);
+        // Calculate position on current page (0–9: 2 cols × 5 rows)
+        const col = labelsOnCurrentPage % 2;
+        const row = Math.floor(labelsOnCurrentPage / 2);
 
         const labelX = PROPS.marginLeft + (col * (PROPS.labelWidth + PROPS.hGap));
         const labelY = PROPS.marginTop + (row * PROPS.labelHeight);
+
+        labelsOnCurrentPage++;
 
         // Draw Border
         doc.setLineWidth(0.01);
@@ -175,7 +190,6 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         doc.line(textRightEdge, labelY, textRightEdge, maxYPhase1);
 
         // Driver color for all text (when getDriverInfo provided)
-        const driverInfo = getDriverInfo?.(order);
         const setDriverColor = () => {
             if (driverInfo?.driverColor) {
                 const hex = driverInfo.driverColor.replace('#', '');
@@ -377,12 +391,30 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
     const qrZoneWidth = qrSize + 2 * qrMargin + qrPaddingLeft;
     const driverLabelHeight = 0.22;
 
+    let prevDriverKeyAlt: string | null = null;
+    let rowsOnCurrentPage = 0;
+
     for (let index = 0; index < orders.length; index++) {
         const order = orders[index];
-        const rowOnPage = index % 5;
-        if (index > 0 && rowOnPage === 0) {
+
+        const driverInfoForBreak = getDriverInfo?.(order);
+        const driverKeyAlt = driverInfoForBreak != null ? `${driverInfoForBreak.driverNumber}:${driverInfoForBreak.driverColor}` : null;
+
+        // When getDriverInfo is provided: each driver starts on a new page (leave bottom of previous page blank)
+        if (getDriverInfo && index > 0 && driverKeyAlt != null && driverKeyAlt !== prevDriverKeyAlt) {
             doc.addPage();
+            rowsOnCurrentPage = 0;
         }
+        if (driverKeyAlt != null) prevDriverKeyAlt = driverKeyAlt;
+
+        // Full page (5 rows): add new page before placing this row
+        if (rowsOnCurrentPage === 5) {
+            doc.addPage();
+            rowsOnCurrentPage = 0;
+        }
+
+        const rowOnPage = rowsOnCurrentPage;
+        rowsOnCurrentPage++;
 
         const labelY = PROPS.marginTop + (rowOnPage * PROPS.labelHeight);
         const labelBottom = labelY + PROPS.labelHeight - PROPS.padding;

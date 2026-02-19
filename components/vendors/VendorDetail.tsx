@@ -914,12 +914,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 dependantsByParentId.set(c.parentClientId, list);
             }
         }
+        const clientIdsWithOwnOrder = new Set(sortedOrders.map((o: any) => o.client_id));
         const ordersWithDependants: any[] = [];
         for (const order of sortedOrders) {
             ordersWithDependants.push(order);
             const dependants = dependantsByParentId.get(order.client_id) ?? [];
             for (const dep of dependants) {
-                ordersWithDependants.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
+                if (!clientIdsWithOwnOrder.has(dep.id)) {
+                    ordersWithDependants.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
+                }
             }
         }
         const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
@@ -1002,12 +1005,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     dependantsByParentIdAlt.set(c.parentClientId, list);
                 }
             }
+            const clientIdsWithOwnOrderAlt = new Set(sortedOrders.map((o: any) => o.client_id));
             const ordersWithDependantsAlt: any[] = [];
             for (const order of sortedOrders) {
                 ordersWithDependantsAlt.push(order);
                 const dependants = dependantsByParentIdAlt.get(order.client_id) ?? [];
                 for (const dep of dependants) {
-                    ordersWithDependantsAlt.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
+                    if (!clientIdsWithOwnOrderAlt.has(dep.id)) {
+                        ordersWithDependantsAlt.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
+                    }
                 }
             }
             const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
