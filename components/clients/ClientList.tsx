@@ -796,7 +796,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             alert('No clients to export. Adjust filters or search to include clients.');
             return;
         }
-        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Notes', 'Status', 'Navigator', 'Service Type', 'Parent Client'];
+        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
             client.email ?? '',
@@ -806,7 +806,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.city ?? '',
             client.state ?? '',
             client.zip ?? '',
-            client.notes ?? client.dislikes ?? '',
+            client.dislikes ?? '',
             getStatusName(client.statusId),
             client.parentClientId ? '' : getNavigatorName(client.navigatorId),
             client.serviceType === 'Produce' ? 'Produce' : 'Food',
