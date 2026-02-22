@@ -294,9 +294,10 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
                 notesText ? `Notes: ${notesText}` : "",
             ].filter(Boolean);
 
-            // --- driver badge: just show driver number (count) ---
+            // --- driver badge: driver.stop (e.g. 1.1, 1.2) ---
             const driverIdx0 = getDriverIdx0(u, di);
-            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}`, colorRGB);
+            const stopNum1 = getStopNum1(u, si);
+            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}.${stopNum1}`, colorRGB);
 
             drawLines(doc, state.x, state.y, colorRGB, lines);
             printed = true;
@@ -366,9 +367,8 @@ export async function exportRouteLabelsPDF(routes, driverColors, tsString) {
             const driverColor = palette[driverIdx % palette.length];
             const colorRGB = hexToRgb(driverColor);
             const driverIdx0 = getDriverIdx0(u, driverIdx);
-            
-            // Draw badge with just driver number (count)
-            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}`, colorRGB);
+            const stopNum1 = getStopNum1(u, stopIdx);
+            drawBadgeAbove(doc, state.x, state.y, `${driverIdx0}.${stopNum1}`, colorRGB);
 
             // Prepare label content (first line = client name only, never address)
             const notesText = getNotes(u);

@@ -6,11 +6,15 @@ import { redirect } from 'next/navigation';
 const secretKey = process.env.JWT_SECRET || 'default-secret-change-me';
 const key = new TextEncoder().encode(secretKey);
 
+// Session duration: 7 days (change to e.g. '24h' or '30d' if needed)
+const SESSION_DURATION = '7d';
+const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
+
 export async function encrypt(payload: any) {
     return await new SignJWT(payload)
         .setProtectedHeader({ alg: 'HS256' })
         .setIssuedAt()
-        .setExpirationTime('24h') // Session duration
+        .setExpirationTime(SESSION_DURATION)
         .sign(key);
 }
 
@@ -33,7 +37,7 @@ export async function getSession() {
 }
 
 export async function createSession(userId: string, name: string = 'Admin', role: string = 'admin') {
-    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    const expires = new Date(Date.now() + SESSION_MS);
     const session = await encrypt({ userId, name, role, expires });
     const cookieStore = await cookies();
 

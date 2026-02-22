@@ -196,6 +196,36 @@ export default function ManualGeocodeDialog({
 
     const geocodeOneNow = async (row) => { await geocodeRowAuto(row, "Manual auto-try"); };
 
+    // Parse pasted "lat,lng" or "lat lng" string; returns { lat, lng } or null
+    const parsePastedCoords = (str) => {
+        if (!str || typeof str !== "string") return null;
+        const trimmed = str.trim();
+        const parts = trimmed.split(/[\s,]+/).filter(Boolean);
+        if (parts.length < 2) return null;
+        const lat = Number(parts[0]);
+        const lng = Number(parts[1]);
+        if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+        return { lat, lng };
+    };
+
+    const [pasteValueById, setPasteValueById] = React.useState({});
+    const applyPastedCoords = async (row) => {
+        const raw = pasteValueById[row.id] ?? "";
+        const coords = parsePastedCoords(raw);
+        if (!coords) {
+            pushLog(row.id, "❌ Invalid coordinates. Use format: lat, lng (e.g. 40.7128, -74.0060)");
+            updateRow(row.id, { status: "error", lastError: "Invalid lat,lng" });
+            return;
+        }
+        await persistOK(row.id, coords.lat, coords.lng, "✅ pasted coordinates");
+        setPasteValueById((prev) => {
+            const next = { ...prev };
+            delete next[row.id];
+            return next;
+        });
+    };
+
     return (
         <>
             <MapConfirmDialog
@@ -250,6 +280,17 @@ export default function ManualGeocodeDialog({
                                         </Stack>
 
                                         <Stack direction="row" spacing={1} sx={{ mt: 1 }} alignItems="center" flexWrap="wrap">
+                                            <TextField
+                                                size="small"
+                                                placeholder="Paste lat, lng (e.g. 40.7128, -74.0060)"
+                                                value={pasteValueById[r.id] ?? ""}
+                                                onChange={(e) => setPasteValueById((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                                                sx={{ minWidth: 240 }}
+                                                inputProps={{ "aria-label": "Paste latitude and longitude" }}
+                                            />
+                                            <Button size="small" variant="outlined" onClick={() => applyPastedCoords(r)}>
+                                                Use coordinates
+                                            </Button>
                                             <Button size="small" variant="outlined" onClick={() => geocodeOneNow(r)}>
                                                 Auto-try again
                                             </Button>
