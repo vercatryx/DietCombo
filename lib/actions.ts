@@ -7590,6 +7590,102 @@ export async function processUpcomingOrders() {
                 }
             }
 
+            // Create one order per dependant (same content as parent) when eligible — so labels get one label per person without synthetic rows.
+            // Skip dependants who already have an order for this vendor+date (e.g. their own upcoming_order was processed) to avoid duplicate labels.
+            const serviceType = upcomingOrder.service_type;
+            if (serviceType === 'Food' || serviceType === 'Boxes') {
+                const dependants = await getDependentsByParentId(upcomingOrder.client_id);
+                const scheduledDate = orderData.scheduled_delivery_date;
+                const vendorIdForDep = orderData.vendor_id;
+                for (const dep of dependants) {
+                    if (dep.delivery === false || dep.paused === true) continue;
+                    const existingQuery = supabase
+                        .from('orders')
+                        .select('id')
+                        .eq('client_id', dep.id)
+                        .eq('scheduled_delivery_date', scheduledDate);
+                    const { data: existingForDep } = vendorIdForDep
+                        ? await existingQuery.eq('vendor_id', vendorIdForDep).limit(1).maybeSingle()
+                        : await existingQuery.is('vendor_id', null).limit(1).maybeSingle();
+                    if (existingForDep) continue;
+                    let depOrderId: string;
+                    let depOrderNumber: number;
+                    try {
+                        depOrderNumber = await generateUniqueOrderNumber(supabase);
+                        depOrderId = randomUUID();
+                        const depOrderData = {
+                            id: depOrderId,
+                            client_id: dep.id,
+                            service_type: orderData.service_type,
+                            case_id: orderData.case_id,
+                            status: orderData.status,
+                            last_updated: orderData.last_updated,
+                            updated_by: orderData.updated_by,
+                            scheduled_delivery_date: orderData.scheduled_delivery_date,
+                            delivery_distribution: orderData.delivery_distribution,
+                            total_value: orderData.total_value,
+                            total_items: orderData.total_items,
+                            bill_amount: orderData.bill_amount,
+                            notes: orderData.notes,
+                            order_number: depOrderNumber,
+                            vendor_id: orderData.vendor_id
+                        };
+                        const { error: depInsertErr } = await supabase
+                            .from('orders')
+                            .insert([depOrderData]);
+                        if (depInsertErr) {
+                            errors.push(`Failed to create dependant order for ${dep.fullName} (${dep.id}): ${depInsertErr.message}`);
+                            continue;
+                        }
+                    } catch (depOrderErr: any) {
+                        errors.push(`Failed to create dependant order for ${dep.fullName}: ${depOrderErr?.message}`);
+                        continue;
+                    }
+                    const { data: parentVsList } = await supabase
+                        .from('order_vendor_selections')
+                        .select('id, vendor_id')
+                        .eq('order_id', newOrder.id);
+                    if (parentVsList && parentVsList.length > 0) {
+                        for (const pvs of parentVsList) {
+                            const newVsId = randomUUID();
+                            await supabase
+                                .from('order_vendor_selections')
+                                .insert([{ id: newVsId, order_id: depOrderId, vendor_id: pvs.vendor_id }]);
+                            const { data: parentItems } = await supabase
+                                .from('order_items')
+                                .select('menu_item_id, quantity')
+                                .eq('vendor_selection_id', pvs.id);
+                            if (parentItems?.length) {
+                                const depItems = parentItems.map((item: any) => ({
+                                    id: randomUUID(),
+                                    vendor_selection_id: newVsId,
+                                    menu_item_id: item.menu_item_id ?? '',
+                                    quantity: item.quantity ?? 0
+                                })).filter((i: any) => i.menu_item_id);
+                                if (depItems.length) await supabase.from('order_items').insert(depItems);
+                            }
+                        }
+                    }
+                    const { data: parentBoxList } = await supabase
+                        .from('order_box_selections')
+                        .select('*')
+                        .eq('order_id', newOrder.id);
+                    if (parentBoxList?.length) {
+                        for (const pbs of parentBoxList) {
+                            await supabase.from('order_box_selections').insert([{
+                                id: randomUUID(),
+                                order_id: depOrderId,
+                                vendor_id: pbs.vendor_id,
+                                box_type_id: pbs.box_type_id,
+                                quantity: pbs.quantity,
+                                items: pbs.items || {}
+                            }]);
+                        }
+                    }
+                    processedCount++;
+                }
+            }
+
             // Update upcoming order status
             await supabase
                 .from('upcoming_orders')
@@ -8963,6 +9059,7 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string,
 
     try {
         // 1. Primary source: all orders from the database orders table for this vendor (chunked to support 2000+ per day)
+        // Order by id as tie-breaker so pagination is deterministic (same created_at no longer causes same row in multiple chunks)
         const ordersFromTable: any[] = [];
         let offset = 0;
         let hasMore = true;
@@ -8972,6 +9069,7 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string,
                 .select('*')
                 .eq('vendor_id', vendorId)
                 .order('created_at', { ascending: false })
+                .order('id', { ascending: true })
                 .range(offset, offset + ROW_CHUNK - 1);
 
             if (directErr) {
@@ -9025,13 +9123,23 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string,
                     .from('orders')
                     .select('*')
                     .in('id', batch)
-                    .order('created_at', { ascending: false });
+                    .order('created_at', { ascending: false })
+                    .order('id', { ascending: true });
                 if (extraOrders?.length) {
                     ordersData = [...ordersData, ...extraOrders];
                 }
             }
             ordersData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         }
+
+        // Deduplicate by order id (guards against pagination duplicates from any source)
+        const seenOrderIds = new Set<string>();
+        ordersData = ordersData.filter((o: any) => {
+            if (seenOrderIds.has(o.id)) return false;
+            seenOrderIds.add(o.id);
+            return true;
+        });
+        ordersData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
         // Filter: only orders from orders table; exclude Produce (handled on produce pages)
         let filteredOrders = ordersData.filter((order: any) => {
@@ -9051,13 +9159,18 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string,
 
         // When deliveryDate provided, filter early to avoid processing thousands of orders (stack overflow)
         // dateKey from URL = same as VendorDetail.groupOrdersByDeliveryDate (toCalendarDateKeyInAppTz so date-only stays correct)
+        // When deliveryDate === 'no-date', return only orders with no scheduled_delivery_date.
         if (deliveryDate) {
-            const dateKey = toCalendarDateKeyInAppTz(deliveryDate) ?? deliveryDate;
-            filteredOrders = filteredOrders.filter((order: any) => {
-                if (!order.scheduled_delivery_date) return false;
-                const orderDateKey = toCalendarDateKeyInAppTz(order.scheduled_delivery_date);
-                return orderDateKey != null && orderDateKey === dateKey;
-            });
+            if (deliveryDate === 'no-date') {
+                filteredOrders = filteredOrders.filter((order: any) => !order.scheduled_delivery_date);
+            } else {
+                const dateKey = toCalendarDateKeyInAppTz(deliveryDate) ?? deliveryDate;
+                filteredOrders = filteredOrders.filter((order: any) => {
+                    if (!order.scheduled_delivery_date) return false;
+                    const orderDateKey = toCalendarDateKeyInAppTz(order.scheduled_delivery_date);
+                    return orderDateKey != null && orderDateKey === dateKey;
+                });
+            }
         }
 
         const usedServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY;

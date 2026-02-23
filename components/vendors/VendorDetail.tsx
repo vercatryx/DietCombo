@@ -16,6 +16,14 @@ import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from '
 import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
 import styles from './VendorDetail.module.css';
 
+const SINGLE_VENDOR_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+
+interface DateSummaryRow {
+    date_key: string;
+    order_count: number;
+    total_items: number;
+}
+
 interface Props {
     vendorId: string;
     isVendorView?: boolean;
@@ -27,6 +35,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     const router = useRouter();
     const [vendor, setVendor] = useState<Vendor | null>(initialVendor || null);
     const [orders, setOrders] = useState<any[]>(serverOrders ?? []);
+    const [dateSummaries, setDateSummaries] = useState<DateSummaryRow[]>([]);
+    const [ordersByDate, setOrdersByDate] = useState<Record<string, any[]>>({});
     const [clients, setClients] = useState<ClientProfile[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
@@ -34,6 +44,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     const [mealItems, setMealItems] = useState<{ id: string; name: string; categoryId?: string }[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+
+    const useSummaryMode = vendorId === SINGLE_VENDOR_ID;
 
     const [isExporting, setIsExporting] = useState(false);
 
@@ -67,60 +79,92 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     async function loadData() {
         setIsLoading(true);
         try {
-            const promises: Promise<any>[] = [
-                getOrdersByVendor(vendorId),
-                getClients(),
-                getMenuItems(),
-                getBoxTypes(),
-                getCategories(),
-                getMealItems(),
-                getCachedDefaultOrderTemplate('Food')
-            ];
-
-            let vendorsResultIndex = -1;
-            if (!initialVendor) {
-                promises.push(getVendors());
-                vendorsResultIndex = 7;
+            if (useSummaryMode) {
+                const [summaryRes, clientsData, menuItemsData, boxTypesData, categoriesData, mealItemsData] = await Promise.all([
+                    fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders/summary`, { credentials: 'include' }),
+                    getClients(),
+                    getMenuItems(),
+                    getBoxTypes(),
+                    getCategories(),
+                    getMealItems(),
+                    getCachedDefaultOrderTemplate('Food')
+                ]);
+                if (summaryRes.ok) {
+                    const summary = await summaryRes.json();
+                    setDateSummaries(Array.isArray(summary) ? summary : []);
+                } else {
+                    setDateSummaries([]);
+                }
+                setOrders([]);
+                setOrdersByDate({});
+                setClients(clientsData);
+                setMenuItems(menuItemsData);
+                setBoxTypes(boxTypesData);
+                setCategories(categoriesData ?? []);
+                setMealItems(mealItemsData ?? []);
+                if (!initialVendor) {
+                    const vendorsData = await getVendors();
+                    const foundVendor = vendorsData.find((v: Vendor) => v.id === vendorId);
+                    setVendor(foundVendor || null);
+                }
+            } else {
+                const promises: Promise<any>[] = [
+                    getOrdersByVendor(vendorId),
+                    getClients(),
+                    getMenuItems(),
+                    getBoxTypes(),
+                    getCategories(),
+                    getMealItems(),
+                    getCachedDefaultOrderTemplate('Food')
+                ];
+                let vendorsResultIndex = -1;
+                if (!initialVendor) {
+                    promises.push(getVendors());
+                    vendorsResultIndex = 7;
+                }
+                const results = await Promise.all(promises);
+                const ordersData = results[0];
+                const clientsData = results[1];
+                const menuItemsData = results[2];
+                const boxTypesData = results[3];
+                const categoriesData = results[4];
+                const mealItemsData = results[5];
+                if (!initialVendor && vendorsResultIndex !== -1 && results[vendorsResultIndex]) {
+                    const vendorsData = results[vendorsResultIndex];
+                    const foundVendor = vendorsData.find((v: Vendor) => v.id === vendorId);
+                    setVendor(foundVendor || null);
+                }
+                if (Array.isArray(ordersData) && ordersData.length > 0) {
+                    setOrders(ordersData);
+                } else if (Array.isArray(serverOrders) && serverOrders.length > 0) {
+                    setOrders(serverOrders);
+                } else if (Array.isArray(ordersData)) {
+                    setOrders(ordersData);
+                }
+                setDateSummaries([]);
+                setClients(clientsData);
+                setMenuItems(menuItemsData);
+                setBoxTypes(boxTypesData);
+                setCategories(categoriesData ?? []);
+                setMealItems(mealItemsData ?? []);
             }
-
-            const results = await Promise.all(promises);
-            const ordersData = results[0];
-            const clientsData = results[1];
-            const menuItemsData = results[2];
-            const boxTypesData = results[3];
-            const categoriesData = results[4];
-            const mealItemsData = results[5];
-
-            if (!initialVendor && vendorsResultIndex !== -1 && results[vendorsResultIndex]) {
-                const vendorsData = results[vendorsResultIndex];
-                const foundVendor = vendorsData.find((v: Vendor) => v.id === vendorId);
-                setVendor(foundVendor || null);
-            }
-            // Prefer server-fetched orders: only replace if we got a non-empty array (avoid client action returning [] and wiping server data)
-            if (Array.isArray(ordersData) && ordersData.length > 0) {
-                setOrders(ordersData);
-                // Debug: log raw dates from getOrdersByVendor to compare with Orders View
-                const sample = ordersData.slice(0, 5).map((o: any) => ({
-                    id: o.id,
-                    raw: o.scheduled_delivery_date,
-                    inEastern: o.scheduled_delivery_date ? toCalendarDateKeyInAppTz(o.scheduled_delivery_date) ?? null : null,
-                }));
-                console.log("[VendorDetail] loadData orders:", { count: ordersData.length, sample });
-            } else if (Array.isArray(serverOrders) && serverOrders.length > 0) {
-                setOrders(serverOrders);
-            } else if (Array.isArray(ordersData)) {
-                setOrders(ordersData);
-            }
-            setClients(clientsData);
-            setMenuItems(menuItemsData);
-            setBoxTypes(boxTypesData);
-            setCategories(categoriesData ?? []);
-            setMealItems(mealItemsData ?? []);
         } catch (error) {
             console.error('Error loading vendor data:', error);
         } finally {
             setIsLoading(false);
         }
+    }
+
+    async function fetchOrdersForDate(dateKey: string): Promise<any[]> {
+        const cached = ordersByDate[dateKey];
+        if (cached) return cached;
+        const param = dateKey === 'no-date' ? 'no-date' : dateKey;
+        const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(param)}`, { credentials: 'include' });
+        if (!res.ok) return [];
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : [];
+        setOrdersByDate(prev => ({ ...prev, [dateKey]: list }));
+        return list;
     }
 
     function getClientName(clientId: string) {
@@ -906,25 +950,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsForExport);
         const clientById = new Map(clientsForExport.map(c => [c.id, c]));
-        const dependantsByParentId = new Map<string, ClientProfile[]>();
-        for (const c of clientsForExport) {
-            if (c.parentClientId) {
-                const list = dependantsByParentId.get(c.parentClientId) ?? [];
-                list.push(c);
-                dependantsByParentId.set(c.parentClientId, list);
-            }
-        }
-        const clientIdsWithOwnOrder = new Set(sortedOrders.map((o: any) => o.client_id));
-        const ordersWithDependants: any[] = [];
-        for (const order of sortedOrders) {
-            ordersWithDependants.push(order);
-            const dependants = dependantsByParentId.get(order.client_id) ?? [];
-            for (const dep of dependants) {
-                if (!clientIdsWithOwnOrder.has(dep.id)) {
-                    ordersWithDependants.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
-                }
-            }
-        }
+        // One label per client per date: dedupe in case DB has duplicate orders for same client+date (e.g. from prior dependant-creation logic).
+        const seenClientDate = new Set<string>();
+        const ordersForLabels = sortedOrders.filter((o: any) => {
+            const key = `${o.client_id}|${o.scheduled_delivery_date ?? ''}`;
+            if (seenClientDate.has(key)) return false;
+            seenClientDate.add(key);
+            return true;
+        });
+        // Labels: one per actual order only. Do not add synthetic rows for dependants without orders.
         const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
         const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
@@ -938,11 +972,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             return full || useClient.address || '-';
         };
         const getDriverInfoForOrder = (order: any) => {
-            const primaryId = (order as any)._primaryClientId ?? order.client_id;
-            const client = clientById.get(primaryId);
+            const client = clientById.get(order.client_id);
             const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
             if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
-            const stopNumber = clientIdToStopNumber[primaryId];
+            const stopNumber = clientIdToStopNumber[order.client_id];
             return {
                 driverNumber: driverIdToNumber[driverId],
                 driverColor: driverIdToColor[driverId],
@@ -950,8 +983,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             };
         };
         const isComplex = (order: any) => !!(clientById.get(order.client_id)?.complex);
-        const ordersWithDependantsNonComplex = ordersWithDependants.filter((o: any) => !isComplex(o));
-        const ordersWithDependantsComplex = ordersWithDependants.filter((o: any) => isComplex(o));
+        const ordersNonComplex = ordersForLabels.filter((o: any) => !isComplex(o));
+        const ordersComplex = ordersForLabels.filter((o: any) => isComplex(o));
         const commonOpts = {
             getClientName: getClientNameForExport,
             getClientAddress: getClientAddressForExport,
@@ -962,11 +995,11 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             getDriverInfo: getDriverInfoForOrder,
             getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
         };
-        if (ordersWithDependantsNonComplex.length > 0) {
-            await generateLabelsPDF({ ...commonOpts, orders: ordersWithDependantsNonComplex });
+        if (ordersNonComplex.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersNonComplex });
         }
-        if (ordersWithDependantsComplex.length > 0) {
-            await generateLabelsPDF({ ...commonOpts, orders: ordersWithDependantsComplex, filenameSuffix: '_complex' });
+        if (ordersComplex.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersComplex, filenameSuffix: '_complex' });
         }
         } finally {
             setIsExporting(false);
@@ -997,25 +1030,13 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const clientsForExport = await getClientsUnlimited();
             const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrdersAlt, clientsForExport);
             const clientById = new Map(clientsForExport.map(c => [c.id, c]));
-            const dependantsByParentIdAlt = new Map<string, ClientProfile[]>();
-            for (const c of clientsForExport) {
-                if (c.parentClientId) {
-                    const list = dependantsByParentIdAlt.get(c.parentClientId) ?? [];
-                    list.push(c);
-                    dependantsByParentIdAlt.set(c.parentClientId, list);
-                }
-            }
-            const clientIdsWithOwnOrderAlt = new Set(sortedOrders.map((o: any) => o.client_id));
-            const ordersWithDependantsAlt: any[] = [];
-            for (const order of sortedOrders) {
-                ordersWithDependantsAlt.push(order);
-                const dependants = dependantsByParentIdAlt.get(order.client_id) ?? [];
-                for (const dep of dependants) {
-                    if (!clientIdsWithOwnOrderAlt.has(dep.id)) {
-                        ordersWithDependantsAlt.push({ ...order, client_id: dep.id, _primaryClientId: order.client_id });
-                    }
-                }
-            }
+            const seenClientDateAlt = new Set<string>();
+            const ordersForLabelsAlt = sortedOrders.filter((o: any) => {
+                const key = `${o.client_id}|${o.scheduled_delivery_date ?? ''}`;
+                if (seenClientDateAlt.has(key)) return false;
+                seenClientDateAlt.add(key);
+                return true;
+            });
             const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
             const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
             const getClientNameForExportAlt = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
@@ -1029,11 +1050,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 return full || useClient.address || '-';
             };
             const getDriverInfoForOrderAlt = (order: any) => {
-                const primaryId = (order as any)._primaryClientId ?? order.client_id;
-                const client = clientById.get(primaryId);
+                const client = clientById.get(order.client_id);
                 const driverId = client?.assignedDriverId ? String(client.assignedDriverId) : null;
                 if (!driverId || driverIdToNumber[driverId] == null || !driverIdToColor[driverId]) return null;
-                const stopNumber = clientIdToStopNumber[primaryId];
+                const stopNumber = clientIdToStopNumber[order.client_id];
                 return {
                     driverNumber: driverIdToNumber[driverId],
                     driverColor: driverIdToColor[driverId],
@@ -1041,7 +1061,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 };
             };
             await generateLabelsPDFTwoPerCustomer({
-                orders: ordersWithDependantsAlt,
+                orders: ordersForLabelsAlt,
                 getClientName: getClientNameForExportAlt,
                 getClientAddress: getClientAddressForExportAlt,
                 formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
@@ -1588,6 +1608,81 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 {/*</div>*/}
 
                 {(() => {
+                    if (dateSummaries.length > 0) {
+                        return (
+                            <div className={styles.ordersList}>
+                                <div className={styles.ordersHeader}>
+                                    <span style={{ width: '40px', flexShrink: 0 }}></span>
+                                    <span style={{ flex: '2 1 150px', minWidth: 0 }}>Delivery Date</span>
+                                    <span style={{ flex: '1 1 100px', minWidth: 0 }}>Orders Count</span>
+                                    <span style={{ flex: '1.2 1 120px', minWidth: 0 }}>Total Items</span>
+                                    <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>Actions</span>
+                                </div>
+                                {dateSummaries.map((row) => {
+                                    const dateKey = row.date_key;
+                                    const orderCount = Number(row.order_count) || 0;
+                                    const totalItems = Number(row.total_items) || 0;
+                                    const isNoDate = dateKey === 'no-date';
+                                    const runExport = async (exportFn: (dk: string, orders: any[]) => void | Promise<void>) => {
+                                        const dateOrders = await fetchOrdersForDate(dateKey);
+                                        if (!dateOrders.length) {
+                                            alert('No orders to export for this date');
+                                            return;
+                                        }
+                                        await exportFn(dateKey, dateOrders);
+                                    };
+                                    return (
+                                        <div key={dateKey}>
+                                            <div className={styles.orderRow}>
+                                                <span style={{ width: '40px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <Calendar size={16} style={{ color: isNoDate ? 'var(--text-tertiary)' : 'var(--color-primary)' }} />
+                                                </span>
+                                                <span style={{ flex: '2 1 150px', minWidth: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    {isNoDate ? 'No Delivery Date' : formatDate(dateKey)}
+                                                </span>
+                                                <span style={{ flex: '1 1 100px', minWidth: 0 }}>
+                                                    <span className="badge badge-info">{orderCount} order{orderCount !== 1 ? 's' : ''}</span>
+                                                </span>
+                                                <span style={{ flex: '1.2 1 120px', minWidth: 0, fontSize: '0.9rem' }}>
+                                                    {totalItems}
+                                                </span>
+                                                <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
+                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportLabelsPDFForDate)}>
+                                                            <FileText size={14} /> Download Labels
+                                                        </button>
+                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportLabelsPDFForDateAlt)}>
+                                                            <FileText size={14} /> Labels – address + order details (2 per customer)
+                                                        </button>
+                                                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport((dk, o) => exportExcelForDate(dk, o, 'breakdown'))}>
+                                                                <FileSpreadsheet size={14} /> Breakdown Excel
+                                                            </button>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportBreakdownPDFForDate)}>
+                                                                <FileText size={14} /> Breakdown PDF
+                                                            </button>
+                                                        </div>
+                                                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport((dk, o) => exportExcelForDate(dk, o, 'cooking'))}>
+                                                                <FileSpreadsheet size={14} /> Cooking Excel
+                                                            </button>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportCookingPDFForDate)}>
+                                                                <FileText size={14} /> Cooking PDF
+                                                            </button>
+                                                        </div>
+                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport((dk, o) => exportExcelForDate(dk, o, 'combined'))}>
+                                                            <Download size={14} /> Combined Excel
+                                                        </button>
+                                                    </div>
+                                                </span>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        );
+                    }
+
                     if (orders.length === 0) {
                         return (
                             <div className={styles.emptyState}>

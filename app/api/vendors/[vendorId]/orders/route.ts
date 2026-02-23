@@ -1,6 +1,7 @@
 /**
  * GET /api/vendors/[vendorId]/orders?date=YYYY-MM-DD
- * Returns full orders with items for the vendor on the given date.
+ * GET /api/vendors/[vendorId]/orders?date=no-date
+ * Returns full orders with items for the vendor on the given date, or orders with no delivery date when date=no-date.
  * Enriches Food order items with menuItemName (like orders page) so labels/CSV show names.
  */
 

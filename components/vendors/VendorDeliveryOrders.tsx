@@ -429,6 +429,13 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrders(clientsForExport, freshOrders);
         const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const seenClientDate = new Set<string>();
+        const ordersForLabels = sortedOrders.filter((o: any) => {
+            const key = `${o.client_id}|${o.scheduled_delivery_date ?? ''}`;
+            if (seenClientDate.has(key)) return false;
+            seenClientDate.add(key);
+            return true;
+        });
         const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : {};
         const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
         const getClientAddressForExport = (clientId: string) => {
@@ -438,8 +445,8 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             return full || c.address || '-';
         };
         const isComplex = (order: { client_id: string }) => !!(clientById.get(order.client_id)?.complex);
-        const ordersNonComplex = sortedOrders.filter(o => !isComplex(o));
-        const ordersComplex = sortedOrders.filter(o => isComplex(o));
+        const ordersNonComplex = ordersForLabels.filter(o => !isComplex(o));
+        const ordersComplex = ordersForLabels.filter(o => isComplex(o));
         const commonOpts = {
             getClientName: getClientNameForExport,
             getClientAddress: getClientAddressForExport,
