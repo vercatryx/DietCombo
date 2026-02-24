@@ -21,6 +21,10 @@
                 Start from API</button>
             <button id="btn-download" onclick="downloadCloudRequests()"
                 style="background: #10b981; margin-left: 10px;">⬇ Download from Cloud</button>
+            <button id="btn-download-bill" onclick="downloadAllClients()"
+                style="background: #059669; margin-left: 10px;">📋 Download from /api/bill</button>
+            <button id="btn-run-queue" onclick="runCurrentQueue()"
+                style="background: #7c3aed; margin-left: 10px;">▶ Run current queue</button>
 
             <div id="api-config" style="margin-top: 10px; display: flex; gap: 10px;">
                 <input type="text" id="api-base-url" placeholder="API Base URL (e.g. http://localhost:3000)"
@@ -43,6 +47,9 @@
                     <table>
                         <thead>
                             <tr>
+                                <th class="col-check" title="Select clients to run">
+                                    <input type="checkbox" id="queue-select-all" title="Select all">
+                                </th>
                                 <th onclick="sortQueue('id')"># ↕</th>
                                 <th onclick="sortQueue('name')">Client ↕</th>
                                 <th onclick="sortQueue('start')">Dates ↕</th>

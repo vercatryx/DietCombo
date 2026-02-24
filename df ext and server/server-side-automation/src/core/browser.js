@@ -55,32 +55,41 @@ async function launchBrowser() {
         const request = route.request();
         const url = request.url();
 
-        // 1. Block unnecessary/problematic 3rd party services
-        if (url.includes('app.launchdarkly.com') || url.includes('maps.googleapis.com')) {
+        // 1. Block unnecessary/problematic 3rd party services (avoids CORS/credentials errors)
+        if (
+            url.includes('app.launchdarkly.com') ||
+            url.includes('maps.googleapis.com') ||
+            url.includes('intercom.io') ||
+            url.includes('api-iam.intercom.io')
+        ) {
             return route.abort();
         }
 
-        // 2. CORS Proxy for External Files (PDFs, etc.)
-        // If the browser tries to fetch a file from a different domain (e.g. USDA),
-        // we intercept, fetch it in Node (no CORS), and send it back with permissive headers.
+        // 2a. CORS proxy for requests FROM app.uniteus.io TO localhost (e.g. /api/signatures/.../pdf)
+        // The page is on https://app.uniteus.io but fetches our local API; the API has no CORS headers, so we
+        // fetch in Node and fulfill with CORS headers so the page can use the response.
+        if (url.includes('localhost') && url.includes('/api/')) {
+            try {
+                const response = await route.fetch();
+                const headers = { ...response.headers() };
+                const origin = request.headers()['origin'] || 'https://app.uniteus.io';
+                headers['access-control-allow-origin'] = origin;
+                headers['access-control-allow-credentials'] = 'true';
+                return route.fulfill({ response, headers });
+            } catch (e) {
+                return route.continue();
+            }
+        }
+
+        // 2b. CORS Proxy for External Files (PDFs, etc.) — not uniteus, not localhost
         if (!url.includes('uniteus.io') && !url.includes('localhost') && !url.startsWith('data:')) {
             try {
-                // Perform the request from Node.js (bypassing browser CORS)
                 const response = await route.fetch();
-
-                // Copy headers and inject CORS permission
                 const headers = { ...response.headers() };
                 headers['access-control-allow-origin'] = '*';
                 headers['access-control-allow-credentials'] = 'true';
-
-                // Fulfill the request with the intercepted data and modified headers
-                return route.fulfill({
-                    response,
-                    headers
-                });
+                return route.fulfill({ response, headers });
             } catch (e) {
-                // If the proxy fetch fails, let the browser try naturally (it might fail too, but good fallback)
-                // console.warn(`Proxy fetch failed for ${url}:`, e);
                 return route.continue();
             }
         }

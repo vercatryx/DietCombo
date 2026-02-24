@@ -1648,10 +1648,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                                 </span>
                                                 <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportLabelsPDFForDate)}>
+                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport(exportLabelsPDFForDate).finally(() => setIsExporting(false)), 0); }}>
                                                             <FileText size={14} /> Download Labels
                                                         </button>
-                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportLabelsPDFForDateAlt)}>
+                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport(exportLabelsPDFForDateAlt).finally(() => setIsExporting(false)), 0); }}>
                                                             <FileText size={14} /> Labels – address + order details (2 per customer)
                                                         </button>
                                                         <div style={{ display: 'flex', gap: '0.35rem' }}>
@@ -1726,10 +1726,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                             </span>
                                             <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDate(dateKey, dateOrders)}>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDate(dateKey, dateOrders), 0); }}>
                                                         <FileText size={14} /> Download Labels
                                                     </button>
-                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDateAlt(dateKey, dateOrders)}>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDateAlt(dateKey, dateOrders), 0); }}>
                                                         <FileText size={14} /> Labels – address + order details (2 per customer)
                                                     </button>
                                                     <div style={{ display: 'flex', gap: '0.35rem' }}>
@@ -1776,10 +1776,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                         </span>
                                         <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDate('no-date', noDate)}>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDate('no-date', noDate), 0); }}>
                                                     <FileText size={14} /> Download Labels
                                                 </button>
-                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => exportLabelsPDFForDateAlt('no-date', noDate)}>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDateAlt('no-date', noDate), 0); }}>
                                                     <FileText size={14} /> Labels – address + order details (2 per customer)
                                                 </button>
                                                 <div style={{ display: 'flex', gap: '0.35rem' }}>

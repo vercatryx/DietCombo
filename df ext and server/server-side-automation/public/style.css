@@ -159,6 +159,17 @@ th:hover {
     color: var(--text-main);
 }
 
+th.col-check,
+td.col-check {
+    width: 2.5rem;
+    text-align: center;
+    cursor: default;
+}
+
+th.col-check {
+    cursor: default;
+}
+
 td {
     padding: 0.5rem;
     border-bottom: 1px solid var(--border);

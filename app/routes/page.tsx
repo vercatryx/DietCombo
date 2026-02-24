@@ -552,7 +552,9 @@ export default function RoutesPage() {
     );
     const ordersViewClients = React.useMemo(() => {
         if (!assignmentData?.clients?.length || clientIdsWithOrdersOnDate.size === 0) return [];
-        return assignmentData.clients.filter((c: any) => clientIdsWithOrdersOnDate.has(String(c.id)));
+        return assignmentData.clients
+            .filter((c: any) => clientIdsWithOrdersOnDate.has(String(c.id)))
+            .filter((c: any) => !(c.parent_client_id ?? c.parentClientId));
     }, [assignmentData?.clients, clientIdsWithOrdersOnDate]);
 
     const mapDriversOrdersView = React.useMemo(() => {

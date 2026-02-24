@@ -93,7 +93,7 @@
       /** XPath for "UniteUs ready" (panel wait). */
       xpath: '//*[@id="container"]/div[2]/main/div/section/div'
     },
-    /** Authorized limits table: date range, max amount, date opened. Used for clamping. */
+    /** Authorized limits table: date range, max amount, date opened, service type. Used for clamping and per-person amount. */
     authorizedTable: {
       date: {
         id: 'basic-table-authorized-service-delivery-date-s-value',
@@ -106,6 +106,11 @@
       dateOpened: {
         id: 'basic-table-date-opened-value',
         xpath: '/html/body/div[2]/div[2]/main/div/section/div/div[2]/div/div[1]/div[1]/div[2]/div[1]/div[1]/div/table/tbody/tr[3]/td[2]'
+      },
+      /** Service Type e.g. "Produce Prescription/Voucher" or "Medically Tailored Meals". If text contains "produce" → $146/person, else $336/person. */
+      serviceType: {
+        id: 'basic-table-service-type-value',
+        xpath: '/html/body/div[2]/div[2]/main/div/section/div/div[2]/div/div[1]/div[1]/div[2]/div[1]/div[1]/div/table/tbody/tr[1]/td[2]'
       }
     },
 

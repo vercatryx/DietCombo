@@ -79,7 +79,7 @@ async function enrichOrdersPage(
         for (let i = 0; i < clientIds.length; i += CLIENT_BATCH) {
             const batch = clientIds.slice(i, i + CLIENT_BATCH);
             const { data: clients } = await db.from('clients').select('id, full_name').in('id', batch);
-            if (clients) clients.forEach((c: any) => clientsMap.set(c.id, c.full_name || 'Unknown'));
+            if (clients) clients.forEach((c: any) => clientsMap.set(String(c.id), c.full_name || 'Unknown'));
         }
     }
 
@@ -141,7 +141,7 @@ async function enrichOrdersPage(
 
     return orders.map((o: any) => ({
         ...o,
-        clientName: clientsMap.get(o.client_id) || 'Unknown',
+        clientName: clientsMap.get(String(o.client_id)) || 'Unknown',
         status: o.status || 'pending',
         scheduled_delivery_date: o.scheduled_delivery_date || null,
         vendorNames: (vendorNamesByOrderId.get(o.id) || ['Unknown']).sort(),
@@ -737,12 +737,8 @@ export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<Bi
         ordersOffset += PAGE_SIZE;
     }
 
-    const clientIds = [...new Set(allOrdersData.map((o: any) => o.client_id).filter(Boolean))];
-    let clientsMap = new Map<string, string>();
-    if (clientIds.length > 0) {
-        const { data: clients } = await supabaseClient.from('clients').select('id, full_name').in('id', clientIds);
-        if (clients) clients.forEach((c: any) => clientsMap.set(c.id, c.full_name || 'Unknown'));
-    }
+    // Use same enrichment as Orders list (enrichOrdersPage) so client names match
+    const enrichedOrdersData = await enrichOrdersPage(supabaseClient, allOrdersData);
 
     const allBillingRecords: any[] = [];
     let brOffset = 0;
@@ -759,14 +755,13 @@ export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<Bi
         brHasMore = rows.length >= PAGE_SIZE;
         brOffset += PAGE_SIZE;
     }
-    const successfulOrderIds = new Set(allBillingRecords.map((br: any) => br.order_id).filter(Boolean));
+    const successfulOrderIds = new Set(allBillingRecords.map((br: any) => br.order_id != null ? String(br.order_id) : null).filter(Boolean));
 
-    const allOrders = allOrdersData.map((o: any) => {
+    const allOrders = enrichedOrdersData.map((o: any) => {
         const hasProof = !!(o.proof_of_delivery_url || o.proof_of_delivery_image || o.delivery_proof_url);
-        const isBilled = successfulOrderIds.has(o.id);
+        const isBilled = successfulOrderIds.has(String(o.id));
         return {
             ...o,
-            clientName: clientsMap.get(o.client_id) || 'Unknown',
             amount: o.total_value || 0,
             hasProof,
             isBilled,
@@ -783,6 +778,33 @@ export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<Bi
         });
     }
 
+    // Group by household: dependants' orders are billed under their parent. Build client_id -> parent id and parent id -> name.
+    const orderClientIds = [...new Set(filteredOrders.map((o: any) => o.client_id).filter(Boolean))].map(String);
+    const clientIdToParentId = new Map<string, string>();
+    const parentIdToName = new Map<string, string>();
+    if (orderClientIds.length > 0) {
+        const { data: clientsForParent } = await supabaseClient
+            .from('clients')
+            .select('id, parent_client_id, full_name')
+            .in('id', orderClientIds);
+        (clientsForParent || []).forEach((c: any) => {
+            const id = String(c.id);
+            const parentId = c.parent_client_id != null ? String(c.parent_client_id) : id;
+            clientIdToParentId.set(id, parentId);
+            if (c.parent_client_id == null) parentIdToName.set(id, c.full_name || 'Unknown');
+        });
+        // Ensure parent names for dependants (parent may not be in orderClientIds)
+        const parentIds = [...new Set(clientIdToParentId.values())];
+        const missingParentIds = parentIds.filter((pid) => !parentIdToName.has(pid));
+        if (missingParentIds.length > 0) {
+            const { data: parents } = await supabaseClient
+                .from('clients')
+                .select('id, full_name')
+                .in('id', missingParentIds);
+            (parents || []).forEach((p: any) => parentIdToName.set(String(p.id), p.full_name || 'Unknown'));
+        }
+    }
+
     const billingRequestsMap = new Map<string, BillingRequest>();
     for (const order of filteredOrders) {
         const deliveryDateStr = order.actual_delivery_date || order.scheduled_delivery_date;
@@ -793,13 +815,14 @@ export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<Bi
         weekStart.setHours(0, 0, 0, 0);
         const weekEnd = getWeekEnd(deliveryDate);
         const weekStartDateStr = toDateStringInAppTz(weekStart);
-        const weekKey = `${order.client_id}-${weekStartDateStr}`;
+        const householdId = clientIdToParentId.get(String(order.client_id)) ?? order.client_id;
+        const weekKey = `${householdId}-${weekStartDateStr}`;
         const weekRange = getWeekRangeString(deliveryDate);
 
         if (!billingRequestsMap.has(weekKey)) {
             billingRequestsMap.set(weekKey, {
-                clientId: order.client_id,
-                clientName: order.clientName,
+                clientId: householdId,
+                clientName: parentIdToName.get(householdId) ?? order.clientName ?? 'Unknown',
                 weekStart: weekStart.toISOString(),
                 weekEnd: weekEnd.toISOString(),
                 weekRange,

@@ -19,6 +19,8 @@ interface Client {
     phoneNumber?: string;
     lat?: number | null;
     lng?: number | null;
+    /** Dependants have a parent; only primaries (null) are shown on the map. */
+    parentClientId?: string | null;
 }
 
 interface Driver {
@@ -98,7 +100,8 @@ export default function ClientDriverAssignment({
                 state: user.state ?? '',
                 phoneNumber: user.phone ?? '',
                 lat: user.lat != null ? Number(user.lat) : null,
-                lng: user.lng != null ? Number(user.lng) : null
+                lng: user.lng != null ? Number(user.lng) : null,
+                parentClientId: user.parent_client_id ?? user.parentClientId ?? null,
             };
         });
         const map = new Map<string, string>();
@@ -277,9 +280,10 @@ export default function ClientDriverAssignment({
     // Order status is only used for display in popups/dialogs, not for map marker colors
     // The __driverColor property on stops is set from assignedDriver?.color and is used for all marker coloring
 
-    // Convert clients to stops format for the map (driver info from props)
+    // Convert clients to stops format for the map (driver info from props). Only primaries on map; dependants excluded.
     const mapStops = useMemo(() => {
         return filteredClients
+            .filter(client => !client.parentClientId)
             .filter(client => {
                 const lat = client.lat;
                 const lng = client.lng;
@@ -377,11 +381,7 @@ export default function ClientDriverAssignment({
                             {' · '}
                             <strong>Total clients:</strong> {stats.total_clients}
                             {' · '}
-                            <strong>Dependants:</strong> {stats.total_dependants}
-                            {' · '}
                             <strong>Primaries (food only):</strong> {stats.total_primaries_food}
-                            {' · '}
-                            <strong>Produce:</strong> {stats.total_produce}
                             {' · '}
                             <strong>Primary paused or delivery off</strong> (not produce): {stats.primary_paused_or_delivery_off}
                             {selectedClientIds.size > 0 && ` · ${selectedClientIds.size} selected`}

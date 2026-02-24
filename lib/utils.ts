@@ -52,14 +52,23 @@ export function parseUniteUsUrl(urlStr: string | null | undefined): { caseId: st
     }
 }
 
+function isFullUniteUsUrl(s: string): boolean {
+    const t = String(s).trim();
+    return t.startsWith('http') && t.includes('uniteus.io') && t.includes('dashboard/cases/open');
+}
+
 /**
  * Composes a UniteUs URL from caseId and clientId (contact ID)
- * Returns empty string if either ID is missing
+ * Returns empty string if either ID is missing.
+ * If caseId is already a full UniteUs URL, returns it as-is to avoid doubled URLs.
  * Based on dietfantasy UserModal.jsx implementation
  */
 export function composeUniteUsUrl(caseId: string | null | undefined, clientId: string | null | undefined): string {
-    if (!caseId || !clientId) return '';
-    return `https://app.uniteus.io/dashboard/cases/open/${encodeURIComponent(caseId)}/contact/${encodeURIComponent(clientId)}`;
+    if (!caseId) return '';
+    const raw = String(caseId).trim();
+    if (isFullUniteUsUrl(raw)) return raw;
+    if (!clientId) return '';
+    return `https://app.uniteus.io/dashboard/cases/open/${encodeURIComponent(raw)}/contact/${encodeURIComponent(clientId)}`;
 }
 
 /**

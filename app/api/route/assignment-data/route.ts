@@ -16,7 +16,7 @@ export async function GET(req: Request) {
         const clientsQuery = supabase
             .from("clients")
             .select(
-                "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id"
+                "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id"
             )
             .eq("paused", false)
             .or("delivery.is.null,delivery.eq.true")
@@ -94,6 +94,8 @@ export async function GET(req: Request) {
             delivery: c.delivery !== undefined ? Boolean(c.delivery) : true,
             assigned_driver_id: c.assigned_driver_id ?? null,
             assignedDriverId: c.assigned_driver_id ?? null,
+            parent_client_id: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
+            parentClientId: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
         }));
 
         // 2) Drivers: id + name + color from drivers and routes tables (DB-side)

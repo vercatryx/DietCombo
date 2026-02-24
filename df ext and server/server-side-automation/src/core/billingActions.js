@@ -76,21 +76,14 @@ async function executeBillingOnPage(page, requestData) {
             const [eY, eM, eD] = endStr.split('-').map(Number);
             const reqStart = new Date(sY, sM - 1, sD);
             const reqEnd = new Date(eY, eM - 1, eD);
-            // USER REQUEST: Do not calculate amount. Use JSON amount directly.
-            const amount = data.amount;
-
-            if (amount === undefined || amount === null) {
-                console.warn('[Injected] Missing "amount" in JSON request. Assuming it will be calculated/provided by worker.');
-            }
+            // Amount is set in step 0 from Service Type + dependants (336 or 146 per person)
+            let amount;
 
             console.log(`[Injected] Transformed dates: ${toMDY(reqStart)} -> ${toMDY(reqEnd)}`);
-            console.log(`[Injected] Using explicit amount from JSON: $${amount}`);
 
-            // --- EARLY DUPLICATE GUARD ---
             const plannedDays = Math.max(1, Math.floor((reqEnd - reqStart) / 86400000) + 1);
-            // const plannedAmount = ratePerDay * plannedDays; // DEPRECATED - We use direct amount now
 
-            const doInlineScanFallback = (startD, endD, amount) => {
+            const doInlineScanFallback = (startD, endD, amt) => {
                 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
                 const cents = (v) => {
                     const n = Number(String(v).replace(/[^\d.]/g, ''));
@@ -99,7 +92,7 @@ async function executeBillingOnPage(page, requestData) {
                 const sameDay = (a, b) => a && b && a.getTime() === b.getTime();
                 const cardClass = (sel.duplicateScan.cardClass || 'fee-schedule-provided-service-card').replace(/^\./, '');
                 const cards = Array.from(document.querySelectorAll('.' + cardClass));
-                const tCents = cents(amount);
+                const tCents = cents(amt);
                 const amtTest = sel.duplicateScan.amountDataTest || 'unit-amount-value';
                 const datesTest = sel.duplicateScan.datesDataTest || ['service-dates-value', 'service-start-date-value'];
                 const datesSel = Array.isArray(datesTest) ? datesTest.map(d => '[data-test-element="' + d + '"]').join(', ') : '[data-test-element="' + datesTest + '"]';
@@ -123,11 +116,6 @@ async function executeBillingOnPage(page, requestData) {
                 return false;
             };
 
-            if (doInlineScanFallback(reqStart, reqEnd, amount)) {
-                console.warn('[Injected] Duplicate detected (early). Aborting.');
-                return { ok: false, duplicate: true, error: '[DUPLICATE] Duplicate invoice detected' };
-            }
-
             let currentStep = 'init';
             function classifyError(msg) {
                 if (!msg) return 'UNKNOWN';
@@ -144,10 +132,14 @@ async function executeBillingOnPage(page, requestData) {
             currentStep = 'wait_authorized_table';
             const AUTH_DATE_ID = sel.authorizedTable.date.id;
             const AUTH_AMOUNT_ID = sel.authorizedTable.amount.id;
+            const stSel = sel.authorizedTable.serviceType || {};
+            const SERVICE_TYPE_ID = stSel.id || 'basic-table-service-type-value';
+            const SERVICE_TYPE_XP = stSel.xpath;
             console.log('[Injected] Waiting for Authorized Table elements...');
             const getAuthEls = () => ({
                 dateEl: document.getElementById(AUTH_DATE_ID) || byXPath(sel.authorizedTable.date.xpath),
-                amountEl: document.getElementById(AUTH_AMOUNT_ID) || byXPath(sel.authorizedTable.amount.xpath)
+                amountEl: document.getElementById(AUTH_AMOUNT_ID) || byXPath(sel.authorizedTable.amount.xpath),
+                serviceTypeEl: document.getElementById(SERVICE_TYPE_ID) || (SERVICE_TYPE_XP ? byXPath(SERVICE_TYPE_XP) : null)
             });
 
             for (let i = 0; i < 30; i++) {
@@ -156,7 +148,21 @@ async function executeBillingOnPage(page, requestData) {
                 await sleep(500);
             }
 
-            const { dateEl, amountEl } = getAuthEls();
+            const { dateEl, amountEl, serviceTypeEl } = getAuthEls();
+
+            // --- Service Type: set amount per person (336 or 146 if Produce) ---
+            const numDependants = (data.dependants && Array.isArray(data.dependants)) ? data.dependants.length : 0;
+            const people = 1 + numDependants;
+            if (serviceTypeEl) {
+                const serviceTypeText = (serviceTypeEl.textContent || serviceTypeEl.innerText || '').trim();
+                const isProduce = serviceTypeText.toLowerCase().includes('produce');
+                amount = isProduce ? 146 * people : 336 * people;
+                console.log(`[Injected] Service Type: "${serviceTypeText}" → ${isProduce ? 'Produce' : 'MTM'}, ${people} person(s), amount: $${amount}`);
+            } else {
+                amount = (typeof data.amount === 'number' && data.amount > 0) ? data.amount : 336 * people;
+                console.warn('[Injected] Service Type element not found; using amount from API or default $336/person:', amount);
+            }
+
             if (!dateEl || !amountEl) {
                 console.warn('[Injected] Authorized table elements not found. Continuing, but risks are high.');
             } else {
@@ -208,6 +214,11 @@ async function executeBillingOnPage(page, requestData) {
                 }
             }
 
+            // --- Early duplicate guard (after amount is set from Service Type) ---
+            if (doInlineScanFallback(reqStart, reqEnd, amount)) {
+                console.warn('[Injected] Duplicate detected (early). Aborting.');
+                return { ok: false, duplicate: true, error: '[DUPLICATE] Duplicate invoice detected' };
+            }
 
             // --- 1. Find Add Button & Open Shelf ---
             currentStep = 'open_shelf';
@@ -1089,15 +1100,13 @@ async function executeBillingOnPage(page, requestData) {
             const submitBtn = document.getElementById(submitId);
 
             if (submitBtn) {
-                // Comment the next line for test mode
                 clickLikeHuman(submitBtn);
-                console.log('[Step] Submit button FOUND but and clicked.');
+                console.log('[Step] Submit button FOUND and clicked.');
                 await sleep(3000); // Wait for UI to react
 
                 // --- 5. Verify Success ---
                 console.log('[Step] Verifying submission...');
                 let found = false;
-                // Poll for 10 seconds checking for the new record
                 for (let i = 0; i < 20; i++) {
                     if (doInlineScanFallback(reqStart, reqEnd, amount)) {
                         found = true;
@@ -1115,8 +1124,6 @@ async function executeBillingOnPage(page, requestData) {
             } else {
                 return { ok: false, error: '[SUBMIT] Could not find final "Post" button to submit billing record' };
             }
-
-            return { ok: true, amount, days };
 
             } catch (e) {
                 const msg = (e && e.message) || String(e);

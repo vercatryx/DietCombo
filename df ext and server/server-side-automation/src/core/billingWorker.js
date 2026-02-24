@@ -6,7 +6,8 @@ const uniteSelectors = require('../uniteSelectors');
 const fs = require('fs');
 const path = require('path');
 
-require('dotenv').config();
+// Load .env from server-side-automation root so auth works regardless of cwd
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
 
 const EMAIL = process.env.UNITEUS_EMAIL;
 const PASSWORD = process.env.UNITEUS_PASSWORD;
@@ -251,6 +252,15 @@ async function updateOrderStatus(orderNumber, status, config) {
     }
 }
 
+/** Call update-status for all orders in this request (orderNumbers array from /api/bill, or legacy single orderNumber). */
+async function updateOrderStatusForRequest(req, status, config) {
+    if (!config) return;
+    const orderNumbers = Array.isArray(req.orderNumbers) ? req.orderNumbers : (req.orderNumber != null ? [req.orderNumber] : []);
+    for (const num of orderNumbers) {
+        if (num != null && num !== '') await updateOrderStatus(num, status, config);
+    }
+}
+
 /**
  * Main worker entry point.
  * @param {Array} requests - (Legacy) requests if passed directly, or null if using internal fetch
@@ -346,13 +356,13 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
             const toISO = (d) => d.toISOString().split('T')[0];
 
             req.start = toISO(reqStart);
-            req.end = toISO(reqEnd);
+            req.end = (req.endDate && String(req.endDate).match(/^\d{4}-\d{2}-\d{2}$/)) ? String(req.endDate) : toISO(reqEnd);
 
             emitEvent('log', { message: `Requested range: ${req.start} to ${req.end}` });
         } catch (e) {
             req.status = 'failed';
             emitEvent('log', { message: `[MISC] Invalid date: ${e.message}`, type: 'error' });
-            if (source === 'api') updateOrderStatus(req.orderNumber, 'billing_failed', apiConfig);
+            if (apiConfig) await updateOrderStatusForRequest(req, 'billing_failed', apiConfig);
             continue;
         }
 
@@ -382,7 +392,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     if (!req.url) {
                         req.status = 'failed';
                         emitEvent('log', { message: '[NAV] Missing URL', type: 'error' });
-                        if (source === 'api') updateOrderStatus(req.orderNumber, 'billing_failed', apiConfig);
+                        if (apiConfig) await updateOrderStatusForRequest(req, 'billing_failed', apiConfig);
                         success = true; // Break loop
                         break;
                     }
@@ -503,6 +513,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                         req.message = e.message;
                         emitEvent('log', { message: `❌ Skip Client: ${e.message}`, type: 'error' });
                         resultSourceStatus = 'billing_failed';
+                        if (apiConfig) await updateOrderStatusForRequest(req, 'billing_failed', apiConfig);
                         success = true; // Break both loops
                         break;
                     }
@@ -537,9 +548,10 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
             }
         }
 
-        // --- API Update ---
-        if (source === 'api' && req.orderNumber) {
-            await updateOrderStatus(req.orderNumber, resultSourceStatus, apiConfig);
+        // --- API Update: mark all orders for this client (orderNumbers from /api/bill or legacy orderNumber) ---
+        const statusToSend = resultSourceStatus === 'billing_already_exists' ? 'billing_successful' : resultSourceStatus;
+        if (apiConfig && (statusToSend === 'billing_successful' || statusToSend === 'billing_failed')) {
+            await updateOrderStatusForRequest(req, statusToSend, apiConfig);
         }
 
         emitEvent('queue', requests);
