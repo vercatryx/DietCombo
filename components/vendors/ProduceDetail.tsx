@@ -32,7 +32,9 @@ export function ProduceDetail() {
             ]);
 
             // Include all Produce clients: primary and dependants (each gets their own row and label)
-            const produceClientsList = clientsData.filter(client => client.serviceType === 'Produce');
+            const produceClientsList = clientsData
+                .filter(client => client.serviceType === 'Produce')
+                .sort((a, b) => (a.fullName || '').localeCompare(b.fullName || '', undefined, { sensitivity: 'base' }));
 
             setProduceClients(produceClientsList);
             setAllClients(clientsData);
