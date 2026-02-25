@@ -33,6 +33,8 @@ export function DependantInfoShelf({
         fullName: c.fullName,
         dob: c.dob || '',
         cin: c.cin ?? '',
+        phoneNumber: c.phoneNumber || '',
+        secondaryPhoneNumber: c.secondaryPhoneNumber || '',
         address: c.address || '',
         apt: c.apt || '',
         city: c.city || '',
@@ -88,6 +90,8 @@ export function DependantInfoShelf({
                     fullName: editForm.fullName,
                     dob: editForm.dob || null,
                     cin: editForm.cin === '' || editForm.cin === null ? null : Number(editForm.cin),
+                    phoneNumber: editForm.phoneNumber || '',
+                    secondaryPhoneNumber: editForm.secondaryPhoneNumber || null,
                     address: editForm.address,
                     apt: editForm.apt || null,
                     city: editForm.city || null,
@@ -250,6 +254,47 @@ export function DependantInfoShelf({
                                         </select>
                                     ) : (
                                         client.serviceType === 'Produce' ? 'Produce' : 'Food'
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Phone */}
+                    <div className={styles.section}>
+                        <h3>Phone</h3>
+                        <div className={styles.infoGrid}>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Phone</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.phoneNumber}
+                                            onChange={e => setEditForm({ ...editForm, phoneNumber: e.target.value })}
+                                            placeholder="Primary"
+                                        />
+                                    ) : (
+                                        client.phoneNumber?.trim() ? (
+                                            <a href={`tel:${client.phoneNumber.replace(/\s/g, '')}`}>{client.phoneNumber}</a>
+                                        ) : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Secondary Phone</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            className={styles.editInput}
+                                            value={editForm.secondaryPhoneNumber}
+                                            onChange={e => setEditForm({ ...editForm, secondaryPhoneNumber: e.target.value })}
+                                            placeholder="Secondary"
+                                        />
+                                    ) : (
+                                        client.secondaryPhoneNumber?.trim() ? (
+                                            <a href={`tel:${client.secondaryPhoneNumber.replace(/\s/g, '')}`}>{client.secondaryPhoneNumber}</a>
+                                        ) : '—'
                                     )}
                                 </div>
                             </div>

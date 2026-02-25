@@ -8,6 +8,13 @@ import StopPreviewDialog from './StopPreviewDialog';
 import dynamic from 'next/dynamic';
 const DriversMapLeaflet = dynamic(() => import('./DriversMapLeaflet'), { ssr: false });
 
+/** True if client has food delivery (show on routes map). Produce-only clients are excluded. */
+function hasFoodServiceType(serviceType: string | null | undefined): boolean {
+    const st = (serviceType ?? '').trim().toLowerCase();
+    if (!st) return false;
+    return st.includes('food');
+}
+
 interface Client {
     id: string;
     fullName: string;
@@ -19,8 +26,10 @@ interface Client {
     phoneNumber?: string;
     lat?: number | null;
     lng?: number | null;
-    /** Dependants have a parent; only primaries (null) are shown on the map. */
+    /** Dependants have a parent. Map shows food clients (primaries + dependants); produce-only are hidden. */
     parentClientId?: string | null;
+    serviceType?: string | null;
+    service_type?: string | null;
 }
 
 interface Driver {
@@ -102,6 +111,8 @@ export default function ClientDriverAssignment({
                 lat: user.lat != null ? Number(user.lat) : null,
                 lng: user.lng != null ? Number(user.lng) : null,
                 parentClientId: user.parent_client_id ?? user.parentClientId ?? null,
+                serviceType: user.service_type ?? user.serviceType ?? null,
+                service_type: user.service_type ?? user.serviceType ?? null,
             };
         });
         const map = new Map<string, string>();
@@ -280,10 +291,10 @@ export default function ClientDriverAssignment({
     // Order status is only used for display in popups/dialogs, not for map marker colors
     // The __driverColor property on stops is set from assignedDriver?.color and is used for all marker coloring
 
-    // Convert clients to stops format for the map (driver info from props). Only primaries on map; dependants excluded.
+    // Convert clients to stops format for the map. Show food clients (primaries + dependants); hide produce-only only.
     const mapStops = useMemo(() => {
         return filteredClients
-            .filter(client => !client.parentClientId)
+            .filter(client => hasFoodServiceType(client.serviceType ?? client.service_type))
             .filter(client => {
                 const lat = client.lat;
                 const lng = client.lng;
