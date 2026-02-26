@@ -262,12 +262,41 @@ async function updateOrderStatusForRequest(req, status, config) {
 }
 
 /**
+ * POST authorized amount and expiration date for a client to the app's update-client-authorization endpoint.
+ * Uses apiConfig when provided, otherwise env EXTENSION_API_BASE_URL and EXTENSION_API_KEY.
+ */
+async function updateClientAuthorization(clientId, authorizedAmount, expirationDate, config) {
+    if (!clientId || authorizedAmount == null || !expirationDate) return;
+    const baseUrl = config?.baseUrl || DEFAULT_API_BASE_URL;
+    const key = config?.key || DEFAULT_API_KEY;
+
+    console.log(`[API] Updating client authorization: ${clientId} -> $${authorizedAmount}, expires ${expirationDate}`);
+    try {
+        await axios.post(`${baseUrl}/api/extension/update-client-authorization`, {
+            clientId,
+            authorizedAmount: Number(authorizedAmount),
+            expirationDate
+        }, {
+            headers: {
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        console.log('[API] Client authorization updated.');
+    } catch (err) {
+        console.error(`[API] update-client-authorization failed for ${clientId}:`, err.message);
+    }
+}
+
+/**
  * Main worker entry point.
  * @param {Array} requests - (Legacy) requests if passed directly, or null if using internal fetch
  * @param {function} emitEvent - Function to emit socket events
  * @param {string} source - 'file' (default) or 'api'
+ * @param {object} apiConfig - API base URL and key for update-status
+ * @param {object} options - Optional: { page, context, getPageOrRestart, requestSlice, slotLabel } for parallel mode
  */
-async function billingWorker(initialRequests, emitEvent, source = 'file', apiConfig = null) {
+async function billingWorker(initialRequests, emitEvent, source = 'file', apiConfig = null, options = {}) {
     if (!EMAIL || !PASSWORD) {
         emitEvent('log', { message: '[AUTH] Missing UNITEUS_EMAIL or UNITEUS_PASSWORD in env.', type: 'error' });
         return;
@@ -300,19 +329,23 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
         }
     }
 
-    emitEvent('log', { message: `Processing ${requests.length} requests...` });
+    const fullRequests = requests;
+    const toProcess = options.requestSlice || requests;
+    const slotLabel = options.slotLabel || '';
+
+    emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Processing ${toProcess.length} request(s)...` });
 
     // --- Browser Setup ---
-    let page = await getPage();
+    let page = options.page != null ? options.page : await getPage();
 
     // Helper to setup console logging on a page
     const setupPageLogging = (p) => {
         p.on('console', msg => {
             const text = msg.text();
             if (text.startsWith('[Injected]')) {
-                console.log(`[Browser] ${text}`);
+                console.log(`${slotLabel ? `[${slotLabel}] ` : ''}[Browser] ${text}`);
             } else if (msg.type() === 'error') {
-                console.error(`[Browser Error] ${text}`);
+                console.error(`${slotLabel ? `[${slotLabel}] ` : ''}[Browser Error] ${text}`);
             }
         });
     };
@@ -328,13 +361,13 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
     };
 
     // --- Processing Loop ---
-    for (let i = 0; i < requests.length; i++) {
-        const req = requests[i];
+    for (let i = 0; i < toProcess.length; i++) {
+        const req = toProcess[i];
 
         req.status = 'processing';
         req.message = 'Starting...';
-        emitEvent('queue', requests);
-        emitEvent('log', { message: `Processing ${req.name} (${i + 1}/${requests.length})` });
+        emitEvent('queue', fullRequests);
+        emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Processing ${req.name} (${i + 1}/${toProcess.length})` });
 
         // API Status Tracking
         let resultSourceStatus = 'unknown';
@@ -342,7 +375,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
         if (req.skip) {
             req.status = 'skipped';
             emitEvent('log', { message: 'Skipped by config.', type: 'warning' });
-            emitEvent('queue', requests);
+            emitEvent('queue', fullRequests);
             continue;
         }
 
@@ -380,8 +413,9 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                 try {
                     // --- Login Check ---
                     if (!(await isLoggedIn())) {
-                        emitEvent('log', { message: 'Logging in...' });
-                        const loginOk = await performLoginSequence(EMAIL, PASSWORD);
+                        emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Logging in...` });
+                        const authOpts = (options.page != null && options.context != null) ? { page, context: options.context } : {};
+                        const loginOk = await performLoginSequence(EMAIL, PASSWORD, authOpts);
                         if (!loginOk) {
                             throw new Error('[AUTH] Login failed');
                         }
@@ -413,8 +447,17 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     };
 
                     const dateOpened = parseMDY(authInfo.dateOpened);
-                    const authDatesMatch = authInfo.authorizedDates.match(/(\d{1,2})\/\d{1,2}\/\d{4}\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                    const authDatesMatch = String(authInfo.authorizedDates || '').match(/(\d{1,2})\/\d{1,2}\/\d{4}\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
                     const authEnd = authDatesMatch ? new Date(Date.UTC(+authDatesMatch[4], +authDatesMatch[2] - 1, +authDatesMatch[3])) : null;
+
+                    // Send authorized amount and expiration date to app API (when clientId present)
+                    if (req.clientId) {
+                        const amountNum = parseFloat(String(authInfo.authorizedAmount || '').replace(/[$,]/g, '')) || null;
+                        const expirationISO = authEnd ? authEnd.toISOString().split('T')[0] : null;
+                        if (amountNum != null && expirationISO) {
+                            await updateClientAuthorization(req.clientId, amountNum, expirationISO, apiConfig);
+                        }
+                    }
 
                     if (dateOpened || authEnd) {
                         const currentStart = new Date(req.start + 'T00:00:00Z');
@@ -447,11 +490,10 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                         const diffDays = Math.floor((finalEnd - finalStart) / (1000 * 60 * 60 * 24)) + 1;
                         emitEvent('log', { message: `Final adjusted range: ${req.start} to ${req.end} (${diffDays} days)` });
 
-                        // Amount Refinement (48/day)
-                        if (!req.amount || req.amount === 0) {
-                            req.amount = diffDays * 48;
-                            emitEvent('log', { message: `Calculated amount: $${req.amount} (48 * ${diffDays})` });
-                        }
+                        // Amount = 48/day when dates were clamped (injected logic uses this for MTM only; Produce stays per-person)
+                        req.datesWereClamped = true;
+                        req.amount = diffDays * 48;
+                        emitEvent('log', { message: `Amount for adjusted range: $${req.amount} (48 × ${diffDays} days)` });
                     }
 
                     // --- Proof URL Fallback ---
@@ -535,15 +577,14 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                 restartAttempt++;
                 const { step, type } = parseBillingError(lastRefreshError || '');
                 if (restartAttempt < MAX_RESTARTS) {
-                    emitEvent('log', { message: `Session failed (last failure: Step: ${step}, Type: ${type}). Restarting browser (Attempt ${restartAttempt + 1}/${MAX_RESTARTS})...`, type: 'warning' });
-                    page = await restartBrowser();
+                    emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Session failed (last failure: Step: ${step}, Type: ${type}). Restarting browser (Attempt ${restartAttempt + 1}/${MAX_RESTARTS})...`, type: 'warning' });
+                    page = options.getPageOrRestart ? await options.getPageOrRestart() : await restartBrowser();
                     setupPageLogging(page);
                 } else {
                     req.status = 'failed';
                     req.message = '[TIMEOUT] All retry attempts failed';
-                    emitEvent('log', { message: `❌ [TIMEOUT] Final attempt failed after ${MAX_RESTARTS} browser sessions.`, type: 'error' });
-                    resultSourceStatus = 'billing_failed';
-                    await page.screenshot({ path: `error_${i}_final.png` });
+                    emitEvent('log', { message: `❌ ${slotLabel ? `[${slotLabel}] ` : ''}[TIMEOUT] Final attempt failed after ${MAX_RESTARTS} browser sessions.`, type: 'error' });
+                    await page.screenshot({ path: `error_${slotLabel.replace(/\s/g, '-')}_${i}_final.png` }).catch(() => {});
                 }
             }
         }
@@ -554,11 +595,11 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
             await updateOrderStatusForRequest(req, statusToSend, apiConfig);
         }
 
-        emitEvent('queue', requests);
+        emitEvent('queue', fullRequests);
         await sleep(1000);
     }
 
-    emitEvent('log', { message: 'Billing Cycle Completed.' });
+    emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Billing cycle completed.` });
 }
 
 module.exports = { billingWorker, fetchRequestsFromApi };

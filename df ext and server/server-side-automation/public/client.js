@@ -26,6 +26,11 @@ let lastRequests = [];
 let sortDir = {}; // track direction for each field
 let selectedIds = new Set(); // which clients are selected to run (stable id per request)
 
+// Drag-to-select over checkboxes
+let dragSelectActive = false;
+let dragSelectValue = false; // true = selecting, false = deselecting
+let dragSelectLastIndex = -1;
+
 // Handle Queue Updates (Full Refresh) — keep selection by id
 evtSource.addEventListener('queue', (e) => {
     const next = JSON.parse(e.data);
@@ -218,6 +223,47 @@ function onSelectAllChange(checked) {
     renderQueue(lastRequests);
 }
 
+function setRowSelectedByIndex(rowIndex, selected) {
+    if (rowIndex < 0 || rowIndex >= lastRequests.length) return;
+    const id = requestId(lastRequests[rowIndex], rowIndex);
+    if (selected) selectedIds.add(id);
+    else selectedIds.delete(id);
+}
+
+function setupDragSelect() {
+    queueBody.addEventListener('mousedown', (e) => {
+        const cell = e.target.closest('.col-check');
+        const row = e.target.closest('tbody tr');
+        if (!cell || !row) return;
+        const checkbox = row.querySelector('.queue-row-check');
+        if (!checkbox) return;
+        dragSelectActive = true;
+        dragSelectValue = !checkbox.checked;
+        dragSelectLastIndex = Array.from(queueBody.rows).indexOf(row);
+        setRowSelectedByIndex(dragSelectLastIndex, dragSelectValue);
+        renderQueue(lastRequests);
+        updateSelectAllCheckbox();
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragSelectActive) return;
+        const row = e.target.closest('tbody#queue-body tr');
+        if (!row || row.closest('tbody') !== queueBody) return;
+        const idx = Array.from(queueBody.rows).indexOf(row);
+        if (idx === -1 || idx === dragSelectLastIndex) return;
+        dragSelectLastIndex = idx;
+        setRowSelectedByIndex(idx, dragSelectValue);
+        renderQueue(lastRequests);
+        updateSelectAllCheckbox();
+    });
+
+    document.addEventListener('mouseup', () => {
+        dragSelectActive = false;
+        dragSelectLastIndex = -1;
+    });
+}
+
 function renderQueue(requests) {
     queueBody.innerHTML = '';
     requests.forEach((req, idx) => {
@@ -264,3 +310,5 @@ function updateStats(requests) {
     document.getElementById('stat-success').textContent = requests.filter(r => r.status === 'success').length;
     document.getElementById('stat-failed').textContent = requests.filter(r => r.status === 'failed').length;
 }
+
+setupDragSelect();

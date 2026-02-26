@@ -78,6 +78,7 @@ async function executeBillingOnPage(page, requestData) {
             const reqEnd = new Date(eY, eM - 1, eD);
             // Amount is set in step 0 from Service Type + dependants (336 or 146 per person)
             let amount;
+            let isProduce = false;
 
             console.log(`[Injected] Transformed dates: ${toMDY(reqStart)} -> ${toMDY(reqEnd)}`);
 
@@ -155,7 +156,7 @@ async function executeBillingOnPage(page, requestData) {
             const people = 1 + numDependants;
             if (serviceTypeEl) {
                 const serviceTypeText = (serviceTypeEl.textContent || serviceTypeEl.innerText || '').trim();
-                const isProduce = serviceTypeText.toLowerCase().includes('produce');
+                isProduce = serviceTypeText.toLowerCase().includes('produce');
                 amount = isProduce ? 146 * people : 336 * people;
                 console.log(`[Injected] Service Type: "${serviceTypeText}" → ${isProduce ? 'Produce' : 'MTM'}, ${people} person(s), amount: $${amount}`);
             } else {
@@ -178,6 +179,8 @@ async function executeBillingOnPage(page, requestData) {
                 const amountText = (amountEl.innerText || '').replace(/[$,]/g, '');
                 const authAmount = parseFloat(amountText);
 
+                console.log('[Injected] Authorized Amount:', (amountEl.innerText || '').trim());
+                console.log('[Injected] Expiration Date:', endStr || 'N/A');
                 console.log(`[Injected] Limits: ${toMDY(authStart)} - ${toMDY(authEnd)}, Max: $${authAmount}`);
 
                 // --- CLAMPING LOGIC (Extension Port) ---
@@ -210,6 +213,12 @@ async function executeBillingOnPage(page, requestData) {
                     // We verify against Total Auth, but do not recalc 'projected amount'.
                     if (amount > authAmount) {
                         console.warn(`[Clamping] WARNING: Requested amount $${amount} > Auth Max $${authAmount}. Proceeding as requested, but might fail.`);
+                    }
+
+                    // For regular (MTM) clients only: when dates were clamped in worker, use 48 × days × people
+                    if (!isProduce && data.datesWereClamped && typeof data.amount === 'number' && data.amount > 0) {
+                        amount = data.amount * people;
+                        console.log(`[Injected] Dates were clamped; using 48/day × ${people} person(s) for MTM: $${amount}`);
                     }
                 }
             }
