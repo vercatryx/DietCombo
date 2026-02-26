@@ -2254,11 +2254,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     <span title={isDependent ? undefined : (client.email || undefined)} style={{ minWidth: '180px', flex: 1.2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                         {isDependent ? '-' : (client.email || '-')}
                                     </span>
-                                    <span title={isDependent ? undefined : client.phoneNumber} style={{ minWidth: '140px', flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
-                                        {isDependent ? '-' : (client.phoneNumber || '-')}
+                                    <span title={client.phoneNumber || undefined} style={{ minWidth: '140px', flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                        {client.phoneNumber || '-'}
                                     </span>
-                                    <span title={isDependent ? undefined : (client.secondaryPhoneNumber || undefined)} style={{ minWidth: '140px', flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
-                                        {isDependent ? '-' : (client.secondaryPhoneNumber || '-')}
+                                    <span title={client.secondaryPhoneNumber || undefined} style={{ minWidth: '140px', flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                        {client.secondaryPhoneNumber || '-'}
                                     </span>
                                     <span title={isDependent ? undefined : client.address} style={{ minWidth: '250px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                         {isDependent ? '-' : (client.address || '-')}

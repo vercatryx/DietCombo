@@ -4806,6 +4806,14 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                 </div>
 
                                 <div className={styles.formGroup}>
+                                    <label className="label">Phone</label>
+                                    <input className="input" value={formData.phoneNumber || ''} onChange={e => setFormData({ ...formData, phoneNumber: e.target.value })} />
+                                    <div style={{ height: '1rem' }} />
+                                    <label className="label">Secondary Phone</label>
+                                    <input className="input" value={formData.secondaryPhoneNumber || ''} onChange={e => setFormData({ ...formData, secondaryPhoneNumber: e.target.value })} />
+                                </div>
+
+                                <div className={styles.formGroup}>
                                     <label className="label">Parent Client</label>
                                     <div style={{ position: 'relative' }}>
                                         <input
