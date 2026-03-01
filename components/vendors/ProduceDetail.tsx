@@ -18,6 +18,14 @@ export function ProduceDetail() {
     const [isLoading, setIsLoading] = useState(true);
     const [search, setSearch] = useState('');
 
+    /** Last word of a name (space-separated), used for last-name sorting when name length varies. */
+    function getLastName(name: string): string {
+        const trimmed = (name || '').trim();
+        if (!trimmed) return '';
+        const parts = trimmed.split(/\s+/);
+        return parts[parts.length - 1] || '';
+    }
+
     useEffect(() => {
         loadData();
     }, []);
@@ -32,9 +40,14 @@ export function ProduceDetail() {
             ]);
 
             // Include all Produce clients: primary and dependants (each gets their own row and label)
+            // Sort by last name (last word of full name, space-separated), then by full name as tiebreaker
             const produceClientsList = clientsData
                 .filter(client => client.serviceType === 'Produce')
-                .sort((a, b) => (a.fullName || '').localeCompare(b.fullName || '', undefined, { sensitivity: 'base' }));
+                .sort((a, b) => {
+                    const byLast = getLastName(a.fullName || '').localeCompare(getLastName(b.fullName || ''), undefined, { sensitivity: 'base' });
+                    if (byLast !== 0) return byLast;
+                    return (a.fullName || '').localeCompare(b.fullName || '', undefined, { sensitivity: 'base' });
+                });
 
             setProduceClients(produceClientsList);
             setAllClients(clientsData);

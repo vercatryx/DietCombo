@@ -512,7 +512,6 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                             const showSeparator = includeRecurringInTemplate && recurringItems.length > 0 && daySpecificItems.length > 0;
                             // Day-specific on top, grey bar "Alternate items", then recurring on bottom
                             const itemsToRender = includeRecurringInTemplate ? [...daySpecificItems, ...(showSeparator ? [{ _separator: true, label: 'Alternate items' }] : []), ...recurringItems] : filteredItems;
-                            console.log('[MealPlan Step 6] SavedMealPlanMonth render:', 'selectedDate=', selectedDate, 'items=', items.length, 'filtered=', filteredItems.length, 'recurring=', recurringItems.length, 'daySpecific=', daySpecificItems.length, 'itemsToRender=', itemsToRender.length);
                             return itemsToRender.map((itemOrSep, idx) => {
                             if ((itemOrSep as any)._separator) {
                               const label = (itemOrSep as any).label ?? 'Alternate items';

@@ -1693,6 +1693,7 @@ export async function saveClientMealPlannerData(
     if (!clientId) return { ok: false, error: 'Missing clientId' };
     try {
         const dateOnly = mealPlannerDateOnly(dateToSave);
+        console.log('[saveClientMealPlannerData] clientId=', clientId, 'date=', dateOnly, 'items count=', items?.length ?? 0, 'sample=', items?.slice(0, 3).map((i) => ({ name: i.name, qty: i.quantity })));
         const cutoff = mealPlannerCutoffDate();
         const validItems = items
             .filter((i) => (i.name ?? '').trim())
@@ -1738,6 +1739,7 @@ export async function saveClientMealPlannerData(
             .update({ meal_planner_data: newData.length > 0 ? newData : null, updated_at: new Date().toISOString() })
             .eq('id', clientId);
         if (updateErr) return { ok: false, error: updateErr.message };
+        console.log('[saveClientMealPlannerData] Written to clients.meal_planner_data for date', dateOnly, 'entries in snapshot:', newData.length);
         revalidatePath('/clients');
         return { ok: true };
     } catch (e) {
@@ -2405,9 +2407,9 @@ async function getFullFoodMenuAsRecurringFallback(): Promise<MealPlannerOrderDis
 }
 
 /**
- * Combined menu for a single day: recurring items (from default Food template) + day-specific items
- * (from meal_planner_custom_items for that date). Day-specific overrides recurring by name.
- * Used by client portal and admin client view so "each day has one menu".
+ * Combined menu for a single day.
+ * - Default (clientId null): recurring only — same for all days. Source: settings (default_order_template).
+ * - Client (clientId set): recurring + that client's day-only items from meal_planner_custom_items (client_id = clientId).
  * When the default Food template is empty, uses full Food vendor menu (qty 0) so all items are visible.
  */
 export async function getCombinedMenuItemsForDate(
@@ -2416,35 +2418,24 @@ export async function getCombinedMenuItemsForDate(
 ): Promise<MealPlannerOrderDisplayItem[]> {
     const dateOnly = mealPlannerDateOnly(calendarDate);
     console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: date=', dateOnly, 'clientId=', clientId ?? 'null');
-    const [recurringFromTemplate, { items: dayItems }] = await Promise.all([
-        getRecurringItemsFromFoodTemplate(),
-        getMealPlannerCustomItems(dateOnly, clientId ?? null)
-    ]);
-    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: recurringFromTemplate count=', recurringFromTemplate.length, 'dayItems count=', dayItems?.length ?? 0);
-    // If default template has no items, show full Food menu (all items, qty 0) so client portal shows everything
+    const recurringFromTemplate = await getRecurringItemsFromFoodTemplate();
     const recurring = recurringFromTemplate.length > 0 ? recurringFromTemplate : await getFullFoodMenuAsRecurringFallback();
-    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: recurring count (after fallback)=', recurring.length);
+    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: recurring count=', recurring.length);
+
+    const combined: MealPlannerOrderDisplayItem[] = recurring.map((r) => ({
+        id: r.id,
+        name: r.name ?? 'Item',
+        quantity: r.quantity ?? 0,
+        value: r.value ?? null
+    }));
 
     const nameEq = (a: { name?: string | null }, b: { name?: string | null }) =>
         ((a.name ?? '').trim() || 'Item').toLowerCase() === ((b.name ?? '').trim() || 'Item').toLowerCase();
 
-    // Recurring (top) = same items, same amount every day. Do not override with per-date data.
-    // Day-specific (meal_planner_custom_items) only adds items that are NOT in the recurring list.
-    const combined: MealPlannerOrderDisplayItem[] = [];
-
-    // 1) All recurring items with their recurring quantity (no per-date override)
-    recurring.forEach((r) => {
-        combined.push({
-            id: r.id,
-            name: r.name ?? 'Item',
-            quantity: r.quantity ?? 0,
-            value: r.value ?? null
-        });
-    });
-
-    // 2) Day-only items (in meal_planner_custom_items but no matching recurring name)
-    for (const dayIt of dayItems) {
-        if (recurring.some((r) => nameEq(r, dayIt))) continue;
+    // Day-specific items: default (client_id IS NULL) and/or client overrides (client_id = clientId)
+    const { items: defaultDayItems } = await getMealPlannerCustomItems(dateOnly, null);
+    for (const dayIt of defaultDayItems) {
+        if (combined.some((c) => nameEq(c, dayIt))) continue;
         combined.push({
             id: dayIt.id,
             name: dayIt.name ?? 'Item',
@@ -2452,7 +2443,19 @@ export async function getCombinedMenuItemsForDate(
             value: dayIt.value != null && !Number.isNaN(Number(dayIt.value)) ? Number(dayIt.value) : null
         });
     }
-    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: final combined count=', combined.length, 'recurring ids sample=', combined.filter((i) => String(i.id).startsWith('recurring-')).length);
+    if (clientId != null && clientId !== '') {
+        const { items: clientDayItems } = await getMealPlannerCustomItems(dateOnly, clientId);
+        for (const dayIt of clientDayItems) {
+            if (combined.some((c) => nameEq(c, dayIt))) continue;
+            combined.push({
+                id: dayIt.id,
+                name: dayIt.name ?? 'Item',
+                quantity: Math.max(0, Number(dayIt.quantity) ?? 0),
+                value: dayIt.value != null && !Number.isNaN(Number(dayIt.value)) ? Number(dayIt.value) : null
+            });
+        }
+    }
+    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: final combined count=', combined.length);
     return combined;
 }
 

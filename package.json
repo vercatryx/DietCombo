@@ -19,6 +19,9 @@
     "diagnose-expired-order-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-expired-order-client.ts",
     "diagnose-order-items-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-order-items-doubles.ts",
     "preview-order-for-client-date": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/preview-order-for-client-date.ts",
+    "verify-default-order-template": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-default-order-template.ts",
+    "list-default-order-template-recurring": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/list-default-order-template-recurring-items.ts",
+    "verify-meal-plan-mar9-acai": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-meal-plan-mar9-acai.ts",
     "fix-order-items-remove-item-and-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/fix-order-items-remove-item-and-doubles.ts"
 },
   "dependencies": {

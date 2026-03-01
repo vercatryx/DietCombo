@@ -468,23 +468,30 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
     // Auto-Save Logic - matching ClientProfile exactly
     // Manual Save Logic
     const handleSave = async () => {
+        console.log('[ClientPortalInterface] handleSave called', {
+            mealPlanEditedDatesCount: mealPlanEditedDates.length,
+            mealPlanEditedDatesSample: mealPlanEditedDates.slice(0, 5),
+            orderAndMealPlanOnly
+        });
         if (!client || !orderConfig) {
             setMessage('Error: Missing client or order configuration. Please refresh the page.');
             setTimeout(() => setMessage(null), 5000);
             return;
         }
 
-        // Check if orderConfig is effectively empty (no meaningful data)
-        const hasOrderData = 
+        // Check if orderConfig is effectively empty (no meaningful data). In portal meal-plan-only mode, allow save when only meal plan was edited.
+        const hasOrderData =
             (orderConfig.vendorSelections && orderConfig.vendorSelections.length > 0) ||
             (orderConfig.deliveryDayOrders && Object.keys(orderConfig.deliveryDayOrders).length > 0) ||
             (orderConfig.vendorId && orderConfig.vendorId.trim() !== '') ||
             (orderConfig.boxTypeId && orderConfig.boxTypeId.trim() !== '') ||
             (orderConfig.boxes && orderConfig.boxes.length > 0) ||
             (orderConfig.customItems && orderConfig.customItems.length > 0);
-        
-        if (!hasOrderData) {
-            setMessage('Error: Please configure your order (select vendors, items, or boxes) before saving.');
+        const mealPlanOnlySave = orderAndMealPlanOnly && mealPlanEditedDates.length > 0;
+        console.log('[ClientPortalInterface] hasOrderData=', hasOrderData, 'mealPlanOnlySave=', mealPlanOnlySave);
+
+        if (!hasOrderData && !mealPlanOnlySave) {
+            setMessage('Error: Please configure your order (select vendors, items, or boxes) or edit the meal plan before saving.');
             setTimeout(() => setMessage(null), 5000);
             return;
         }
@@ -517,7 +524,12 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 });
             });
 
-            if (!hasItemsInVendorSelections && !hasItemsInDeliveryDayOrders && !hasItemsInItemsByDay) {
+            if (
+                !hasItemsInVendorSelections &&
+                !hasItemsInDeliveryDayOrders &&
+                !hasItemsInItemsByDay &&
+                !mealPlanOnlySave
+            ) {
                 validationErrors.push('Please select at least one item before saving');
             }
 
@@ -698,6 +710,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         }
 
         if (validationErrors.length > 0) {
+            console.log('[ClientPortalInterface] Save blocked by validation:', validationErrors);
             setMessage(`Error: ${validationErrors.join('; ')}`);
             setTimeout(() => setMessage(null), 8000);
             return;
@@ -730,7 +743,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                         });
                     });
 
-                    if (!hasValidOrders) {
+                    if (!hasValidOrders && !mealPlanOnlySave) {
                         setMessage('Error: After filtering, no valid orders remain. Please ensure at least one vendor has items selected.');
                         setTimeout(() => setMessage(null), 8000);
                         return;
@@ -779,7 +792,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                             return Object.keys(items).length > 0 && Object.values(items).some((qty: any) => (Number(qty) || 0) > 0);
                         });
 
-                        if (!hasValidSelections) {
+                        if (!hasValidSelections && !mealPlanOnlySave) {
                             setMessage('Error: After filtering, no valid vendor selections remain. Please ensure at least one vendor has items selected.');
                             setTimeout(() => setMessage(null), 8000);
                             return;
@@ -904,13 +917,23 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             }
 
             // Only persist to clients.meal_planner_data for dates that were actually edited (merge-by-date; don't touch other days).
+            // Each saved day is the full snapshot for that day: recurring + day-specific items combined.
             const didSaveMealPlan = mealPlanEditedDates.length > 0;
+            console.log('[ClientPortalInterface] Reached save block: didSaveMealPlan=', didSaveMealPlan, 'mealPlanEditedDates.length=', mealPlanEditedDates.length);
             if (didSaveMealPlan) {
+                console.log('[ClientPortalInterface] Saving meal plan: edited dates only', mealPlanEditedDates.slice(0, 10), mealPlanEditedDates.length > 10 ? `... (+${mealPlanEditedDates.length - 10} more)` : '');
                 for (const date of mealPlanEditedDates) {
                     const order = mealPlanOrders.find((o: any) => (o.scheduledDeliveryDate || '').slice(0, 10) === date.slice(0, 10));
                     if (order?.items) {
+                        console.log('[ClientPortalInterface] Saving date', date, 'items count=', order.items.length, 'sample=', order.items.slice(0, 3).map((i: any) => ({ name: i.name, qty: i.quantity })));
                         const { ok, error: mealErr } = await saveClientMealPlannerData(client.id, date, order.items);
-                        if (!ok && mealErr) console.warn('[ClientPortalInterface] Meal planner save for date', date, mealErr);
+                        if (ok) {
+                            console.log('[ClientPortalInterface] Meal planner saved for', date);
+                        } else if (mealErr) {
+                            console.warn('[ClientPortalInterface] Meal planner save for date', date, mealErr);
+                        }
+                    } else {
+                        console.warn('[ClientPortalInterface] No order or items for edited date', date, 'skipping');
                     }
                 }
                 setMealPlanEditedDates([]);
