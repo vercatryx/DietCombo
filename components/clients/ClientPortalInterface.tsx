@@ -26,9 +26,11 @@ interface Props {
     orderAndMealPlanOnly?: boolean;
     /** Preloaded meal plan orders for Saved Meal Plan section (when orderAndMealPlanOnly and service is Food). */
     initialMealPlanOrders?: any[] | null;
+    /** Primary + dependants for "People on this account" in sidebar (client portal). */
+    householdPeople?: ClientProfile[];
 }
 
-export function ClientPortalInterface({ client: initialClient, statuses, navigators, vendors, menuItems, boxTypes, categories, upcomingOrder, activeOrder, previousOrders, orderAndMealPlanOnly = false, initialMealPlanOrders = null }: Props) {
+export function ClientPortalInterface({ client: initialClient, householdPeople = [], statuses, navigators, vendors, menuItems, boxTypes, categories, upcomingOrder, activeOrder, previousOrders, orderAndMealPlanOnly = false, initialMealPlanOrders = null }: Props) {
     const router = useRouter();
     const [client, setClient] = useState<ClientProfile>(initialClient);
     const [activeBoxQuotas, setActiveBoxQuotas] = useState<BoxQuota[]>([]);
@@ -76,6 +78,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     /** Dates edited in meal plan this session; save bar shows and we only write these to clients.meal_planner_data. */
     const [mealPlanEditedDates, setMealPlanEditedDates] = useState<string[]>([]);
     const [mealPlanEditedResetTrigger, setMealPlanEditedResetTrigger] = useState(0);
+    const [mealPlanDiscardTrigger, setMealPlanDiscardTrigger] = useState(0);
 
     // Reset missing-items toast when client changes so it can show again for another client
     useEffect(() => {
@@ -518,11 +521,22 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 validationErrors.push('Please select at least one item before saving');
             }
 
-            // Check total meal count: use per-date expected totals from meal plan (no longer approvedMealsPerWeek)
+            // Per-date: total meals must equal expected for that day (expectedTotalMeals × household size). Block save if any date does not match.
+            const householdSize = Math.max(1, householdPeople?.length ?? 1);
+            for (const order of mealPlanOrders) {
+                const expectedForDay = (order.expectedTotalMeals ?? 0) * householdSize;
+                if (expectedForDay <= 0) continue;
+                const currentForDay = (order.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0);
+                if (currentForDay !== expectedForDay) {
+                    validationErrors.push(`Total meals for each day must equal the expected amount. At least one day has ${currentForDay} selected but must be exactly ${expectedForDay}.`);
+                    break;
+                }
+            }
+            // Also check aggregate for non–meal-plan path (recurring order)
             const totalValueFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
             const totalValue = mealPlanOrders.length > 0 ? totalValueFromPlan : getTotalMealCountAllDays();
-            const totalExpectedFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0);
-            if (totalExpectedFromPlan > 0 && totalValue !== totalExpectedFromPlan) {
+            const totalExpectedFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0) * householdSize;
+            if (totalExpectedFromPlan > 0 && totalValue !== totalExpectedFromPlan && validationErrors.every(e => !e.includes('Total meals for each day'))) {
                 if (totalValue > totalExpectedFromPlan) {
                     validationErrors.push(`Total meals (${totalValue}) exceeds the expected total for your delivery dates (${totalExpectedFromPlan}). Please reduce to match.`);
                 } else {
@@ -925,6 +939,12 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     const handleDiscard = () => {
         // Reset order config to original
         setOrderConfig(JSON.parse(JSON.stringify(originalOrderConfig)));
+        // Reset meal plan to last saved (portal): parent state + tell SavedMealPlanMonth to reset internal orders
+        if (orderAndMealPlanOnly) {
+            setMealPlanEditedDates([]);
+            setMealPlanOrders(Array.isArray(initialMealPlanOrders) ? [...initialMealPlanOrders] : []);
+            setMealPlanDiscardTrigger((t) => t + 1);
+        }
         setMessage('Changes discarded');
         setTimeout(() => setMessage(null), 2000);
     };
@@ -1707,6 +1727,35 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     const configChanged = JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);
     const hasUnsavedChanges = configChanged || mealPlanEditedDates.length > 0;
 
+    // Edited days whose total !== expected (only check dates the user edited, not defaults). Used for mismatch bar message and to block save.
+    const mealPlanMismatchedEditedDates = orderAndMealPlanOnly && client.serviceType === 'Food' && mealPlanEditedDates.length > 0
+        ? (() => {
+            const householdSize = Math.max(1, householdPeople?.length ?? 1);
+            const editedSet = new Set(mealPlanEditedDates.map((d) => String(d).slice(0, 10)));
+            const mismatched: string[] = [];
+            for (const order of mealPlanOrders) {
+                const dateKey = (order.scheduledDeliveryDate ?? '').slice(0, 10);
+                if (!editedSet.has(dateKey)) continue;
+                const expectedForDay = (order.expectedTotalMeals ?? 0) * householdSize;
+                if (expectedForDay <= 0) continue;
+                const currentForDay = (order.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0);
+                if (currentForDay !== expectedForDay) mismatched.push(dateKey);
+            }
+            return mismatched;
+        })()
+        : [];
+    const mealPlanMismatch = mealPlanMismatchedEditedDates.length > 0;
+
+    // Format ISO date for display in mismatch message (e.g. "Mar 9 (Mon)")
+    const formatDateForMismatch = (iso: string) => {
+        const d = new Date(iso.trim().slice(0, 10) + 'T12:00:00');
+        if (Number.isNaN(d.getTime())) return iso;
+        const month = d.toLocaleDateString('en-US', { month: 'short' });
+        const day = d.toLocaleDateString('en-US', { day: 'numeric' });
+        const weekday = d.toLocaleDateString('en-US', { weekday: 'short' });
+        return `${month} ${day} (${weekday})`;
+    };
+
     const mainContent = (
             <div className={styles.wideGrid}>
                 {!orderAndMealPlanOnly && (
@@ -2383,30 +2432,28 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 </div>
                 )}
 
-                {orderAndMealPlanOnly && client.serviceType === 'Food' && (
+                {orderAndMealPlanOnly && client.serviceType === 'Food' && (() => {
+                    const mealPlanHouseholdSize = Math.max(1, householdPeople?.length ?? 1);
+                    const mealPlanTotal = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
+                    const mealPlanExpected = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0) * mealPlanHouseholdSize;
+                    return (
                     <section className={styles.card} style={{ marginTop: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                            <h3 className={styles.sectionTitle} style={{ marginBottom: 0 }}>Your meal plan</h3>
+                            {/* <h3 className={styles.sectionTitle} style={{ marginBottom: 0 }}>Your meal plan</h3> */}
                             <div className={styles.budget} style={{
-                                color: (() => {
-                                    const total = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
-                                    const expected = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0);
-                                    return expected > 0 && total !== expected ? 'white' : 'inherit';
-                                })(),
-                                backgroundColor: (() => {
-                                    const total = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
-                                    const expected = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0);
-                                    return expected > 0 && total !== expected ? 'var(--color-danger)' : 'var(--bg-surface-hover)';
-                                })(),
+                                color: mealPlanExpected > 0 && mealPlanTotal !== mealPlanExpected ? 'white' : 'inherit',
+                                backgroundColor: mealPlanExpected > 0 && mealPlanTotal !== mealPlanExpected ? 'var(--color-danger)' : 'var(--bg-surface-hover)',
                                 padding: '8px 12px',
                                 borderRadius: '6px',
                                 fontSize: '1rem',
                                 fontWeight: 700
                             }}>
-                                Meals: {mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0)} / {mealPlanOrders.reduce((s, o) => s + (o.expectedTotalMeals ?? 0), 0) || '—'}
+                                Meals: {mealPlanTotal} / {mealPlanExpected || '—'}
+                                {mealPlanHouseholdSize > 1 && <span style={{ fontSize: '0.85rem', fontWeight: 500, opacity: 0.9 }}> ({mealPlanHouseholdSize} people)</span>}
                             </div>
                         </div>
                         <SavedMealPlanMonth
+                            key={`meal-plan-${client.id}-${mealPlanDiscardTrigger}`}
                             clientId={client.id}
                             onOrdersChange={setMealPlanOrders}
                             onEditedDatesChange={setMealPlanEditedDates}
@@ -2414,9 +2461,11 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                             autoSave={false}
                             editedDatesResetTrigger={mealPlanEditedResetTrigger}
                             includeRecurringInTemplate={true}
+                            householdSize={mealPlanHouseholdSize}
                         />
                     </section>
-                )}
+                    );
+                })()}
 
                 {!orderAndMealPlanOnly && (
                 <>
@@ -2708,9 +2757,9 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                         bottom: 0,
                         left: 0,
                         right: 0,
-                        backgroundColor: saving ? '#d1fae5' : '#fef3c7',
-                        borderTop: saving ? '4px solid #10b981' : '4px solid #f59e0b',
-                        boxShadow: saving ? '0 -10px 30px -5px rgba(16, 185, 129, 0.4)' : '0 -10px 30px -5px rgba(245, 158, 11, 0.4)',
+                        backgroundColor: saving ? '#d1fae5' : mealPlanMismatch ? '#fef2f2' : '#fef3c7',
+                        borderTop: saving ? '4px solid #10b981' : mealPlanMismatch ? '4px solid #dc2626' : '4px solid #f59e0b',
+                        boxShadow: saving ? '0 -10px 30px -5px rgba(16, 185, 129, 0.4)' : mealPlanMismatch ? '0 -10px 30px -5px rgba(220, 38, 38, 0.4)' : '0 -10px 30px -5px rgba(245, 158, 11, 0.4)',
                         zIndex: 1000,
                         backdropFilter: 'blur(10px)'
                     }}>
@@ -2742,6 +2791,25 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                                 fontWeight: 600
                                             }}>
                                                 Please wait while your changes are being saved to the database
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : mealPlanMismatch ? (
+                                    <>
+                                        <AlertTriangle className="save-bar-icon" size={24} style={{ color: '#b91c1c', flexShrink: 0 }} />
+                                        <div style={{ flex: 1 }}>
+                                            <div className="save-bar-title" style={{
+                                                fontWeight: 700,
+                                                color: '#b91c1c',
+                                                marginBottom: '0.25rem'
+                                            }}>
+                                                ⚠️ UNSAVED CHANGES
+                                            </div>
+                                            <div className="save-bar-message" style={{
+                                                color: '#991b1b',
+                                                fontWeight: 600
+                                            }}>
+                                                Cannot save because of the mismatch. The following edited days have wrong amounts: {mealPlanMismatchedEditedDates.map(formatDateForMismatch).join(', ')}. Adjust quantities so each day&apos;s total matches the required amount.
                                             </div>
                                         </div>
                                     </>
@@ -2782,31 +2850,31 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                                 </button>
                                 <button
                                     onClick={handleSave}
-                                    disabled={saving}
+                                    disabled={saving || mealPlanMismatch}
                                     className="btn btn-primary save-bar-button save-bar-button-primary"
                                     style={{
                                         fontWeight: 700,
-                                        boxShadow: saving ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : '0 8px 16px -4px rgba(0, 0, 0, 0.3)',
-                                        backgroundColor: saving ? '#10b981' : '#f59e0b',
-                                        border: saving ? '2px solid #059669' : '2px solid #d97706',
+                                        boxShadow: saving ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : mealPlanMismatch ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : '0 8px 16px -4px rgba(0, 0, 0, 0.3)',
+                                        backgroundColor: saving ? '#10b981' : mealPlanMismatch ? '#9ca3af' : '#f59e0b',
+                                        border: saving ? '2px solid #059669' : mealPlanMismatch ? '2px solid #6b7280' : '2px solid #d97706',
                                         color: '#1f2937',
-                                        transform: saving ? 'scale(1)' : 'scale(1.05)',
+                                        transform: saving || mealPlanMismatch ? 'scale(1)' : 'scale(1.05)',
                                         transition: 'all 0.2s',
-                                        opacity: saving ? 0.9 : 1,
-                                        cursor: saving ? 'wait' : 'pointer',
+                                        opacity: saving ? 0.9 : mealPlanMismatch ? 0.7 : 1,
+                                        cursor: saving ? 'wait' : mealPlanMismatch ? 'not-allowed' : 'pointer',
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '8px',
                                         justifyContent: 'center'
                                     }}
                                     onMouseEnter={(e) => {
-                                        if (!saving) {
+                                        if (!saving && !mealPlanMismatch) {
                                             e.currentTarget.style.transform = 'scale(1.08)';
                                             e.currentTarget.style.boxShadow = '0 12px 24px -4px rgba(0, 0, 0, 0.4)';
                                         }
                                     }}
                                     onMouseLeave={(e) => {
-                                        if (!saving) {
+                                        if (!saving && !mealPlanMismatch) {
                                             e.currentTarget.style.transform = 'scale(1.05)';
                                             e.currentTarget.style.boxShadow = '0 8px 16px -4px rgba(0, 0, 0, 0.3)';
                                         }
@@ -2830,7 +2898,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     );
 
     const clientInfoSidebar = orderAndMealPlanOnly && (
-        <aside className={styles.profileLayoutSidebar}>
+        <aside className={`${styles.profileLayoutSidebar} ${styles.profileLayoutSidebarCompact}`}>
             <section className={styles.clientInfoCard}>
                 <h3 className={styles.sectionTitle} style={{ marginTop: 0 }}>Your info</h3>
                 <div className={styles.clientInfoName}>{client.fullName || '—'}</div>
@@ -2847,13 +2915,19 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
                 <span className="label">Address</span>
                 <div className={styles.clientInfoValue}>{client.address || '—'}</div>
                 <span className="label">Service</span>
-                <div className={`${styles.clientInfoValue} ${client.serviceType !== 'Food' ? styles.clientInfoValueLast : ''}`}>{client.serviceType || '—'}</div>
-                {client.serviceType === 'Food' && (
-                    <>
-                        <span className="label">Meals per week</span>
-                        <div className={`${styles.clientInfoValue} ${styles.clientInfoValueLast}`}>{client.approvedMealsPerWeek ?? '—'}</div>
-                    </>
-                )}
+                <div className={styles.clientInfoValue}>{client.serviceType || '—'}</div>
+                <span className="label">People on this account</span>
+                <div className={`${styles.clientInfoValue} ${styles.clientInfoValueLast}`}>
+                    {householdPeople.length > 0 ? (
+                        <ul style={{ margin: 0, paddingLeft: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            {householdPeople.map((p) => (
+                                <li key={p.id}>{p.fullName || '—'}</li>
+                            ))}
+                        </ul>
+                    ) : (
+                        client.fullName || '—'
+                    )}
+                </div>
             </section>
         </aside>
     );
@@ -2861,7 +2935,7 @@ export function ClientPortalInterface({ client: initialClient, statuses, navigat
     return (
         <div className={styles.container}>
             {orderAndMealPlanOnly ? (
-                <div className={styles.profileLayout}>
+                <div className={`${styles.profileLayout} ${styles.profileLayoutPortal}`}>
                     {clientInfoSidebar}
                     <div className={styles.profileLayoutMain}>
                         {mainContent}

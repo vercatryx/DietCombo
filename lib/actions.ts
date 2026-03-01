@@ -1840,7 +1840,7 @@ export async function getMealPlannerCustomItems(
         const items = rows.map((row: any) => ({
             id: row.id,
             name: row.name,
-            quantity: row.quantity ?? 1,
+            quantity: row.quantity != null && !Number.isNaN(Number(row.quantity)) ? Math.max(0, Number(row.quantity)) : 0,
             value: row.value != null && !Number.isNaN(Number(row.value)) ? Number(row.value) : null,
             sortOrder: row.sort_order ?? 0
         }));
@@ -2300,8 +2300,13 @@ export async function getAvailableMealPlanTemplateWithAllDates(): Promise<MealPl
  */
 export async function getRecurringItemsFromFoodTemplate(): Promise<MealPlannerOrderDisplayItem[]> {
     const template = await getDefaultOrderTemplate('Food');
-    if (!template || typeof template !== 'object') return [];
+    console.log('[MealPlan Step 1] getRecurringItemsFromFoodTemplate: template exists=', !!template, 'template keys=', template && typeof template === 'object' ? Object.keys(template) : []);
+    if (!template || typeof template !== 'object') {
+        console.log('[MealPlan Step 1] getRecurringItemsFromFoodTemplate: returning [] (no template)');
+        return [];
+    }
     const menuItems = await getMenuItems();
+    console.log('[MealPlan Step 1] getRecurringItemsFromFoodTemplate: menuItems count=', menuItems?.length ?? 0);
     const menuById = new Map(menuItems.map((m) => [m.id, m.name]));
     const menuValueById = new Map(menuItems.map((m) => [m.id, m.value != null && !Number.isNaN(Number(m.value)) ? Number(m.value) : null]));
 
@@ -2310,12 +2315,12 @@ export async function getRecurringItemsFromFoodTemplate(): Promise<MealPlannerOr
         const items = vs?.items && typeof vs.items === 'object' && !Array.isArray(vs.items) ? vs.items : {};
         for (const [itemId, qty] of Object.entries(items)) {
             const n = Math.max(0, Number(qty) || 0);
-            if (n === 0) continue;
             const name = menuById.get(itemId) ?? 'Item';
             const value = menuValueById.get(itemId) ?? null;
             const key = itemId;
             const existing = seen.get(key);
-            if (!existing || existing.quantity < n) {
+            // Include all items (including qty 0) so Alternate items section shows full list; keep highest qty when same key appears multiple times
+            if (!existing || n > existing.quantity) {
                 seen.set(key, { name, quantity: n, value });
             }
         }
@@ -2331,11 +2336,71 @@ export async function getRecurringItemsFromFoodTemplate(): Promise<MealPlannerOr
     if (Array.isArray(vsTop)) {
         for (const vs of vsTop) addItemsFromVs(vs);
     }
-    return Array.from(seen.entries()).map(([id, { name, quantity, value }]) => ({
+    const fromTemplate = Array.from(seen.entries()).map(([id, { name, quantity, value }]) => ({
         id: `recurring-${id}`,
         name,
         quantity,
         value
+    }));
+
+    // Merge with full Food menu so items with qty 0 in default (or omitted from template) still appear in Alternate items
+    const fullMenu = await getFullFoodMenuAsRecurringFallback();
+    const rawId = (r: MealPlannerOrderDisplayItem) => r.id.startsWith('recurring-') ? r.id.slice('recurring-'.length) : r.id;
+    const templateByRaw = new Map(fromTemplate.map((r) => [rawId(r), r]));
+    // Start with full menu (all items, qty 0); overlay template quantity/name/value so default zeroes and names are respected
+    let result: MealPlannerOrderDisplayItem[] = fullMenu.map((m) => {
+        const t = templateByRaw.get(rawId(m));
+        return t ? { ...m, quantity: t.quantity, name: (t.name ?? '').trim() ? t.name ?? m.name : m.name, value: t.value ?? m.value } : m;
+    });
+    // Append any template-only items (e.g. legacy IDs not in current menu)
+    for (const t of fromTemplate) {
+        const rid = rawId(t);
+        if (!fullMenu.some((m) => rawId(m) === rid)) result.push({ ...t });
+    }
+
+    // If any names are still "Item" (template IDs not in current menu), fill from full Food menu by index so display shows real names
+    const unresolvedCount = result.filter((r) => (r.name ?? '').trim().toLowerCase() === 'item').length;
+    if (unresolvedCount > 0) {
+        if (fullMenu.length > 0) {
+            let fallbackIdx = 0;
+            result = result.map((r) => {
+                const needName = (r.name ?? '').trim().toLowerCase() === 'item';
+                if (needName && fallbackIdx < fullMenu.length) {
+                    const name = fullMenu[fallbackIdx].name ?? 'Item';
+                    fallbackIdx += 1;
+                    return { ...r, name };
+                }
+                return r;
+            });
+        }
+    }
+    console.log('[MealPlan Step 1] getRecurringItemsFromFoodTemplate: result count=', result.length, 'sample names=', result.slice(0, 3).map((r) => r.name));
+    return result;
+}
+
+/**
+ * When the default Food template has no items, return all active Food vendor menu items as
+ * "recurring" with quantity 0 so the client portal (and admin) show the full menu every day.
+ */
+async function getFullFoodMenuAsRecurringFallback(): Promise<MealPlannerOrderDisplayItem[]> {
+    console.log('[MealPlan Step 2] getFullFoodMenuAsRecurringFallback: called (template had 0 items)');
+    const [vendors, menuItems] = await Promise.all([getVendors(), getMenuItems()]);
+    console.log('[MealPlan Step 2] getFullFoodMenuAsRecurringFallback: vendors count=', vendors?.length ?? 0, 'menuItems count=', menuItems?.length ?? 0);
+    const foodVendor = vendors.find((v) => v.isDefault === true) || vendors.find((v) => (v.serviceTypes || []).includes('Food')) || vendors[0];
+    console.log('[MealPlan Step 2] getFullFoodMenuAsRecurringFallback: foodVendor=', foodVendor ? { id: foodVendor.id, name: foodVendor.name } : null);
+    if (!foodVendor || !menuItems.length) {
+        console.log('[MealPlan Step 2] getFullFoodMenuAsRecurringFallback: returning [] (no vendor or no menu items)');
+        return [];
+    }
+    const foodMenuItems = menuItems
+        .filter((m) => m.vendorId === foodVendor.id && m.isActive)
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    console.log('[MealPlan Step 2] getFullFoodMenuAsRecurringFallback: foodMenuItems count=', foodMenuItems.length, 'sample names=', foodMenuItems.slice(0, 3).map((m) => m.name));
+    return foodMenuItems.map((m) => ({
+        id: `recurring-${m.id}`,
+        name: m.name ?? 'Item',
+        quantity: 0,
+        value: m.value != null && !Number.isNaN(Number(m.value)) ? Number(m.value) : null
     }));
 }
 
@@ -2343,39 +2408,52 @@ export async function getRecurringItemsFromFoodTemplate(): Promise<MealPlannerOr
  * Combined menu for a single day: recurring items (from default Food template) + day-specific items
  * (from meal_planner_custom_items for that date). Day-specific overrides recurring by name.
  * Used by client portal and admin client view so "each day has one menu".
+ * When the default Food template is empty, uses full Food vendor menu (qty 0) so all items are visible.
  */
 export async function getCombinedMenuItemsForDate(
     calendarDate: string,
     clientId?: string | null
 ): Promise<MealPlannerOrderDisplayItem[]> {
     const dateOnly = mealPlannerDateOnly(calendarDate);
-    const [recurring, { items: dayItems }] = await Promise.all([
+    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: date=', dateOnly, 'clientId=', clientId ?? 'null');
+    const [recurringFromTemplate, { items: dayItems }] = await Promise.all([
         getRecurringItemsFromFoodTemplate(),
         getMealPlannerCustomItems(dateOnly, clientId ?? null)
     ]);
-    const byName = new Map<string, MealPlannerOrderDisplayItem>();
-    for (const it of recurring) {
-        const name = (it.name ?? '').trim() || 'Item';
-        byName.set(name.toLowerCase(), { id: it.id, name: it.name ?? 'Item', quantity: it.quantity ?? 0, value: it.value ?? null });
+    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: recurringFromTemplate count=', recurringFromTemplate.length, 'dayItems count=', dayItems?.length ?? 0);
+    // If default template has no items, show full Food menu (all items, qty 0) so client portal shows everything
+    const recurring = recurringFromTemplate.length > 0 ? recurringFromTemplate : await getFullFoodMenuAsRecurringFallback();
+    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: recurring count (after fallback)=', recurring.length);
+
+    const nameEq = (a: { name?: string | null }, b: { name?: string | null }) =>
+        ((a.name ?? '').trim() || 'Item').toLowerCase() === ((b.name ?? '').trim() || 'Item').toLowerCase();
+
+    // Recurring (top) = same items, same amount every day. Do not override with per-date data.
+    // Day-specific (meal_planner_custom_items) only adds items that are NOT in the recurring list.
+    const combined: MealPlannerOrderDisplayItem[] = [];
+
+    // 1) All recurring items with their recurring quantity (no per-date override)
+    recurring.forEach((r) => {
+        combined.push({
+            id: r.id,
+            name: r.name ?? 'Item',
+            quantity: r.quantity ?? 0,
+            value: r.value ?? null
+        });
+    });
+
+    // 2) Day-only items (in meal_planner_custom_items but no matching recurring name)
+    for (const dayIt of dayItems) {
+        if (recurring.some((r) => nameEq(r, dayIt))) continue;
+        combined.push({
+            id: dayIt.id,
+            name: dayIt.name ?? 'Item',
+            quantity: Math.max(0, Number(dayIt.quantity) ?? 0),
+            value: dayIt.value != null && !Number.isNaN(Number(dayIt.value)) ? Number(dayIt.value) : null
+        });
     }
-    for (const it of dayItems) {
-        const name = (it.name ?? '').trim() || 'Item';
-        const dayQty = Math.max(0, Number(it.quantity) ?? 0);
-        const existing = byName.get(name.toLowerCase());
-        const value = it.value != null && !Number.isNaN(Number(it.value)) ? Number(it.value) : null;
-        if (existing) {
-            // Day-specific overrides recurring; if day-specific qty is 0, keep recurring quantity so default (e.g. 2) still shows
-            byName.set(name.toLowerCase(), {
-                id: it.id,
-                name: it.name ?? 'Item',
-                quantity: dayQty > 0 ? dayQty : (existing.quantity ?? 0),
-                value: value ?? existing.value ?? null
-            });
-        } else {
-            byName.set(name.toLowerCase(), { id: it.id, name: it.name ?? 'Item', quantity: dayQty, value });
-        }
-    }
-    return Array.from(byName.values());
+    console.log('[MealPlan Step 3] getCombinedMenuItemsForDate: final combined count=', combined.length, 'recurring ids sample=', combined.filter((i) => String(i.id).startsWith('recurring-')).length);
+    return combined;
 }
 
 /**
@@ -2385,8 +2463,10 @@ export async function getCombinedMenuItemsForDate(
  */
 export async function getAvailableMealPlanTemplateWithAllDatesIncludingRecurring(): Promise<MealPlannerOrderResult[]> {
     try {
+        console.log('[MealPlan Step 4] getAvailableMealPlanTemplateWithAllDatesIncludingRecurring: start');
         let dates = await getDefaultTemplateMealPlanDatesForFuture();
         const today = getTodayInAppTz();
+        console.log('[MealPlan Step 4] getAvailableMealPlanTemplateWithAllDatesIncludingRecurring: dates from settings=', dates.length, 'today=', today);
         if (dates.length === 0) {
             const [y, m, d] = today.split('-').map(Number);
             const fallback: string[] = [];
@@ -2395,6 +2475,7 @@ export async function getAvailableMealPlanTemplateWithAllDatesIncludingRecurring
                 fallback.push(date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'));
             }
             dates = fallback;
+            console.log('[MealPlan Step 4] getAvailableMealPlanTemplateWithAllDatesIncludingRecurring: using fallback dates count=', dates.length);
         }
         const list: MealPlannerOrderResult[] = [];
         for (const dateOnly of dates) {
@@ -2421,6 +2502,7 @@ export async function getAvailableMealPlanTemplateWithAllDatesIncludingRecurring
                 expectedTotalMeals
             });
         }
+        console.log('[MealPlan Step 4] getAvailableMealPlanTemplateWithAllDatesIncludingRecurring: list length=', list.length, 'first date items=', list[0]?.items?.length ?? 0, 'first date sample names=', list[0]?.items?.slice(0, 3).map((i) => i.name) ?? []);
         return list;
     } catch (err) {
         console.error('Error fetching combined meal plan template with all dates:', err);

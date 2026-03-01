@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { CalendarDays, UtensilsCrossed, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { CalendarDays, UtensilsCrossed, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   getClientMealPlannerData,
   getAvailableMealPlanTemplateWithAllDates,
@@ -64,18 +64,27 @@ export interface SavedMealPlanMonthProps {
   editedDatesResetTrigger?: number;
   /** When true, template for each day = recurring (Food default) + day-specific. Use for client portal day-only view. */
   includeRecurringInTemplate?: boolean;
+  /** Number of people on the account (primary + dependants). Expected totals per day are multiplied by this so each person gets the default amount. Default 1. */
+  householdSize?: number;
 }
 
-function applyOrdersAndSelectFirst(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void, setSelectedDate: (d: string | null) => void) {
+function applyOrders(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void) {
   setOrders(orders);
-  const today = getTodayIso();
-  const future = orders.filter((o) => (o.scheduledDeliveryDate || '') >= today);
-  const sorted = [...future].sort((a, b) => (a.scheduledDeliveryDate || '').localeCompare(b.scheduledDeliveryDate || ''));
-  const firstDate = sorted.length > 0 ? sorted[0].scheduledDeliveryDate : (orders[0]?.scheduledDeliveryDate ?? null);
-  setSelectedDate(firstDate);
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false }: SavedMealPlanMonthProps) {
+/** Scale template item quantities by household size so defaults show per-account amounts (e.g. 3 people → 3x quantities). */
+function scaleTemplateQuantities(list: MealPlannerOrderResult[], multiplier: number): MealPlannerOrderResult[] {
+  if (!list?.length || multiplier <= 1) return list ?? [];
+  return list.map((order) => ({
+    ...order,
+    items: (order.items ?? []).map((item) => ({
+      ...item,
+      quantity: Math.max(0, Math.round((Number(item.quantity) ?? 0) * multiplier))
+    }))
+  }));
+}
+
+export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1 }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -100,7 +109,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
   useEffect(() => {
     if (initialOrders == null || !Array.isArray(initialOrders)) return;
     clientEditedDatesRef.current = new Set(initialOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean));
-    applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
+    applyOrders(initialOrders, setOrders);
     setLoadingDates(false);
   }, [initialOrders]);
 
@@ -115,7 +124,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     getTemplateFn()
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
-        applyOrdersAndSelectFirst(list, setOrders, setSelectedDate);
+        applyOrders(list, setOrders);
       })
       .catch((err) => {
         if (fetchIdRef.current !== thisFetchId) return;
@@ -188,13 +197,16 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       (includeRecurringInTemplate ? getAvailableMealPlanTemplateWithAllDatesIncludingRecurring() : getAvailableMealPlanTemplateWithAllDates())
         .then((templateList) => {
           if (fetchIdRef.current !== thisFetchId) return;
+          const scaledTemplate = scaleTemplateQuantities(templateList ?? [], householdSize);
+          console.log('[MealPlan Step 5] SavedMealPlanMonth (with initialOrders): templateList length=', templateList?.length ?? 0, 'first order items=', templateList?.[0]?.items?.length ?? 0, 'initialOrders length=', initialOrders?.length ?? 0);
           clientEditedDatesRef.current = new Set(initialOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean));
-          const merged = mergeTemplateWithClient(templateList, initialOrders);
-          applyOrdersAndSelectFirst(merged, setOrders, setSelectedDate);
+          const merged = mergeTemplateWithClient(scaledTemplate, initialOrders);
+          console.log('[MealPlan Step 5] SavedMealPlanMonth: merged length=', merged?.length ?? 0, 'first merged order items=', merged?.[0]?.items?.length ?? 0);
+          applyOrders(merged, setOrders);
         })
         .catch((err) => {
           if (fetchIdRef.current !== thisFetchId) return;
-          applyOrdersAndSelectFirst(initialOrders, setOrders, setSelectedDate);
+          applyOrders(initialOrders, setOrders);
         })
         .finally(() => {
           if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
@@ -211,9 +223,12 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     ])
       .then(([templateList, clientSavedList]) => {
         if (fetchIdRef.current !== thisFetchId) return;
+        const scaledTemplate = scaleTemplateQuantities(templateList ?? [], householdSize);
+        console.log('[MealPlan Step 5] SavedMealPlanMonth (no initialOrders): templateList length=', templateList?.length ?? 0, 'first order items=', templateList?.[0]?.items?.length ?? 0, 'clientSavedList length=', clientSavedList?.length ?? 0);
         clientEditedDatesRef.current = new Set(clientSavedList.map((o) => o.scheduledDeliveryDate).filter(Boolean));
-        const merged = mergeTemplateWithClient(templateList, clientSavedList);
-        applyOrdersAndSelectFirst(merged, setOrders, setSelectedDate);
+        const merged = mergeTemplateWithClient(scaledTemplate, clientSavedList);
+        console.log('[MealPlan Step 5] SavedMealPlanMonth: merged length=', merged?.length ?? 0, 'first merged order items=', merged?.[0]?.items?.length ?? 0);
+        applyOrders(merged, setOrders);
       })
       .catch((err) => {
         if (fetchIdRef.current !== thisFetchId) return;
@@ -223,7 +238,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [effectiveClientId, initialOrders, includeRecurringInTemplate]);
+  }, [effectiveClientId, initialOrders, includeRecurringInTemplate, householdSize]);
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
@@ -345,13 +360,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
   return (
     <div className={styles.wrapper}>
       <header className={styles.header}>
-        <div className={styles.titleRow}>
-          <CalendarDays className={styles.titleIcon} size={26} />
-          <h4 className={styles.title}>Day-specific meal plan</h4>
-        </div>
-        <p className={styles.subtitle}>
-          Different selections per delivery date. Only non-expired dates are shown. Select a date on the calendar to view or set quantities.
-        </p>
+        <p className={styles.titleSimple}>Click on a day marked in green to customize the orders for that day.</p>
       </header>
 
       {!effectiveClientId && (clientId !== 'new' || orders.length === 0) ? (
@@ -360,8 +369,25 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
           <p>{clientId === 'new' ? 'No default meal plan template configured, or save the client to load the meal plan.' : 'Save the client first to see saved meal plans.'}</p>
         </div>
       ) : (loadingDates || (clientId === 'new' && preloadInProgress)) ? (
-        <div className={styles.emptyState}>
-          <p>Loading saved dates…</p>
+        <div className={styles.calendarLoadingWrap}>
+          <div className={styles.calendarLoading} aria-hidden>
+            <div className={styles.calendarLoadingHeader}>
+              <div className={styles.calendarLoadingNav} />
+              <div className={styles.calendarLoadingMonth} />
+              <div className={styles.calendarLoadingNav} />
+            </div>
+            <div className={styles.calendarLoadingWeekdays}>
+              {WEEKDAY_LABELS.map((label) => (
+                <div key={label} className={styles.calendarLoadingWeekday}>{label}</div>
+              ))}
+            </div>
+            <div className={styles.calendarLoadingGrid}>
+              {Array.from({ length: 35 }, (_, i) => (
+                <div key={i} className={styles.calendarLoadingDay} />
+              ))}
+            </div>
+            <p className={styles.calendarLoadingLabel} aria-live="polite">Loading calendar…</p>
+          </div>
         </div>
       ) : !hasDates ? (
         <div className={styles.emptyState}>
@@ -370,6 +396,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
         </div>
       ) : (
         <>
+          <div className={styles.mealPlannerCalendarWrap}>
           <div className={styles.mealPlannerCalendar}>
             <div className={styles.calendarHeader}>
               <button
@@ -400,8 +427,6 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                 const dateKey = date ? dateKeyForCalendarDay(date.getFullYear(), date.getMonth(), date.getDate()) : null;
                 const isSelectable = dateKey != null && validDateSet.has(dateKey);
                 const hasPlan = isSelectable && futureOrders.some((o) => o.scheduledDeliveryDate === dateKey);
-                const orderForDate = dateKey ? futureOrders.find((o) => o.scheduledDeliveryDate === dateKey) : null;
-                const itemCount = orderForDate?.items?.length ?? 0;
                 const isTodayCell = dateKey === getTodayIso();
                 return (
                   <div
@@ -416,22 +441,10 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                     role={date && isSelectable ? 'button' : undefined}
                     tabIndex={date && isSelectable ? 0 : undefined}
                     onKeyDown={dateKey && isSelectable ? (e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedDate(selectedDate === dateKey ? null : dateKey); } : undefined}
-                    title={date && hasPlan ? `Meal plan · ${itemCount} item${itemCount !== 1 ? 's' : ''}` : !isSelectable && dateKey ? 'Expired or not configured' : undefined}
+                    title={!isSelectable && dateKey ? 'Expired or not configured' : date && isSelectable ? 'Select to edit order' : undefined}
                   >
                     {date && (
-                      <>
-                        {hasPlan && (
-                          <span className={styles.calendarDayCheck} aria-hidden>
-                            <Check size={12} strokeWidth={2.5} />
-                          </span>
-                        )}
-                        <span className={styles.calendarDayNum}>{date.getDate()}</span>
-                        {hasPlan && itemCount > 0 && (
-                          <span className={styles.calendarDayIndicator} aria-hidden>
-                            {itemCount}
-                          </span>
-                        )}
-                      </>
+                      <span className={styles.calendarDayNum}>{date.getDate()}</span>
                     )}
                   </div>
                 );
@@ -439,10 +452,10 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
             </div>
             <div className={styles.calendarLegend} aria-hidden>
               <span className={styles.calendarLegendItem}>
-                <Check size={14} strokeWidth={2.5} />
-                <span>Meal plan saved</span>
+         
               </span>
             </div>
+          </div>
           </div>
 
           {selectedDate && (
@@ -466,14 +479,15 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                   const unitValue = item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : 1;
                   return sum + unitValue * getItemQty(item);
                 }, 0);
-                const expectedTotal = selectedOrder.expectedTotalMeals ?? null;
+                const baseExpected = selectedOrder.expectedTotalMeals ?? null;
+                const expectedTotal = baseExpected != null ? baseExpected * householdSize : null;
                 const totalMismatch = expectedTotal != null && currentTotalMeals !== expectedTotal;
 
                 return (
                   <>
                     {totalMismatch && (
                       <div className={styles.mealsMismatchBanner} role="alert">
-                        Total meals ({currentTotalMeals}) must equal the default for this day ({expectedTotal}). Adjust quantities to match.
+                        The total meals must be exactly equal to {expectedTotal}{householdSize > 1 ? ` (${baseExpected} × ${householdSize} people)` : ''}. You currently have {currentTotalMeals} selected.
                       </div>
                     )}
                     <div className={styles.tableWrap}>
@@ -488,18 +502,24 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                         <tbody>
                           {(() => {
                             const items = selectedOrder.items;
-                            // Hide placeholder rows: backend uses name "Item" when item has no custom_name/menu_item (stray "item qt 2" at top)
-                            const isPlaceholder = (i: typeof items[0]) => (i.name ?? '').trim().toLowerCase() === 'item';
+                            // Hide placeholder rows: backend uses name "Item" when item has no custom_name/menu_item (stray "item qt 2" at top).
+                            // Do NOT filter out items with id starting with 'recurring-' — those are real recurring menu items (name may be "Item" when template resolution failed).
+                            const isPlaceholder = (i: typeof items[0]) =>
+                                (i.name ?? '').trim().toLowerCase() === 'item' && !String(i.id || '').startsWith('recurring-');
                             const filteredItems = items.filter((i) => !isPlaceholder(i));
                             const recurringItems = includeRecurringInTemplate ? filteredItems.filter((i) => String(i.id || '').startsWith('recurring-')) : filteredItems;
                             const daySpecificItems = includeRecurringInTemplate ? filteredItems.filter((i) => !String(i.id || '').startsWith('recurring-')) : filteredItems;
                             const showSeparator = includeRecurringInTemplate && recurringItems.length > 0 && daySpecificItems.length > 0;
-                            const itemsToRender = includeRecurringInTemplate ? [...recurringItems, ...(showSeparator ? [{ _separator: true }] : []), ...daySpecificItems] : filteredItems;
+                            // Day-specific on top, grey bar "Alternate items", then recurring on bottom
+                            const itemsToRender = includeRecurringInTemplate ? [...daySpecificItems, ...(showSeparator ? [{ _separator: true, label: 'Alternate items' }] : []), ...recurringItems] : filteredItems;
+                            console.log('[MealPlan Step 6] SavedMealPlanMonth render:', 'selectedDate=', selectedDate, 'items=', items.length, 'filtered=', filteredItems.length, 'recurring=', recurringItems.length, 'daySpecific=', daySpecificItems.length, 'itemsToRender=', itemsToRender.length);
                             return itemsToRender.map((itemOrSep, idx) => {
                             if ((itemOrSep as any)._separator) {
+                              const label = (itemOrSep as any).label ?? 'Alternate items';
                               return (
                                 <tr key={`sep-${idx}`} className={styles.separatorRow} aria-hidden>
                                   <td colSpan={3}>
+                                    <span className={styles.separatorLabel}>{label}</span>
                                     <span className={styles.separatorLine} />
                                   </td>
                                 </tr>

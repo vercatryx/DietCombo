@@ -48,8 +48,24 @@ export default async function ClientProfilePage({ params }: Props) {
         mealPlanData: payload.mealPlanData ?? []
     };
 
+    const isProduce = payload.c?.serviceType === 'Produce';
+
     return (
-        <ClientProfileDetail
+        <>
+            {isProduce && (
+                <div style={{
+                    margin: '0 20px 16px',
+                    padding: '12px 16px',
+                    background: 'var(--color-warning-bg, #fef3c7)',
+                    border: '1px solid var(--color-warning, #f59e0b)',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    color: 'var(--text-primary)'
+                }}>
+                    <strong>Produce clients cannot sign in or access the client portal.</strong> They should contact support.
+                </div>
+            )}
+            <ClientProfileDetail
             clientId={id}
             initialData={initialData}
             statuses={payload.s ?? []}
@@ -64,5 +80,6 @@ export default async function ClientProfilePage({ params }: Props) {
             initialRegularClients={payload.regularClientsData?.filter((c): c is NonNullable<typeof c> => c != null) ?? []}
             initialDependents={payload.dependentsData}
         />
+        </>
     );
 }

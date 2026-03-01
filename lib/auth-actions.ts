@@ -96,10 +96,14 @@ export async function verifyOtp(email: string, code: string) {
         await supabase.from('passwordless_codes').delete().eq('id', record.id);
 
         // Perform Login (Create Session)
-        const { exists, type, id } = await checkEmailIdentity(email);
+        const { exists, type, id, produceNotAllowed } = await checkEmailIdentity(email);
 
         if (!exists) {
             return { success: false, message: 'User not found.' };
+        }
+
+        if (type === 'client' && produceNotAllowed) {
+            return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
         }
 
         if (type === 'admin') {
@@ -123,6 +127,10 @@ export async function verifyOtp(email: string, code: string) {
             await createSession(id, nav?.name || 'Navigator', 'navigator');
             redirect('/clients');
         } else if (type === 'client' && id) {
+            const { data: clientRow } = await supabase.from('clients').select('service_type').eq('id', id).single();
+            if (clientRow?.service_type === 'Produce') {
+                return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
+            }
             redirect(`/client-portal/${id}`);
         }
 
@@ -258,7 +266,7 @@ export async function checkEmailIdentity(identifier: string) {
 
     // Collect all matches to determine if there are multiple accounts
     // Priority order: admin > vendor > navigator > client
-    const matches: Array<{ type: 'admin' | 'vendor' | 'navigator' | 'client', id?: string, isActive?: boolean }> = [];
+    const matches: Array<{ type: 'admin' | 'vendor' | 'navigator' | 'client', id?: string, isActive?: boolean, serviceType?: string }> = [];
 
     // 1. Check Env Super Admin (match by username)
     const envUser = process.env.ADMIN_USERNAME;
@@ -322,10 +330,10 @@ export async function checkEmailIdentity(identifier: string) {
         }
     }
 
-    // 5. Check Clients (by Email)
+    // 5. Check Clients (by Email) - include service_type to block Produce clients from signing in
     const { data: clientsData, error: clientsError } = await supabase
         .from('clients')
-        .select('id, email')
+        .select('id, email, service_type')
         .not('email', 'is', null);
     
     if (clientsError) {
@@ -344,7 +352,8 @@ export async function checkEmailIdentity(identifier: string) {
         if (exactMatches.length > 0) {
             matches.push(...exactMatches.map(c => ({ 
                 type: 'client' as const, 
-                id: c.id 
+                id: c.id,
+                serviceType: (c as any).service_type
             })));
         }
     }
@@ -395,11 +404,13 @@ export async function checkEmailIdentity(identifier: string) {
             enablePasswordless: false 
         };
     } else if (match.type === 'client') {
+        const produceNotAllowed = match.serviceType === 'Produce';
         return { 
             exists: true, 
             type: 'client', 
             id: match.id, 
-            enablePasswordless 
+            enablePasswordless,
+            produceNotAllowed: produceNotAllowed || false
         };
     }
 

@@ -187,6 +187,11 @@
         grid-template-columns: 320px 1fr;
         gap: 2rem;
     }
+    /* Client portal: sidebar is a narrow rail so calendar/meal plan get most of the space */
+    .profileLayout.profileLayoutPortal {
+        grid-template-columns: 220px 1fr;
+        gap: 1.25rem;
+    }
 }
 
 .profileLayoutSidebar {
@@ -194,6 +199,38 @@
     flex-direction: column;
     gap: 0;
     min-width: 0;
+}
+
+/* Compact sidebar rail for client portal (calendar/meal plan are primary) */
+.profileLayoutSidebarCompact .clientInfoCard {
+    padding: 1rem;
+    position: sticky;
+    top: 1rem;
+}
+
+.profileLayoutSidebarCompact .clientInfoCard .sectionTitle {
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+
+.profileLayoutSidebarCompact .clientInfoName {
+    font-size: 1.05rem;
+    margin-bottom: 0.75rem;
+}
+
+.profileLayoutSidebarCompact .clientInfoValue,
+.profileLayoutSidebarCompact .clientInfoValueLast {
+    font-size: 0.85rem;
+    margin-bottom: 0.6rem;
+}
+
+.profileLayoutSidebarCompact .clientInfoValueLast {
+    margin-bottom: 0;
+}
+
+.profileLayoutSidebarCompact :global(.label) {
+    font-size: 0.7rem;
+    margin-bottom: 0.15rem;
 }
 
 .profileLayoutMain {

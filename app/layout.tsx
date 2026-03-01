@@ -39,6 +39,9 @@ export const metadata: Metadata = {
   },
 };
 
+// Use cookies/session in layout — opt out of static generation so build doesn't log cookie errors
+export const dynamic = 'force-dynamic';
+
 export default async function RootLayout({
   children,
 }: {

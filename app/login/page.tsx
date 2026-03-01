@@ -46,6 +46,11 @@ export default function LoginPage() {
 
             if (result.exists) {
                 if (result.type === 'client' && result.id) {
+                    if ((result as { produceNotAllowed?: boolean }).produceNotAllowed) {
+                        setIdentityError('Produce account holders cannot sign in here. Please contact support.');
+                        setCheckingIdentity(false);
+                        return;
+                    }
                     // Check if passwordless is enabled for this user (which means global enabled + is client)
                     if (result.enablePasswordless) {
                         setUseOtp(true);

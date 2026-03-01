@@ -8,7 +8,8 @@ import {
   getCategories,
   getActiveOrderForClient,
   getOrderHistory,
-  getClientMealPlannerData
+  getClientMealPlannerData,
+  getDependentsByParentId
 } from '@/lib/actions';
 import { ClientPortalInterface } from '@/components/clients/ClientPortalInterface';
 import { notFound, redirect } from 'next/navigation';
@@ -40,9 +41,61 @@ export default async function ClientPortalPage({ params }: Props) {
     notFound();
   }
 
+  // Produce clients cannot use the client portal (e.g. admin opened their URL)
+  if (client.serviceType === 'Produce') {
+    return (
+      <div style={{ padding: '20px', maxWidth: '480px', margin: '2rem auto', textAlign: 'center' }}>
+        <div style={{
+          padding: '24px',
+          background: 'var(--bg-surface)',
+          borderRadius: '12px',
+          border: '1px solid var(--border-color)',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+        }}>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '12px', color: 'var(--text-primary)' }}>
+            Portal not available
+          </h2>
+          <p style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: 1.5 }}>
+            Produce account holders cannot sign in or access the client portal. Please contact support.
+          </p>
+          <form action={logout}>
+            <button
+              type="submit"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 20px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-app)',
+                cursor: 'pointer',
+                fontSize: '0.95rem',
+                fontWeight: 500,
+                color: 'var(--text-secondary)'
+              }}
+            >
+              Back to login
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   // For Food clients, portal uses only day-based meal plan (clients.meal_planner_data). Do not pass
   // upcoming_order so we never read or write it for the client's order.
   const upcomingOrder = client.serviceType === 'Food' ? null : (client.activeOrder ?? null);
+
+  // Household: primary + dependants (for "People on this account" in sidebar)
+  const parentId = client.parentClientId ?? client.id;
+  const [parent, dependants] = await Promise.all([
+    parentId === client.id ? Promise.resolve(client) : getClient(parentId),
+    getDependentsByParentId(parentId)
+  ]);
+  const householdPeople = parent
+    ? [parent, ...dependants]
+    : [client, ...dependants];
 
   // Portal-specific data fetch (independent of admin getClientProfilePageData)
   const [
@@ -66,6 +119,10 @@ export default async function ClientPortalPage({ params }: Props) {
     getOrderHistory(id),
     client.serviceType === 'Food' ? getClientMealPlannerData(id) : Promise.resolve([])
   ]);
+
+  if (client.serviceType === 'Food' && Array.isArray(mealPlanData)) {
+    console.log('[MealPlan Step 0] client-portal page: mealPlanData (initialMealPlanOrders) length=', mealPlanData.length, 'first order items=', mealPlanData[0]?.items?.length ?? 0, 'first order item ids sample=', mealPlanData[0]?.items?.slice(0, 2).map((i: any) => i?.id) ?? []);
+  }
 
   return (
     <div style={{ padding: '20px' }}>
@@ -100,6 +157,7 @@ export default async function ClientPortalPage({ params }: Props) {
 
       <ClientPortalInterface
         client={client}
+        householdPeople={householdPeople}
         statuses={statuses}
         navigators={navigators}
         vendors={vendors}
