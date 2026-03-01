@@ -109,6 +109,13 @@ export async function POST(request: NextRequest) {
 
         const updated = await updateClient(clientId.trim(), updateData, { skipOrderSync: true });
 
+        if (!updated) {
+            return NextResponse.json(
+                { success: false, error: 'Client not found or update returned no data' },
+                { status: 404 }
+            );
+        }
+
         return NextResponse.json({
             success: true,
             client: {
