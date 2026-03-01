@@ -164,6 +164,7 @@ td.col-check {
     width: 2.5rem;
     text-align: center;
     cursor: default;
+    user-select: none;
 }
 
 th.col-check {

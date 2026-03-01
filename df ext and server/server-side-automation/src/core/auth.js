@@ -3,9 +3,9 @@ const uniteSelectors = require('../uniteSelectors');
 
 const LOGIN_URL = uniteSelectors.urls.login;
 
-async function performLoginSequence(email, password) {
-    const page = await getPage();
-    const context = getContext();
+async function performLoginSequence(email, password, opts = {}) {
+    const page = opts.page != null ? opts.page : await getPage();
+    const context = opts.context != null ? opts.context : getContext();
 
     console.log('[Auth] Starting robust login sequence (User-defined flow)...');
 

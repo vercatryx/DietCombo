@@ -2,12 +2,18 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { launchBrowser, closeBrowser } = require('./core/browser');
-const { performLoginSequence } = require('./core/auth');
+const { launchBrowser, launchBrowserInstance, closeAllBrowserInstances } = require('./core/browser');
 const { billingWorker, fetchRequestsFromApi } = require('./core/billingWorker');
 
 // Load .env from this app's directory (not cwd) so UNITEUS_* etc. are predictable
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+/** Split array into N slices (round-robin) so each slot gets different clients. */
+function roundRobinSlices(arr, n) {
+    const slices = Array.from({ length: n }, () => []);
+    arr.forEach((item, i) => slices[i % n].push(item));
+    return slices;
+}
 
 const app = express();
 const PORT = process.env.PORT || 3500;
@@ -94,6 +100,7 @@ app.post('/fetch-all-clients', async (req, res) => {
         }
         const requests = data.map((r, i) => ({
             id: `bill-${i + 1}`,
+            clientId: r.clientId || null,
             name: r.name,
             url: r.url,
             date: r.date,
@@ -190,15 +197,63 @@ app.post('/process-billing', async (req, res) => {
 
     const workerRequests = (source === 'file' || source === 'queue') ? requests : null;
 
+    const concurrency = Math.max(1, parseInt(process.env.CONCURRENT_BROWSERS, 10) || 1);
+
     (async () => {
         try {
-            await launchBrowser();
-            // Pass apiConfig to worker (null for queue => no update-status calls)
-            await billingWorker(workerRequests, broadcast, source, apiConfig);
+            if (concurrency === 1) {
+                await launchBrowser();
+                await billingWorker(workerRequests, broadcast, source, apiConfig, {});
+            } else {
+                broadcast('log', { message: `Starting ${concurrency} browsers in parallel (different clients per slot)...`, type: 'info' });
+                let requests = workerRequests;
+                if (source === 'api') {
+                    requests = await fetchRequestsFromApi(apiConfig);
+                    if (!requests || requests.length === 0) {
+                        broadcast('log', { message: 'No pending requests from API.', type: 'warning' });
+                        isRunning = false;
+                        return;
+                    }
+                }
+                if (!requests || requests.length === 0) {
+                    broadcast('log', { message: 'No requests to process.', type: 'warning' });
+                    isRunning = false;
+                    return;
+                }
+                requests.forEach((r, i) => {
+                    r.status = r.status || 'pending';
+                    r.message = r.message || '';
+                    if (r.id == null) r.id = r.orderID ? String(r.orderID) : `api-${i}`;
+                });
+                currentRequests = requests;
+                broadcast('queue', currentRequests);
+
+                const slices = roundRobinSlices(requests, concurrency);
+                const slots = await Promise.all(
+                    Array.from({ length: concurrency }, (_, i) => launchBrowserInstance(i))
+                );
+                await Promise.all(
+                    slots.map((slot, i) =>
+                        billingWorker(requests, broadcast, source, apiConfig, {
+                            page: slot.page,
+                            context: slot.context,
+                            getPageOrRestart: slot.restartPage,
+                            requestSlice: slices[i],
+                            slotLabel: `Slot ${i}`
+                        })
+                    )
+                );
+                await closeAllBrowserInstances();
+            }
             broadcast('log', { message: '--- Automation Run Complete ---', type: 'success' });
         } catch (e) {
             console.error('CRITICAL AUTOMATION ERROR:', e);
             broadcast('log', { message: `Critical Error: ${e.message}`, type: 'error' });
+            try {
+                await closeAllBrowserInstances();
+            } catch (e2) {
+                console.warn('Close all instances:', e2.message);
+            }
         } finally {
             isRunning = false;
         }

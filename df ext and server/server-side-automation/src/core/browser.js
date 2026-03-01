@@ -1,61 +1,45 @@
 const { chromium } = require('playwright');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
 
 let browser = null;
 let context = null;
 let page = null;
 
-async function launchBrowser() {
-    if (page) return page;
+/** Shared launch options for Chromium (singleton and multi-instance). */
+const launchOptions = () => ({
+    headless: process.env.HEADLESS === 'true',
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials'
+    ]
+});
 
-    console.log('[Browser] Launching Chromium...');
-    // HEADED mode by default for debugging/visual verification
-    browser = await chromium.launch({
-        headless: process.env.HEADLESS === 'true',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled', // Hide automation detection
-            '--disable-dev-shm-usage',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--disable-site-isolation-trials'
-        ]
-    });
+const contextOptions = () => ({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    viewport: { width: 1280, height: 800 },
+    permissions: [],
+    geolocation: undefined,
+    locale: 'en-US',
+    bypassCSP: true,
+    extraHTTPHeaders: {
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive'
+    }
+});
 
-    context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 800 },
-        permissions: [], // Block all permissions by default
-        geolocation: undefined, // Ensure no geolocation
-        locale: 'en-US',
-        bypassCSP: true, // CRITICAL: Allow fetching PDFs from external URLs (mimics Extension privileges)
-        // Add extra headers to appear more like a real browser
-        extraHTTPHeaders: {
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive'
-        }
-    });
-
-    // Explicitly deny permissions
-    await context.grantPermissions([], { origin: 'https://app.uniteus.io' });
-    await context.clearPermissions();
-    // IMPORTANT: Persist storage state if we want to reuse sessions, 
-    // BUT for this specific app we are asked to clear cookies aggressively.
-    // We will handle clearing manually.
-
-    page = await context.newPage();
-
-    // Block unnecessary third-party requests that cause CORS/CSP errors
-    // These services aren't needed for the billing automation
-    // Intercept network requests to handling blocking and CORS proxying
-    await page.route('**/*', async (route) => {
+/** Route handler for a page (block 3rd party, CORS proxy for localhost/external). */
+async function setupPageRoutes(p) {
+    await p.route('**/*', async (route) => {
         const request = route.request();
         const url = request.url();
-
-        // 1. Block unnecessary/problematic 3rd party services (avoids CORS/credentials errors)
         if (
             url.includes('app.launchdarkly.com') ||
             url.includes('maps.googleapis.com') ||
@@ -64,10 +48,6 @@ async function launchBrowser() {
         ) {
             return route.abort();
         }
-
-        // 2a. CORS proxy for requests FROM app.uniteus.io TO localhost (e.g. /api/signatures/.../pdf)
-        // The page is on https://app.uniteus.io but fetches our local API; the API has no CORS headers, so we
-        // fetch in Node and fulfill with CORS headers so the page can use the response.
         if (url.includes('localhost') && url.includes('/api/')) {
             try {
                 const response = await route.fetch();
@@ -80,8 +60,6 @@ async function launchBrowser() {
                 return route.continue();
             }
         }
-
-        // 2b. CORS Proxy for External Files (PDFs, etc.) — not uniteus, not localhost
         if (!url.includes('uniteus.io') && !url.includes('localhost') && !url.startsWith('data:')) {
             try {
                 const response = await route.fetch();
@@ -93,18 +71,74 @@ async function launchBrowser() {
                 return route.continue();
             }
         }
-
-        // 3. Allow everything else (internal app requests)
         return route.continue();
     });
+}
 
-    // Add console log forwarder to see browser logs in node terminal
+/** Registry of multi-instance browsers for closeAllBrowserInstances(). */
+const instances = new Map();
+
+/**
+ * Launch a dedicated browser instance for a slot (parallel mode).
+ * Returns { browser, context, page, close, restartPage }.
+ */
+async function launchBrowserInstance(slotId) {
+    console.log(`[Browser] Launching instance for slot ${slotId}...`);
+    const b = await chromium.launch(launchOptions());
+    const ctx = await b.newContext(contextOptions());
+    await ctx.grantPermissions([], { origin: 'https://app.uniteus.io' });
+    await ctx.clearPermissions();
+    const p = await ctx.newPage();
+    await setupPageRoutes(p);
+    p.on('console', msg => {
+        if (msg.type() === 'log') console.log(`[Browser:${slotId}] ${msg.text()}`);
+        if (msg.type() === 'warn') console.warn(`[Browser:${slotId}] ${msg.text()}`);
+        if (msg.type() === 'error') console.error(`[Browser:${slotId}] ${msg.text()}`);
+    });
+
+    const close = async () => {
+        instances.delete(slotId);
+        try {
+            await b.close();
+        } catch (e) {
+            console.warn(`[Browser:${slotId}] Close error:`, e.message);
+        }
+    };
+
+    const restartPage = async () => {
+        await close();
+        const next = await launchBrowserInstance(slotId);
+        return next.page;
+    };
+
+    instances.set(slotId, { browser: b, context: ctx, page: p, close });
+    return { browser: b, context: ctx, page: p, close, restartPage };
+}
+
+async function closeAllBrowserInstances() {
+    const slots = Array.from(instances.keys());
+    await Promise.all(slots.map(async (slotId) => {
+        const inst = instances.get(slotId);
+        if (inst && inst.close) await inst.close();
+    }));
+    instances.clear();
+}
+
+async function launchBrowser() {
+    if (page) return page;
+
+    console.log('[Browser] Launching Chromium...');
+    browser = await chromium.launch(launchOptions());
+    context = await browser.newContext(contextOptions());
+    await context.grantPermissions([], { origin: 'https://app.uniteus.io' });
+    await context.clearPermissions();
+    page = await context.newPage();
+    await setupPageRoutes(page);
     page.on('console', msg => {
         if (msg.type() === 'log') console.log(`[Browser] ${msg.text()}`);
         if (msg.type() === 'warn') console.warn(`[Browser] ${msg.text()}`);
         if (msg.type() === 'error') console.error(`[Browser] ${msg.text()}`);
     });
-
     return page;
 }
 
@@ -133,5 +167,7 @@ module.exports = {
     getPage,
     closeBrowser,
     restartBrowser,
-    getContext: () => context
+    getContext: () => context,
+    launchBrowserInstance,
+    closeAllBrowserInstances
 };

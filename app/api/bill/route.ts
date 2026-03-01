@@ -14,12 +14,12 @@ const AMOUNT_PER_PERSON = 336;
 const AMOUNT_PER_PERSON_PRODUCE = 146;
 
 /** Default date for billing (YYYY-MM-DD). Delivery date and start of 7-day window. */
-const BILL_DATE_DEFAULT = '2026-02-16';
+const BILL_DATE_DEFAULT = '2026-02-23';
 
-/** End date for 7-day billing window (date var + 7 days). */
+/** End date for 7-day billing window (start through end inclusive: start + 6 days). */
 function billDateEnd(startISO: string): string {
     const d = new Date(startISO + 'T00:00:00Z');
-    d.setUTCDate(d.getUTCDate() + 7);
+    d.setUTCDate(d.getUTCDate() + 6);
     return d.toISOString().slice(0, 10);
 }
 
@@ -202,6 +202,7 @@ export async function GET(request: NextRequest) {
             }
 
             return {
+                clientId: pid,
                 name: parent.full_name || 'Unknown Client',
                 url,
                 orderNumbers,
