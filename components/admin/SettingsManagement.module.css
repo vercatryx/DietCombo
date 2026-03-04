@@ -157,3 +157,30 @@
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+.deleteCounter {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-primary, #6366f1);
+    margin-bottom: 0.5rem;
+}
+
+.deleteButton {
+    background-color: #dc2626;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.deleteButton:hover:not(:disabled) {
+    background-color: #b91c1c;
+}
+
+.deleteButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

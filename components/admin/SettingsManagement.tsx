@@ -6,6 +6,8 @@ import { AppSettings } from '@/lib/types';
 import { getTodayInAppTz } from '@/lib/timezone';
 import styles from './SettingsManagement.module.css';
 
+const DELETE_CONFIRM_CLICKS = 5;
+
 export function SettingsManagement() {
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [loading, setLoading] = useState(true);
@@ -13,6 +15,10 @@ export function SettingsManagement() {
     const [message, setMessage] = useState<{ text: string; success: boolean } | null>(null);
     const [runningExpired, setRunningExpired] = useState(false);
     const [expiredResult, setExpiredResult] = useState<{ message: string; success: boolean } | null>(null);
+    const [deleteDate, setDeleteDate] = useState('');
+    const [deleteClicks, setDeleteClicks] = useState(0);
+    const [deleting, setDeleting] = useState(false);
+    const [deleteResult, setDeleteResult] = useState<{ message: string; success: boolean } | null>(null);
 
     useEffect(() => {
         fetchSettings();
@@ -74,6 +80,60 @@ export function SettingsManagement() {
             });
         } finally {
             setRunningExpired(false);
+        }
+    }
+
+    function handleDeleteDateChange(e: React.ChangeEvent<HTMLInputElement>) {
+        setDeleteDate(e.target.value);
+        setDeleteClicks(0);
+        setDeleteResult(null);
+    }
+
+    async function handleDeleteOrdersForDay() {
+        const nextClicks = deleteClicks + 1;
+        if (nextClicks < DELETE_CONFIRM_CLICKS) {
+            setDeleteClicks(nextClicks);
+            setDeleteResult(null);
+            return;
+        }
+        if (!deleteDate || !/^\d{4}-\d{2}-\d{2}$/.test(deleteDate)) {
+            setDeleteResult({ message: 'Please select a valid date (YYYY-MM-DD).', success: false });
+            return;
+        }
+        setDeleting(true);
+        setDeleteResult(null);
+        try {
+            const res = await fetch('/api/admin/delete-orders-by-date', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    date: deleteDate,
+                    confirmClicks: DELETE_CONFIRM_CLICKS,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                setDeleteResult({
+                    message: data.error || 'Failed to delete orders.',
+                    success: false,
+                });
+                setDeleteClicks(0);
+                return;
+            }
+            const deleted = data.deleted ?? 0;
+            setDeleteResult({
+                message: `Deleted ${deleted} order(s) for ${deleteDate}.`,
+                success: true,
+            });
+            setDeleteClicks(0);
+        } catch (err) {
+            setDeleteResult({
+                message: err instanceof Error ? err.message : 'Failed to delete orders.',
+                success: false,
+            });
+            setDeleteClicks(0);
+        } finally {
+            setDeleting(false);
         }
     }
 
@@ -154,6 +214,40 @@ export function SettingsManagement() {
                     {expiredResult && (
                         <div className={expiredResult.success ? styles.success : styles.error} style={{ marginTop: '0.75rem' }}>
                             {expiredResult.message}
+                        </div>
+                    )}
+                </div>
+
+                <div className={styles.actionCard} style={{ marginTop: '1.5rem' }}>
+                    <p className={styles.actionDescription}>
+                        Delete all orders for a specific day. You must click Delete {DELETE_CONFIRM_CLICKS} times to confirm.
+                    </p>
+                    <div className={styles.inputGroup} style={{ marginBottom: '0.75rem' }}>
+                        <label className={styles.label}>Date</label>
+                        <input
+                            className={styles.input}
+                            type="date"
+                            value={deleteDate}
+                            onChange={handleDeleteDateChange}
+                            disabled={deleting}
+                        />
+                    </div>
+                    {deleteClicks > 0 && (
+                        <p className={styles.deleteCounter}>
+                            Clicks: {deleteClicks} of {DELETE_CONFIRM_CLICKS}
+                        </p>
+                    )}
+                    <button
+                        type="button"
+                        className={styles.deleteButton}
+                        onClick={handleDeleteOrdersForDay}
+                        disabled={deleting || !deleteDate}
+                    >
+                        {deleting ? 'Deleting...' : 'Delete orders for this day'}
+                    </button>
+                    {deleteResult && (
+                        <div className={deleteResult.success ? styles.success : styles.error} style={{ marginTop: '0.75rem' }}>
+                            {deleteResult.message}
                         </div>
                     )}
                 </div>

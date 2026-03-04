@@ -749,11 +749,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         return dateKey.trim().slice(0, 10) < todayStr;
     }
 
-    /** Today as YYYY-MM-DD in EST for min expiration date (only allow today or future) */
-    function getTodayDateKey(): string {
-        return getTodayInAppTz();
-    }
-
     /** Open meal planner dialog for a date. Loads existing records from DB for that date and auto-populates the dialog when they match. */
     async function openMealPlannerPopup(dateKey: string) {
         setMealPlannerPopupDate(dateKey);
@@ -814,12 +809,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                 return;
             }
             const expTrim = mealPlannerExpirationDate.trim();
-            if (expTrim && isDatePast(expTrim)) {
-                setMealPlannerPopupStatus('Expiration date must be today or future.');
-                setMessage('Expiration date must be today or a future date.');
-                setTimeout(() => { setMessage(null); setMealPlannerPopupStatus(null); }, 3000);
-                return;
-            }
             if (expTrim && mealPlannerPopupDate && expTrim > mealPlannerPopupDate) {
                 setMealPlannerPopupStatus('Expiration date cannot be after the delivery date.');
                 setMessage('Expiration date cannot be after the delivery date for this day.');
@@ -1247,7 +1236,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                     className="input"
                                                     value={mealPlannerExpirationDate}
                                                     onChange={(e) => setMealPlannerExpirationDate(e.target.value)}
-                                                    min={getTodayDateKey()}
                                                     max={mealPlannerPopupDate}
                                                     disabled={isPast}
                                                     style={{ maxWidth: '12rem' }}
