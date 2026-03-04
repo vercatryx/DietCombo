@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
 import { getClientsUnlimited } from '@/lib/actions';
-import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, isOrderUnderVendor, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId } from '@/lib/actions';
+import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, isOrderUnderVendor, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId, getClientsWhoChangedFromDefaultForDate, getDefaultOrderTemplate } from '@/lib/actions';
 import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { generateLabelsPDF, generateLabelsPDFTwoPerCustomer, generateTablePDF } from '@/lib/label-utils';
@@ -878,12 +878,17 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}`;
 
+        const changedNames = dateKey !== 'no-date' ? await getClientsWhoChangedFromDefaultForDate(dateKey) : [];
+        const changedSheetRows: string[][] = changedNames.length > 0 ? [['Client Name'], ...changedNames.map((n) => [n])] : [['Client Name'], ['(None)']];
+
         if (which === 'combined') {
             const wb = XLSX.utils.book_new();
             const ws2 = XLSX.utils.aoa_to_sheet(buildClientBreakdownSheet(sortedOrders, getClientNameForExport, getClientAddressForExport, getDriverStop));
             const ws3 = XLSX.utils.aoa_to_sheet(buildCookingListSheet(sortedOrders));
+            const wsChanged = XLSX.utils.aoa_to_sheet(changedSheetRows);
             XLSX.utils.book_append_sheet(wb, ws2, 'Client Breakdown');
             XLSX.utils.book_append_sheet(wb, ws3, 'Cooking List');
+            XLSX.utils.book_append_sheet(wb, wsChanged, 'Changed from default');
             downloadExcelWorkbook(wb, `${baseName}_combined.xlsx`);
             return;
         }
@@ -894,9 +899,11 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             XLSX.utils.book_append_sheet(wb, ws, 'Client Breakdown');
             downloadExcelWorkbook(wb, `${baseName}_breakdown.xlsx`);
         } else if (which === 'cooking') {
-            const ws = XLSX.utils.aoa_to_sheet(buildCookingListSheet(sortedOrders));
             const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(buildCookingListSheet(sortedOrders));
+            const wsChanged = XLSX.utils.aoa_to_sheet(changedSheetRows);
             XLSX.utils.book_append_sheet(wb, ws, 'Cooking List');
+            XLSX.utils.book_append_sheet(wb, wsChanged, 'Changed from default');
             downloadExcelWorkbook(wb, `${baseName}_cooking.xlsx`);
         }
         } finally {
@@ -956,13 +963,21 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         try {
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
+        const changedNames = dateKey !== 'no-date' ? await getClientsWhoChangedFromDefaultForDate(dateKey) : [];
+        const changedRows: string[][] = changedNames.length > 0
+            ? [['Client Name'], ...changedNames.map((n) => [n])]
+            : [['Client Name'], ['(None)']];
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}_cooking`;
         generateTablePDF({
             title: `Cooking List – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
             rows: buildCookingListSheet(sortedOrders),
             filename: `${baseName}.pdf`,
-            columnWidths: [50, 25, 25]
+            columnWidths: [50, 25, 25],
+            secondTable: {
+                title: `Clients who changed from default – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
+                rows: changedRows
+            }
         });
         } finally {
             setIsExporting(false);
@@ -1107,6 +1122,65 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const isComplexAlt = (order: any) => !!(clientById.get(order.client_id)?.complex);
             const ordersNonComplexAlt = ordersForLabelsAlt.filter((o: any) => !isComplexAlt(o));
             const ordersComplexAlt = ordersForLabelsAlt.filter((o: any) => isComplexAlt(o));
+
+            // Fetch default order template for "that day" so right label can show only items changed from default
+            const defaultTemplate = await getDefaultOrderTemplate('Food');
+            const defaultQtyForVendor: Record<string, number> = {};
+            if (defaultTemplate && typeof defaultTemplate === 'object' && vendorId) {
+                const dayName = dateKey && dateKey !== 'no-date'
+                    ? new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })
+                    : null;
+                const ddo = defaultTemplate.deliveryDayOrders ?? defaultTemplate.delivery_day_orders;
+                const vsTop = defaultTemplate.vendorSelections ?? defaultTemplate.vendor_selections ?? [];
+                let vendorVs: { items?: Record<string, number> } | null = null;
+                if (ddo && typeof ddo === 'object' && dayName && (ddo as any)[dayName]) {
+                    const arr = (ddo as any)[dayName]?.vendorSelections ?? (ddo as any)[dayName]?.vendor_selections ?? [];
+                    vendorVs = Array.isArray(arr) ? arr.find((v: any) => v?.vendorId === vendorId) ?? null : null;
+                }
+                if (!vendorVs && Array.isArray(vsTop)) {
+                    vendorVs = vsTop.find((v: any) => v?.vendorId === vendorId) ?? null;
+                }
+                if (!vendorVs && ddo && typeof ddo === 'object') {
+                    const firstDay = Object.keys(ddo)[0];
+                    const arr = (ddo as any)[firstDay]?.vendorSelections ?? (ddo as any)[firstDay]?.vendor_selections ?? [];
+                    vendorVs = Array.isArray(arr) ? arr.find((v: any) => v?.vendorId === vendorId) ?? null : null;
+                }
+                if (vendorVs?.items && typeof vendorVs.items === 'object') {
+                    for (const [id, qty] of Object.entries(vendorVs.items)) {
+                        if (id != null && id !== '') defaultQtyForVendor[id] = Number(qty) || 0;
+                    }
+                }
+            }
+
+            /** Right label only: show items that differ from the default order for this vendor/day. */
+            function formatOrderedItemsChangesOnly(order: any): string {
+                if (order.service_type !== 'Food') {
+                    return formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id));
+                }
+                const orderQtyById = new Map<string, number>();
+                const orderItemById = new Map<string, any>();
+                for (const item of order.items || []) {
+                    const id = item.menu_item_id ?? item.meal_item_id;
+                    if (id != null) {
+                        orderQtyById.set(id, parseInt(item.quantity || 0));
+                        orderItemById.set(id, item);
+                    }
+                }
+                const allIds = new Set([...orderQtyById.keys(), ...Object.keys(defaultQtyForVendor)]);
+                const changedItems: any[] = [];
+                for (const id of allIds) {
+                    const orderQty = orderQtyById.get(id) ?? 0;
+                    const defaultQty = defaultQtyForVendor[id] ?? 0;
+                    if (orderQty !== defaultQty) {
+                        const existing = orderItemById.get(id);
+                        changedItems.push(existing ? { ...existing, quantity: orderQty } : { menu_item_id: id, quantity: orderQty });
+                    }
+                }
+                if (changedItems.length === 0) return 'No changes from default';
+                const filtered = { ...order, items: changedItems };
+                return formatOrderedItemsForCSVWithClient(filtered, clientById.get(order.client_id));
+            }
+
             const commonOptsAlt = {
                 getClientName: getClientNameForExportAlt,
                 getClientAddress: getClientAddressForExportAlt,
@@ -1121,7 +1195,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 vendorName: vendor?.name,
                 deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
                 getDriverInfo: getDriverInfoForOrderAlt,
-                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? '',
+                formatOrderedItemsForRightLabel: formatOrderedItemsChangesOnly
             };
             if (ordersNonComplexAlt.length > 0) {
                 await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersNonComplexAlt });

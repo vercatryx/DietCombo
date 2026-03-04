@@ -26,6 +26,8 @@ interface LabelGenerationOptions {
     getNotes?: (clientId: string) => string;
     /** Optional suffix for the download filename (e.g. '_complex' for a separate complex-only PDF) */
     filenameSuffix?: string;
+    /** When provided, used for the right label (order details) instead of formatOrderedItemsForCSV (e.g. only items changed from default) */
+    formatOrderedItemsForRightLabel?: (order: Order) => string;
 }
 
 /** Line height factor for a given font size (inches per pt). Matches pdfRouteLabels behavior. */
@@ -354,7 +356,8 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
         vendorName,
         deliveryDate,
         getDriverInfo,
-        getNotes
+        getNotes,
+        formatOrderedItemsForRightLabel
     } = options;
 
     if (orders.length === 0) {
@@ -538,10 +541,11 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
             rightY += rightNameShow.length * headerLineHeight + 0.05;
         }
 
-        // Right: Full order details (items) — auto-size font to fit all items
+        // Right: Full order details (items) — auto-size font to fit all items. Use right-label formatter when provided (e.g. only changes from default).
         doc.setFont('helvetica', 'normal');
         setDriverColor();
-        const itemsText = formatOrderedItemsForCSV(order).split('; ').join('  |  ') || 'No items';
+        const formatRightItems = formatOrderedItemsForRightLabel ?? formatOrderedItemsForCSV;
+        const itemsText = formatRightItems(order).split('; ').join('  |  ') || 'No items';
         const availableHeight = labelBottomSafe - rightY;
         let itemFont = PROPS.smallSize;
         const minItemFont = 4;
@@ -593,8 +597,10 @@ export function generateTablePDF(options: {
     lineRowMarker?: string;
     /** If first column cell equals this, draw an empty checkbox (square) instead of text */
     checkboxMarker?: string;
+    /** Optional second table rendered on a new page (e.g. "Clients who changed from default") */
+    secondTable?: { title: string; rows: string[][] };
 }): void {
-    const { title, rows, filename: baseFilename, columnWidths, lineRowMarker, checkboxMarker } = options;
+    const { title, rows, filename: baseFilename, columnWidths, lineRowMarker, checkboxMarker, secondTable } = options;
     if (!rows || rows.length === 0) {
         alert('No data to export');
         return;
@@ -610,78 +616,92 @@ export function generateTablePDF(options: {
     const lineHeight = 0.2;
     const cellPadding = 0.05;
     const checkboxSize = 0.14;
+    const maxY = pageHeight - margin;
 
-    doc.setFontSize(headerFontSize);
-    doc.setFont('helvetica', 'bold');
-    doc.text(title, margin, margin + 0.3);
-    let y = margin + 0.55;
+    function drawTable(
+        tableTitle: string,
+        tableRows: string[][],
+        colWidths: number[] | undefined,
+        cols: number,
+        useLineMarker: string | undefined,
+        useCheckboxMarker: string | undefined
+    ) {
+        doc.setFontSize(headerFontSize);
+        doc.setFont('helvetica', 'bold');
+        doc.text(tableTitle, margin, margin + 0.3);
+        let y = margin + 0.55;
+        const widths = colWidths && colWidths.length === cols
+            ? colWidths.map(p => (p / 100) * contentWidth)
+            : Array(cols).fill(contentWidth / cols);
+
+        for (let r = 0; r < tableRows.length; r++) {
+            const row = tableRows[r];
+            if (!row || row.length === 0) {
+                y += lineHeight * 0.5;
+                continue;
+            }
+            if (y > maxY - lineHeight) {
+                doc.addPage();
+                y = margin;
+            }
+            if (useLineMarker && row[0] === useLineMarker) {
+                doc.setDrawColor(180, 180, 180);
+                doc.setLineWidth(0.01);
+                doc.line(margin, y + lineHeight / 2, margin + contentWidth, y + lineHeight / 2);
+                y += lineHeight + cellPadding;
+                continue;
+            }
+            const isHeader = r === 0 || (row[1] === 'Item Name' && row[2] === 'Quantity');
+            doc.setFont('helvetica', isHeader ? 'bold' : 'normal');
+            doc.setFontSize(fontSize);
+            let rowHeight = lineHeight;
+            const cellSplits: string[][] = [];
+            for (let c = 0; c < row.length; c++) {
+                const cellText = String(row[c] ?? '');
+                const isCheckboxCell = c === 0 && useCheckboxMarker && cellText === useCheckboxMarker;
+                if (isCheckboxCell) {
+                    cellSplits.push([]);
+                    const h = checkboxSize + 0.02;
+                    if (h > rowHeight) rowHeight = h;
+                } else {
+                    const w = widths[c] ?? contentWidth / cols;
+                    const split = doc.splitTextToSize(cellText, Math.max(w - cellPadding * 2, 0.1));
+                    cellSplits.push(split);
+                    const h = split.length * lineHeight;
+                    if (h > rowHeight) rowHeight = h;
+                }
+            }
+            for (let c = 0; c < row.length; c++) {
+                const x = margin + widths.slice(0, c).reduce((a, b) => a + b, 0);
+                const w = widths[c] ?? contentWidth / cols;
+                const isCheckboxCell = c === 0 && useCheckboxMarker && String(row[c] ?? '') === useCheckboxMarker;
+                if (isCheckboxCell) {
+                    const boxX = x + cellPadding;
+                    const boxY = y + (rowHeight - checkboxSize) / 2;
+                    doc.setDrawColor(0, 0, 0);
+                    doc.setLineWidth(0.01);
+                    doc.rect(boxX, boxY, checkboxSize, checkboxSize);
+                } else {
+                    const lines = cellSplits[c];
+                    for (let L = 0; L < lines.length; L++) {
+                        doc.text(lines[L], x + cellPadding, y + lineHeight - 0.02 + L * lineHeight);
+                    }
+                }
+            }
+            y += rowHeight + cellPadding;
+        }
+    }
 
     const cols = rows[0]?.length ?? 0;
     const widths = columnWidths && columnWidths.length === cols
         ? columnWidths.map(p => (p / 100) * contentWidth)
         : Array(cols).fill(contentWidth / cols);
+    drawTable(title, rows, columnWidths, cols, lineRowMarker, checkboxMarker);
 
-    const maxY = pageHeight - margin;
-
-    for (let r = 0; r < rows.length; r++) {
-        const row = rows[r];
-        if (!row || row.length === 0) {
-            y += lineHeight * 0.5;
-            continue;
-        }
-        if (y > maxY - lineHeight) {
-            doc.addPage();
-            y = margin;
-        }
-
-        // Line row: draw horizontal rule between client blocks
-        if (lineRowMarker && row[0] === lineRowMarker) {
-            doc.setDrawColor(180, 180, 180);
-            doc.setLineWidth(0.01);
-            doc.line(margin, y + lineHeight / 2, margin + contentWidth, y + lineHeight / 2);
-            y += lineHeight + cellPadding;
-            continue;
-        }
-
-        const isHeader = r === 0 || (row[1] === 'Item Name' && row[2] === 'Quantity');
-        doc.setFont('helvetica', isHeader ? 'bold' : 'normal');
-        doc.setFontSize(fontSize);
-
-        let rowHeight = lineHeight;
-        const cellSplits: string[][] = [];
-        for (let c = 0; c < row.length; c++) {
-            const cellText = String(row[c] ?? '');
-            const isCheckboxCell = c === 0 && checkboxMarker && cellText === checkboxMarker;
-            if (isCheckboxCell) {
-                cellSplits.push([]);
-                const h = checkboxSize + 0.02;
-                if (h > rowHeight) rowHeight = h;
-            } else {
-                const w = widths[c] ?? contentWidth / cols;
-                const split = doc.splitTextToSize(cellText, Math.max(w - cellPadding * 2, 0.1));
-                cellSplits.push(split);
-                const h = split.length * lineHeight;
-                if (h > rowHeight) rowHeight = h;
-            }
-        }
-        for (let c = 0; c < row.length; c++) {
-            const x = margin + widths.slice(0, c).reduce((a, b) => a + b, 0);
-            const w = widths[c] ?? contentWidth / cols;
-            const isCheckboxCell = c === 0 && checkboxMarker && String(row[c] ?? '') === checkboxMarker;
-            if (isCheckboxCell) {
-                const boxX = x + cellPadding;
-                const boxY = y + (rowHeight - checkboxSize) / 2;
-                doc.setDrawColor(0, 0, 0);
-                doc.setLineWidth(0.01);
-                doc.rect(boxX, boxY, checkboxSize, checkboxSize);
-            } else {
-                const lines = cellSplits[c];
-                for (let L = 0; L < lines.length; L++) {
-                    doc.text(lines[L], x + cellPadding, y + lineHeight - 0.02 + L * lineHeight);
-                }
-            }
-        }
-        y += rowHeight + cellPadding;
+    if (secondTable?.rows && secondTable.rows.length > 0) {
+        doc.addPage();
+        const secondCols = secondTable.rows[0]?.length ?? 1;
+        drawTable(secondTable.title, secondTable.rows, [100], secondCols, undefined, undefined);
     }
 
     const filename = baseFilename.endsWith('.pdf') ? baseFilename : `${baseFilename}.pdf`;

@@ -6,11 +6,12 @@ import { useParams, useRouter } from "next/navigation";
 import { fetchDriver, fetchStops, fetchDriversPageData } from "../../../lib/api";
 import { mapsUrlFromAddress } from "../../../lib/maps";
 import {
-    MapPin, Phone, Hash, ArrowLeft, X, Map as MapIcon, Crosshair, Camera, ExternalLink
+    MapPin, Phone, Hash, ArrowLeft, X, Map as MapIcon, Crosshair, Camera, ExternalLink, Upload
 } from "lucide-react";
 import SearchStops from "../../../components/drivers/SearchStops";
 import { DateFilter } from "../../../components/routes/DateFilter";
 import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from "@/lib/timezone";
+import { processDeliveryProof } from "@/app/delivery/actions";
 
 /** Lazy-load the shared Leaflet map */
 const DriversMapLeaflet = dynamic(() => import("../../../components/routes/DriversMapLeaflet"), { ssr: false });
@@ -91,6 +92,11 @@ export default function DriverDetailPage() {
     const [allStops, setAllStops] = useState<any[]>([]); // for SearchStops
     const [loading, setLoading] = useState(true);
     const [proofModalStop, setProofModalStop] = useState<any>(null);
+
+    // Upload-from-gallery state
+    const [uploadingStopId, setUploadingStopId] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const uploadStopRef = useRef<any>(null);
 
     // Map sheet state + API from Leaflet
     const [mapOpen, setMapOpen] = useState(false);
@@ -218,6 +224,37 @@ export default function DriverDetailPage() {
         if (id) return `/delivery/${encodeURIComponent(id)}`;
         return null;
     };
+
+    function handleUploadClick(stop: any) {
+        uploadStopRef.current = stop;
+        fileInputRef.current?.click();
+    }
+
+    async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file || !uploadStopRef.current) return;
+        const stop = uploadStopRef.current;
+        const orderIdentifier = stop.orderNumber ?? stop.order_number ?? stop.orderId;
+        if (!orderIdentifier) return;
+
+        setUploadingStopId(stop.id);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('orderNumber', String(orderIdentifier));
+            const result = await processDeliveryProof(formData);
+            if (!result.success) {
+                alert(result.error || 'Upload failed');
+            }
+        } catch (err: any) {
+            alert(err?.message || 'Upload failed');
+        } finally {
+            setUploadingStopId(null);
+            uploadStopRef.current = null;
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            loadData();
+        }
+    }
 
     // Single-driver payload for Leaflet
     const mapDrivers = useMemo(() => {
@@ -593,15 +630,27 @@ export default function DriverDetailPage() {
 
                                         {!hasProof ? (
                                             takePhotoUrl ? (
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-outline block"
-                                                    title="Take photo"
-                                                    onClick={() => setProofModalStop(s)}
-                                                >
-                                                    <Camera style={{ height: 16, width: 16 }} />
-                                                    Take photo
-                                                </button>
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-outline block"
+                                                        title="Take photo"
+                                                        onClick={() => setProofModalStop(s)}
+                                                    >
+                                                        <Camera style={{ height: 16, width: 16 }} />
+                                                        Take photo
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className={`btn btn-outline block${uploadingStopId === s.id ? " btn-loading" : ""}`}
+                                                        title="Upload photo from gallery"
+                                                        disabled={uploadingStopId === s.id}
+                                                        onClick={() => handleUploadClick(s)}
+                                                    >
+                                                        <Upload style={{ height: 16, width: 16 }} />
+                                                        {uploadingStopId === s.id ? "Uploading…" : "Upload photo"}
+                                                    </button>
+                                                </>
                                             ) : (
                                                 <span className="no-camera-msg" title="No order linked to this stop">
                                                     No order linked — can&apos;t add proof
@@ -718,6 +767,15 @@ export default function DriverDetailPage() {
                     </div>
                 </div>
             )}
+
+            {/* Hidden file input for Upload photo */}
+            <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                className="hidden-input"
+                onChange={handleFileSelect}
+            />
 
             {/* Page CSS */}
             <style

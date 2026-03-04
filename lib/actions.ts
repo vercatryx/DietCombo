@@ -3145,6 +3145,32 @@ export async function getMealPlannerOrders(
 }
 
 /**
+ * Get client full names who changed their order from the default for a given delivery date.
+ * Uses the DB function get_clients_changed_from_default which checks clients.meal_planner_data
+ * for an entry matching the date (presence = client customised that day's order).
+ */
+export async function getClientsWhoChangedFromDefaultForDate(deliveryDate: string): Promise<string[]> {
+    if (!deliveryDate || deliveryDate === 'no-date') return [];
+    try {
+        const dateOnly = mealPlannerDateOnly(deliveryDate);
+        const supabaseAdmin = process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            : supabase;
+        const { data, error } = await supabaseAdmin.rpc('get_clients_changed_from_default', {
+            p_delivery_date: dateOnly
+        });
+        if (error) {
+            logQueryError(error, 'get_clients_changed_from_default', 'rpc');
+            return [];
+        }
+        return (data ?? []).map((r: { full_name: string }) => r.full_name).filter(Boolean);
+    } catch (error) {
+        console.error('Error in getClientsWhoChangedFromDefaultForDate:', error);
+        return [];
+    }
+}
+
+/**
  * Save meal planner custom items for a given date.
  * Replaces all existing items for that date with the provided list.
  * Uses service role so admin default template and client overrides always save and sync to meal_planner_orders.
