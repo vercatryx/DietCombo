@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
@@ -336,7 +337,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             alert('No orders to export');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber } = await getSortedOrders(clientsForExport);
@@ -416,7 +417,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             alert('No orders to export');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
         // Re-fetch full orders via API so items are included (avoids server-action serialization issues)
         const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(deliveryDate)}`, { credentials: 'include' });

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
@@ -654,6 +655,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export');
             return;
         }
+        flushSync(() => setIsExporting(true));
+        try {
         const clientsForExport = await getClientsUnlimited();
         const clientById = new Map(clientsForExport.map(c => [c.id, c]));
         const getClientNameForExport = (id: string) => clientById.get(id)?.fullName || 'Unknown Client';
@@ -699,6 +702,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+        } finally {
+            setIsExporting(false);
+        }
     }
 
     async function exportOrdersByDateToCSV(dateKey: string, dateOrders: any[]) {
@@ -706,6 +712,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
+        flushSync(() => setIsExporting(true));
+        try {
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
         const clientById = new Map(clientsForExport.map(c => [c.id, c]));
@@ -766,6 +774,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+        } finally {
+            setIsExporting(false);
+        }
     }
 
     function getDateSuffix(dateKey: string): string {
@@ -852,7 +863,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
@@ -916,7 +927,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
@@ -959,7 +970,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
         const { sortedOrders } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
@@ -989,7 +1000,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
         // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
         // Use API route when we have a date to avoid server-action response size/serialization issues with items
@@ -1071,7 +1082,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             alert('No orders to export for this date');
             return;
         }
-        setIsExporting(true);
+        flushSync(() => setIsExporting(true));
         try {
             // Re-fetch full orders for this date (use API to avoid server-action serialization issues with items)
             let freshOrdersAlt: any[];

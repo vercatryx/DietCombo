@@ -3,7 +3,9 @@ import { decrypt } from '@/lib/session';
 
 // Protected (admin) routes — require auth; unauthenticated users redirect to /login
 const protectedRoutes = ['/admin', '/clients', '/billing', '/vendors', '/orders', '/routes', '/forms', '/'];
-const vendorRoutes = ['/vendor'];
+// Vendor portal only (singular): /vendor and /vendor/... — NOT /vendors (admin list)
+const isVendorPortalRoute = (path: string) => path === '/vendor' || path.startsWith('/vendor/');
+
 const publicRoutes = ['/login', '/login/verify', '/api/auth/login', '/api/extension', '/verify-order', '/delivery', '/drivers', '/produce', '/sign'];
 
 export default async function middleware(request: NextRequest) {
@@ -16,14 +18,13 @@ export default async function middleware(request: NextRequest) {
   const isPublicRoute =
     publicRoutes.includes(path) ||
     path.startsWith('/verify-order/') ||
-    path.startsWith('/client-portal') ||
     path.startsWith('/delivery/') ||
     path.startsWith('/drivers/') ||
     path.startsWith('/produce/') ||
     path.startsWith('/vendors/produce') ||
     path.startsWith('/api/') ||
     path.startsWith('/sign/');
-  const isVendorRoute = vendorRoutes.some((route) => path.startsWith(route));
+  const isVendorRoute = isVendorPortalRoute(path);
   const isProtectedRoute = protectedRoutes.some((route) =>
     route === '/' ? path === '/' : path.startsWith(route)
   );
@@ -41,10 +42,21 @@ export default async function middleware(request: NextRequest) {
 
   // Role-based redirects when user is logged in
   if (session?.userId) {
+    // Clients: only their own portal (and /sign/). No other clients, no admin routes.
     if (session.role === 'client') {
-      const clientPortalPath = `/client-portal/${session.userId}`;
-      if (path !== clientPortalPath && !path.startsWith('/sign/')) {
-        return NextResponse.redirect(new URL(clientPortalPath, request.url));
+      const ownPortalBase = `/client-portal/${session.userId}`;
+      const isOwnPortal = path === ownPortalBase || path.startsWith(ownPortalBase + '/');
+      const isSignRoute = path.startsWith('/sign/');
+      if (!isOwnPortal && !isSignRoute) {
+        return NextResponse.redirect(new URL(ownPortalBase, request.url));
+      }
+      return NextResponse.next();
+    }
+
+    // Admin / super-admin: full access to all app routes (only vendor portal redirects to /clients)
+    if (session.role === 'admin' || session.role === 'super-admin') {
+      if (isVendorRoute) {
+        return NextResponse.redirect(new URL('/clients', request.url));
       }
       return NextResponse.next();
     }
@@ -58,17 +70,14 @@ export default async function middleware(request: NextRequest) {
         path.startsWith('/clients') ||
         path.startsWith('/client-portal') ||
         path.startsWith('/navigator-history') ||
-        path.startsWith('/orders')
+        path.startsWith('/orders') ||
+        path.startsWith('/vendors')
       ) {
         return NextResponse.next();
       }
       if (isProtectedRoute || path === '/') {
         return NextResponse.redirect(new URL('/clients', request.url));
       }
-    }
-
-    if ((session.role === 'admin' || session.role === 'super-admin') && isVendorRoute) {
-      return NextResponse.redirect(new URL('/clients', request.url));
     }
 
     if (path === '/login' && (session.role === 'admin' || session.role === 'super-admin' || session.role === 'navigator')) {
