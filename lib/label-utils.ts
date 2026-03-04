@@ -245,7 +245,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         // 3. Ordered Items — phase 1: left of QR (strictly above qrBlockBottom); phase 2: below QR (strictly above labelBottom)
         doc.setFontSize(PROPS.smallSize);
         setDriverColor();
-        const itemsText = formatOrderedItemsForCSV(order).split('; ').join(' | ');
+        const itemsText = formatOrderedItemsForCSV(order).split('; ').join('  |  ');
         const itemsDisplay = itemsText || 'No items';
 
         const remainingHeight1 = maxYPhase1 - currentY;
@@ -515,9 +515,8 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
 
         const rightContentX = rightX + PROPS.padding;
         const rightContentY = labelY + PROPS.padding;
-        // Keep text well inside right label (same conservative factor as left so it doesn't go past edge)
         const rightTextEdge = rightX + PROPS.labelWidth - PROPS.padding - 0.2;
-        const rightTextZoneWidth = Math.max(0.5, (rightTextEdge - rightContentX) * 0.58);
+        const rightTextZoneWidth = rightTextEdge - rightContentX;
 
         let rightY = rightContentY + 0.1;
 
@@ -539,21 +538,36 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
             rightY += rightNameShow.length * headerLineHeight + 0.05;
         }
 
-        // Right: Full order details (items) — respect label bottom
+        // Right: Full order details (items) — auto-size font to fit all items
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(PROPS.smallSize);
         setDriverColor();
-        const itemsText = formatOrderedItemsForCSV(order).split('; ').join(' | ') || 'No items';
-        const splitItems = doc.splitTextToSize(itemsText, rightTextZoneWidth);
-        const maxLines = Math.max(0, Math.floor((labelBottomSafe - rightY) / phase2LineHeight));
-        const linesToShow = splitItems.slice(0, maxLines);
-        if (linesToShow.length > 0) {
-            doc.text(linesToShow, rightContentX, rightY);
+        const itemsText = formatOrderedItemsForCSV(order).split('; ').join('  |  ') || 'No items';
+        const availableHeight = labelBottomSafe - rightY;
+        let itemFont = PROPS.smallSize;
+        const minItemFont = 4;
+        let itemLh = lineHeightFromFont(itemFont);
+        doc.setFontSize(itemFont);
+        let splitItems = doc.splitTextToSize(itemsText, rightTextZoneWidth);
+        while (splitItems.length * itemLh > availableHeight && itemFont > minItemFont) {
+            itemFont -= 0.5;
+            itemLh = lineHeightFromFont(itemFont);
+            doc.setFontSize(itemFont);
+            splitItems = doc.splitTextToSize(itemsText, rightTextZoneWidth);
+        }
+        doc.setFontSize(itemFont);
+        let itemY = rightY;
+        for (const ln of splitItems) {
+            if (itemY + itemLh > labelBottomSafe + 0.02) break;
+            if (ln) doc.text(ln, rightContentX, itemY);
+            itemY += itemLh;
         }
         resetColor();
     }
 
     let filename = `${vendorName || 'vendor'}_labels_two_per_customer`;
+    if (options.filenameSuffix) {
+        filename += options.filenameSuffix;
+    }
     if (deliveryDate) {
         const formattedDate = formatDate(deliveryDate).replace(/\s/g, '_').replace(/[/\\:*?"<>|]/g, '_');
         filename += `_${formattedDate}`;

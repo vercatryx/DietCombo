@@ -36,6 +36,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     const [vendor, setVendor] = useState<Vendor | null>(initialVendor || null);
     const [orders, setOrders] = useState<any[]>(serverOrders ?? []);
     const [dateSummaries, setDateSummaries] = useState<DateSummaryRow[]>([]);
+    const [totalDates, setTotalDates] = useState<number>(0);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [ordersByDate, setOrdersByDate] = useState<Record<string, any[]>>({});
     const [clients, setClients] = useState<ClientProfile[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -44,8 +46,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     const [mealItems, setMealItems] = useState<{ id: string; name: string; categoryId?: string }[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+    const [showAllDates, setShowAllDates] = useState(false);
 
     const useSummaryMode = vendorId === SINGLE_VENDOR_ID;
+
+    function getYesterdayCutoff(): string {
+        const today = new Date();
+        today.setDate(today.getDate() - 1);
+        return getTodayInAppTz(today);
+    }
 
     const [isExporting, setIsExporting] = useState(false);
 
@@ -80,8 +89,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         setIsLoading(true);
         try {
             if (useSummaryMode) {
+                const sinceDate = getYesterdayCutoff();
                 const [summaryRes, clientsData, menuItemsData, boxTypesData, categoriesData, mealItemsData] = await Promise.all([
-                    fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders/summary`, { credentials: 'include' }),
+                    fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders/summary?since=${encodeURIComponent(sinceDate)}`, { credentials: 'include' }),
                     getClients(),
                     getMenuItems(),
                     getBoxTypes(),
@@ -90,10 +100,20 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     getCachedDefaultOrderTemplate('Food')
                 ]);
                 if (summaryRes.ok) {
-                    const summary = await summaryRes.json();
-                    setDateSummaries(Array.isArray(summary) ? summary : []);
+                    const body = await summaryRes.json();
+                    if (body && Array.isArray(body.rows)) {
+                        setDateSummaries(body.rows);
+                        setTotalDates(Number(body.total_dates) || body.rows.length);
+                    } else if (Array.isArray(body)) {
+                        setDateSummaries(body);
+                        setTotalDates(body.length);
+                    } else {
+                        setDateSummaries([]);
+                        setTotalDates(0);
+                    }
                 } else {
                     setDateSummaries([]);
+                    setTotalDates(0);
                 }
                 setOrders([]);
                 setOrdersByDate({});
@@ -165,6 +185,30 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         const list = Array.isArray(data) ? data : [];
         setOrdersByDate(prev => ({ ...prev, [dateKey]: list }));
         return list;
+    }
+
+    async function loadMoreDates() {
+        setIsLoadingMore(true);
+        try {
+            const res = await fetch(
+                `/api/vendors/${encodeURIComponent(vendorId)}/orders/summary`,
+                { credentials: 'include' }
+            );
+            if (res.ok) {
+                const body = await res.json();
+                if (Array.isArray(body)) {
+                    setDateSummaries(body);
+                    setTotalDates(body.length);
+                } else if (body && Array.isArray(body.rows)) {
+                    setDateSummaries(body.rows);
+                    setTotalDates(Number(body.total_dates) || body.rows.length);
+                }
+            }
+        } catch (err) {
+            console.error('Error loading more dates:', err);
+        } finally {
+            setIsLoadingMore(false);
+        }
     }
 
     function getClientName(clientId: string) {
@@ -1060,17 +1104,31 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     ...(stopNumber != null && { stopNumber })
                 };
             };
-            await generateLabelsPDFTwoPerCustomer({
-                orders: ordersForLabelsAlt,
+            const isComplexAlt = (order: any) => !!(clientById.get(order.client_id)?.complex);
+            const ordersNonComplexAlt = ordersForLabelsAlt.filter((o: any) => !isComplexAlt(o));
+            const ordersComplexAlt = ordersForLabelsAlt.filter((o: any) => isComplexAlt(o));
+            const commonOptsAlt = {
                 getClientName: getClientNameForExportAlt,
                 getClientAddress: getClientAddressForExportAlt,
-                formatOrderedItemsForCSV: (order) => formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id)),
+                formatOrderedItemsForCSV: (order: any) => {
+                    if (order.service_type === 'Food') {
+                        const filtered = { ...order, items: (order.items || []).filter((item: any) => parseInt(item.quantity || 0) > 0) };
+                        return formatOrderedItemsForCSVWithClient(filtered, clientById.get(order.client_id));
+                    }
+                    return formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id));
+                },
                 formatDate,
                 vendorName: vendor?.name,
                 deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
                 getDriverInfo: getDriverInfoForOrderAlt,
-                getNotes: (clientId) => clientById.get(clientId)?.dislikes ?? ''
-            });
+                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+            };
+            if (ordersNonComplexAlt.length > 0) {
+                await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersNonComplexAlt });
+            }
+            if (ordersComplexAlt.length > 0) {
+                await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersComplexAlt, filenameSuffix: '_complex' });
+            }
         } finally {
             setIsExporting(false);
         }
@@ -1679,6 +1737,23 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                         </div>
                                     );
                                 })}
+
+                                {totalDates > dateSummaries.length && (
+                                    <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem 0' }}>
+                                        <button
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: '0.875rem', padding: '0.5rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                            disabled={isLoadingMore}
+                                            onClick={loadMoreDates}
+                                        >
+                                            {isLoadingMore ? (
+                                                <><Loader2 size={16} className="animate-spin" /> Loading...</>
+                                            ) : (
+                                                <><ChevronDown size={16} /> Show More ({totalDates - dateSummaries.length} older dates)</>
+                                            )}
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         );
                     }
@@ -1693,6 +1768,11 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     }
 
                     const { grouped, sortedDates, noDate } = groupOrdersByDeliveryDate(orders);
+                    const cutoff = getYesterdayCutoff();
+                    const visibleDates = showAllDates
+                        ? sortedDates
+                        : sortedDates.filter(d => d >= cutoff);
+                    const hiddenDateCount = sortedDates.length - visibleDates.length;
 
                     return (
                         <div className={styles.ordersList}>
@@ -1705,7 +1785,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                             </div>
 
                             {/* Orders grouped by delivery date */}
-                            {sortedDates.map((dateKey) => {
+                            {visibleDates.map((dateKey) => {
                                 const dateOrders = grouped[dateKey];
                                 const dateTotalItems = dateOrders.reduce((sum, o) => sum + (o.total_items || 0), 0);
 
@@ -1757,6 +1837,18 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                     </div>
                                 );
                             })}
+
+                            {hiddenDateCount > 0 && (
+                                <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem 0' }}>
+                                    <button
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '0.875rem', padding: '0.5rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                        onClick={() => setShowAllDates(true)}
+                                    >
+                                        <ChevronDown size={16} /> Show More ({hiddenDateCount} older dates)
+                                    </button>
+                                </div>
+                            )}
 
                             {/* Orders without delivery dates */}
                             {noDate.length > 0 && (
