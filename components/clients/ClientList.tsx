@@ -2208,7 +2208,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 {isDependent ? '-' : <SignCell client={client} />}
                             </span>
                             <span title={client.serviceType} style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', fontSize: '0.9rem' }}>
-                                {isDependent ? '-' : (client.serviceType === 'Produce' ? 'Produce' : 'Food')}
+                                {client.serviceType === 'Produce' ? 'Produce' : 'Food'}
                             </span>
                             <span title={isDependent ? '' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : 'All default')} style={{ minWidth: '120px', flex: 1, fontSize: '0.85rem', color: hasNonDefaultFlags(client) ? 'var(--color-primary)' : 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                 {isDependent ? '-' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : '—')}
