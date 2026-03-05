@@ -6,8 +6,9 @@ const uniteSelectors = require('../uniteSelectors');
 const fs = require('fs');
 const path = require('path');
 
-// Load .env from server-side-automation root so auth works regardless of cwd
-require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+// Load .env from DOTENV_PATH (packaged app) or server-side-automation root
+const dotenvPath = process.env.DOTENV_PATH || path.join(__dirname, '..', '..', '.env');
+require('dotenv').config({ path: dotenvPath });
 
 const EMAIL = process.env.UNITEUS_EMAIL;
 const PASSWORD = process.env.UNITEUS_PASSWORD;

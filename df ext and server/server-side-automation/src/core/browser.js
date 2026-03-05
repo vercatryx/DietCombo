@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+const dotenvPath = process.env.DOTENV_PATH || path.join(__dirname, '..', '..', '.env');
+require('dotenv').config({ path: dotenvPath });
 
 let browser = null;
 let context = null;

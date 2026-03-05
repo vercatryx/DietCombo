@@ -3,6 +3,10 @@
  * Amount = 336 × people (non-Produce) or 146 × people (Produce). Based on parent service_type only.
  * Same JSON format as /api/extension/billing-requests.
  *
+ * - Order list: only orders NOT already marked billing_successful.
+ * - Proof URLs: from ALL orders for the household, the 2 most recent that have proof_of_delivery_url
+ *   (or 1 if only one); if none, uses sign_token signature PDF.
+ *
  * GET /api/bill
  * No auth required.
  */
@@ -12,6 +16,18 @@ import { createClient } from '@supabase/supabase-js';
 
 const AMOUNT_PER_PERSON = 336;
 const AMOUNT_PER_PERSON_PRODUCE = 146;
+
+/** Orders with this status are excluded from the order list (already billed). */
+const BILLING_SUCCESSFUL = 'billing_successful';
+
+/** Max number of proof URLs to return per household (most recent orders with proof). */
+const MAX_PROOF_URLS = 2;
+
+/** Get sortable date for an order (most recent first). */
+function orderDate(o: { actual_delivery_date?: string | null; scheduled_delivery_date?: string | null }): string {
+    const d = o.actual_delivery_date || o.scheduled_delivery_date || '';
+    return d;
+}
 
 /** Default date for billing (YYYY-MM-DD) when no query param is provided. */
 const BILL_DATE_DEFAULT = '2026-02-23';
@@ -165,15 +181,29 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        // All orders per household (parent + dependants). proofURLs: only non-blank URLs (never include "").
+        // Per household:
+        // - Order list: only orders NOT billing_successful (already billed are excluded).
+        // - Proof URLs: from ALL orders (any status), sort by most recent, take up to MAX_PROOF_URLS that have proof.
         const orderNumbersByHousehold: Record<string, string[]> = {};
         const proofURLsByHousehold: Record<string, string[]> = {};
         for (const householdId of Object.keys(ordersByHousehold)) {
             const list = ordersByHousehold[householdId] as any[];
-            orderNumbersByHousehold[householdId] = list.map((o: any) => String(o.order_number ?? ''));
-            const urls = list
-                .map((o: any) => (o.proof_of_delivery_url != null ? String(o.proof_of_delivery_url).trim() : ''))
-                .filter((u: string) => u !== '');
+            // Orders for the list: exclude billing_successful
+            const ordersForList = list.filter((o: any) => String(o.status || '').toLowerCase() !== BILLING_SUCCESSFUL);
+            orderNumbersByHousehold[householdId] = ordersForList.map((o: any) => String(o.order_number ?? ''));
+
+            // Proof URLs: all orders sorted by date (most recent first), then take those with proof, up to MAX_PROOF_URLS
+            const sortedByDate = [...list].sort((a: any, b: any) => {
+                const da = orderDate(a);
+                const db = orderDate(b);
+                return db.localeCompare(da);
+            });
+            const withProof = sortedByDate.filter(
+                (o: any) => o.proof_of_delivery_url != null && String(o.proof_of_delivery_url).trim() !== ''
+            );
+            const urls = withProof
+                .slice(0, MAX_PROOF_URLS)
+                .map((o: any) => String(o.proof_of_delivery_url).trim());
             proofURLsByHousehold[householdId] = urls;
         }
 

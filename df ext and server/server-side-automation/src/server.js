@@ -5,8 +5,9 @@ const axios = require('axios');
 const { launchBrowser, launchBrowserInstance, closeAllBrowserInstances } = require('./core/browser');
 const { billingWorker, fetchRequestsFromApi } = require('./core/billingWorker');
 
-// Load .env from this app's directory (not cwd) so UNITEUS_* etc. are predictable
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// Load .env from DOTENV_PATH (packaged app) or project root
+const dotenvPath = process.env.DOTENV_PATH || path.join(__dirname, '..', '.env');
+require('dotenv').config({ path: dotenvPath });
 
 /** Split array into N slices (round-robin) so each slot gets different clients. */
 function roundRobinSlices(arr, n) {
@@ -138,7 +139,7 @@ app.post('/process-billing', async (req, res) => {
     try {
         if (source === 'file') {
             // -- SOURCE: FILE --
-            const jsonPath = path.join(__dirname, '../billing_requests.json');
+            const jsonPath = process.env.BILLING_REQUESTS_PATH || path.join(__dirname, '../billing_requests.json');
             if (!fs.existsSync(jsonPath)) {
                 return res.status(404).json({ error: 'billing_requests.json not found' });
             }
@@ -266,6 +267,15 @@ app.post('/process-billing', async (req, res) => {
     })();
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-});
+function start(port) {
+    const p = port != null ? port : PORT;
+    return app.listen(p, () => {
+        console.log(`Server running on http://localhost:${p}`);
+    });
+}
+
+module.exports = { app, start };
+
+if (require.main === module) {
+    start(PORT);
+}
