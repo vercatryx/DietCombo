@@ -88,10 +88,14 @@ app.post('/fetch-requests', async (req, res) => {
     }
 });
 
-// Pull all clients from GET /api/bill (no auth). Maps to worker shape: name, url, date, endDate, amount, orderNumbers, proofURL(s).
+// Pull all clients from GET /api/bill (no auth). Optional ?date=YYYY-MM-DD. Maps to worker shape: name, url, date, endDate, amount, orderNumbers, proofURL(s).
 app.post('/fetch-all-clients', async (req, res) => {
-    const apiBaseUrl = (req.body && req.body.apiBaseUrl) ? req.body.apiBaseUrl.trim() : 'http://localhost:3000';
-    const url = `${apiBaseUrl.replace(/\/$/, '')}/api/bill`;
+    const apiBaseUrl = (req.body && req.body.apiBaseUrl) ? req.body.apiBaseUrl.trim() : 'http://customer.thedietfantasy.com';
+    const dateParam = (req.body && req.body.date) ? String(req.body.date).trim() : null;
+    let url = `${apiBaseUrl.replace(/\/$/, '')}/api/bill`;
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        url += `?date=${dateParam}`;
+    }
     try {
         console.log('[Server] Fetching all clients from', url);
         const { data } = await axios.get(url, { timeout: 30000 });
@@ -201,9 +205,10 @@ app.post('/process-billing', async (req, res) => {
 
     (async () => {
         try {
+            broadcast('slotCount', { count: concurrency });
             if (concurrency === 1) {
                 await launchBrowser();
-                await billingWorker(workerRequests, broadcast, source, apiConfig, {});
+                await billingWorker(workerRequests, broadcast, source, apiConfig, { slotIndex: 0, slotLabel: 'Slot 0' });
             } else {
                 broadcast('log', { message: `Starting ${concurrency} browsers in parallel (different clients per slot)...`, type: 'info' });
                 let requests = workerRequests;
@@ -239,6 +244,7 @@ app.post('/process-billing', async (req, res) => {
                             context: slot.context,
                             getPageOrRestart: slot.restartPage,
                             requestSlice: slices[i],
+                            slotIndex: i,
                             slotLabel: `Slot ${i}`
                         })
                     )

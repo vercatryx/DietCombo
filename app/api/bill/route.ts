@@ -13,8 +13,20 @@ import { createClient } from '@supabase/supabase-js';
 const AMOUNT_PER_PERSON = 336;
 const AMOUNT_PER_PERSON_PRODUCE = 146;
 
-/** Default date for billing (YYYY-MM-DD). Delivery date and start of 7-day window. */
+/** Default date for billing (YYYY-MM-DD) when no query param is provided. */
 const BILL_DATE_DEFAULT = '2026-02-23';
+
+/** Parse YYYY-MM-DD from query; returns null if missing or invalid. */
+function parseBillDateFromRequest(request: NextRequest): string | null {
+    const url = request.nextUrl ?? new URL(request.url);
+    const dateParam = url.searchParams.get('date');
+    if (!dateParam || typeof dateParam !== 'string') return null;
+    const trimmed = dateParam.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
+    const d = new Date(trimmed + 'T00:00:00Z');
+    if (Number.isNaN(d.getTime())) return null;
+    return trimmed;
+}
 
 /** End date for 7-day billing window (start through end inclusive: start + 6 days). */
 function billDateEnd(startISO: string): string {
@@ -43,6 +55,8 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function GET(request: NextRequest) {
     try {
+        const billDate = parseBillDateFromRequest(request) ?? BILL_DATE_DEFAULT;
+
         // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
         const { data: clients, error: clientsError } = await supabase
             .from('clients')
@@ -189,9 +203,9 @@ export async function GET(request: NextRequest) {
             let orderNumbers = orderNumbersByHousehold[pid] ?? [];
             let proofURLs = proofURLsByHousehold[pid] ?? [];
             if (proofURLs.length === 0 && parent.sign_token) {
-                const endDate = billDateEnd(BILL_DATE_DEFAULT);
+                const endDate = billDateEnd(billDate);
                 proofURLs = [
-                    `${baseUrl}/api/signatures/${encodeURIComponent(String(parent.sign_token))}/pdf?start=${BILL_DATE_DEFAULT}&end=${endDate}&delivery=${BILL_DATE_DEFAULT}`,
+                    `${baseUrl}/api/signatures/${encodeURIComponent(String(parent.sign_token))}/pdf?start=${billDate}&end=${endDate}&delivery=${billDate}`,
                 ];
             }
 
@@ -207,8 +221,8 @@ export async function GET(request: NextRequest) {
                 url,
                 orderNumbers,
                 proofURLs,
-                date: BILL_DATE_DEFAULT,
-                endDate: billDateEnd(BILL_DATE_DEFAULT),
+                date: billDate,
+                endDate: billDateEnd(billDate),
                 amount: Number(amount),
                 dependants: deps.map((d: any) => ({
                     name: d.full_name ?? '',

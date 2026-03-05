@@ -13,7 +13,7 @@ const EMAIL = process.env.UNITEUS_EMAIL;
 const PASSWORD = process.env.UNITEUS_PASSWORD;
 
 // --- API CONFIG DEFAULTS ---
-const DEFAULT_API_BASE_URL = process.env.EXTENSION_API_BASE_URL || 'http://localhost:3000';
+const DEFAULT_API_BASE_URL = process.env.EXTENSION_API_BASE_URL || 'http://customer.thedietfantasy.com';
 const DEFAULT_API_KEY = process.env.EXTENSION_API_KEY || 'justtomakesureicanlockyouout';
 
 /** Parse structured error message from billing flow. Returns { step, type, details } for clear logging. */
@@ -264,13 +264,19 @@ async function updateOrderStatusForRequest(req, status, config) {
 /**
  * POST authorized amount and expiration date for a client to the app's update-client-authorization endpoint.
  * Uses apiConfig when provided, otherwise env EXTENSION_API_BASE_URL and EXTENSION_API_KEY.
+ * @param {Function} [emitEvent] - Optional: (type, data) to broadcast to UI for clear logging
+ * @param {string} [slotLabel] - Optional: e.g. "Slot 0" for log prefix
  */
-async function updateClientAuthorization(clientId, authorizedAmount, expirationDate, config) {
+async function updateClientAuthorization(clientId, authorizedAmount, expirationDate, config, emitEvent = null, slotLabel = '') {
     if (!clientId || authorizedAmount == null || !expirationDate) return;
     const baseUrl = config?.baseUrl || DEFAULT_API_BASE_URL;
     const key = config?.key || DEFAULT_API_KEY;
+    const prefix = slotLabel ? `[${slotLabel}] ` : '';
 
-    console.log(`[API] Updating client authorization: ${clientId} -> $${authorizedAmount}, expires ${expirationDate}`);
+    const logMsg = `Client auth API: clientId=${clientId} | authorizedAmount=$${authorizedAmount} | expirationDate=${expirationDate}`;
+    console.log(`[API] ${logMsg}`);
+    if (emitEvent) emitEvent('log', { message: `${prefix}[Auth API] Sending: ${logMsg}`, type: 'info' });
+
     try {
         await axios.post(`${baseUrl}/api/extension/update-client-authorization`, {
             clientId,
@@ -282,9 +288,11 @@ async function updateClientAuthorization(clientId, authorizedAmount, expirationD
                 'Content-Type': 'application/json'
             }
         });
-        console.log('[API] Client authorization updated.');
+        console.log('[API] Client authorization updated successfully.');
+        if (emitEvent) emitEvent('log', { message: `${prefix}[Auth API] ✓ Client authorization updated (amount + expiration saved).`, type: 'success' });
     } catch (err) {
         console.error(`[API] update-client-authorization failed for ${clientId}:`, err.message);
+        if (emitEvent) emitEvent('log', { message: `${prefix}[Auth API] ✗ Failed: ${err.message}`, type: 'error' });
     }
 }
 
@@ -332,6 +340,11 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
     const fullRequests = requests;
     const toProcess = options.requestSlice || requests;
     const slotLabel = options.slotLabel || '';
+    const slotIndex = options.slotIndex ?? 0;
+
+    const emitSlotStatus = (stage, clientName = '') => {
+        emitEvent('slotStatus', { slotIndex, slotLabel, clientName, stage });
+    };
 
     emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Processing ${toProcess.length} request(s)...` });
 
@@ -367,6 +380,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
         req.status = 'processing';
         req.message = 'Starting...';
         emitEvent('queue', fullRequests);
+        emitSlotStatus('Starting', req.name);
         emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Processing ${req.name} (${i + 1}/${toProcess.length})` });
 
         // API Status Tracking
@@ -374,6 +388,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
 
         if (req.skip) {
             req.status = 'skipped';
+            emitSlotStatus('Skipped', req.name);
             emitEvent('log', { message: 'Skipped by config.', type: 'warning' });
             emitEvent('queue', fullRequests);
             continue;
@@ -394,6 +409,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
             emitEvent('log', { message: `Requested range: ${req.start} to ${req.end}` });
         } catch (e) {
             req.status = 'failed';
+            emitSlotStatus('Failed', req.name);
             emitEvent('log', { message: `[MISC] Invalid date: ${e.message}`, type: 'error' });
             if (apiConfig) await updateOrderStatusForRequest(req, 'billing_failed', apiConfig);
             continue;
@@ -413,6 +429,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                 try {
                     // --- Login Check ---
                     if (!(await isLoggedIn())) {
+                        emitSlotStatus('Login', req.name);
                         emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Logging in...` });
                         const authOpts = (options.page != null && options.context != null) ? { page, context: options.context } : {};
                         const loginOk = await performLoginSequence(EMAIL, PASSWORD, authOpts);
@@ -425,6 +442,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     // --- Navigation and Refinement ---
                     if (!req.url) {
                         req.status = 'failed';
+                        emitSlotStatus('Failed', req.name);
                         emitEvent('log', { message: '[NAV] Missing URL', type: 'error' });
                         if (apiConfig) await updateOrderStatusForRequest(req, 'billing_failed', apiConfig);
                         success = true; // Break loop
@@ -432,12 +450,14 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     }
 
                     const attemptLabel = `(S${restartAttempt + 1}/R${refreshAttempt + 1})`;
+                    emitSlotStatus('Navigating', req.name);
                     emitEvent('log', { message: `Navigating to ${req.url} ${attemptLabel}...` });
                     await page.goto(req.url, { waitUntil: 'networkidle', timeout: 60000 });
                     await sleep(3000);
 
                     // Scrape Auth Info for Clamping
                     const authInfo = await fetchAuthDetailsFromPage(page);
+                    emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}[Auth] Scraped from page: authorizedDates="${authInfo.authorizedDates || '—'}", dateOpened="${authInfo.dateOpened || '—'}", authorizedAmount="${authInfo.authorizedAmount || '—'}"` });
 
                     // Clamping Logic
                     const parseMDY = (s) => {
@@ -449,14 +469,19 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     const dateOpened = parseMDY(authInfo.dateOpened);
                     const authDatesMatch = String(authInfo.authorizedDates || '').match(/(\d{1,2})\/\d{1,2}\/\d{4}\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
                     const authEnd = authDatesMatch ? new Date(Date.UTC(+authDatesMatch[4], +authDatesMatch[2] - 1, +authDatesMatch[3])) : null;
+                    const expirationISO = authEnd ? authEnd.toISOString().split('T')[0] : null;
 
                     // Send authorized amount and expiration date to app API (when clientId present)
                     if (req.clientId) {
                         const amountNum = parseFloat(String(authInfo.authorizedAmount || '').replace(/[$,]/g, '')) || null;
-                        const expirationISO = authEnd ? authEnd.toISOString().split('T')[0] : null;
                         if (amountNum != null && expirationISO) {
-                            await updateClientAuthorization(req.clientId, amountNum, expirationISO, apiConfig);
+                            await updateClientAuthorization(req.clientId, amountNum, expirationISO, apiConfig, emitEvent, slotLabel);
+                        } else {
+                            const reason = !amountNum && !expirationISO ? 'missing amount and expiration' : !amountNum ? 'missing authorized amount' : 'missing expiration date';
+                            emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}[Auth API] Skipped (${reason}). clientId=${req.clientId}`, type: 'warning' });
                         }
+                    } else {
+                        emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}[Auth API] Skipped (no clientId on request).`, type: 'info' });
                     }
 
                     if (dateOpened || authEnd) {
@@ -512,6 +537,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                         emitEvent('log', { message: `Generated proof URL: ${req.fileName}` });
                     }
 
+                    emitSlotStatus('Billing', req.name);
                     const result = await executeBillingOnPage(page, req);
 
                     // --- Handle Result ---
@@ -519,11 +545,13 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                         if (result.verified) {
                             req.status = 'success';
                             req.message = `Billed: $${result.amount || req.amount}`;
+                            emitSlotStatus('Success', req.name);
                             emitEvent('log', { message: `✅ Success!`, type: 'success' });
                             resultSourceStatus = 'billing_successful';
                         } else {
                             req.status = 'warning';
                             req.message = 'Submitted but verification failed';
+                            emitSlotStatus('Success', req.name);
                             emitEvent('log', { message: `⚠️ Submitted, unverified.`, type: 'warning' });
                             resultSourceStatus = 'billing_successful';
                         }
@@ -531,6 +559,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                         if (result.duplicate) {
                             req.status = 'skipped';
                             req.message = 'Duplicate';
+                            emitSlotStatus('Skipped', req.name);
                             emitEvent('log', { message: `⏭️ Duplicate found.`, type: 'info' });
                             resultSourceStatus = 'billing_already_exists';
                             success = true; // Definitive result
@@ -553,6 +582,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     if (shouldSkip) {
                         req.status = 'failed';
                         req.message = e.message;
+                        emitSlotStatus('Failed', req.name);
                         emitEvent('log', { message: `❌ Skip Client: ${e.message}`, type: 'error' });
                         resultSourceStatus = 'billing_failed';
                         if (apiConfig) await updateOrderStatusForRequest(req, 'billing_failed', apiConfig);
@@ -583,6 +613,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                 } else {
                     req.status = 'failed';
                     req.message = '[TIMEOUT] All retry attempts failed';
+                    emitSlotStatus('Failed', req.name);
                     emitEvent('log', { message: `❌ ${slotLabel ? `[${slotLabel}] ` : ''}[TIMEOUT] Final attempt failed after ${MAX_RESTARTS} browser sessions.`, type: 'error' });
                     await page.screenshot({ path: `error_${slotLabel.replace(/\s/g, '-')}_${i}_final.png` }).catch(() => {});
                 }
@@ -599,6 +630,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
         await sleep(1000);
     }
 
+    emitSlotStatus('Idle', '');
     emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Billing cycle completed.` });
 }
 

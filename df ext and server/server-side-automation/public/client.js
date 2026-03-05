@@ -1,6 +1,7 @@
 const termEl = document.getElementById('terminal');
 const queueBody = document.getElementById('queue-body');
 const statusBadge = document.getElementById('connection-status');
+const slotsStrip = document.getElementById('slots-strip');
 
 // Connect to SSE
 const evtSource = new EventSource('/events');
@@ -20,6 +21,62 @@ evtSource.onerror = () => {
 evtSource.addEventListener('log', (e) => {
     const data = JSON.parse(e.data);
     log(data.message, data.type);
+});
+
+// Slot status: { slotIndex, slotLabel, clientName, stage }
+let slotStates = [];
+
+function stageToClass(stage) {
+    if (!stage) return 'slot-stage--idle';
+    const s = (stage || '').toLowerCase();
+    if (s === 'idle') return 'slot-stage--idle';
+    if (s === 'starting' || s === 'navigating' || s === 'login') return 'slot-stage--starting';
+    if (s === 'billing') return 'slot-stage--billing';
+    if (s === 'success') return 'slot-stage--success';
+    if (s === 'skipped') return 'slot-stage--skipped';
+    if (s === 'failed') return 'slot-stage--failed';
+    return 'slot-stage--idle';
+}
+
+function renderSlotBoxes(count) {
+    slotsStrip.innerHTML = '';
+    slotStates = Array.from({ length: count }, () => ({ clientName: '', stage: 'Idle' }));
+    for (let i = 0; i < count; i++) {
+        const box = document.createElement('div');
+        box.className = 'slot-box';
+        box.setAttribute('data-slot-index', i);
+        box.innerHTML = `
+            <div class="slot-title">Slot ${i}</div>
+            <div class="slot-client">—</div>
+            <span class="slot-stage slot-stage--idle">Idle</span>
+        `;
+        slotsStrip.appendChild(box);
+    }
+}
+
+function updateSlotStatus(slotIndex, clientName, stage) {
+    if (slotIndex < 0 || slotIndex >= slotStates.length) return;
+    slotStates[slotIndex] = { clientName: clientName || '', stage: stage || 'Idle' };
+    const box = slotsStrip.querySelector(`[data-slot-index="${slotIndex}"]`);
+    if (!box) return;
+    const clientEl = box.querySelector('.slot-client');
+    const stageEl = box.querySelector('.slot-stage');
+    if (clientEl) clientEl.textContent = clientName || '—';
+    if (stageEl) {
+        stageEl.textContent = stage || 'Idle';
+        stageEl.className = 'slot-stage ' + stageToClass(stage);
+    }
+}
+
+evtSource.addEventListener('slotCount', (e) => {
+    const data = JSON.parse(e.data);
+    const count = Math.max(0, parseInt(data.count, 10) || 0);
+    renderSlotBoxes(count);
+});
+
+evtSource.addEventListener('slotStatus', (e) => {
+    const data = JSON.parse(e.data);
+    updateSlotStatus(data.slotIndex, data.clientName, data.stage);
 });
 
 let lastRequests = [];
@@ -63,81 +120,36 @@ function sortQueue(field) {
     renderQueue(lastRequests);
 }
 
-function triggerProcess(source = 'file') {
-    const apiBaseUrl = document.getElementById('api-base-url').value.trim();
-    const apiKey = document.getElementById('api-key').value.trim();
+const DEFAULT_API_BASE = 'http://customer.thedietfantasy.com';
 
-    log(`Sending request to start automation (Source: ${source})...`, 'info');
-
-    // Switch to POST to carry body data nicely
-    fetch('/process-billing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            source,
-            apiBaseUrl,
-            apiKey
-        })
-    })
-        .then(r => {
-            console.log('[Client] Response status:', r.status, r.statusText);
-            if (!r.ok) {
-                return r.json().then(data => {
-                    console.error('[Client] Error response:', data);
-                    throw new Error(data.error || `HTTP ${r.status}: ${r.statusText}`);
-                });
-            }
-            return r.json();
-        })
-        .then(d => {
-            console.log('[Client] Success response:', d);
-            if (d.error) {
-                log(`Error: ${d.error}`, 'error');
-            } else {
-                const msg = d.source === 'api' ? 'Automation started [API Mode]' : `Triggered: ${d.count || 0} requests [File Mode]`;
-                log(msg, 'success');
-            }
-        })
-        .catch(e => {
-            console.error('[Client] Fetch error:', e);
-            log(`Error triggering: ${e.message || e}`, 'error');
-        });
+/** Return YYYY-MM-DD for the last Monday (including today if today is Monday). */
+function getLastMondayISO() {
+    const d = new Date();
+    const day = d.getDay(); // 0 Sun .. 6 Sat
+    const daysBack = (day + 6) % 7; // Mon=0, Tue=1, ..., Sun=6
+    d.setDate(d.getDate() - daysBack);
+    return d.toISOString().slice(0, 10);
 }
 
-function downloadCloudRequests() {
-    const apiBaseUrl = document.getElementById('api-base-url').value.trim();
-    const apiKey = document.getElementById('api-key').value.trim();
+function initBillDate() {
+    const el = document.getElementById('bill-date');
+    if (el && !el.value) el.value = getLastMondayISO();
+}
 
-    log('Fetching pending requests from Cloud (Preview)...', 'info');
-    document.getElementById('queue-body').innerHTML = ''; // Clear previous
-
-    fetch('/fetch-requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiBaseUrl, apiKey })
-    })
-        .then(r => r.json())
-        .then(d => {
-            if (d.error) {
-                log(`Fetch Error: ${d.error}`, 'error');
-            } else {
-                log(`Fetched ${d.count} requests from API.`, 'success');
-            }
-        })
-        .catch(e => {
-            log(`Fetch Failed: ${e.message}`, 'error');
-        });
+function getBillDate() {
+    const el = document.getElementById('bill-date');
+    return (el && el.value) ? el.value : getLastMondayISO();
 }
 
 function downloadAllClients() {
-    const apiBaseUrl = document.getElementById('api-base-url').value.trim() || 'http://localhost:3000';
-
-    log('Fetching all clients from ' + apiBaseUrl + '/api/bill...', 'info');
+    const date = getBillDate();
+    const urlWithQuery = `${DEFAULT_API_BASE}/api/bill?date=${date}`;
+    log('Fetching all clients from ' + urlWithQuery + '...', 'info');
 
     fetch('/fetch-all-clients', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiBaseUrl })
+        body: JSON.stringify({ apiBaseUrl: DEFAULT_API_BASE, date })
     })
         .then(r => r.json())
         .then(d => {
@@ -161,10 +173,7 @@ function runCurrentQueue() {
         log('Starting automation with current queue (all)...', 'info');
     }
 
-    const apiBaseUrl = document.getElementById('api-base-url').value.trim();
-    const apiKey = document.getElementById('api-key').value.trim();
-
-    const body = { source: 'queue', apiBaseUrl, apiKey };
+    const body = { source: 'queue', apiBaseUrl: DEFAULT_API_BASE, apiKey: '' };
     if (runOnlySelected) body.selectedIds = ids;
 
     fetch('/process-billing', {
@@ -311,4 +320,5 @@ function updateStats(requests) {
     document.getElementById('stat-failed').textContent = requests.filter(r => r.status === 'failed').length;
 }
 
+initBillDate();
 setupDragSelect();
