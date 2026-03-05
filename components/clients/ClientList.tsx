@@ -31,7 +31,7 @@ import { hasNonDefaultFlags, getNonDefaultFlagLabels, clientMatchesFlagFilter, F
 import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import styles from './ClientList.module.css';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 interface ClientListProps {
     currentUser?: { role: string; id: string } | null;
@@ -39,6 +39,7 @@ interface ClientListProps {
 
 export function ClientList({ currentUser }: ClientListProps = {}) {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [clients, setClients] = useState<ClientProfile[]>([]);
     const [statuses, setStatuses] = useState<ClientStatus[]>([]);
     const [navigators, setNavigators] = useState<Navigator[]>([]);
@@ -121,6 +122,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         loadInitialData();
         loadSignatureCounts();
     }, []);
+
+    // Sync currentView from URL (e.g. /clients?view=needs-attention)
+    useEffect(() => {
+        const view = searchParams.get('view');
+        if (view === 'needs-attention' || view === 'eligible' || view === 'ineligible' || view === 'all' || view === 'billing') {
+            setCurrentView(view);
+        }
+    }, [searchParams]);
 
     // Load signature counts from API
     async function loadSignatureCounts() {
@@ -465,52 +474,33 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             // Show clients whose status does NOT allow deliveries
             matchesView = status ? !status.deliveriesAllowed : false;
         } else if (currentView === 'needs-attention') {
-            // First, check if client is eligible (status allows deliveries)
-            const status = statuses.find(s => s.id === c.statusId);
-            const isEligible = status ? status.deliveriesAllowed : false;
+            // Show ALL clients that need attention (no eligibility gate):
+            // 1. Client expires within one month from today (anytime on or before that date)
+            // 2. Authorized amount is less than $2000 (or missing) — any service type
 
-            // Only show eligible clients that need attention
-            if (!isEligible) {
-                matchesView = false;
-            } else {
-                // Show clients that need attention based on specific criteria:
-                // 1. Clients with boxes that do not have a vendor assigned
-                // 2. Clients whose expiration date is within the current month
-                // 3. Clients with boxes whose authorized amount is less than 584
-                // 4. Clients with food whose authorized amount is less than 1344
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const oneMonthFromToday = new Date(today);
+            oneMonthFromToday.setMonth(oneMonthFromToday.getMonth() + 1);
 
-                const now = new Date();
-                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-                const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-
-                // 1. Check if client with boxes doesn't have vendor assigned
-                let boxesNeedsVendor = false;
-                if (c.serviceType === 'Boxes') {
-                    if (c.activeOrder && c.activeOrder.serviceType === 'Boxes') {
-                        const box = boxTypes.find(b => b.id === c.activeOrder?.boxTypeId);
-                        const vendorId = c.activeOrder.vendorId || box?.vendorId;
-                        boxesNeedsVendor = !vendorId;
-                    } else {
-                        boxesNeedsVendor = true; // No active order means needs vendor
-                    }
+            // 1. Expiration on or before one month from today
+            let expiresWithinMonth = false;
+            if (c.expirationDate) {
+                const expDate = new Date(String(c.expirationDate).trim());
+                if (!isNaN(expDate.getTime())) {
+                    expDate.setHours(0, 0, 0, 0);
+                    const cutoff = new Date(oneMonthFromToday);
+                    cutoff.setHours(23, 59, 59, 999);
+                    expiresWithinMonth = expDate <= cutoff;
                 }
-
-                // 2. Check if expiration date is within current month
-                let expirationInCurrentMonth = false;
-                if (c.expirationDate) {
-                    const expDate = new Date(c.expirationDate);
-                    expirationInCurrentMonth = expDate >= firstDayOfMonth && expDate <= lastDayOfMonth;
-                }
-
-                // 3. Check if boxes client has authorized amount < 584 or is null/undefined
-                const boxesLowOrNoAmount = c.serviceType === 'Boxes' && (c.authorizedAmount === null || c.authorizedAmount === undefined || c.authorizedAmount < 584);
-
-                // 4. Check if food client has authorized amount < 1344 or is null/undefined
-                const foodLowOrNoAmount = c.serviceType === 'Food' && (c.authorizedAmount === null || c.authorizedAmount === undefined || c.authorizedAmount < 1344);
-
-                matchesView = boxesNeedsVendor || expirationInCurrentMonth || boxesLowOrNoAmount || foodLowOrNoAmount;
             }
+
+            // 2. Auth amount < 2000 or null/undefined (coerce to number for string API values)
+            const rawAuth = c.authorizedAmount;
+            const amount = rawAuth != null && String(rawAuth).trim() !== '' ? Number(rawAuth) : NaN;
+            const authLowOrMissing = (amount !== amount) || amount < 2000; // NaN or < 2000
+
+            matchesView = expiresWithinMonth || authLowOrMissing;
         }
         // 'billing' might just show all clients but with different columns?
 
@@ -1609,46 +1599,28 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     function getNeedsAttentionReason(client: ClientProfile): string {
         const reasons: string[] = [];
         const now = new Date();
-        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const oneMonthFromToday = new Date(today);
+        oneMonthFromToday.setMonth(oneMonthFromToday.getMonth() + 1);
 
-        // 1. Check if client with boxes doesn't have vendor assigned
-        if (client.serviceType === 'Boxes') {
-            if (client.activeOrder && client.activeOrder.serviceType === 'Boxes') {
-                const box = boxTypes.find(b => b.id === client.activeOrder?.boxTypeId);
-                const vendorId = client.activeOrder.vendorId || box?.vendorId;
-                if (!vendorId) {
-                    reasons.push('Boxes: No vendor assigned');
-                }
-            } else {
-                reasons.push('Boxes: No vendor assigned');
-            }
-        }
-
-        // 2. Check if expiration date is within current month
+        // 1. Expiration on or before one month from today
         if (client.expirationDate) {
             const expDate = new Date(client.expirationDate);
-            if (expDate >= firstDayOfMonth && expDate <= lastDayOfMonth) {
-                reasons.push('Expiration date this month');
+            expDate.setHours(0, 0, 0, 0);
+            const cutoff = new Date(oneMonthFromToday);
+            cutoff.setHours(23, 59, 59, 999);
+            if (expDate <= cutoff) {
+                reasons.push('Expires within one month');
             }
         }
 
-        // 3. Check if boxes client has authorized amount < 584 or is null/undefined
-        if (client.serviceType === 'Boxes') {
-            if (client.authorizedAmount === null || client.authorizedAmount === undefined) {
-                reasons.push('Boxes: No authorized amount');
-            } else if (client.authorizedAmount < 584) {
-                reasons.push(`Boxes: Auth amount $${client.authorizedAmount} < $584`);
-            }
-        }
-
-        // 4. Check if food client has authorized amount < 1344 or is null/undefined
-        if (client.serviceType === 'Food') {
-            if (client.authorizedAmount === null || client.authorizedAmount === undefined) {
-                reasons.push('Food: No authorized amount');
-            } else if (client.authorizedAmount < 1344) {
-                reasons.push(`Food: Auth amount $${client.authorizedAmount} < $1344`);
-            }
+        // 2. Auth amount < $2000 or missing (coerce to number)
+        const rawAuth = client.authorizedAmount;
+        const amount = rawAuth != null && String(rawAuth).trim() !== '' ? Number(rawAuth) : NaN;
+        if (amount !== amount) {
+            reasons.push('No authorized amount');
+        } else if (amount < 2000) {
+            reasons.push(`Auth amount $${amount} < $2,000`);
         }
 
         return reasons.length > 0 ? reasons.join(', ') : 'No reason specified';
