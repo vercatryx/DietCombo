@@ -12,34 +12,28 @@ import {
 } from '@/lib/actions';
 
 /**
- * API Route: Create Orders for Expired Meal Planner Items (Optimized)
+ * API Route: Create Orders for Meal Planner by Scheduled Delivery Date
  *
  * POST /api/create-expired-meal-planner-orders
  *
  * CONTRACT:
+ * - ?date= is the SCHEDULED DELIVERY date (calendar date) to create orders for (YYYY-MM-DD in app TZ). When omitted, uses today.
  * - Defaults (single source of truth, not per-client):
  *   - Default food menu: settings.default_order_template (Food).
  *   - Default meal planner: meal_planner_custom_items where client_id IS NULL (per calendar_date).
  * - Client overrides (day-based): clients.meal_planner_data is the source for the client's order per date.
- *   - When client has meal_planner_data for the expired date, use that to build the order (items by name → menu_item_id or custom).
- *   - When client has no meal_planner_data for that date, fall back to clients.upcoming_order (or default) for migration period.
- *   - Always default to defaults when client has nothing.
- * - Created orders are immutable snapshots: we write into orders + order_vendor_selections + order_items the exact items and quantities at creation time. They do not change when defaults or clients.upcoming_order change later.
- * - Order items: names that match the menu are written only as menu items (order_items.menu_item_id); names that do not match are written only as custom (custom_name). No duplicate (same name as both menu and custom). Generic placeholder name "Item" is never written as a custom row.
- * - All dates are in EST (America/New_York). The ?date= param is a calendar date (YYYY-MM-DD) in EST; when omitted, "today" is taken in EST.
- *
- * Logic:
- * 1. Check if today is the expiration date for any meals in the meal planner (default template only).
- * 2. Batch fetch defaults and client overrides.
- * 3. Per client and date: prefer clients.meal_planner_data for that date; else upcoming_order or default.
- * 4. Insert snapshot rows into orders / order_vendor_selections / order_items (no references to templates).
+ *   - When client has meal_planner_data for that date, use that to build the order (items by name → menu_item_id or custom).
+ *   - When client has no meal_planner_data for that date, fall back to clients.upcoming_order (or default).
+ * - Created orders are immutable snapshots: we write into orders + order_vendor_selections + order_items the exact items and quantities at creation time.
+ * - Order items: names that match the menu are written only as menu items; names that do not match are written only as custom (custom_name).
+ * - All dates are in EST (America/New_York).
  */
 export async function POST(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
         const dateParam = searchParams.get('date');
 
-        let expirationDateStr: string;
+        let scheduledDeliveryDateStr: string;
         if (dateParam) {
             const dateMatch = dateParam.match(/^\d{4}-\d{2}-\d{2}$/);
             if (!dateMatch) {
@@ -48,58 +42,23 @@ export async function POST(request: NextRequest) {
                     error: 'Invalid date format. Use YYYY-MM-DD format.'
                 }, { status: 400 });
             }
-            expirationDateStr = dateParam;
+            scheduledDeliveryDateStr = dateParam;
         } else {
             const currentTime = await getCurrentTime();
-            expirationDateStr = getTodayInAppTz(currentTime);
+            scheduledDeliveryDateStr = getTodayInAppTz(currentTime);
         }
 
         const currentTime = await getCurrentTime();
         const currentTimeISO = currentTime.toISOString();
 
-        console.log(`[Create Expired Meal Planner Orders] Starting for expiration date: ${expirationDateStr}`);
+        // Single date to create orders for: the selected scheduled delivery date
+        const deliveryDates = [scheduledDeliveryDateStr];
+        console.log(`[Create Meal Planner Orders] Starting for scheduled delivery date: ${scheduledDeliveryDateStr}`);
 
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
         );
-
-        // 1. Fetch expired meal planner items (default template only - identifies which dates have expired items)
-        const { data: expiredItems, error: expiredError } = await supabaseAdmin
-            .from('meal_planner_custom_items')
-            .select('calendar_date, expiration_date, name, quantity')
-            .is('client_id', null)
-            .eq('expiration_date', expirationDateStr)
-            .order('calendar_date', { ascending: true });
-
-        if (expiredError) {
-            return NextResponse.json({
-                success: false,
-                error: `Failed to fetch expired meal planner items: ${expiredError.message}`
-            }, { status: 500 });
-        }
-
-        if (!expiredItems || expiredItems.length === 0) {
-            const { data: allExpirationDates } = await supabaseAdmin
-                .from('meal_planner_custom_items')
-                .select('expiration_date')
-                .is('client_id', null)
-                .not('expiration_date', 'is', null)
-                .order('expiration_date', { ascending: true });
-            const uniqueExpirationDates = [...new Set((allExpirationDates || []).map((item: any) => item.expiration_date))];
-            return NextResponse.json({
-                success: true,
-                message: `No meal planner items expire on ${expirationDateStr}`,
-                ordersCreated: 0,
-                clientsProcessed: 0,
-                expirationDate: expirationDateStr,
-                availableExpirationDates: uniqueExpirationDates.length > 0 ? uniqueExpirationDates : undefined
-            });
-        }
-
-        // Normalize to YYYY-MM-DD (EST calendar date) in case DB returns timestamps
-        const expiredDates = [...new Set(expiredItems.map((item: any) => String(item.calendar_date).slice(0, 10)))];
-        console.log(`[Create Expired Meal Planner Orders] Found ${expiredItems.length} expired items across ${expiredDates.length} date(s)`);
 
         // 2. Pre-fetch all reference data in parallel
         // Use getClientsForAdmin to bypass Supabase's 1000-row limit - avoids "Unknown Client" on vendor sheets
@@ -130,7 +89,7 @@ export async function POST(request: NextRequest) {
                 message: 'No Food service clients found',
                 ordersCreated: 0,
                 clientsProcessed: 0,
-                expirationDate: expirationDateStr
+                scheduledDeliveryDate: scheduledDeliveryDateStr
             });
         }
 
@@ -139,7 +98,7 @@ export async function POST(request: NextRequest) {
             .from('meal_planner_custom_items')
             .select('calendar_date, name, quantity')
             .is('client_id', null)
-            .in('calendar_date', expiredDates)
+            .in('calendar_date', deliveryDates)
             .order('sort_order', { ascending: true });
 
         const defaultByDate = new Map<string, { name: string; quantity: number }[]>();
@@ -159,7 +118,7 @@ export async function POST(request: NextRequest) {
             if (!raw || !Array.isArray(raw)) continue;
             for (const entry of raw) {
                 const d = String(entry?.scheduledDeliveryDate ?? entry?.scheduled_delivery_date ?? '').slice(0, 10);
-                if (!d || !expiredDates.includes(d)) continue;
+                if (!d || !deliveryDates.includes(d)) continue;
                 const items = Array.isArray(entry?.items) ? entry.items : [];
                 if (items.length === 0) continue;
                 if (!clientByDate.has(client.id)) clientByDate.set(client.id, new Map());
@@ -177,7 +136,7 @@ export async function POST(request: NextRequest) {
                 .from('orders')
                 .select('client_id, scheduled_delivery_date')
                 .in('client_id', foodClientIds)
-                .in('scheduled_delivery_date', expiredDates)
+                .in('scheduled_delivery_date', deliveryDates)
                 .eq('service_type', 'Food')
         ]);
 
@@ -219,17 +178,17 @@ export async function POST(request: NextRequest) {
                     (client.activeOrder.deliveryDayOrders && Object.keys(client.activeOrder.deliveryDayOrders).length > 0));
             const clientFoodOrderFallback = hasClientFoodOverride ? client.activeOrder : defaultTemplate;
 
-            for (const expiredDateStr of expiredDates) {
-                const defaultItems = defaultByDate.get(expiredDateStr) || [];
-                const clientItems = clientByDate.get(client.id)?.get(expiredDateStr) || [];
+            for (const deliveryDateStr of deliveryDates) {
+                const defaultItems = defaultByDate.get(deliveryDateStr) || [];
+                const clientItems = clientByDate.get(client.id)?.get(deliveryDateStr) || [];
                 const mealPlanMap = new Map<string, { name: string; quantity: number }>();
                 for (const i of defaultItems) mealPlanMap.set(i.name, i);
                 for (const i of clientItems) mealPlanMap.set(i.name, i);
                 const mealPlanItems = Array.from(mealPlanMap.values());
 
-                const scheduledDeliveryDate = expiredDateStr;
+                const scheduledDeliveryDate = deliveryDateStr;
                 const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                const deliveryDay = dayNames[new Date(expiredDateStr + 'T12:00:00').getDay()];
+                const deliveryDay = dayNames[new Date(deliveryDateStr + 'T12:00:00').getDay()];
 
                 if (existingSet.has(`${client.id}:${scheduledDeliveryDate}`)) {
                     skippedReasons.push(`Client ${client.id} (${client.fullName}): Order already exists for ${scheduledDeliveryDate}`);
@@ -312,7 +271,7 @@ export async function POST(request: NextRequest) {
                     (item) => !menuNamesBeingWritten.has((item.name || '').trim().toLowerCase())
                 );
                 if (!vendorSelections || vendorSelections.length === 0) {
-                    skippedReasons.push(`Client ${client.id} (${client.fullName}): No vendor selections or meal plan items for ${expiredDateStr}`);
+                    skippedReasons.push(`Client ${client.id} (${client.fullName}): No vendor selections or meal plan items for ${deliveryDateStr}`);
                     continue;
                 }
 
@@ -366,9 +325,8 @@ export async function POST(request: NextRequest) {
                 message: `Processed ${clientsProcessed} clients. No orders to create.`,
                 ordersCreated: 0,
                 clientsProcessed,
-                expirationDate: expirationDateStr,
-                expiredDates,
-                expiredItemsCount: expiredItems.length,
+                scheduledDeliveryDate: scheduledDeliveryDateStr,
+                deliveryDates,
                 errors: errors.length > 0 ? errors : undefined,
                 skippedReasons: skippedReasons.length > 0 ? skippedReasons : undefined
             });
@@ -481,26 +439,25 @@ export async function POST(request: NextRequest) {
         }
 
         const ordersCreated = ordersToInsert.length;
-        console.log(`[Create Expired Meal Planner Orders] Created ${ordersCreated} orders in batch`);
+        console.log(`[Create Meal Planner Orders] Created ${ordersCreated} orders in batch`);
 
         return NextResponse.json({
             success: true,
-            message: `Processed ${clientsProcessed} clients. Created ${ordersCreated} order(s) for expired meal planner items (expired: ${expirationDateStr}).`,
+            message: `Processed ${clientsProcessed} clients. Created ${ordersCreated} order(s) for scheduled delivery date ${scheduledDeliveryDateStr}.`,
             ordersCreated,
             clientsProcessed,
-            expirationDate: expirationDateStr,
-            expiredDates,
-            expiredItemsCount: expiredItems.length,
+            scheduledDeliveryDate: scheduledDeliveryDateStr,
+            deliveryDates,
             errors: errors.length > 0 ? errors : undefined,
             skippedReasons: skippedReasons.length > 0 ? skippedReasons : undefined
         }, {
             headers: { 'Content-Type': 'application/json' }
         });
     } catch (error: any) {
-        console.error('[Create Expired Meal Planner Orders] Unexpected error:', error);
+        console.error('[Create Meal Planner Orders] Unexpected error:', error);
         return NextResponse.json({
             success: false,
-            error: error.message || 'Failed to create expired meal planner orders',
+            error: error.message || 'Failed to create meal planner orders',
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         }, {
             status: 500,

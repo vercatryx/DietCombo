@@ -15,6 +15,10 @@ export function SettingsManagement() {
     const [message, setMessage] = useState<{ text: string; success: boolean } | null>(null);
     const [runningExpired, setRunningExpired] = useState(false);
     const [expiredResult, setExpiredResult] = useState<{ message: string; success: boolean } | null>(null);
+    const [createOrderDate, setCreateOrderDate] = useState(() => {
+        const t = getTodayInAppTz();
+        return t;
+    });
     const [deleteDate, setDeleteDate] = useState('');
     const [deleteClicks, setDeleteClicks] = useState(0);
     const [deleting, setDeleting] = useState(false);
@@ -56,11 +60,14 @@ export function SettingsManagement() {
     }
 
     async function handleRunCreateExpiredOrders() {
+        if (!createOrderDate || !/^\d{4}-\d{2}-\d{2}$/.test(createOrderDate)) {
+            setExpiredResult({ message: 'Please select a scheduled delivery date (YYYY-MM-DD).', success: false });
+            return;
+        }
         setRunningExpired(true);
         setExpiredResult(null);
-        const dateParam = getTodayInAppTz();
         try {
-            const res = await fetch(`/api/create-expired-meal-planner-orders?date=${dateParam}`, {
+            const res = await fetch(`/api/create-expired-meal-planner-orders?date=${createOrderDate}`, {
                 method: 'POST',
             });
             const data = await res.json();
@@ -70,12 +77,12 @@ export function SettingsManagement() {
             }
             const ordersCreated = data.ordersCreated ?? 0;
             const msg = ordersCreated > 0
-                ? `Created ${ordersCreated} order(s) for expiration date ${dateParam}.`
-                : data.message || `No meal planner items expire on ${dateParam}.`;
+                ? `Created ${ordersCreated} order(s) for scheduled delivery ${createOrderDate}.`
+                : data.message || `No orders created for ${createOrderDate}.`;
             setExpiredResult({ message: msg, success: true });
         } catch (err) {
             setExpiredResult({
-                message: err instanceof Error ? err.message : 'Failed to run create expired meal days.',
+                message: err instanceof Error ? err.message : 'Failed to create orders.',
                 success: false,
             });
         } finally {
@@ -201,15 +208,28 @@ export function SettingsManagement() {
                 <h3 className={styles.sectionTitle}>Actions</h3>
                 <div className={styles.actionCard}>
                     <p className={styles.actionDescription}>
-                        Create orders for meal planner items that expire today.
+                        Create orders for a selected scheduled delivery date. Choose the date, then click to create orders for that day.
                     </p>
+                    <div className={styles.inputGroup} style={{ marginBottom: '0.75rem' }}>
+                        <label className={styles.label}>Scheduled delivery date</label>
+                        <input
+                            className={styles.input}
+                            type="date"
+                            value={createOrderDate}
+                            onChange={(e) => {
+                                setCreateOrderDate(e.target.value);
+                                setExpiredResult(null);
+                            }}
+                            disabled={runningExpired}
+                        />
+                    </div>
                     <button
                         type="button"
                         className={styles.actionButton}
                         onClick={handleRunCreateExpiredOrders}
-                        disabled={runningExpired}
+                        disabled={runningExpired || !createOrderDate}
                     >
-                        {runningExpired ? 'Running...' : 'Create Orders (Expired Today)'}
+                        {runningExpired ? 'Running...' : 'Create orders for this date'}
                     </button>
                     {expiredResult && (
                         <div className={expiredResult.success ? styles.success : styles.error} style={{ marginTop: '0.75rem' }}>
