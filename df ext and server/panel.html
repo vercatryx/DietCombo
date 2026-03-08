@@ -5,10 +5,10 @@
     <title>Diet Fantasy — Panel</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-        :root{
+        :root, .site-main{
             --bg:#0f172a; --muted:#9ca3af; --text:#e5e7eb;
             --line:#1f2937; --line-strong:#0b1222;
-            --primary:#2563eb; --pill:#111827; --hover:#0c1326;
+            --primary:#10b981; --pill:#111827; --hover:#0c1326;
             --ok:#10b981; --warn:#f59e0b; --bad:#ef4444;
             --w: 360px;
             --log-h: 150px;
@@ -99,18 +99,28 @@
 
         .foot{ padding:8px 12px; border-top:2px solid var(--line-strong); display:flex; justify-content:space-between; align-items:center; font-size:12px; color:var(--muted); gap:8px }
         .countfoot{ color:#cbd5e1; flex:1 }
-        .foot .btn.slate#btnUnitedUsLogin{ background:var(--btn-blue) }
-        .foot .btn.slate#btnUnitedUsLogin:hover{ background:var(--btn-blue-h) }
+        .foot .btn.slate#btnUnitedUsLogin{ background:var(--primary) }
+        .foot .btn.slate#btnUnitedUsLogin:hover{ filter:brightness(1.1) }
+
+        /* Brooklyn = blue theme */
+        .site-brooklyn{ --primary:#2563eb; --ok:#3b82f6; }
+        .site-brooklyn .tab[aria-selected="true"]{ background:var(--primary) }
+        .site-brooklyn .btn.blue{ background:var(--primary) }
+        .site-brooklyn .btn.micro.toggle.active{ background:var(--primary) }
+        .site-brooklyn .status.pending{ background:var(--primary) }
+
+        .site-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px }
+        .site-row label{ font-size:12px; color:var(--muted); margin-right:4px }
+        #siteSelect{ background:#0b1222; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:13px; min-width:140px; cursor:pointer }
+        #siteSelect:focus{ outline:none; border-color:var(--primary) }
 
         /* Manual iframe */
         #manualWrap{ display:none; flex:1 1 auto; min-height:0 }
         #manualFrame{ width:100%; height:100%; border:0; background:transparent }
     </style>
 </head>
-<body>
+<body class="site-main" id="panelBody">
 <div class="panel">
-
-
     <div class="tabs">
         <button class="tab" id="tabAuto" aria-selected="true">Auto</button>
         <button class="tab" id="tabManual" aria-selected="false">Manual</button>
@@ -120,6 +130,13 @@
         <!-- AUTO -->
         <div id="autoWrap">
             <div class="controls" id="controls">
+                <div class="site-row">
+                    <label for="siteSelect">Site:</label>
+                    <select id="siteSelect" title="Which site to load users from and record billings to">
+                        <option value="main">Diet Fantasy (Main)</option>
+                        <option value="brooklyn">Brooklyn</option>
+                    </select>
+                </div>
                 <div class="rowA">
                     <button class="btn slate"  id="btnRefresh">Refresh</button>
                     <button class="btn blue"   id="btnStart">Start</button>

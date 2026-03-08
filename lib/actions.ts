@@ -2131,6 +2131,133 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
     }
 }
 
+/** One client's meal plan edit for a given delivery date (for meal plan edits report). */
+export type MealPlanEditEntry = {
+    clientId: string;
+    clientName: string;
+    scheduledDeliveryDate: string;
+    items: { id: string; name: string; quantity: number; value: number | null }[];
+};
+
+/**
+ * Get all clients who changed their meal plan from the default for a given delivery date.
+ * Sources from clients.meal_planner_data — same as getClientsWhoChangedFromDefaultForDate
+ * (vendor cooking list) — but returns full items so the Meal Plan Edits page can show them.
+ */
+export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Promise<MealPlanEditEntry[]> {
+    const dateOnly = mealPlannerDateOnly(deliveryDate);
+    if (!dateOnly) return [];
+    try {
+        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            : supabase;
+
+        const { data: clients, error } = await supabaseClient
+            .from('clients')
+            .select('id, full_name, meal_planner_data')
+            .not('meal_planner_data', 'is', null);
+
+        if (error) {
+            logQueryError(error, 'clients', 'select');
+            return [];
+        }
+        if (!clients || clients.length === 0) return [];
+
+        const result: MealPlanEditEntry[] = [];
+        for (const c of clients) {
+            const mpd = c.meal_planner_data;
+            if (!Array.isArray(mpd)) continue;
+            const entry = mpd.find(
+                (e: any) => (e?.scheduledDeliveryDate ?? e?.scheduled_delivery_date) === dateOnly
+            );
+            if (!entry) continue;
+            const items = Array.isArray(entry.items)
+                ? entry.items.map((i: any, idx: number) => ({
+                    id: i.id ?? `item-${idx}`,
+                    name: (i.name ?? 'Item').trim(),
+                    quantity: Math.max(0, Number(i.quantity) ?? 0),
+                    value: i.value != null && !Number.isNaN(Number(i.value)) ? Number(i.value) : null
+                }))
+                : [];
+            result.push({
+                clientId: c.id,
+                clientName: (c.full_name ?? 'Unknown').trim() || 'Unknown',
+                scheduledDeliveryDate: dateOnly,
+                items
+            });
+        }
+        return result.sort((a, b) => a.clientName.localeCompare(b.clientName));
+    } catch (error) {
+        console.error('Error fetching meal plan edits by delivery date:', error);
+        return [];
+    }
+}
+
+/**
+ * Get count of distinct clients who changed from default per delivery date in the given range.
+ * Sources from clients.meal_planner_data (same as vendor cooking list).
+ * Uses DB function get_meal_plan_edit_counts when available (faster); falls back to JS scan.
+ */
+export async function getMealPlanEditCountsByMonth(startDate: string, endDate: string): Promise<Record<string, number>> {
+    const start = mealPlannerDateOnly(startDate);
+    const end = mealPlannerDateOnly(endDate);
+    try {
+        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+            : supabase;
+
+        const { data: rpcRows, error: rpcError } = await supabaseClient.rpc('get_meal_plan_edit_counts', {
+            p_start_date: start,
+            p_end_date: end
+        });
+
+        if (!rpcError && rpcRows && Array.isArray(rpcRows)) {
+            const result: Record<string, number> = {};
+            for (const row of rpcRows as { delivery_date: string; client_count: number }[]) {
+                const dateKey = row.delivery_date ? mealPlannerDateOnly(String(row.delivery_date)) : null;
+                if (dateKey) result[dateKey] = Number(row.client_count) || 0;
+            }
+            return result;
+        }
+
+        if (rpcError) {
+            console.warn('[getMealPlanEditCountsByMonth] RPC not available, using fallback:', rpcError.message);
+        }
+
+        // Fallback: scan clients.meal_planner_data in JS
+        const { data: clients, error } = await supabaseClient
+            .from('clients')
+            .select('id, meal_planner_data')
+            .not('meal_planner_data', 'is', null);
+
+        if (error) {
+            logQueryError(error, 'clients', 'select');
+            return {};
+        }
+        if (!clients || clients.length === 0) return {};
+
+        const byDate = new Map<string, Set<string>>();
+        for (const c of clients) {
+            const mpd = c.meal_planner_data;
+            if (!Array.isArray(mpd)) continue;
+            for (const entry of mpd) {
+                const dateKey = mealPlannerDateOnly(entry?.scheduledDeliveryDate ?? entry?.scheduled_delivery_date ?? '');
+                if (!dateKey || dateKey < start || dateKey > end) continue;
+                if (!byDate.has(dateKey)) byDate.set(dateKey, new Set());
+                byDate.get(dateKey)!.add(c.id);
+            }
+        }
+        const result: Record<string, number> = {};
+        for (const [dateKey, clientSet] of byDate) {
+            result[dateKey] = clientSet.size;
+        }
+        return result;
+    } catch (err) {
+        console.error('Error fetching meal plan edit counts:', err);
+        return {};
+    }
+}
+
 /**
  * Get distinct calendar dates from meal_planner_custom_items for the default template (client_id is null)
  * that are today or in the future. Used to seed meal_planner_orders for a client when they have none.

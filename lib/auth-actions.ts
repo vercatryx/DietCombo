@@ -127,10 +127,11 @@ export async function verifyOtp(email: string, code: string) {
             await createSession(id, nav?.name || 'Navigator', 'navigator');
             redirect('/clients');
         } else if (type === 'client' && id) {
-            const { data: clientRow } = await supabase.from('clients').select('service_type').eq('id', id).single();
+            const { data: clientRow } = await supabase.from('clients').select('service_type, full_name').eq('id', id).single();
             if (clientRow?.service_type === 'Produce') {
                 return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
             }
+            await createSession(id, clientRow?.full_name || 'Client', 'client');
             redirect(`/client-portal/${id}`);
         }
 

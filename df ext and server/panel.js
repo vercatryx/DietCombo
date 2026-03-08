@@ -1,6 +1,15 @@
 (() => {
-    const API_URL = "https://dietfantasy-nkw6.vercel.app/api/ext/users";
-    const BILLINGS_URL = "https://dietfantasy-nkw6.vercel.app/api/ext/billings";
+    const SITES = {
+        main: { base: "https://customer.thedietfantasy.com", label: "Diet Fantasy (Main)" },
+        brooklyn: { base: "https://brooklyn.thedietfantasy.com", label: "Brooklyn" }
+    };
+    const SITE_KEY = "df_panel_site";
+    function getApiUrls() {
+        const siteId = localStorage.getItem(SITE_KEY) || "main";
+        const base = (SITES[siteId] || SITES.main).base.replace(/\/$/, "");
+        return { apiUrl: base + "/api/ext/users", billingsUrl: base + "/api/ext/billings", base, siteId };
+    }
+    let { apiUrl: API_URL, billingsUrl: BILLINGS_URL } = getApiUrls();
     const UNITE_URL = (caseId, clientId) =>
         `https://app.uniteus.io/dashboard/cases/open/${encodeURIComponent(caseId)}/contact/${encodeURIComponent(clientId)}`;
 
@@ -36,6 +45,8 @@
     const inpEnd    = document.getElementById("inpEndDate");
     const inpSearch = document.getElementById("inpSearch");
     const chkCustomDelivery = document.getElementById("chkCustomDelivery");
+    const siteSelect = document.getElementById("siteSelect");
+    const panelBody = document.getElementById("panelBody");
 
     const countFoot = document.getElementById("countFoot");
 
@@ -273,7 +284,21 @@
         updateStartButtonText();
     }
 
+    function applySiteTheme(siteId) {
+        if (!panelBody) return;
+        panelBody.classList.remove("site-main", "site-brooklyn");
+        panelBody.classList.add(siteId === "brooklyn" ? "site-brooklyn" : "site-main");
+    }
+
+    function refreshApiUrls() {
+        const { apiUrl, billingsUrl, siteId } = getApiUrls();
+        API_URL = apiUrl;
+        BILLINGS_URL = billingsUrl;
+        applySiteTheme(siteId);
+    }
+
     async function fetchUsers(){
+        refreshApiUrls();
         listEl.innerHTML="<div style='padding:10px 12px;'>Loading…</div>";
         const r=await fetch(API_URL,{credentials:"omit"});
         if(!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -339,13 +364,15 @@
     async function setBillingArgsOnPage({ startISO, endISO, ratePerDay=48, userId, attemptUpload=false, hasSignature=false }) {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tab?.id) throw new Error("No active tab");
+        const { base } = getApiUrls();
         const args = {
             start: toMDY(startISO),
             end: toMDY(endISO),
             ratePerDay: Number(ratePerDay)||48,
             userId: Number(userId)||null,
             attemptUpload: !!attemptUpload,
-            hasSignature: !!hasSignature
+            hasSignature: !!hasSignature,
+            apiBase: base
         };
         await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -915,7 +942,7 @@
 
     async function runAuto() {
         if (isRunning) return;
-        
+        refreshApiUrls();
         // Clear logs when starting
         logEl.textContent = "";
         localStorage.removeItem(LOG_KEY);
@@ -1144,12 +1171,33 @@
         t=setTimeout(()=>{ q = inpSearch.value || ""; localStorage.setItem(SEARCH_KEY, q); buildFiltered(); renderList(); }, 120);
     });
 
+    // Site dropdown: persist and apply theme, refresh users when changed
+    if (siteSelect) {
+        const saved = localStorage.getItem(SITE_KEY) || "main";
+        siteSelect.value = saved;
+        applySiteTheme(saved);
+        siteSelect.addEventListener("change", () => {
+            const siteId = siteSelect.value || "main";
+            localStorage.setItem(SITE_KEY, siteId);
+            applySiteTheme(siteId);
+            refreshApiUrls();
+            log(`Switched to ${(SITES[siteId] || SITES.main).label}. Refreshing users...`);
+            fetchUsers().catch(e => log("Refresh failed: " + e));
+        });
+    }
+
     // ----- Boot -----
     (async()=>{
         reflectTabs(); restoreLog(); reflectOptsToUI(loadOpts());
         restoreSelectedUsers();
         btnSomeMode.classList.toggle('active', someMode);
         btnErrors.classList.toggle('active', errorsOnly);
+        if (siteSelect) {
+            const saved = localStorage.getItem(SITE_KEY) || "main";
+            siteSelect.value = saved;
+            applySiteTheme(saved);
+            refreshApiUrls();
+        }
         try{ await fetchUsers(); }catch(e){ listEl.innerHTML=`<div style='padding:10px 12px;'>Load failed: ${e}`; }
         setRunningUI(false);
     })();

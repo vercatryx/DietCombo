@@ -120,7 +120,23 @@ function sortQueue(field) {
     renderQueue(lastRequests);
 }
 
-const DEFAULT_API_BASE = 'http://customer.thedietfantasy.com';
+const SERVERS = {
+    main: 'https://customer.thedietfantasy.com',
+    brooklyn: 'https://brooklyn.thedietfantasy.com'
+};
+const SERVER_STORAGE_KEY = 'df_automation_server';
+
+function getSelectedApiBase() {
+    const sel = document.getElementById('serverSelect');
+    const id = (sel && sel.value) || localStorage.getItem(SERVER_STORAGE_KEY) || 'main';
+    if (sel && sel.value !== id) sel.value = id;
+    return (SERVERS[id] || SERVERS.main).replace(/\/$/, '');
+}
+
+function persistServerSelection() {
+    const sel = document.getElementById('serverSelect');
+    if (sel) localStorage.setItem(SERVER_STORAGE_KEY, sel.value);
+}
 
 /** Return YYYY-MM-DD for the last Monday (including today if today is Monday). */
 function getLastMondayISO() {
@@ -142,14 +158,15 @@ function getBillDate() {
 }
 
 function downloadAllClients() {
+    const apiBaseUrl = getSelectedApiBase();
     const date = getBillDate();
-    const urlWithQuery = `${DEFAULT_API_BASE}/api/bill?date=${date}`;
+    const urlWithQuery = `${apiBaseUrl}/api/bill?date=${date}`;
     log('Fetching all clients from ' + urlWithQuery + '...', 'info');
 
     fetch('/fetch-all-clients', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiBaseUrl: DEFAULT_API_BASE, date })
+        body: JSON.stringify({ apiBaseUrl, date })
     })
         .then(r => r.json())
         .then(d => {
@@ -173,7 +190,8 @@ function runCurrentQueue() {
         log('Starting automation with current queue (all)...', 'info');
     }
 
-    const body = { source: 'queue', apiBaseUrl: DEFAULT_API_BASE, apiKey: '' };
+    const apiBaseUrl = getSelectedApiBase();
+    const body = { source: 'queue', apiBaseUrl, apiKey: '' };
     if (runOnlySelected) body.selectedIds = ids;
 
     fetch('/process-billing', {
@@ -322,3 +340,11 @@ function updateStats(requests) {
 
 initBillDate();
 setupDragSelect();
+
+(function initServerSelect() {
+    const sel = document.getElementById('serverSelect');
+    if (!sel) return;
+    const saved = localStorage.getItem(SERVER_STORAGE_KEY) || 'main';
+    sel.value = saved;
+    sel.addEventListener('change', persistServerSelection);
+})();

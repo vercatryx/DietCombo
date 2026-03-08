@@ -80,6 +80,9 @@ export default async function middleware(request: NextRequest) {
       }
     }
 
+    if (path === '/login' && session.role === 'client') {
+      return NextResponse.redirect(new URL(`/client-portal/${session.userId}`, request.url));
+    }
     if (path === '/login' && (session.role === 'admin' || session.role === 'super-admin' || session.role === 'navigator')) {
       return NextResponse.redirect(new URL('/clients', request.url));
     }

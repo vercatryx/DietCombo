@@ -1252,9 +1252,10 @@
                 const person = personResult.person || {};
                 console.log('[enterBillingDetails] Person:', person.name);
 
-                // Generate PDF via backend
-                console.log('[enterBillingDetails] Generating PDF via backend...');
-                const backendUrl = "https://dietfantasy-nkw6.vercel.app/api/ext/attestation";
+                // Generate PDF via backend (use apiBase from panel when set, e.g. Brooklyn vs Main)
+                const apiBase = (window.__BILLING_INPUTS__ && window.__BILLING_INPUTS__.apiBase) ? String(window.__BILLING_INPUTS__.apiBase).replace(/\/$/, '') : 'https://customer.thedietfantasy.com';
+                const backendUrl = apiBase + '/api/ext/attestation';
+                console.log('[enterBillingDetails] Generating PDF via backend...', backendUrl);
                 const payload = {
                     name: person.name || "",
                     phone: person.phone || "",

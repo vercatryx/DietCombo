@@ -513,8 +513,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         // Filter by Screening Status
         const matchesScreeningFilter = !screeningFilter || (c.screeningStatus || 'not_started') === screeningFilter;
 
-        // Filter by Service Type (Active Order)
-        const matchesServiceTypeFilter = !serviceTypeFilter || c.serviceType === serviceTypeFilter;
+        // Filter by Service Type (match display: Produce = Produce, else Food)
+        const matchesServiceTypeFilter = !serviceTypeFilter ||
+            (serviceTypeFilter === 'Produce' ? c.serviceType === 'Produce' : c.serviceType !== 'Produce');
 
         // Filter by Needs Vendor (for Boxes clients without vendor)
         let matchesNeedsVendorFilter = true;
@@ -1932,10 +1933,43 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         SIGN {getSortIcon('signatures')}
                     </span>
 
-                    {/* Type (Food / Produce) column - sortable */}
-                    <span style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                        onClick={() => handleSort('clientType')}>
-                        Type {getSortIcon('clientType')}
+                    {/* Type (Food / Produce) column - sortable + filter */}
+                    <span style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                        <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('clientType')}>
+                            Type {getSortIcon('clientType')}
+                        </span>
+                        <Filter
+                            size={14}
+                            style={{ cursor: 'pointer', opacity: serviceTypeFilter ? 1 : 0.5, color: serviceTypeFilter ? 'var(--color-primary)' : 'inherit', filter: serviceTypeFilter ? 'drop-shadow(0 0 3px var(--color-primary))' : 'none' }}
+                            onClick={(e) => { e.stopPropagation(); setOpenFilterMenu(openFilterMenu === 'clientType' ? null : 'clientType'); }}
+                        />
+                        {openFilterMenu === 'clientType' && (
+                            <div style={{
+                                position: 'absolute', top: '100%', left: 0, marginTop: '4px',
+                                backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
+                                zIndex: 1000, minWidth: '140px'
+                            }}>
+                                <div onClick={() => { setServiceTypeFilter(null); setOpenFilterMenu(null); }}
+                                    style={{
+                                        padding: '8px 12px', cursor: 'pointer',
+                                        backgroundColor: !serviceTypeFilter ? 'var(--bg-surface-hover)' : 'transparent',
+                                        fontWeight: !serviceTypeFilter ? 600 : 400
+                                    }}>
+                                    All Types
+                                </div>
+                                {['Food', 'Produce'].map((type) => (
+                                    <div key={type} onClick={() => { setServiceTypeFilter(type); setOpenFilterMenu(null); }}
+                                        style={{
+                                            padding: '8px 12px', cursor: 'pointer',
+                                            backgroundColor: serviceTypeFilter === type ? 'var(--bg-surface-hover)' : 'transparent',
+                                            fontWeight: serviceTypeFilter === type ? 600 : 400
+                                        }}>
+                                        {type}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </span>
 
                     {/* Flags (non-default) column - sortable + filter */}
@@ -2247,6 +2281,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 {filteredClients.length === 0 && !isLoading && (
                     <div className={styles.empty}>
                         {flagsFilter !== 'all' ? `No clients with "${FLAGS_FILTER_OPTIONS.find(o => o.value === flagsFilter)?.label ?? flagsFilter}".` :
+                            serviceTypeFilter ? `No clients with type "${serviceTypeFilter}".` :
                             needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
                                 currentView === 'ineligible' ? 'No ineligible clients found.' :
                                     currentView === 'eligible' ? 'No eligible clients found.' :

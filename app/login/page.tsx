@@ -1,13 +1,11 @@
 'use client';
 
 import { useActionState, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { login, checkEmailIdentity, sendOtp, verifyOtp } from '@/lib/auth-actions';
 import styles from './page.module.css';
 
 export default function LoginPage() {
-    const router = useRouter();
     const [state, action, isPending] = useActionState(login, undefined);
     const [step, setStep] = useState<1 | 2>(1);
     const [username, setUsername] = useState('');
@@ -51,27 +49,17 @@ export default function LoginPage() {
                         setCheckingIdentity(false);
                         return;
                     }
-                    // Check if passwordless is enabled for this user (which means global enabled + is client)
-                    if (result.enablePasswordless) {
-                        setUseOtp(true);
-
-                        // Trigger OTP send immediately
-                        setOtpMessage('Sending security code...');
-                        const sendResult = await sendOtp(username);
-                        if (sendResult.success) {
-                            setOtpMessage(`Code sent to ${username}`);
-                            setStep(2);
-                            startResendTimer();
-                        } else {
-                            setIdentityError(sendResult.message || 'Failed to send verification code.');
-                            setCheckingIdentity(false);
-                            return;
-                        }
+                    // Clients always use OTP (email code) so we create a session before redirecting
+                    setUseOtp(true);
+                    setOtpMessage('Sending security code...');
+                    const sendResult = await sendOtp(username);
+                    if (sendResult.success) {
+                        setOtpMessage(`Code sent to ${username}`);
+                        setStep(2);
+                        startResendTimer();
                     } else {
-                        // Original flow for client without passwordless
-                        console.log('Redirecting to client portal:', result.id);
-                        router.push(`/client-portal/${result.id}`);
-                        // Don't turn off checkingIdentity so we show loading state during redirect
+                        setIdentityError(sendResult.message || 'Failed to send verification code.');
+                        setCheckingIdentity(false);
                         return;
                     }
                 } else {

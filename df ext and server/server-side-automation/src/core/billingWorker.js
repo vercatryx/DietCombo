@@ -10,8 +10,20 @@ const path = require('path');
 const dotenvPath = process.env.DOTENV_PATH || path.join(__dirname, '..', '..', '.env');
 require('dotenv').config({ path: dotenvPath });
 
-const EMAIL = process.env.UNITEUS_EMAIL;
-const PASSWORD = process.env.UNITEUS_PASSWORD;
+// --- CREDENTIALS: main vs Brooklyn (multiple UniteUs accounts) ---
+function getUniteUsCredentials(apiConfig) {
+    const baseUrl = (apiConfig && apiConfig.baseUrl) ? String(apiConfig.baseUrl) : '';
+    const isBrooklyn = /brooklyn/i.test(baseUrl);
+    if (isBrooklyn) {
+        const email = process.env.UNITEUS_EMAIL_BROOKLYN || process.env.UNITEUS_EMAIL;
+        const password = process.env.UNITEUS_PASSWORD_BROOKLYN || process.env.UNITEUS_PASSWORD;
+        return { email, password };
+    }
+    return {
+        email: process.env.UNITEUS_EMAIL,
+        password: process.env.UNITEUS_PASSWORD
+    };
+}
 
 // --- API CONFIG DEFAULTS ---
 const DEFAULT_API_BASE_URL = process.env.EXTENSION_API_BASE_URL || 'http://customer.thedietfantasy.com';
@@ -306,12 +318,18 @@ async function updateClientAuthorization(clientId, authorizedAmount, expirationD
  * @param {object} options - Optional: { page, context, getPageOrRestart, requestSlice, slotLabel } for parallel mode
  */
 async function billingWorker(initialRequests, emitEvent, source = 'file', apiConfig = null, options = {}) {
-    if (!EMAIL || !PASSWORD) {
-        emitEvent('log', { message: '[AUTH] Missing UNITEUS_EMAIL or UNITEUS_PASSWORD in env.', type: 'error' });
+    const creds = getUniteUsCredentials(apiConfig);
+    if (!creds.email || !creds.password) {
+        const baseUrl = (apiConfig && apiConfig.baseUrl) || '';
+        const hint = /brooklyn/i.test(baseUrl) ? ' (Brooklyn: set UNITEUS_EMAIL_BROOKLYN / UNITEUS_PASSWORD_BROOKLYN)' : ' (set UNITEUS_EMAIL / UNITEUS_PASSWORD)';
+        emitEvent('log', { message: '[AUTH] Missing UniteUs credentials in env.' + hint, type: 'error' });
         return;
     }
+    const EMAIL = creds.email;
+    const PASSWORD = creds.password;
+    const baseUrl = (apiConfig && apiConfig.baseUrl) || DEFAULT_API_BASE_URL;
+    emitEvent('log', { message: `Initializing Billing Cycle (Source: ${source}, API: ${baseUrl}, UniteUs: ${EMAIL})...` });
 
-    emitEvent('log', { message: `Initializing Billing Cycle (Source: ${source})...` });
 
     // --- Load Requests based on Source ---
     let requests = initialRequests || [];
