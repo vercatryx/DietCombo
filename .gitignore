@@ -44,6 +44,24 @@ next-env.d.ts
 
 /dietfantasy
 /triangleorder
+/brooklyn clone
+
+# cursor/IDE
+.cursor/
+
+# Electron/build output
+dist/
+**/server-side-automation/dist/
+
+# generated docs
+docs/db-schema-dump.txt
+docs/VERIFY_DB_SCHEMA.md
+
+# optional/one-off scripts (untracked)
+scripts/check-needs-attention-count.ts
+scripts/consolidate-env.js
+scripts/dump-db-schema.ts
+scripts/verify-env.js
 
 /lib/generated/prisma
 
