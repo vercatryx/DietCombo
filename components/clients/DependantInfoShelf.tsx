@@ -42,6 +42,10 @@ export function DependantInfoShelf({
         zip: c.zip || '',
         notes: c.dislikes ?? '',
         serviceType: c.serviceType,
+        paused: c.paused ?? false,
+        complex: c.complex ?? false,
+        bill: c.bill ?? true,
+        delivery: c.delivery ?? true,
     }), []);
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
@@ -99,6 +103,10 @@ export function DependantInfoShelf({
                     zip: editForm.zip || null,
                     dislikes: editForm.notes || null,
                     serviceType: editForm.serviceType,
+                    paused: editForm.paused,
+                    complex: editForm.complex,
+                    bill: editForm.bill,
+                    delivery: editForm.delivery,
                 },
                 { skipOrderSync: true }
             );
@@ -412,6 +420,63 @@ export function DependantInfoShelf({
                                         />
                                     ) : (
                                         <span style={{ whiteSpace: 'pre-wrap' }}>{client.dislikes?.trim() || '—'}</span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Flags: Paused, Complex, Bill, Delivery (e.g. mark as No delivery) */}
+                    <div className={styles.section}>
+                        <h3>Flags</h3>
+                        <div className={styles.infoGrid}>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>Flags</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.paused}
+                                                    onChange={e => setEditForm({ ...editForm, paused: e.target.checked })}
+                                                />
+                                                <span>Paused</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.complex}
+                                                    onChange={e => setEditForm({ ...editForm, complex: e.target.checked })}
+                                                />
+                                                <span>Complex</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.bill}
+                                                    onChange={e => setEditForm({ ...editForm, bill: e.target.checked })}
+                                                />
+                                                <span>Bill</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.delivery}
+                                                    onChange={e => setEditForm({ ...editForm, delivery: e.target.checked })}
+                                                />
+                                                <span>Delivery</span>
+                                            </label>
+                                        </div>
+                                    ) : (
+                                        (client.paused || client.complex || client.bill || client.delivery) ? (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                {client.paused && <span className={styles.flagChip}>Paused</span>}
+                                                {client.complex && <span className={styles.flagChip}>Complex</span>}
+                                                {client.bill && <span className={styles.flagChip}>Bill</span>}
+                                                {client.delivery && <span className={styles.flagChip}>Delivery</span>}
+                                            </div>
+                                        ) : '—'
                                     )}
                                 </div>
                             </div>

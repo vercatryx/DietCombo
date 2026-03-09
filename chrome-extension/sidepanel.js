@@ -1,8 +1,24 @@
-// Configuration
-let apiKey = '';
-let baseUrl = '';
+// Configuration: two connection sets (main + Brooklyn)
+const DEFAULT_MAIN_BASE = 'https://customer.thedietfantasy.com';
+const DEFAULT_BROOKLYN_BASE = 'https://brooklyn.thedietfantasy.com';
+
+let configMain = { baseUrl: DEFAULT_MAIN_BASE, apiKey: '' };
+let configBrooklyn = { baseUrl: DEFAULT_BROOKLYN_BASE, apiKey: '' };
+let activeConnection = 'main'; // 'main' | 'brooklyn'
 let statuses = [];
 let navigators = [];
+
+function getActiveConfig() {
+    const c = activeConnection === 'brooklyn' ? configBrooklyn : configMain;
+    return { baseUrl: (c.baseUrl || '').replace(/\/$/, ''), apiKey: c.apiKey || '' };
+}
+
+function applyTheme() {
+    const body = document.getElementById('panel-body');
+    if (!body) return;
+    body.classList.remove('theme-main', 'theme-brooklyn');
+    body.classList.add(activeConnection === 'brooklyn' ? 'theme-brooklyn' : 'theme-main');
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -11,15 +27,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
 });
 
-// Load configuration from storage
+// Load configuration from storage (with migration from old single apiKey/baseUrl)
 async function loadConfig() {
-    const result = await chrome.storage.sync.get(['apiKey', 'baseUrl']);
-    if (result.apiKey) {
-        apiKey = result.apiKey;
+    const result = await chrome.storage.sync.get([
+        'configMain', 'configBrooklyn', 'activeConnection',
+        'apiKey', 'baseUrl'
+    ]);
+    if (result.configMain && typeof result.configMain === 'object') {
+        configMain = {
+            baseUrl: result.configMain.baseUrl || DEFAULT_MAIN_BASE,
+            apiKey: result.configMain.apiKey || ''
+        };
     }
-    if (result.baseUrl) {
-        baseUrl = result.baseUrl;
+    if (result.configBrooklyn && typeof result.configBrooklyn === 'object') {
+        configBrooklyn = {
+            baseUrl: result.configBrooklyn.baseUrl || DEFAULT_BROOKLYN_BASE,
+            apiKey: result.configBrooklyn.apiKey || ''
+        };
     }
+    if (result.activeConnection === 'brooklyn' || result.activeConnection === 'main') {
+        activeConnection = result.activeConnection;
+    }
+    // Migrate legacy single config to Main
+    if (result.apiKey || result.baseUrl) {
+        const hasNew = (configMain.apiKey && configMain.baseUrl) || (configBrooklyn.apiKey && configBrooklyn.baseUrl);
+        if (!hasNew) {
+            configMain = {
+                baseUrl: (result.baseUrl || '').trim() || DEFAULT_MAIN_BASE,
+                apiKey: (result.apiKey || '').trim()
+            };
+            await chrome.storage.sync.set({ configMain, activeConnection: 'main' });
+        }
+    }
+    applyTheme();
 }
 
 // Validate API key and initialize
@@ -27,18 +67,23 @@ async function validateAndInitialize() {
     const validationSection = document.getElementById('validation-section');
     const errorSection = document.getElementById('error-section');
     const formSection = document.getElementById('form-section');
+    const connectionRow = document.getElementById('connection-row');
 
     // Show validation spinner
     validationSection.style.display = 'flex';
     errorSection.style.display = 'none';
     formSection.style.display = 'none';
+    if (connectionRow) connectionRow.style.display = 'none';
 
-    // Check if API key and base URL are configured
+    const { baseUrl, apiKey } = getActiveConfig();
+
+    // Check if active connection has API key and base URL
     if (!apiKey || !baseUrl) {
         validationSection.style.display = 'none';
         errorSection.style.display = 'flex';
+        const label = activeConnection === 'brooklyn' ? 'Brooklyn' : 'Diet Fantasy (Main)';
         document.getElementById('error-text').textContent = 
-            'API key or Base URL is not configured. Please open Settings to configure them.';
+            `${label} connection is not configured. Please open Settings to set Base URL and API Key.`;
         return;
     }
 
@@ -99,6 +144,11 @@ async function validateAndInitialize() {
         validationSection.style.display = 'none';
         errorSection.style.display = 'none';
         formSection.style.display = 'block';
+        if (connectionRow) connectionRow.style.display = 'flex';
+        applyTheme();
+
+        const connSelect = document.getElementById('connection-select');
+        if (connSelect) connSelect.value = activeConnection;
         
         await loadStatuses();
         await loadNavigators();
@@ -149,10 +199,36 @@ function setupEventListeners() {
         await saveSettings();
     });
 
-    // Test connection
-    document.getElementById('test-connection').addEventListener('click', async () => {
-        await testConnection();
+    // Test Main connection
+    document.getElementById('test-main').addEventListener('click', async () => {
+        await testConnectionFor('main');
     });
+    document.getElementById('test-brooklyn').addEventListener('click', async () => {
+        await testConnectionFor('brooklyn');
+    });
+
+    // Connection dropdown (which site to use)
+    const connectionSelect = document.getElementById('connection-select');
+    if (connectionSelect) {
+        connectionSelect.addEventListener('change', async () => {
+            const val = connectionSelect.value;
+            if (val !== 'main' && val !== 'brooklyn') return;
+            activeConnection = val;
+            applyTheme();
+            await chrome.storage.sync.set({ activeConnection });
+            const { baseUrl, apiKey } = getActiveConfig();
+            if (!baseUrl || !apiKey) {
+                showStatus('form-status', `${val === 'brooklyn' ? 'Brooklyn' : 'Main'} connection not configured. Open Settings.`, 'error');
+                return;
+            }
+            showStatus('form-status', 'Switched connection. Reloading...', 'info');
+            await loadStatuses();
+            await loadNavigators();
+            showStatus('form-status', '', 'success');
+            const form = document.getElementById('client-form');
+            if (form._validateForm) form._validateForm();
+        });
+    }
 
     // Form submission
     document.getElementById('client-form').addEventListener('submit', handleSubmit);
@@ -216,9 +292,15 @@ function setupEventListeners() {
 // Open settings modal
 function openSettings() {
     const modal = document.getElementById('settings-modal');
-    document.getElementById('settings-api-key').value = apiKey;
-    document.getElementById('settings-base-url').value = baseUrl;
+    document.getElementById('settings-main-base-url').value = configMain.baseUrl || '';
+    document.getElementById('settings-main-api-key').value = configMain.apiKey || '';
+    document.getElementById('settings-brooklyn-base-url').value = configBrooklyn.baseUrl || '';
+    document.getElementById('settings-brooklyn-api-key').value = configBrooklyn.apiKey || '';
     document.getElementById('settings-status').style.display = 'none';
+    document.getElementById('settings-main-status').style.display = 'none';
+    document.getElementById('settings-main-status').textContent = '';
+    document.getElementById('settings-brooklyn-status').style.display = 'none';
+    document.getElementById('settings-brooklyn-status').textContent = '';
     modal.style.display = 'flex';
 }
 
@@ -229,43 +311,43 @@ function closeSettings() {
 
 // Save settings
 async function saveSettings() {
-    const newApiKey = document.getElementById('settings-api-key').value.trim();
-    const newBaseUrl = document.getElementById('settings-base-url').value.trim();
+    const mainBaseUrl = document.getElementById('settings-main-base-url').value.trim().replace(/\/$/, '') || DEFAULT_MAIN_BASE;
+    const mainApiKey = document.getElementById('settings-main-api-key').value.trim();
+    const brooklynBaseUrl = document.getElementById('settings-brooklyn-base-url').value.trim().replace(/\/$/, '') || DEFAULT_BROOKLYN_BASE;
+    const brooklynApiKey = document.getElementById('settings-brooklyn-api-key').value.trim();
 
-    if (!newApiKey) {
-        showStatus('settings-status', 'Please enter an API key', 'error');
-        return;
-    }
+    configMain = { baseUrl: mainBaseUrl, apiKey: mainApiKey };
+    configBrooklyn = { baseUrl: brooklynBaseUrl, apiKey: brooklynApiKey };
 
-    if (!newBaseUrl) {
-        showStatus('settings-status', 'Please enter a base URL', 'error');
-        return;
-    }
-
-    apiKey = newApiKey;
-    baseUrl = newBaseUrl.replace(/\/$/, ''); // Remove trailing slash
-
-    await chrome.storage.sync.set({ apiKey, baseUrl });
+    await chrome.storage.sync.set({
+        configMain,
+        configBrooklyn,
+        activeConnection
+    });
     showStatus('settings-status', 'Settings saved! Validating...', 'success');
 
-    // Close modal and revalidate
     setTimeout(async () => {
         closeSettings();
         await validateAndInitialize();
     }, 1000);
 }
 
-// Test connection
-async function testConnection() {
-    const testApiKey = document.getElementById('settings-api-key').value.trim();
-    const testBaseUrl = document.getElementById('settings-base-url').value.trim().replace(/\/$/, '');
+// Test connection for a given connection key ('main' or 'brooklyn')
+async function testConnectionFor(which) {
+    const baseId = which === 'brooklyn' ? 'settings-brooklyn' : 'settings-main';
+    const testApiKey = document.getElementById(`${baseId}-api-key`).value.trim();
+    const testBaseUrl = document.getElementById(`${baseId}-base-url`).value.trim().replace(/\/$/, '');
 
     if (!testApiKey || !testBaseUrl) {
-        showStatus('settings-status', 'Please enter both API key and Base URL', 'error');
+        showStatus(`${baseId}-status`, 'Please enter both API key and Base URL', 'error');
+        document.getElementById(`${baseId}-status`).style.display = 'block';
         return;
     }
 
-    showStatus('settings-status', 'Testing connection...', 'info');
+    const statusEl = document.getElementById(`${baseId}-status`);
+    statusEl.textContent = 'Testing connection...';
+    statusEl.className = 'status-message info';
+    statusEl.style.display = 'block';
 
     try {
         const response = await fetch(`${testBaseUrl}/api/extension/statuses`, {
@@ -276,14 +358,12 @@ async function testConnection() {
             }
         });
 
-        // Check if response is JSON
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
-            // Got HTML instead of JSON - likely wrong URL or server error
             if (response.status === 404) {
-                throw new Error('API endpoint not found. Please check your Base URL is correct.');
+                throw new Error('API endpoint not found. Check Base URL.');
             }
-            throw new Error('Server returned an error page. Please check your Base URL and ensure the server is running.');
+            throw new Error('Server returned an error page. Check Base URL and server.');
         }
 
         if (!response.ok) {
@@ -297,8 +377,8 @@ async function testConnection() {
                         throw new Error('API key is not configured on the server');
                     }
                 } catch (e) {
-                    // If we can't parse JSON, it's a server error
-                    throw new Error('Server error. Please check your Base URL and ensure the server is running.');
+                    if (e.message && e.message.includes('not configured')) throw e;
+                    throw new Error('Server error. Check Base URL and server.');
                 }
             }
             throw new Error(`Connection failed: ${response.statusText}`);
@@ -309,24 +389,24 @@ async function testConnection() {
             throw new Error(data.error || 'Connection test failed');
         }
 
-        showStatus('settings-status', '✓ Connection successful!', 'success');
+        statusEl.textContent = '✓ Connection successful!';
+        statusEl.className = 'status-message success';
     } catch (error) {
         console.error('Connection test error:', error);
-        
-        // Handle network errors (no internet)
         if (error.name === 'TypeError' && error.message.includes('fetch')) {
-            showStatus('settings-status', 'No internet connection. Please check your network connection.', 'error');
+            statusEl.textContent = 'No internet connection.';
         } else if (error.message.includes('JSON') || error.message.includes('DOCTYPE')) {
-            // HTML response instead of JSON
-            showStatus('settings-status', 'Invalid response from server. Please check your Base URL is correct.', 'error');
+            statusEl.textContent = 'Invalid response. Check Base URL.';
         } else {
-            showStatus('settings-status', `Connection failed: ${error.message}`, 'error');
+            statusEl.textContent = `Failed: ${error.message}`;
         }
+        statusEl.className = 'status-message error';
     }
 }
 
 // Load statuses from API
 async function loadStatuses() {
+    const { baseUrl, apiKey } = getActiveConfig();
     try {
         const response = await fetch(`${baseUrl}/api/extension/statuses`, {
             method: 'GET',
@@ -387,6 +467,7 @@ async function loadStatuses() {
 
 // Load navigators from API
 async function loadNavigators() {
+    const { baseUrl, apiKey } = getActiveConfig();
     try {
         const response = await fetch(`${baseUrl}/api/extension/navigators`, {
             method: 'GET',
@@ -531,6 +612,7 @@ async function handleSubmit(e) {
             throw new Error('Address must be geocoded before submitting. Fill in address, city, state, and ZIP, then wait for geocoding or click "Geocode Address".');
         }
 
+        const { baseUrl, apiKey } = getActiveConfig();
         const response = await fetch(`${baseUrl}/api/extension/create-client`, {
             method: 'POST',
             headers: {
@@ -880,6 +962,7 @@ async function autoGeocode(manualCall) {
     const geocodeBtn = document.getElementById('geocode-btn');
     if (geocodeBtn) geocodeBtn.disabled = true;
 
+    const { baseUrl } = getActiveConfig();
     try {
         const addressQuery = `${address}, ${city}, ${state} ${zip}`;
         const response = await fetch(`${baseUrl}/api/geocode?q=${encodeURIComponent(addressQuery)}&provider=auto`, {
