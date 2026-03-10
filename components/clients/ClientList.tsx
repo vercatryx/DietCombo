@@ -787,7 +787,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             alert('No clients to export. Adjust filters or search to include clients.');
             return;
         }
-        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client'];
+        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
             client.email ?? '',
@@ -802,6 +802,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.parentClientId ? '' : getNavigatorName(client.navigatorId),
             client.serviceType === 'Produce' ? 'Produce' : 'Food',
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
+            client.expirationDate ?? '',
+            client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
         ]);
         const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
         const wb = XLSX.utils.book_new();
