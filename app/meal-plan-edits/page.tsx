@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { getTodayInAppTz, getCalendarDaysForMonthInAppTz } from '@/lib/timezone';
 import { getMealPlanEditsByDeliveryDate, getMealPlanEditCountsByMonth, type MealPlanEditEntry } from '@/lib/actions';
-import { ChevronLeft, ChevronRight, Loader2, User, CalendarDays, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, User, CalendarDays, Check, FileSpreadsheet, FileText } from 'lucide-react';
 import styles from './MealPlanEdits.module.css';
 import calendarStyles from '@/components/admin/DefaultOrderTemplate.module.css';
 
@@ -48,6 +48,83 @@ export default function MealPlanEditsPage() {
       .then(setEdits)
       .finally(() => setLoadingEdits(false));
   }, [selectedDate]);
+
+  const buildExportRows = useCallback(() => {
+    const rows: { Client: string; Item: string; Qty: number; Meals: number | string }[] = [];
+    for (const entry of edits) {
+      const visibleItems = entry.items.filter((i) => i.quantity > 0);
+      if (visibleItems.length === 0) {
+        rows.push({ Client: entry.clientName, Item: '(no items)', Qty: 0, Meals: '—' });
+      } else {
+        for (const item of visibleItems) {
+          rows.push({
+            Client: entry.clientName,
+            Item: item.name,
+            Qty: item.quantity,
+            Meals: item.value != null ? item.quantity * item.value : '—',
+          });
+        }
+      }
+    }
+    return rows;
+  }, [edits]);
+
+  const exportToExcel = useCallback(async () => {
+    const XLSX = await import('xlsx');
+    const rows = buildExportRows();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{ wch: 28 }, { wch: 32 }, { wch: 8 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Meal Plan Edits');
+    XLSX.writeFile(wb, `meal-plan-edits-${selectedDate}.xlsx`);
+  }, [buildExportRows, selectedDate]);
+
+  const exportToPdf = useCallback(async () => {
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 14;
+    let y = 18;
+
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Meal Plan Edits', margin, y);
+    y += 7;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(selectedDate ? formatDateLong(selectedDate) : '', margin, y);
+    doc.text(`${edits.length} client${edits.length !== 1 ? 's' : ''} changed`, pageW - margin, y, { align: 'right' });
+    y += 8;
+
+    const colX = [margin, margin + 72, margin + 130, margin + 150];
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CLIENT', colX[0], y);
+    doc.text('ITEM', colX[1], y);
+    doc.text('QTY', colX[2], y);
+    doc.text('MEALS', colX[3], y);
+    y += 1;
+    doc.setDrawColor(200);
+    doc.line(margin, y, pageW - margin, y);
+    y += 4;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const rows = buildExportRows();
+    for (const row of rows) {
+      if (y > doc.internal.pageSize.getHeight() - 16) {
+        doc.addPage();
+        y = 18;
+      }
+      doc.text(String(row.Client).slice(0, 36), colX[0], y);
+      doc.text(String(row.Item).slice(0, 30), colX[1], y);
+      doc.text(String(row.Qty), colX[2], y);
+      doc.text(String(row.Meals), colX[3], y);
+      y += 5.5;
+    }
+
+    doc.save(`meal-plan-edits-${selectedDate}.pdf`);
+  }, [buildExportRows, selectedDate, edits.length]);
 
   return (
     <div className={styles.page}>
@@ -140,12 +217,26 @@ export default function MealPlanEditsPage() {
         <section className={styles.listSection} aria-label="Clients who changed">
           {selectedDate ? (
             <>
-              <h2 className={styles.listTitle}>
-                {formatDateLong(selectedDate)}
+              <div className={styles.listHeader}>
+                <h2 className={styles.listTitle}>
+                  {formatDateLong(selectedDate)}
+                  {!loadingEdits && edits.length > 0 && (
+                    <span className={styles.listCount}>{edits.length} {edits.length === 1 ? 'client' : 'clients'} changed</span>
+                  )}
+                </h2>
                 {!loadingEdits && edits.length > 0 && (
-                  <span className={styles.listCount}>{edits.length} {edits.length === 1 ? 'client' : 'clients'} changed</span>
+                  <div className={styles.exportButtons}>
+                    <button type="button" className={styles.exportBtn} onClick={exportToExcel} title="Export to Excel">
+                      <FileSpreadsheet size={16} />
+                      Excel
+                    </button>
+                    <button type="button" className={styles.exportBtn} onClick={exportToPdf} title="Export to PDF">
+                      <FileText size={16} />
+                      PDF
+                    </button>
+                  </div>
                 )}
-              </h2>
+              </div>
               {loadingEdits ? (
                 <div className={styles.loading}>
                   <Loader2 size={24} className={styles.spinner} />
