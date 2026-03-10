@@ -39,10 +39,10 @@ export function ProduceDetail() {
                 getBoxTypes()
             ]);
 
-            // Include all Produce clients: primary and dependants (each gets their own row and label)
+            // Include non-paused Produce clients: primary and dependants (each gets their own row and label)
             // Sort by last name (last word of full name, space-separated), then by full name as tiebreaker
             const produceClientsList = clientsData
-                .filter(client => client.serviceType === 'Produce')
+                .filter(client => client.serviceType === 'Produce' && !client.paused)
                 .sort((a, b) => {
                     const byLast = getLastName(a.fullName || '').localeCompare(getLastName(b.fullName || ''), undefined, { sensitivity: 'base' });
                     if (byLast !== 0) return byLast;
