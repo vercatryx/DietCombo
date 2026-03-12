@@ -9,9 +9,10 @@ import {
     MessageSquare, Pencil, Trash2, Check, Save, Trash, Loader2, Plus,
     MapPinned
 } from 'lucide-react';
-import { ClientProfile, ClientStatus, Navigator, Submission } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Submission, ProduceVendor } from '@/lib/types';
 import { useState, useEffect, useCallback } from 'react';
 import { addDependent, getDependentsByParentId, updateClient, deleteClient } from '@/lib/actions';
+import { getProduceVendors } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { getSingleForm } from '@/lib/form-actions';
@@ -69,6 +70,7 @@ export function ClientInfoShelf({
         approvedMealsPerWeek: c.approvedMealsPerWeek || 0,
         caseId: c.activeOrder?.caseId || '',
         serviceType: c.serviceType,
+        produceVendorId: c.produceVendorId || null as string | null,
         paused: c.paused ?? false,
         complex: c.complex ?? false,
         bill: c.bill ?? true,
@@ -83,6 +85,8 @@ export function ClientInfoShelf({
     const [dependentDob, setDependentDob] = useState('');
     const [dependentCin, setDependentCin] = useState('');
     const [dependentServiceType, setDependentServiceType] = useState<'Food' | 'Produce'>('Food');
+    const [dependentProduceVendorId, setDependentProduceVendorId] = useState<string | null>(null);
+    const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
     const [creatingDependent, setCreatingDependent] = useState(false);
     const [loadingDependents, setLoadingDependents] = useState(false);
     const [localDependents, setLocalDependents] = useState<ClientProfile[]>([]);
@@ -100,6 +104,10 @@ export function ClientInfoShelf({
     useEffect(() => {
         if (!isEditing) setEditForm(getInitialEditForm(client));
     }, [client, isEditing, getInitialEditForm]);
+
+    useEffect(() => {
+        getProduceVendors().then(setProduceVendors);
+    }, []);
 
     // Load dependents from allClients when provided (stable list = no refetch every render). When allClients empty, fetch once per client.id.
     const lastFetchedParentIdRef = React.useRef<string | null>(null);
@@ -176,6 +184,7 @@ export function ClientInfoShelf({
                     expirationDate: editForm.expirationDate || null,
                     approvedMealsPerWeek: editForm.approvedMealsPerWeek,
                     serviceType: editForm.serviceType,
+                    produceVendorId: editForm.serviceType === 'Produce' ? editForm.produceVendorId : null,
                     paused: editForm.paused,
                     complex: editForm.complex,
                     bill: editForm.bill,
@@ -221,7 +230,8 @@ export function ClientInfoShelf({
                 client.id,
                 dependentDob || null,
                 dependentCin ? Number(dependentCin) : null,
-                dependentServiceType
+                dependentServiceType,
+                dependentServiceType === 'Produce' ? dependentProduceVendorId : null
             );
             if (newDep) {
                 // Update local state
@@ -646,14 +656,27 @@ export function ClientInfoShelf({
                                     {isEditing ? (
                                         <select
                                             className={styles.editSelect}
-                                            value={editForm.serviceType}
-                                            onChange={e => setEditForm({ ...editForm, serviceType: e.target.value as any })}
+                                            value={editForm.serviceType === 'Produce' ? `Produce:${editForm.produceVendorId || ''}` : editForm.serviceType}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                if (val.startsWith('Produce:')) {
+                                                    const pvId = val.slice('Produce:'.length) || null;
+                                                    setEditForm({ ...editForm, serviceType: 'Produce' as any, produceVendorId: pvId });
+                                                } else {
+                                                    setEditForm({ ...editForm, serviceType: val as any, produceVendorId: null });
+                                                }
+                                            }}
                                         >
                                             <option value="Food">Food</option>
-                                            <option value="Produce">Produce</option>
+                                            <option value="Produce:">Produce (unassigned)</option>
+                                            {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                                <option key={pv.id} value={`Produce:${pv.id}`}>Produce - {pv.name}</option>
+                                            ))}
                                         </select>
                                     ) : (
-                                        client.serviceType || '-'
+                                        client.serviceType === 'Produce'
+                                            ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}`
+                                            : (client.serviceType || '-')
                                     )}
                                 </div>
                             </div>
@@ -819,11 +842,23 @@ export function ClientInfoShelf({
                                         <label className="label" style={{ fontSize: '0.75rem' }}>Type</label>
                                         <select
                                             className="input input-sm"
-                                            value={dependentServiceType}
-                                            onChange={e => setDependentServiceType(e.target.value as 'Food' | 'Produce')}
+                                            value={dependentServiceType === 'Produce' ? `Produce:${dependentProduceVendorId || ''}` : 'Food'}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                if (val.startsWith('Produce:')) {
+                                                    setDependentServiceType('Produce');
+                                                    setDependentProduceVendorId(val.slice('Produce:'.length) || null);
+                                                } else {
+                                                    setDependentServiceType('Food');
+                                                    setDependentProduceVendorId(null);
+                                                }
+                                            }}
                                         >
                                             <option value="Food">Food</option>
-                                            <option value="Produce">Produce</option>
+                                            <option value="Produce:">Produce (unassigned)</option>
+                                            {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                                <option key={pv.id} value={`Produce:${pv.id}`}>Produce - {pv.name}</option>
+                                            ))}
                                         </select>
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
@@ -832,6 +867,7 @@ export function ClientInfoShelf({
                                             onClick={() => {
                                                 setShowAddDependentForm(false);
                                                 setDependentServiceType('Food');
+                                                setDependentProduceVendorId(null);
                                             }}
                                         >
                                             Cancel

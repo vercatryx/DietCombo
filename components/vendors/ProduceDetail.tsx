@@ -1,24 +1,30 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { ClientProfile, MenuItem, BoxType } from '@/lib/types';
-import { getClients, getMenuItems, getBoxTypes } from '@/lib/cached-data';
-import { Package, FileText, Search, User } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { ClientProfile, MenuItem, BoxType, ProduceVendor } from '@/lib/types';
+import { getClients, getMenuItems, getBoxTypes, getProduceVendors } from '@/lib/cached-data';
+import { Package, FileText, Search, User, AlertTriangle } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
 import styles from './VendorDetail.module.css';
 
 export function ProduceDetail() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const token = searchParams.get('token');
+
     const [produceClients, setProduceClients] = useState<ClientProfile[]>([]);
     const [allClients, setAllClients] = useState<ClientProfile[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
+    const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [search, setSearch] = useState('');
+    const [vendorFilter, setVendorFilter] = useState<string>('all');
+    const [tokenVendor, setTokenVendor] = useState<ProduceVendor | null>(null);
+    const [invalidToken, setInvalidToken] = useState(false);
 
-    /** Last word of a name (space-separated), used for last-name sorting when name length varies. */
     function getLastName(name: string): string {
         const trimmed = (name || '').trim();
         if (!trimmed) return '';
@@ -33,16 +39,34 @@ export function ProduceDetail() {
     async function loadData() {
         setIsLoading(true);
         try {
-            const [clientsData, menuItemsData, boxTypesData] = await Promise.all([
+            const [clientsData, menuItemsData, boxTypesData, pvData] = await Promise.all([
                 getClients(),
                 getMenuItems(),
-                getBoxTypes()
+                getBoxTypes(),
+                getProduceVendors()
             ]);
 
-            // Include non-paused Produce clients: primary and dependants (each gets their own row and label)
-            // Sort by last name (last word of full name, space-separated), then by full name as tiebreaker
+            setProduceVendors(pvData);
+
+            let resolvedTokenVendor: ProduceVendor | null = null;
+            if (token) {
+                resolvedTokenVendor = pvData.find(pv => pv.token === token) || null;
+                setTokenVendor(resolvedTokenVendor);
+                if (!resolvedTokenVendor) {
+                    setInvalidToken(true);
+                    setIsLoading(false);
+                    return;
+                }
+            }
+
             const produceClientsList = clientsData
-                .filter(client => client.serviceType === 'Produce' && !client.paused)
+                .filter(client => {
+                    if (client.serviceType !== 'Produce' || client.paused) return false;
+                    if (resolvedTokenVendor) {
+                        return client.produceVendorId === resolvedTokenVendor.id;
+                    }
+                    return true;
+                })
                 .sort((a, b) => {
                     const byLast = getLastName(a.fullName || '').localeCompare(getLastName(b.fullName || ''), undefined, { sensitivity: 'base' });
                     if (byLast !== 0) return byLast;
@@ -68,7 +92,6 @@ export function ProduceDetail() {
     function getClientAddress(clientId: string) {
         const client = allClients.find(c => c.id === clientId);
         if (!client) return '-';
-        // Dependants often have no address; use parent's address for delivery
         const useClient = client.parentClientId && !(client.address?.trim()) && !client.apt && !client.city && !client.zip
             ? allClients.find(c => c.id === client.parentClientId) || client
             : client;
@@ -81,7 +104,15 @@ export function ProduceDetail() {
         return client?.phoneNumber || '-';
     }
 
-    // Filter clients based on search (include parent name for dependants)
+    function getProduceVendorName(client: ClientProfile): string {
+        if (!client.produceVendorId) return '—';
+        const pv = produceVendors.find(v => v.id === client.produceVendorId);
+        return pv?.name || '—';
+    }
+
+    const isExternalView = !!token && !!tokenVendor;
+    const showVendorColumn = !isExternalView && produceVendors.length > 0;
+
     const filteredClients = produceClients.filter(client => {
         const parent = client.parentClientId ? allClients.find(c => c.id === client.parentClientId) : null;
         const parentName = parent?.fullName?.toLowerCase() ?? '';
@@ -90,7 +121,17 @@ export function ProduceDetail() {
             (client.phoneNumber && client.phoneNumber.includes(search)) ||
             (client.address && client.address.toLowerCase().includes(search.toLowerCase())) ||
             (parentName && parentName.includes(search.toLowerCase()));
-        return matchesSearch;
+
+        let matchesVendorFilter = true;
+        if (!isExternalView && vendorFilter !== 'all') {
+            if (vendorFilter === 'unassigned') {
+                matchesVendorFilter = !client.produceVendorId;
+            } else {
+                matchesVendorFilter = client.produceVendorId === vendorFilter;
+            }
+        }
+
+        return matchesSearch && matchesVendorFilter;
     });
 
     async function exportLabelsPDF() {
@@ -99,13 +140,14 @@ export function ProduceDetail() {
             return;
         }
 
-        // Convert clients to order-like format for label generation
         const clientOrders = filteredClients.map(client => ({
             id: client.id,
             client_id: client.id,
-            orderNumber: client.id.slice(0, 8), // Use first 8 chars of client ID as order number
+            orderNumber: client.id.slice(0, 8),
             service_type: 'Produce'
         }));
+
+        const vendorLabel = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce';
 
         await generateLabelsPDF({
             orders: clientOrders,
@@ -113,10 +155,21 @@ export function ProduceDetail() {
             getClientAddress: (clientId: string) => getClientAddress(clientId),
             formatOrderedItemsForCSV: () => 'Produce Client',
             formatDate: () => '',
-            vendorName: 'Produce'
+            vendorName: vendorLabel
         });
     }
 
+    if (invalidToken) {
+        return (
+            <div className={styles.container}>
+                <div className={styles.loadingContainer}>
+                    <AlertTriangle size={48} style={{ color: '#ef4444', marginBottom: '1rem' }} />
+                    <p style={{ fontSize: '1.2rem', fontWeight: 600 }}>Invalid or expired link</p>
+                    <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>The produce vendor link you followed is not valid. Please check the URL or contact the administrator.</p>
+                </div>
+            </div>
+        );
+    }
 
     if (isLoading) {
         return (
@@ -129,13 +182,18 @@ export function ProduceDetail() {
         );
     }
 
+    const pageTitle = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce Clients';
+    const subtitle = isExternalView
+        ? `Clients assigned to ${tokenVendor!.name}`
+        : 'Clients and dependants with Service Type: Produce';
+
     return (
         <div className={styles.container}>
             <div className={styles.header}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1 }}>
                     <h1 className={styles.title}>
                         <Package size={24} style={{ marginRight: '12px', verticalAlign: 'middle' }} />
-                        Produce Clients
+                        {pageTitle}
                     </h1>
                     <div style={{ display: 'flex', gap: '1rem' }}>
                         <button
@@ -151,9 +209,23 @@ export function ProduceDetail() {
 
             {/* Clients Section */}
             <div className={styles.ordersSection}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-lg)' }}>
-                    <h2 className={styles.sectionTitle}>Clients and dependants with Service Type: Produce</h2>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-lg)', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <h2 className={styles.sectionTitle}>{subtitle}</h2>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        {!isExternalView && produceVendors.length > 0 && (
+                            <select
+                                className="input"
+                                style={{ width: '200px' }}
+                                value={vendorFilter}
+                                onChange={e => setVendorFilter(e.target.value)}
+                            >
+                                <option value="all">All Vendors</option>
+                                {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                    <option key={pv.id} value={pv.id}>{pv.name}</option>
+                                ))}
+                                <option value="unassigned">Unassigned</option>
+                            </select>
+                        )}
                         <div style={{ position: 'relative' }}>
                             <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
                             <input
@@ -179,7 +251,9 @@ export function ProduceDetail() {
                             <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>Email</span>
                             <span style={{ flex: '1 1 120px', minWidth: 0 }}>Phone</span>
                             <span style={{ flex: '2 1 250px', minWidth: 0 }}>Address</span>
-                            <span style={{ flex: '1 1 100px', minWidth: 0 }}>Service Type</span>
+                            {showVendorColumn && (
+                                <span style={{ flex: '1 1 120px', minWidth: 0 }}>Vendor</span>
+                            )}
                         </div>
 
                         {filteredClients.map(client => {
@@ -189,8 +263,8 @@ export function ProduceDetail() {
                                 <div
                                     key={client.id}
                                     className={styles.orderRow}
-                                    onClick={() => router.push(`/clients/${client.id}`)}
-                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => !isExternalView ? router.push(`/clients/${client.id}`) : undefined}
+                                    style={{ cursor: isExternalView ? 'default' : 'pointer' }}
                                 >
                                     <span style={{ flex: '2 1 200px', minWidth: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                         <User size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
@@ -210,9 +284,11 @@ export function ProduceDetail() {
                                     <span style={{ flex: '2 1 250px', minWidth: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
                                         {getClientAddress(client.id)}
                                     </span>
-                                    <span style={{ flex: '1 1 100px', minWidth: 0 }}>
-                                        <span className="badge badge-info">{client.serviceType}</span>
-                                    </span>
+                                    {showVendorColumn && (
+                                        <span style={{ flex: '1 1 120px', minWidth: 0 }}>
+                                            <span className="badge badge-info">{getProduceVendorName(client)}</span>
+                                        </span>
+                                    )}
                                 </div>
                             );
                         })}

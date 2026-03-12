@@ -67,6 +67,7 @@ export interface ClientProfile {
   visits?: any; // JSON data
   signToken?: string | null;
   assignedDriverId?: string | null;
+  produceVendorId?: string | null;
 
   /** Meal planner data: [{ scheduledDeliveryDate, items: [{ id, name, quantity, value? }] }]. Single source of truth. */
   mealPlannerData?: MealPlannerDateItem[] | null;
@@ -320,6 +321,14 @@ export interface Nutritionist {
   id: string;
   name: string;
   email?: string | null;
+}
+
+export interface ProduceVendor {
+  id: string;
+  name: string;
+  token: string;
+  isActive: boolean;
+  createdAt: string;
 }
 
 export interface Equipment {

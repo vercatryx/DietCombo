@@ -17,8 +17,9 @@ import { Vendor, MenuItem } from '@/lib/types';
 
 import { MealSelectionManagement } from '@/components/admin/MealSelectionManagement';
 import { SettingsManagement } from '@/components/admin/SettingsManagement';
+import { ProduceVendorManagement } from '@/components/admin/ProduceVendorManagement';
 
-type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'form' | 'meals' | 'settings' | 'template';
+type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'form' | 'meals' | 'settings' | 'template' | 'produce-vendors';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('template');
@@ -103,6 +104,12 @@ export default function AdminPage() {
                     Admins
                 </button>
                 <button
+                    className={`${styles.tab} ${activeTab === 'produce-vendors' ? styles.activeTab : ''}`}
+                    onClick={() => setActiveTab('produce-vendors')}
+                >
+                    Produce Vendors
+                </button>
+                <button
                     className={`${styles.tab} ${activeTab === 'settings' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('settings')}
                 >
@@ -138,6 +145,7 @@ export default function AdminPage() {
                     </div>
                 )}
                 {activeTab === 'admins' && <AdminManagement />}
+                {activeTab === 'produce-vendors' && <ProduceVendorManagement />}
                 {activeTab === 'settings' && <SettingsManagement />}
                 {activeTab === 'meals' && <MealSelectionManagement />}
                 {activeTab === 'template' && mainVendor && (

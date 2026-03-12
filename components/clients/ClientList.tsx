@@ -5,7 +5,7 @@ import { ClientInfoShelf } from './ClientInfoShelf';
 import { DependantInfoShelf } from './DependantInfoShelf';
 
 import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
-import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType, ProduceVendor } from '@/lib/types';
 import {
     getClientsPaginated,
     getClientFullDetails,
@@ -26,7 +26,7 @@ import {
     getSettings,
     getCategories
 } from '@/lib/actions';
-import { invalidateClientData } from '@/lib/cached-data';
+import { invalidateClientData, getProduceVendors as getCachedProduceVendors } from '@/lib/cached-data';
 import { hasNonDefaultFlags, getNonDefaultFlagLabels, clientMatchesFlagFilter, FLAGS_FILTER_OPTIONS, type FlagsFilterValue } from '@/lib/client-flags';
 import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -84,6 +84,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [allClientsForProfile, setAllClientsForProfile] = useState<ClientProfile[]>([]);
     const [settingsForProfile, setSettingsForProfile] = useState<AppSettings | null>(null);
     const [categoriesForProfile, setCategoriesForProfile] = useState<ItemCategory[]>([]);
+    const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
 
     // Add Dependent Modal state
     const [isAddingDependent, setIsAddingDependent] = useState(false);
@@ -363,13 +364,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     async function loadInitialData() {
         setIsLoading(true);
         try {
-            const [sData, nData, vData, bData, mData, cRes] = await Promise.all([
+            const [sData, nData, vData, bData, mData, cRes, pvData] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '')
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, ''),
+                getCachedProduceVendors()
             ]);
 
             setStatuses(sData);
@@ -377,6 +379,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setVendors(vData);
             setBoxTypes(bData);
             setMenuItems(mData);
+            setProduceVendors(pvData);
             const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
             setClients(clientList);
             setTotalClients(cRes.total);
@@ -513,9 +516,18 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         // Filter by Screening Status
         const matchesScreeningFilter = !screeningFilter || (c.screeningStatus || 'not_started') === screeningFilter;
 
-        // Filter by Service Type (match display: Produce = Produce, else Food)
-        const matchesServiceTypeFilter = !serviceTypeFilter ||
-            (serviceTypeFilter === 'Produce' ? c.serviceType === 'Produce' : c.serviceType !== 'Produce');
+        // Filter by Service Type: "Food" = non-Produce, "Produce" = all Produce, "Produce:<id>" = specific vendor
+        let matchesServiceTypeFilter = true;
+        if (serviceTypeFilter) {
+            if (serviceTypeFilter.startsWith('Produce:')) {
+                const pvId = serviceTypeFilter.slice('Produce:'.length);
+                matchesServiceTypeFilter = c.serviceType === 'Produce' && c.produceVendorId === pvId;
+            } else if (serviceTypeFilter === 'Produce') {
+                matchesServiceTypeFilter = c.serviceType === 'Produce';
+            } else {
+                matchesServiceTypeFilter = c.serviceType !== 'Produce';
+            }
+        }
 
         // Filter by Needs Vendor (for Boxes clients without vendor)
         let matchesNeedsVendorFilter = true;
@@ -644,9 +656,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 }
                 break;
             case 'clientType':
-                const typeA = a.serviceType === 'Produce' ? 'Produce' : 'Food';
-                const typeB = b.serviceType === 'Produce' ? 'Produce' : 'Food';
-                comparison = typeA.localeCompare(typeB);
+                const pvNameA = a.serviceType === 'Produce' ? (produceVendors.find(pv => pv.id === a.produceVendorId)?.name ?? 'Produce') : 'Food';
+                const pvNameB = b.serviceType === 'Produce' ? (produceVendors.find(pv => pv.id === b.produceVendorId)?.name ?? 'Produce') : 'Food';
+                comparison = pvNameA.localeCompare(pvNameB);
                 break;
             case 'flags':
                 const nonDefaultA = hasNonDefaultFlags(a) ? 1 : 0;
@@ -1960,14 +1972,30 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     }}>
                                     All Types
                                 </div>
-                                {['Food', 'Produce'].map((type) => (
-                                    <div key={type} onClick={() => { setServiceTypeFilter(type); setOpenFilterMenu(null); }}
+                                <div onClick={() => { setServiceTypeFilter('Food'); setOpenFilterMenu(null); }}
+                                    style={{
+                                        padding: '8px 12px', cursor: 'pointer',
+                                        backgroundColor: serviceTypeFilter === 'Food' ? 'var(--bg-surface-hover)' : 'transparent',
+                                        fontWeight: serviceTypeFilter === 'Food' ? 600 : 400
+                                    }}>
+                                    Food
+                                </div>
+                                <div onClick={() => { setServiceTypeFilter('Produce'); setOpenFilterMenu(null); }}
+                                    style={{
+                                        padding: '8px 12px', cursor: 'pointer',
+                                        backgroundColor: serviceTypeFilter === 'Produce' ? 'var(--bg-surface-hover)' : 'transparent',
+                                        fontWeight: serviceTypeFilter === 'Produce' ? 600 : 400
+                                    }}>
+                                    All Produce
+                                </div>
+                                {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                    <div key={pv.id} onClick={() => { setServiceTypeFilter(`Produce:${pv.id}`); setOpenFilterMenu(null); }}
                                         style={{
-                                            padding: '8px 12px', cursor: 'pointer',
-                                            backgroundColor: serviceTypeFilter === type ? 'var(--bg-surface-hover)' : 'transparent',
-                                            fontWeight: serviceTypeFilter === type ? 600 : 400
+                                            padding: '8px 12px', paddingLeft: '24px', cursor: 'pointer', fontSize: '0.9em',
+                                            backgroundColor: serviceTypeFilter === `Produce:${pv.id}` ? 'var(--bg-surface-hover)' : 'transparent',
+                                            fontWeight: serviceTypeFilter === `Produce:${pv.id}` ? 600 : 400
                                         }}>
-                                        {type}
+                                        {pv.name}
                                     </div>
                                 ))}
                             </div>
@@ -2215,8 +2243,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             <span style={{ minWidth: '100px', flex: 0.8, paddingRight: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 {isDependent ? '-' : <SignCell client={client} />}
                             </span>
-                            <span title={client.serviceType} style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', fontSize: '0.9rem' }}>
-                                {client.serviceType === 'Produce' ? 'Produce' : 'Food'}
+                            <span title={client.serviceType === 'Produce' ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}` : client.serviceType} style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', fontSize: '0.9rem' }}>
+                                {client.serviceType === 'Produce' ? (() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? pv.name : 'Produce'; })() : 'Food'}
                             </span>
                             <span title={isDependent ? '' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : 'All default')} style={{ minWidth: '120px', flex: 1, fontSize: '0.85rem', color: hasNonDefaultFlags(client) ? 'var(--color-primary)' : 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                 {isDependent ? '-' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : '—')}

@@ -3,9 +3,10 @@
 import React from 'react';
 import Link from 'next/link';
 import { X, ExternalLink, Pencil, Trash2, Check, Loader2, MapPinned } from 'lucide-react';
-import { ClientProfile } from '@/lib/types';
+import { ClientProfile, ProduceVendor } from '@/lib/types';
 import { useState, useEffect, useCallback } from 'react';
 import { updateClient, deleteClient } from '@/lib/actions';
+import { getProduceVendors } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import styles from './ClientInfoShelf.module.css';
@@ -42,6 +43,7 @@ export function DependantInfoShelf({
         zip: c.zip || '',
         notes: c.dislikes ?? '',
         serviceType: c.serviceType,
+        produceVendorId: c.produceVendorId || null as string | null,
         paused: c.paused ?? false,
         complex: c.complex ?? false,
         bill: c.bill ?? true,
@@ -49,6 +51,7 @@ export function DependantInfoShelf({
     }), []);
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
+    const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
 
     const [geoBusy, setGeoBusy] = useState(false);
     const [geoErr, setGeoErr] = useState('');
@@ -56,6 +59,10 @@ export function DependantInfoShelf({
     useEffect(() => {
         if (!isEditing) setEditForm(getInitialEditForm(client));
     }, [client, isEditing, getInitialEditForm]);
+
+    useEffect(() => {
+        getProduceVendors().then(setProduceVendors);
+    }, []);
 
     const hasGeocode = client.lat != null && client.lng != null && Number.isFinite(Number(client.lat)) && Number.isFinite(Number(client.lng));
 
@@ -103,6 +110,7 @@ export function DependantInfoShelf({
                     zip: editForm.zip || null,
                     dislikes: editForm.notes || null,
                     serviceType: editForm.serviceType,
+                    produceVendorId: editForm.serviceType === 'Produce' ? editForm.produceVendorId : null,
                     paused: editForm.paused,
                     complex: editForm.complex,
                     bill: editForm.bill,
@@ -254,14 +262,27 @@ export function DependantInfoShelf({
                                     {isEditing ? (
                                         <select
                                             className={styles.editSelect}
-                                            value={editForm.serviceType === 'Produce' ? 'Produce' : 'Food'}
-                                            onChange={e => setEditForm({ ...editForm, serviceType: e.target.value as 'Food' | 'Produce' })}
+                                            value={editForm.serviceType === 'Produce' ? `Produce:${editForm.produceVendorId || ''}` : 'Food'}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                if (val.startsWith('Produce:')) {
+                                                    const pvId = val.slice('Produce:'.length) || null;
+                                                    setEditForm({ ...editForm, serviceType: 'Produce', produceVendorId: pvId });
+                                                } else {
+                                                    setEditForm({ ...editForm, serviceType: 'Food', produceVendorId: null });
+                                                }
+                                            }}
                                         >
                                             <option value="Food">Food</option>
-                                            <option value="Produce">Produce</option>
+                                            <option value="Produce:">Produce (unassigned)</option>
+                                            {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                                <option key={pv.id} value={`Produce:${pv.id}`}>Produce - {pv.name}</option>
+                                            ))}
                                         </select>
                                     ) : (
-                                        client.serviceType === 'Produce' ? 'Produce' : 'Food'
+                                        client.serviceType === 'Produce'
+                                            ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}`
+                                            : 'Food'
                                     )}
                                 </div>
                             </div>

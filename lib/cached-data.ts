@@ -23,9 +23,10 @@ import {
     getUpcomingOrderForClient as serverGetUpcomingOrderForClient,
     getCompletedOrdersWithDeliveryProof as serverGetCompletedOrdersWithDeliveryProof,
     getRecentOrdersForClient as serverGetRecentOrdersForClient,
+    getProduceVendors as serverGetProduceVendors,
 } from './actions';
 
-import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, AppSettings, ItemCategory, DeliveryRecord, CompletedOrderWithDeliveryProof, Equipment } from './types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, AppSettings, ItemCategory, DeliveryRecord, CompletedOrderWithDeliveryProof, Equipment, ProduceVendor } from './types';
 
 // Cache entry with timestamp
 interface CacheEntry<T> {
@@ -36,6 +37,7 @@ interface CacheEntry<T> {
 // Cache configuration
 const CACHE_DURATION = {
     REFERENCE_DATA: 5 * 60 * 1000, // 5 minutes for reference data
+    LONG_LIVED_DATA: 24 * 60 * 60 * 1000, // 24 hours for rarely-changing data (e.g. produce vendors)
     CLIENT_DATA: 2 * 60 * 1000, // 2 minutes for client-specific data
     CLIENT_LIST: 1 * 60 * 1000, // 1 minute for client list
     ORDER_DATA: 1 * 60 * 1000, // 1 minute for order-related data (changes frequently)
@@ -50,6 +52,7 @@ const STORAGE_KEYS = {
     BOX_TYPES: 'dietcombo_cache_boxTypes',
     CATEGORIES: 'dietcombo_cache_categories',
     SETTINGS: 'dietcombo_cache_settings',
+    PRODUCE_VENDORS: 'dietcombo_cache_produceVendors',
 };
 
 // Helper to load from localStorage
@@ -201,6 +204,27 @@ export async function getSettings(): Promise<AppSettings> {
     return data;
 }
 
+export async function getProduceVendors(): Promise<ProduceVendor[]> {
+    let cached = referenceCache.get('produceVendors');
+
+    if (!cached) {
+        cached = loadFromStorage<ProduceVendor[]>(STORAGE_KEYS.PRODUCE_VENDORS);
+        if (cached) {
+            referenceCache.set('produceVendors', cached);
+        }
+    }
+
+    if (cached && !isStale(cached, CACHE_DURATION.LONG_LIVED_DATA)) {
+        return cached.data;
+    }
+
+    const data = await serverGetProduceVendors();
+    const entry = { data, timestamp: Date.now() };
+    referenceCache.set('produceVendors', entry);
+    saveToStorage(STORAGE_KEYS.PRODUCE_VENDORS, entry);
+    return data;
+}
+
 // Client data getters (cached)
 export async function getClients(): Promise<ClientProfile[]> {
     if (!isStale(clientsCache, CACHE_DURATION.CLIENT_LIST)) {
@@ -260,6 +284,7 @@ export function invalidateReferenceData(key?: string) {
             'boxTypes': STORAGE_KEYS.BOX_TYPES,
             'categories': STORAGE_KEYS.CATEGORIES,
             'settings': STORAGE_KEYS.SETTINGS,
+            'produceVendors': STORAGE_KEYS.PRODUCE_VENDORS,
         };
         const storageKey = storageKeyMap[key];
         if (storageKey) {

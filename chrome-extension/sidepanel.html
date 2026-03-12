@@ -97,6 +97,22 @@
                 <div class="form-group geocode-group">
                     <div id="geocode-status" class="geocode-status" aria-live="polite"></div>
                     <button type="button" id="geocode-btn" class="btn btn-geocode" disabled>Geocode Address</button>
+                    <div id="manual-geocode-section" class="manual-geocode-section" style="display: none;">
+                        <button type="button" id="manual-geocode-toggle" class="btn-link">Enter coordinates manually</button>
+                        <div id="manual-geocode-fields" class="manual-geocode-fields" style="display: none;">
+                            <div class="manual-geocode-row">
+                                <div class="manual-geocode-field">
+                                    <label for="manual-lat">Latitude</label>
+                                    <input type="text" id="manual-lat" placeholder="e.g. 40.7128" inputmode="decimal">
+                                </div>
+                                <div class="manual-geocode-field">
+                                    <label for="manual-lng">Longitude</label>
+                                    <input type="text" id="manual-lng" placeholder="e.g. -74.0060" inputmode="decimal">
+                                </div>
+                            </div>
+                            <button type="button" id="manual-geocode-apply" class="btn btn-geocode-apply" disabled>Apply Coordinates</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-group">

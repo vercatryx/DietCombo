@@ -3,11 +3,11 @@
 import { useState, useEffect, Fragment, useMemo, useRef, ReactNode, forwardRef, useImperativeHandle } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota } from '@/lib/types';
+import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota, ProduceVendor } from '@/lib/types';
 import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, saveClientMealPlannerData, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
 import { getDefaultOrderTemplateCachedSync, getDefaultMealPlanTemplateCachedSync, getCachedDefaultOrderTemplate, getCachedDefaultMealPlanTemplateForNewClient } from '@/lib/default-order-template-cache';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
-import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile } from '@/lib/cached-data';
+import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile, getProduceVendors } from '@/lib/cached-data';
 import { areAnyDeliveriesLocked, getEarliestEffectiveDate, getLockedWeekDescription } from '@/lib/weekly-lock';
 import {
     getNextDeliveryDate as getNextDeliveryDateUtil,
@@ -211,6 +211,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     const [boxTypes, setBoxTypes] = useState<BoxType[]>(initialBoxTypes || []);
     const [categories, setCategories] = useState<ItemCategory[]>([]);
     const [boxQuotas, setBoxQuotas] = useState<BoxQuota[]>([]);
+    const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [history, setHistory] = useState<DeliveryRecord[]>([]);
     const [orderHistory, setOrderHistory] = useState<any[]>([]);
@@ -265,6 +266,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     const [dependentDob, setDependentDob] = useState('');
     const [dependentCin, setDependentCin] = useState('');
     const [dependentServiceType, setDependentServiceType] = useState<'Food' | 'Produce'>('Food');
+    const [dependentProduceVendorId, setDependentProduceVendorId] = useState<string | null>(null);
     const [creatingDependent, setCreatingDependent] = useState(false);
 
     // Geolocation State
@@ -631,6 +633,13 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
     // Use initialData?.client?.id (not initialData) so parent re-renders with same client data
     // don't retrigger this effect and reload the dialog (e.g. when meal plan +/- is clicked).
     }, [clientId, initialData?.client?.id ?? null, isNewClient, serviceConfigOnly]);
+
+    // Load produce vendors once (independent of which profile-load path runs)
+    useEffect(() => {
+        getProduceVendors().then(pvData => {
+            if (pvData && pvData.length > 0) setProduceVendors(pvData);
+        });
+    }, []);
 
     // Sync vendors state when initialVendors prop changes
     useEffect(() => {
@@ -1430,16 +1439,18 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
 
     async function loadAuxiliaryData(clientToCheck?: ClientProfile) {
-        const [appSettings, catData, allClientsData, regularClientsData] = await Promise.all([
+        const [appSettings, catData, allClientsData, regularClientsData, pvData] = await Promise.all([
             getSettings(),
             getCategories(),
             getClients(),
-            getRegularClients()
+            getRegularClients(),
+            getProduceVendors()
         ]);
         setSettings(appSettings);
         setCategories(catData);
         setAllClients(allClientsData);
         setRegularClients(regularClientsData);
+        setProduceVendors(pvData);
 
         // Load dependents if this is a regular client (not a dependent)
         const clientForDependents = clientToCheck || client;
@@ -3828,7 +3839,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         try {
             const dobValue = dependentDob.trim() || null;
             const cinValue = dependentCin.trim() ? parseFloat(dependentCin.trim()) : null;
-            const newDependent = await addDependent(dependentName.trim(), client.id, dobValue, cinValue, dependentServiceType);
+            const newDependent = await addDependent(dependentName.trim(), client.id, dobValue, cinValue, dependentServiceType, dependentProduceVendorId);
             if (newDependent) {
                 // Show new dependent immediately (optimistic update) so it appears without refresh
                 setDependents(prev => [...prev, newDependent]);
@@ -4797,11 +4808,22 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     <label className="label">Client type</label>
                                     <select
                                         className="input"
-                                        value={formData.serviceType === 'Produce' ? 'Produce' : 'Food'}
-                                        onChange={e => setFormData({ ...formData, serviceType: e.target.value as 'Food' | 'Produce' })}
+                                        value={formData.serviceType === 'Produce' ? `Produce:${formData.produceVendorId || ''}` : 'Food'}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            if (val.startsWith('Produce:')) {
+                                                const pvId = val.slice('Produce:'.length) || null;
+                                                setFormData({ ...formData, serviceType: 'Produce', produceVendorId: pvId });
+                                            } else {
+                                                setFormData({ ...formData, serviceType: 'Food', produceVendorId: null });
+                                            }
+                                        }}
                                     >
                                         <option value="Food">Food</option>
-                                        <option value="Produce">Produce</option>
+                                        <option value="Produce:">Produce (unassigned)</option>
+                                        {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                            <option key={pv.id} value={`Produce:${pv.id}`}>Produce - {pv.name}</option>
+                                        ))}
                                     </select>
                                 </div>
 
@@ -5341,12 +5363,24 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                             <label className="label" style={{ marginBottom: '0.5rem' }}>Client type</label>
                                             <select
                                                 className="input"
-                                                value={dependentServiceType}
-                                                onChange={e => setDependentServiceType(e.target.value as 'Food' | 'Produce')}
+                                                value={dependentServiceType === 'Produce' ? `Produce:${dependentProduceVendorId || ''}` : 'Food'}
+                                                onChange={e => {
+                                                    const val = e.target.value;
+                                                    if (val.startsWith('Produce:')) {
+                                                        setDependentServiceType('Produce');
+                                                        setDependentProduceVendorId(val.slice('Produce:'.length) || null);
+                                                    } else {
+                                                        setDependentServiceType('Food');
+                                                        setDependentProduceVendorId(null);
+                                                    }
+                                                }}
                                                 style={{ marginBottom: '0.75rem' }}
                                             >
                                                 <option value="Food">Food</option>
-                                                <option value="Produce">Produce</option>
+                                                <option value="Produce:">Produce (unassigned)</option>
+                                                {produceVendors.filter(pv => pv.isActive).map(pv => (
+                                                    <option key={pv.id} value={`Produce:${pv.id}`}>Produce - {pv.name}</option>
+                                                ))}
                                             </select>
                                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                                                 <button
@@ -5357,6 +5391,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                         setDependentDob('');
                                                         setDependentCin('');
                                                         setDependentServiceType('Food');
+                                                        setDependentProduceVendorId(null);
                                                     }}
                                                     disabled={creatingDependent}
                                                 >
@@ -5458,13 +5493,38 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                 <div className={styles.formGroup}>
                                     <label className="label">Service Type</label>
                                     <div className={styles.serviceTypes}>
-                                        {SERVICE_TYPES.filter(type => type !== 'Boxes' && type !== 'Custom').map(type => (
+                                        <button
+                                            className={`${styles.serviceBtn} ${formData.serviceType === 'Food' ? styles.activeService : ''}`}
+                                            onClick={() => {
+                                                setFormData(prev => ({ ...prev, produceVendorId: null }));
+                                                handleServiceChange('Food');
+                                            }}
+                                        >
+                                            Food
+                                        </button>
+                                        <button
+                                            className={`${styles.serviceBtn} ${formData.serviceType === 'Produce' && !formData.produceVendorId ? styles.activeService : ''}`}
+                                            onClick={() => {
+                                                setFormData(prev => ({ ...prev, produceVendorId: null }));
+                                                if (formData.serviceType !== 'Produce') {
+                                                    handleServiceChange('Produce');
+                                                }
+                                            }}
+                                        >
+                                            Produce (unassigned)
+                                        </button>
+                                        {produceVendors.filter(pv => pv.isActive).map(pv => (
                                             <button
-                                                key={type}
-                                                className={`${styles.serviceBtn} ${formData.serviceType === type ? styles.activeService : ''}`}
-                                                onClick={() => handleServiceChange(type)}
+                                                key={pv.id}
+                                                className={`${styles.serviceBtn} ${formData.serviceType === 'Produce' && formData.produceVendorId === pv.id ? styles.activeService : ''}`}
+                                                onClick={() => {
+                                                    setFormData(prev => ({ ...prev, produceVendorId: pv.id }));
+                                                    if (formData.serviceType !== 'Produce') {
+                                                        handleServiceChange('Produce');
+                                                    }
+                                                }}
                                             >
-                                                {type}
+                                                Produce - {pv.name}
                                             </button>
                                         ))}
                                     </div>

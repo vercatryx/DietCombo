@@ -3,7 +3,7 @@
 import { getCurrentTime } from './time';
 import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from './timezone';
 import { revalidatePath } from 'next/cache';
-import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment, MealCategory, MealItem, ClientFoodOrder, ClientMealOrder, ClientBoxOrder } from './types';
+import { ClientStatus, Vendor, MenuItem, BoxType, AppSettings, Navigator, Nutritionist, ClientProfile, DeliveryRecord, ItemCategory, BoxQuota, ServiceType, Equipment, MealCategory, MealItem, ClientFoodOrder, ClientMealOrder, ClientBoxOrder, ProduceVendor } from './types';
 import { randomUUID } from 'crypto';
 import { getSession } from './session';
 import {
@@ -3875,6 +3875,7 @@ function mapClientFromDB(c: any): ClientProfile {
         visits: visits,
         signToken: c.sign_token || null,
         assignedDriverId: c.assigned_driver_id || null,
+        produceVendorId: c.produce_vendor_id || null,
         mealPlannerData: c.meal_planner_data ?? null,
         createdAt: c.created_at,
         updatedAt: c.updated_at
@@ -4095,7 +4096,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         geocoded_at: data.geocodedAt || null,
         billings: data.billings ? JSON.stringify(data.billings) : null,
         visits: data.visits ? JSON.stringify(data.visits) : null,
-        sign_token: data.signToken || null
+        sign_token: data.signToken || null,
+        produce_vendor_id: (data.serviceType === 'Produce' && data.produceVendorId) ? data.produceVendorId : null
     };
 
     // Save upcoming_order if provided; sanitize to schema-only shape (UPCOMING_ORDER_SCHEMA)
@@ -4158,7 +4160,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         geocoded_at: payload.geocoded_at,
         billings: payload.billings,
         visits: payload.visits,
-        sign_token: payload.sign_token
+        sign_token: payload.sign_token,
+        produce_vendor_id: payload.produce_vendor_id
     };
     
     const { data: res, error: insertError } = await supabase
@@ -4188,7 +4191,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
     return newClient;
 }
 
-export async function addDependent(name: string, parentClientId: string, dob?: string | null, cin?: number | null, serviceType: ServiceType = 'Food') {
+export async function addDependent(name: string, parentClientId: string, dob?: string | null, cin?: number | null, serviceType: ServiceType = 'Food', produceVendorId?: string | null) {
     if (!name.trim() || !parentClientId) {
         throw new Error('Dependent name and parent client are required');
     }
@@ -4267,7 +4270,8 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         dislikes: payload.dislikes,
         lat: payload.lat,
         lng: payload.lng,
-        geocoded_at: payload.geocoded_at
+        geocoded_at: payload.geocoded_at,
+        produce_vendor_id: (serviceType === 'Produce' && produceVendorId) ? produceVendorId : null
     };
     const { data: res, error: insertError } = await supabase
         .from('clients')
@@ -4396,6 +4400,7 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.billings !== undefined) payload.billings = data.billings ? JSON.stringify(data.billings) : null;
     if (data.visits !== undefined) payload.visits = data.visits ? JSON.stringify(data.visits) : null;
     if (data.signToken !== undefined) payload.sign_token = data.signToken || null;
+    if (data.produceVendorId !== undefined) payload.produce_vendor_id = data.produceVendorId || null;
 
     payload.updated_at = new Date().toISOString();
 
@@ -12129,4 +12134,83 @@ export async function saveClientCustomOrder(clientId: string, vendorId: string, 
 
     revalidatePath(`/clients/${clientId}`);
     return { success: true };
+}
+
+// --- PRODUCE VENDOR ACTIONS ---
+
+export async function getProduceVendors(): Promise<ProduceVendor[]> {
+    try {
+        const { data, error } = await supabase
+            .from('produce_vendors')
+            .select('*')
+            .order('name', { ascending: true });
+        if (error) {
+            console.error('[getProduceVendors] Error:', error);
+            return [];
+        }
+        return (data || []).map((pv: any) => ({
+            id: pv.id,
+            name: pv.name,
+            token: pv.token,
+            isActive: pv.is_active,
+            createdAt: pv.created_at,
+        }));
+    } catch (err) {
+        console.error('[getProduceVendors] Error:', err);
+        return [];
+    }
+}
+
+export async function createProduceVendor(name: string): Promise<ProduceVendor> {
+    const { data, error } = await supabase
+        .from('produce_vendors')
+        .insert({ name: name.trim() })
+        .select()
+        .single();
+    if (error || !data) {
+        throw new Error('Failed to create produce vendor: ' + (error?.message || 'no data'));
+    }
+    revalidatePath('/admin');
+    return {
+        id: data.id,
+        name: data.name,
+        token: data.token,
+        isActive: data.is_active,
+        createdAt: data.created_at,
+    };
+}
+
+export async function updateProduceVendor(id: string, updates: { name?: string; isActive?: boolean }): Promise<ProduceVendor> {
+    const payload: any = {};
+    if (updates.name !== undefined) payload.name = updates.name.trim();
+    if (updates.isActive !== undefined) payload.is_active = updates.isActive;
+
+    const { data, error } = await supabase
+        .from('produce_vendors')
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .single();
+    if (error || !data) {
+        throw new Error('Failed to update produce vendor: ' + (error?.message || 'no data'));
+    }
+    revalidatePath('/admin');
+    return {
+        id: data.id,
+        name: data.name,
+        token: data.token,
+        isActive: data.is_active,
+        createdAt: data.created_at,
+    };
+}
+
+export async function deleteProduceVendor(id: string): Promise<void> {
+    const { error } = await supabase
+        .from('produce_vendors')
+        .update({ is_active: false })
+        .eq('id', id);
+    if (error) {
+        throw new Error('Failed to deactivate produce vendor: ' + error.message);
+    }
+    revalidatePath('/admin');
 }

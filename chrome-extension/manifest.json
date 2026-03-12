@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "New DF Client Import",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Add clients to the new Diet Fantasy system",
   "permissions": [
     "storage",

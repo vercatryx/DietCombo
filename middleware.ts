@@ -15,13 +15,18 @@ export default async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // /vendors/produce is public only when accessed with a token (vendor link); otherwise it requires login
+  const vendorsProduceWithToken =
+    (path === '/vendors/produce' || path.startsWith('/vendors/produce/')) &&
+    !!request.nextUrl.searchParams.get('token');
+
   const isPublicRoute =
     publicRoutes.includes(path) ||
     path.startsWith('/verify-order/') ||
     path.startsWith('/delivery/') ||
     path.startsWith('/drivers/') ||
     path.startsWith('/produce/') ||
-    path.startsWith('/vendors/produce') ||
+    vendorsProduceWithToken ||
     path.startsWith('/api/') ||
     path.startsWith('/sign/');
   const isVendorRoute = isVendorPortalRoute(path);

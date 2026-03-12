@@ -355,6 +355,79 @@ body {
     cursor: not-allowed;
 }
 
+.manual-geocode-section {
+    margin-top: 10px;
+    border-top: 1px dashed var(--border-color);
+    padding-top: 10px;
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: var(--color-primary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+}
+
+.btn-link:hover {
+    color: var(--color-primary-hover);
+}
+
+.manual-geocode-fields {
+    margin-top: 10px;
+}
+
+.manual-geocode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.manual-geocode-field label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.manual-geocode-field input {
+    width: 100%;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
+
+.manual-geocode-field input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.btn-geocode-apply {
+    background-color: var(--color-primary);
+    color: white;
+    padding: 7px 14px;
+    font-size: 0.8rem;
+    width: 100%;
+}
+
+.btn-geocode-apply:hover:not(:disabled) {
+    background-color: var(--color-primary-hover);
+}
+
+.btn-geocode-apply:disabled {
+    background-color: var(--text-tertiary);
+    cursor: not-allowed;
+}
+
 .btn {
     padding: 0.6rem 1.2rem;
     border: none;

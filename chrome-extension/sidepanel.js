@@ -156,8 +156,9 @@ async function validateAndInitialize() {
         // Setup form validation after form is visible
         setupFormValidation();
         
-        // Setup auto-geocoding
+        // Setup geocoding (auto + manual fallback)
         setupAutoGeocode();
+        setupManualGeocode();
     } catch (error) {
         console.error('Validation error:', error);
         validationSection.style.display = 'none';
@@ -647,6 +648,9 @@ async function handleSubmit(e) {
             // Clear geocode coordinates and reset geocode UI
             window.geocodeLat = null;
             window.geocodeLng = null;
+            hideManualGeocodeFields();
+            const manualSection = document.getElementById('manual-geocode-section');
+            if (manualSection) manualSection.style.display = 'none';
             updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
             // Reset status and navigator dropdowns to defaults
             const statusSelect = document.getElementById('status');
@@ -918,21 +922,89 @@ function setupFormValidation() {
 function updateGeocodeUI(state, message) {
     const el = document.getElementById('geocode-status');
     const btn = document.getElementById('geocode-btn');
+    const manualSection = document.getElementById('manual-geocode-section');
     if (!el) return;
     el.textContent = message || '';
     el.className = 'geocode-status ' + (state || 'idle');
-    // Enable Geocode button when we have address fields (user can retry)
     const hasAddress = document.getElementById('address').value.trim() &&
         document.getElementById('city').value.trim() &&
         document.getElementById('state').value.trim() &&
         document.getElementById('zip').value.trim();
     btn.disabled = !hasAddress;
+
+    if (manualSection) {
+        if (state === 'error') {
+            manualSection.style.display = 'block';
+        } else if (state === 'success') {
+            manualSection.style.display = 'none';
+            hideManualGeocodeFields();
+        }
+    }
+}
+
+function hideManualGeocodeFields() {
+    const fields = document.getElementById('manual-geocode-fields');
+    const toggle = document.getElementById('manual-geocode-toggle');
+    if (fields) fields.style.display = 'none';
+    if (toggle) toggle.textContent = 'Enter coordinates manually';
+    const latInput = document.getElementById('manual-lat');
+    const lngInput = document.getElementById('manual-lng');
+    if (latInput) latInput.value = '';
+    if (lngInput) lngInput.value = '';
+}
+
+function isValidCoordinate(val, type) {
+    const num = parseFloat(val);
+    if (isNaN(num)) return false;
+    if (type === 'lat') return num >= -90 && num <= 90;
+    if (type === 'lng') return num >= -180 && num <= 180;
+    return false;
+}
+
+function setupManualGeocode() {
+    const toggle = document.getElementById('manual-geocode-toggle');
+    const fields = document.getElementById('manual-geocode-fields');
+    const latInput = document.getElementById('manual-lat');
+    const lngInput = document.getElementById('manual-lng');
+    const applyBtn = document.getElementById('manual-geocode-apply');
+
+    if (!toggle || !fields) return;
+
+    toggle.addEventListener('click', () => {
+        const isVisible = fields.style.display !== 'none';
+        fields.style.display = isVisible ? 'none' : 'block';
+        toggle.textContent = isVisible ? 'Enter coordinates manually' : 'Hide manual entry';
+    });
+
+    function validateManualInputs() {
+        const latValid = isValidCoordinate(latInput.value.trim(), 'lat');
+        const lngValid = isValidCoordinate(lngInput.value.trim(), 'lng');
+        applyBtn.disabled = !(latValid && lngValid);
+    }
+
+    latInput.addEventListener('input', validateManualInputs);
+    lngInput.addEventListener('input', validateManualInputs);
+
+    applyBtn.addEventListener('click', () => {
+        const lat = parseFloat(latInput.value.trim());
+        const lng = parseFloat(lngInput.value.trim());
+        if (!isValidCoordinate(latInput.value.trim(), 'lat') || !isValidCoordinate(lngInput.value.trim(), 'lng')) return;
+
+        window.geocodeLat = lat;
+        window.geocodeLng = lng;
+        updateGeocodeUI('success', `\u2713 Coordinates set manually (${lat}, ${lng})`);
+        const form = document.getElementById('client-form');
+        if (form._validateForm) form._validateForm();
+    });
 }
 
 // Clear stored coordinates when address changes (so submit stays disabled until re-geocoded)
 function clearGeocodeOnAddressChange() {
     window.geocodeLat = null;
     window.geocodeLng = null;
+    hideManualGeocodeFields();
+    const manualSection = document.getElementById('manual-geocode-section');
+    if (manualSection) manualSection.style.display = 'none';
     const hasAddress = document.getElementById('address').value.trim() &&
         document.getElementById('city').value.trim() &&
         document.getElementById('state').value.trim() &&

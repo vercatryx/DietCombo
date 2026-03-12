@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { ProduceDetail } from '@/components/vendors/ProduceDetail';
 import type { Metadata } from 'next';
 
@@ -6,5 +7,9 @@ export const metadata: Metadata = {
 };
 
 export default function ProducePage() {
-    return <ProduceDetail />;
+    return (
+        <Suspense fallback={<div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>}>
+            <ProduceDetail />
+        </Suspense>
+    );
 }
