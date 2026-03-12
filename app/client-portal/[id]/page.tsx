@@ -1,16 +1,4 @@
-import {
-  getClient,
-  getStatuses,
-  getNavigators,
-  getVendors,
-  getMenuItems,
-  getBoxTypes,
-  getCategories,
-  getActiveOrderForClient,
-  getOrderHistory,
-  getClientMealPlannerData,
-  getDependentsByParentId
-} from '@/lib/actions';
+import { getClient, getClientPortalPageData } from '@/lib/actions';
 import { ClientPortalInterface } from '@/components/clients/ClientPortalInterface';
 import { notFound, redirect } from 'next/navigation';
 import { logout } from '@/lib/auth-actions';
@@ -36,10 +24,12 @@ export default async function ClientPortalPage({ params }: Props) {
     redirect(`/client-portal/${session.userId}`);
   }
 
-  const client = await getClient(id);
-  if (!client) {
+  const payload = await getClientPortalPageData(id);
+  if (!payload) {
     notFound();
   }
+
+  const { client, householdPeople, statuses, navigators, vendors, menuItems, boxTypes, categories, activeOrder, previousOrders, mealPlanData } = payload;
 
   // Produce clients cannot use the client portal (e.g. admin opened their URL)
   if (client.serviceType === 'Produce') {
@@ -87,39 +77,6 @@ export default async function ClientPortalPage({ params }: Props) {
   // upcoming_order so we never read or write it for the client's order.
   const upcomingOrder = client.serviceType === 'Food' ? null : (client.activeOrder ?? null);
 
-  // Household: primary + dependants (for "People on this account" in sidebar)
-  const parentId = client.parentClientId ?? client.id;
-  const [parent, dependants] = await Promise.all([
-    parentId === client.id ? Promise.resolve(client) : getClient(parentId),
-    getDependentsByParentId(parentId)
-  ]);
-  const householdPeople = parent
-    ? [parent, ...dependants]
-    : [client, ...dependants];
-
-  // Portal-specific data fetch (independent of admin getClientProfilePageData)
-  const [
-    statuses,
-    navigators,
-    vendors,
-    menuItems,
-    boxTypes,
-    categories,
-    activeOrder,
-    previousOrders,
-    mealPlanData
-  ] = await Promise.all([
-    getStatuses(),
-    getNavigators(),
-    getVendors(),
-    getMenuItems(),
-    getBoxTypes(),
-    getCategories(),
-    getActiveOrderForClient(id),
-    getOrderHistory(id),
-    client.serviceType === 'Food' ? getClientMealPlannerData(id) : Promise.resolve([])
-  ]);
-
   if (client.serviceType === 'Food' && Array.isArray(mealPlanData)) {
     console.log('[MealPlan Step 0] client-portal page: mealPlanData (initialMealPlanOrders) length=', mealPlanData.length, 'first order items=', mealPlanData[0]?.items?.length ?? 0, 'first order item ids sample=', mealPlanData[0]?.items?.slice(0, 2).map((i: any) => i?.id) ?? []);
   }
@@ -166,7 +123,7 @@ export default async function ClientPortalPage({ params }: Props) {
         categories={categories}
         upcomingOrder={upcomingOrder}
         activeOrder={activeOrder}
-        previousOrders={previousOrders ?? []}
+        previousOrders={previousOrders}
         orderAndMealPlanOnly={true}
         initialMealPlanOrders={Array.isArray(mealPlanData) ? mealPlanData : null}
       />

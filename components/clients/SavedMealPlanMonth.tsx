@@ -6,6 +6,7 @@ import {
   getClientMealPlannerData,
   getAvailableMealPlanTemplateWithAllDates,
   getAvailableMealPlanTemplateWithAllDatesIncludingRecurring,
+  getMealPlanForMonth,
   saveClientMealPlannerData,
   type MealPlannerOrderResult,
   type MealPlannerOrderDisplayItem
@@ -66,6 +67,8 @@ export interface SavedMealPlanMonthProps {
   includeRecurringInTemplate?: boolean;
   /** Number of people on the account (primary + dependants). Expected totals per day are multiplied by this so each person gets the default amount. Default 1. */
   householdSize?: number;
+  /** When true, only load one month at a time (portal). initialOrders = current month; when user changes month, fetch that month. Avoids loading all future dates. */
+  loadByMonth?: boolean;
 }
 
 function applyOrders(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void) {
@@ -84,13 +87,15 @@ function scaleTemplateQuantities(list: MealPlannerOrderResult[], multiplier: num
   }));
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1 }: SavedMealPlanMonthProps) {
+export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1, loadByMonth = false }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [editingQty, setEditingQty] = useState<{ itemId: string; value: string } | null>(null);
   const fetchIdRef = useRef(0);
+  /** When loadByMonth, which month initialOrders was for (so we don't refetch on mount). */
+  const initialMonthRef = useRef<{ y: number; m: number } | null>(null);
   /** Only dates the client has edited are persisted; untouched dates stay template-only. */
   const clientEditedDatesRef = useRef<Set<string>>(new Set());
   /** Dates edited in this session only (so parent saves only these, not all dates with data). */
@@ -165,19 +170,26 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
         const clientSelectionsByKey = new Map(
           o.items.map((i) => [(i.name ?? '').trim().toLowerCase(), i])
         );
+        // #region agent log
+        if (o.scheduledDeliveryDate === '2026-03-23') fetch('http://127.0.0.1:7786/ingest/53fdf41f-f828-474a-a4b5-8e05c38915d4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3a14c'},body:JSON.stringify({sessionId:'d3a14c',location:'SavedMealPlanMonth.tsx:mergeTemplateWithClient',message:'merge inputs for 3/23',data:{templateItemCount:templateOrder.items.length,templateNames:templateOrder.items.map((i:any)=>i.name),clientItemCount:o.items.length,clientNames:o.items.map((i:any)=>i.name),clientSelectionKeys:Array.from(clientSelectionsByKey.keys()),dupeCheck:o.items.length!==clientSelectionsByKey.size},timestamp:Date.now(),hypothesisId:'B,C'})}).catch(()=>{});
+        // #endregion
         const mergedItems = templateOrder.items.map((tItem) => {
           const key = (tItem.name ?? '').trim().toLowerCase();
           const clientItem = clientSelectionsByKey.get(key);
           if (clientItem) {
+            const templateIsDay = !String(tItem.id || '').startsWith('recurring-');
+            const clientIsRecurring = String(clientItem.id || '').startsWith('recurring-');
             return {
               ...tItem,
-              id: clientItem.id,
+              id: (templateIsDay && clientIsRecurring) ? tItem.id : clientItem.id,
               quantity: clientItem.quantity
-              // value (meals per item) stays from template - menu is fixed
             };
           }
           return tItem;
         });
+        // #region agent log
+        if (o.scheduledDeliveryDate === '2026-03-23') fetch('http://127.0.0.1:7786/ingest/53fdf41f-f828-474a-a4b5-8e05c38915d4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3a14c'},body:JSON.stringify({sessionId:'d3a14c',location:'SavedMealPlanMonth.tsx:mergeTemplateWithClient:afterMerge',message:'merge output for 3/23',data:{mergedItemCount:mergedItems.length,mergedNames:mergedItems.map((i:any)=>i.name),mergedIds:mergedItems.map((i:any)=>i.id),daySpecificCount:mergedItems.filter((i:any)=>!String(i.id||'').startsWith('recurring-')).length,daySpecificNames:mergedItems.filter((i:any)=>!String(i.id||'').startsWith('recurring-')).map((i:any)=>i.name)},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         byDate.set(o.scheduledDeliveryDate, {
           ...templateOrder,
           items: mergedItems,
@@ -190,6 +202,15 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       );
     };
     if (initialOrders != null && initialOrders.length > 0) {
+      // Portal loadByMonth: server sent current month merged; use as-is and skip heavy template fetch.
+      if (loadByMonth) {
+        clientEditedDatesRef.current = new Set(initialOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean));
+        applyOrders(initialOrders, setOrders);
+        const now = new Date();
+        initialMonthRef.current = { y: now.getFullYear(), m: now.getMonth() + 1 };
+        setLoadingDates(false);
+        return;
+      }
       // Parent passed cached client data; still merge with template so all dates from settings show.
       setLoadingDates(true);
       const thisFetchId = fetchIdRef.current + 1;
@@ -213,6 +234,29 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
         });
       return;
     }
+    // Portal loadByMonth with no initialOrders: fetch current month only instead of full template.
+    if (loadByMonth && effectiveClientId) {
+      const now = new Date();
+      setLoadingDates(true);
+      const thisFetchId = fetchIdRef.current + 1;
+      fetchIdRef.current = thisFetchId;
+      getMealPlanForMonth(effectiveClientId, now.getFullYear(), now.getMonth() + 1)
+        .then((list) => {
+          if (fetchIdRef.current !== thisFetchId) return;
+          clientEditedDatesRef.current = new Set(list.map((o) => o.scheduledDeliveryDate).filter(Boolean));
+          applyOrders(list, setOrders);
+        })
+        .catch((err) => {
+          if (fetchIdRef.current !== thisFetchId) return;
+          console.error('[SavedMealPlanMonth] Error loading current month:', err);
+          setOrders([]);
+        })
+        .finally(() => {
+          if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
+        });
+      return;
+    }
+
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
@@ -238,7 +282,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [effectiveClientId, initialOrders, includeRecurringInTemplate, householdSize]);
+  }, [effectiveClientId, initialOrders, includeRecurringInTemplate, householdSize, loadByMonth]);
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
@@ -266,6 +310,35 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
+
+  // When loadByMonth (portal): fetch that month when user changes calendar month (prev/next).
+  // Skip fetch only when we're on the initial month AND orders already contain dates for that month
+  // (so we didn't navigate away). Otherwise always fetch so e.g. March → April → March shows green again.
+  useEffect(() => {
+    if (!loadByMonth || !effectiveClientId) return;
+    const y = calendarMonth.getFullYear();
+    const m = calendarMonth.getMonth() + 1;
+    const monthPrefix = `${y}-${String(m).padStart(2, '0')}-`;
+    const ordersMatchThisMonth = orders.some((o) => (o.scheduledDeliveryDate || '').startsWith(monthPrefix));
+    if (initialMonthRef.current?.y === y && initialMonthRef.current?.m === m && ordersMatchThisMonth) return;
+    setLoadingDates(true);
+    const thisFetchId = fetchIdRef.current + 1;
+    fetchIdRef.current = thisFetchId;
+    getMealPlanForMonth(effectiveClientId, y, m)
+      .then((list) => {
+        if (fetchIdRef.current !== thisFetchId) return;
+        clientEditedDatesRef.current = new Set(list.map((o) => o.scheduledDeliveryDate).filter(Boolean));
+        applyOrders(list, setOrders);
+      })
+      .catch((err) => {
+        if (fetchIdRef.current !== thisFetchId) return;
+        console.error('[SavedMealPlanMonth] Error loading month:', err);
+        setOrders([]);
+      })
+      .finally(() => {
+        if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
+      });
+  }, [loadByMonth, effectiveClientId, calendarMonth]);
 
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear();
@@ -389,11 +462,6 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
             <p className={styles.calendarLoadingLabel} aria-live="polite">Loading calendar…</p>
           </div>
         </div>
-      ) : !hasDates ? (
-        <div className={styles.emptyState}>
-          <CalendarDays size={32} />
-          <p>No non-expired delivery dates. Add dates in the meal planner settings or extend expiration to show them here.</p>
-        </div>
       ) : (
         <>
           <div className={styles.mealPlannerCalendarWrap}>
@@ -458,6 +526,12 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
           </div>
           </div>
 
+          {!hasDates && (
+            <p className={styles.emptyStateInline} aria-live="polite">
+              No non-expired delivery dates for this month. Add dates in the meal planner settings or extend expiration to show them here. You can switch to another month using the arrows above.
+            </p>
+          )}
+
           {selectedDate && (
             <div className={styles.detailPanel}>
               <div className={styles.detailHeader}>
@@ -507,6 +581,9 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                             const isPlaceholder = (i: typeof items[0]) =>
                                 (i.name ?? '').trim().toLowerCase() === 'item' && !String(i.id || '').startsWith('recurring-');
                             const filteredItems = items.filter((i) => !isPlaceholder(i));
+                            // #region agent log
+                            if (selectedDate === '2026-03-23') fetch('http://127.0.0.1:7786/ingest/53fdf41f-f828-474a-a4b5-8e05c38915d4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3a14c'},body:JSON.stringify({sessionId:'d3a14c',location:'SavedMealPlanMonth.tsx:render',message:'render items for 3/23',data:{totalItems:items.length,placeholderFiltered:items.length-filteredItems.length,filteredNames:filteredItems.map((i:any)=>i.name),includeRecurringInTemplate},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+                            // #endregion
                             const recurringItems = includeRecurringInTemplate ? filteredItems.filter((i) => String(i.id || '').startsWith('recurring-')) : filteredItems;
                             const daySpecificItems = includeRecurringInTemplate ? filteredItems.filter((i) => !String(i.id || '').startsWith('recurring-')) : filteredItems;
                             const showSeparator = includeRecurringInTemplate && recurringItems.length > 0 && daySpecificItems.length > 0;

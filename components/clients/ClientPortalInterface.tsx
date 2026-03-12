@@ -2485,6 +2485,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                             editedDatesResetTrigger={mealPlanEditedResetTrigger}
                             includeRecurringInTemplate={true}
                             householdSize={mealPlanHouseholdSize}
+                            loadByMonth={true}
                         />
                     </section>
                     );
