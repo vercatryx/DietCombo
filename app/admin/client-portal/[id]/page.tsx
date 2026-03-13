@@ -24,7 +24,7 @@ export default async function AdminClientPortalPage({ params }: Props) {
     redirect('/clients');
   }
 
-  const payload = await getClientPortalPageData(id);
+  const payload = await getClientPortalPageData(id, { includePastAndExpired: true });
   if (!payload) {
     notFound();
   }
@@ -126,6 +126,7 @@ export default async function AdminClientPortalPage({ params }: Props) {
         previousOrders={previousOrders}
         orderAndMealPlanOnly={true}
         initialMealPlanOrders={Array.isArray(mealPlanData) ? mealPlanData : null}
+        adminMode={true}
       />
     </div>
   );

@@ -28,7 +28,7 @@ export function LayoutShell({ children, userName, userRole, userId }: { children
     // Hide sidebar only for vendor portal (singular /vendor), not admin vendor management (plural /vendors)
     // Hide sidebar only for vendor portal (singular /vendor), client portal, verify-order, delivery, drivers, and produce routes
     const isVendorPortal = pathname === '/vendor' || pathname.startsWith('/vendor/');
-    const isClientPortal = pathname.startsWith('/client-portal');
+    const isClientPortal = pathname.startsWith('/client-portal') || pathname.startsWith('/admin/client-portal');
     const isVerifyOrder = pathname.startsWith('/verify-order');
     const isDelivery = pathname.startsWith('/delivery');
     const isDrivers = pathname.startsWith('/drivers');

@@ -69,6 +69,8 @@ export interface SavedMealPlanMonthProps {
   householdSize?: number;
   /** When true, only load one month at a time (portal). initialOrders = current month; when user changes month, fetch that month. Avoids loading all future dates. */
   loadByMonth?: boolean;
+  /** When true, show all dates including past and expired (admin override). */
+  adminMode?: boolean;
 }
 
 function applyOrders(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void) {
@@ -87,7 +89,7 @@ function scaleTemplateQuantities(list: MealPlannerOrderResult[], multiplier: num
   }));
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1, loadByMonth = false }: SavedMealPlanMonthProps) {
+export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1, loadByMonth = false, adminMode = false }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -170,9 +172,6 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
         const clientSelectionsByKey = new Map(
           o.items.map((i) => [(i.name ?? '').trim().toLowerCase(), i])
         );
-        // #region agent log
-        if (o.scheduledDeliveryDate === '2026-03-23') fetch('http://127.0.0.1:7786/ingest/53fdf41f-f828-474a-a4b5-8e05c38915d4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3a14c'},body:JSON.stringify({sessionId:'d3a14c',location:'SavedMealPlanMonth.tsx:mergeTemplateWithClient',message:'merge inputs for 3/23',data:{templateItemCount:templateOrder.items.length,templateNames:templateOrder.items.map((i:any)=>i.name),clientItemCount:o.items.length,clientNames:o.items.map((i:any)=>i.name),clientSelectionKeys:Array.from(clientSelectionsByKey.keys()),dupeCheck:o.items.length!==clientSelectionsByKey.size},timestamp:Date.now(),hypothesisId:'B,C'})}).catch(()=>{});
-        // #endregion
         const mergedItems = templateOrder.items.map((tItem) => {
           const key = (tItem.name ?? '').trim().toLowerCase();
           const clientItem = clientSelectionsByKey.get(key);
@@ -187,9 +186,6 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
           }
           return tItem;
         });
-        // #region agent log
-        if (o.scheduledDeliveryDate === '2026-03-23') fetch('http://127.0.0.1:7786/ingest/53fdf41f-f828-474a-a4b5-8e05c38915d4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3a14c'},body:JSON.stringify({sessionId:'d3a14c',location:'SavedMealPlanMonth.tsx:mergeTemplateWithClient:afterMerge',message:'merge output for 3/23',data:{mergedItemCount:mergedItems.length,mergedNames:mergedItems.map((i:any)=>i.name),mergedIds:mergedItems.map((i:any)=>i.id),daySpecificCount:mergedItems.filter((i:any)=>!String(i.id||'').startsWith('recurring-')).length,daySpecificNames:mergedItems.filter((i:any)=>!String(i.id||'').startsWith('recurring-')).map((i:any)=>i.name)},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
         byDate.set(o.scheduledDeliveryDate, {
           ...templateOrder,
           items: mergedItems,
@@ -240,7 +236,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       setLoadingDates(true);
       const thisFetchId = fetchIdRef.current + 1;
       fetchIdRef.current = thisFetchId;
-      getMealPlanForMonth(effectiveClientId, now.getFullYear(), now.getMonth() + 1)
+      getMealPlanForMonth(effectiveClientId, now.getFullYear(), now.getMonth() + 1, adminMode ? { includePastAndExpired: true } : undefined)
         .then((list) => {
           if (fetchIdRef.current !== thisFetchId) return;
           clientEditedDatesRef.current = new Set(list.map((o) => o.scheduledDeliveryDate).filter(Boolean));
@@ -286,15 +282,18 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
 
   const todayIso = useMemo(() => getTodayIso(), []);
 
-  // Only show dates that are today or future and not expired (expirationDate >= today when set)
+  // Only show dates that are today or future and not expired (expirationDate >= today when set).
+  // In adminMode, show ALL dates including past and expired.
   const futureOrders = useMemo(
     () =>
-      orders.filter(
-        (o) =>
-          (o.scheduledDeliveryDate || '') >= todayIso &&
-          (o.expirationDate == null || o.expirationDate === '' || o.expirationDate >= todayIso)
-      ),
-    [orders, todayIso]
+      adminMode
+        ? orders
+        : orders.filter(
+            (o) =>
+              (o.scheduledDeliveryDate || '') >= todayIso &&
+              (o.expirationDate == null || o.expirationDate === '' || o.expirationDate >= todayIso)
+          ),
+    [orders, todayIso, adminMode]
   );
 
   const validDateSet = useMemo(() => new Set(futureOrders.map((o) => o.scheduledDeliveryDate).filter(Boolean)), [futureOrders]);
@@ -324,7 +323,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
-    getMealPlanForMonth(effectiveClientId, y, m)
+    getMealPlanForMonth(effectiveClientId, y, m, adminMode ? { includePastAndExpired: true } : undefined)
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
         clientEditedDatesRef.current = new Set(list.map((o) => o.scheduledDeliveryDate).filter(Boolean));
@@ -338,7 +337,7 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       .finally(() => {
         if (fetchIdRef.current === thisFetchId) setLoadingDates(false);
       });
-  }, [loadByMonth, effectiveClientId, calendarMonth]);
+  }, [loadByMonth, effectiveClientId, calendarMonth, adminMode]);
 
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear();
@@ -581,9 +580,6 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
                             const isPlaceholder = (i: typeof items[0]) =>
                                 (i.name ?? '').trim().toLowerCase() === 'item' && !String(i.id || '').startsWith('recurring-');
                             const filteredItems = items.filter((i) => !isPlaceholder(i));
-                            // #region agent log
-                            if (selectedDate === '2026-03-23') fetch('http://127.0.0.1:7786/ingest/53fdf41f-f828-474a-a4b5-8e05c38915d4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d3a14c'},body:JSON.stringify({sessionId:'d3a14c',location:'SavedMealPlanMonth.tsx:render',message:'render items for 3/23',data:{totalItems:items.length,placeholderFiltered:items.length-filteredItems.length,filteredNames:filteredItems.map((i:any)=>i.name),includeRecurringInTemplate},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-                            // #endregion
                             const recurringItems = includeRecurringInTemplate ? filteredItems.filter((i) => String(i.id || '').startsWith('recurring-')) : filteredItems;
                             const daySpecificItems = includeRecurringInTemplate ? filteredItems.filter((i) => !String(i.id || '').startsWith('recurring-')) : filteredItems;
                             const showSeparator = includeRecurringInTemplate && recurringItems.length > 0 && daySpecificItems.length > 0;

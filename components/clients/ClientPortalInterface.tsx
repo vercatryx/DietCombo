@@ -28,9 +28,11 @@ interface Props {
     initialMealPlanOrders?: any[] | null;
     /** Primary + dependants for "People on this account" in sidebar (client portal). */
     householdPeople?: ClientProfile[];
+    /** When true, admin overrides apply: no amount checks, expired days editable. Only passed from /admin/client-portal. */
+    adminMode?: boolean;
 }
 
-export function ClientPortalInterface({ client: initialClient, householdPeople = [], statuses, navigators, vendors, menuItems, boxTypes, categories, upcomingOrder, activeOrder, previousOrders, orderAndMealPlanOnly = false, initialMealPlanOrders = null }: Props) {
+export function ClientPortalInterface({ client: initialClient, householdPeople = [], statuses, navigators, vendors, menuItems, boxTypes, categories, upcomingOrder, activeOrder, previousOrders, orderAndMealPlanOnly = false, initialMealPlanOrders = null, adminMode = false }: Props) {
     const router = useRouter();
     const [client, setClient] = useState<ClientProfile>(initialClient);
     const [activeBoxQuotas, setActiveBoxQuotas] = useState<BoxQuota[]>([]);
@@ -496,8 +498,9 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             return;
         }
 
-        // Comprehensive pre-save validation
+        // Comprehensive pre-save validation (skipped entirely in adminMode)
         const validationErrors: string[] = [];
+        if (!adminMode) {
 
         if (serviceType === 'Food') {
             // Check if order has items after cleaning
@@ -708,6 +711,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 }
             }
         }
+        } // end if (!adminMode)
 
         if (validationErrors.length > 0) {
             console.log('[ClientPortalInterface] Save blocked by validation:', validationErrors);
@@ -1116,7 +1120,8 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
 
     // New helper functions for multiple boxes
     function canAddMoreBoxes(): boolean {
-        if (!client.authorizedAmount) return true; // No limit
+        if (adminMode) return true;
+        if (!client.authorizedAmount) return true;
         
         const currentBoxCount = getTotalBoxCount(orderConfig);
         const firstBox = orderConfig.boxes?.[0];
@@ -1614,7 +1619,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                                     {getItemsToDisplayForVendor(selection.vendorId, recurringOnlyItemIds(Object.keys(dayItems))).map(item => {
                                                         const qty = Number(dayItems[item.id] || 0);
                                                         const val = item.value ?? 1;
-                                                        const canAdd = !item.isOrderOnly && (totalMeals + val) <= (client.approvedMealsPerWeek || 0);
+                                                        const canAdd = adminMode || (!item.isOrderOnly && (totalMeals + val) <= (client.approvedMealsPerWeek || 0));
 
                                                         return (
                                                             <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: item.isOrderOnly ? 'var(--bg-surface-hover)' : 'var(--bg-surface)' }}>
@@ -1678,7 +1683,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                             {getItemsToDisplayForVendor(selection.vendorId, recurringOnlyItemIds(Object.keys(singleDayItems))).map(item => {
                                                 const qty = Number(singleDayItems[item.id] || 0);
                                                 const val = item.value ?? 1;
-                                                const canAdd = !item.isOrderOnly && (totalMeals + val) <= (client.approvedMealsPerWeek || 0);
+                                                const canAdd = adminMode || (!item.isOrderOnly && (totalMeals + val) <= (client.approvedMealsPerWeek || 0));
 
                                                 return (
                                                     <div key={item.id} className={styles.menuItemCard} style={{ padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: item.isOrderOnly ? 'var(--bg-surface-hover)' : 'var(--bg-surface)' }}>
@@ -1768,6 +1773,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         })()
         : [];
     const mealPlanMismatch = mealPlanMismatchedEditedDates.length > 0;
+    const mealPlanMismatchBlocksSave = mealPlanMismatch && !adminMode;
 
     // Format ISO date for display in mismatch message (e.g. "Mar 9 (Mon)")
     const formatDateForMismatch = (iso: string) => {
@@ -2217,7 +2223,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                                                     {availableItems.map(item => {
                                                                         const qty = Number(selectedItems[item.id] || 0);
                                                                         const itemVal = item.quotaValue || 1;
-                                                                        const canAdd = requiredQuotaValue === null || (categoryQuotaValue + itemVal <= requiredQuotaValue);
+                                                                        const canAdd = adminMode || requiredQuotaValue === null || (categoryQuotaValue + itemVal <= requiredQuotaValue);
                                                                         const itemNote = box.itemNotes?.[item.id] || '';
 
                                                                         return (
@@ -2478,6 +2484,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                         <SavedMealPlanMonth
                             key={`meal-plan-${client.id}-${mealPlanDiscardTrigger}`}
                             clientId={client.id}
+                            adminMode={adminMode}
                             onOrdersChange={setMealPlanOrders}
                             onEditedDatesChange={setMealPlanEditedDates}
                             initialOrders={initialMealPlanOrders ?? undefined}
@@ -2833,7 +2840,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                                 color: '#991b1b',
                                                 fontWeight: 600
                                             }}>
-                                                Cannot save because of the mismatch. The following edited days have wrong amounts: {mealPlanMismatchedEditedDates.map(formatDateForMismatch).join(', ')}. Adjust quantities so each day&apos;s total matches the required amount.
+                                                {adminMode ? 'Warning: ' : 'Cannot save because of the mismatch. '}The following edited days have wrong amounts: {mealPlanMismatchedEditedDates.map(formatDateForMismatch).join(', ')}.{adminMode ? '' : ' Adjust quantities so each day\u0027s total matches the required amount.'}
                                             </div>
                                         </div>
                                     </>
@@ -2874,31 +2881,31 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                 </button>
                                 <button
                                     onClick={handleSave}
-                                    disabled={saving || mealPlanMismatch}
+                                    disabled={saving || mealPlanMismatchBlocksSave}
                                     className="btn btn-primary save-bar-button save-bar-button-primary"
                                     style={{
                                         fontWeight: 700,
-                                        boxShadow: saving ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : mealPlanMismatch ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : '0 8px 16px -4px rgba(0, 0, 0, 0.3)',
-                                        backgroundColor: saving ? '#10b981' : mealPlanMismatch ? '#9ca3af' : '#f59e0b',
-                                        border: saving ? '2px solid #059669' : mealPlanMismatch ? '2px solid #6b7280' : '2px solid #d97706',
+                                        boxShadow: saving ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : mealPlanMismatchBlocksSave ? '0 4px 8px -2px rgba(0, 0, 0, 0.2)' : '0 8px 16px -4px rgba(0, 0, 0, 0.3)',
+                                        backgroundColor: saving ? '#10b981' : mealPlanMismatchBlocksSave ? '#9ca3af' : '#f59e0b',
+                                        border: saving ? '2px solid #059669' : mealPlanMismatchBlocksSave ? '2px solid #6b7280' : '2px solid #d97706',
                                         color: '#1f2937',
-                                        transform: saving || mealPlanMismatch ? 'scale(1)' : 'scale(1.05)',
+                                        transform: saving || mealPlanMismatchBlocksSave ? 'scale(1)' : 'scale(1.05)',
                                         transition: 'all 0.2s',
-                                        opacity: saving ? 0.9 : mealPlanMismatch ? 0.7 : 1,
-                                        cursor: saving ? 'wait' : mealPlanMismatch ? 'not-allowed' : 'pointer',
+                                        opacity: saving ? 0.9 : mealPlanMismatchBlocksSave ? 0.7 : 1,
+                                        cursor: saving ? 'wait' : mealPlanMismatchBlocksSave ? 'not-allowed' : 'pointer',
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '8px',
                                         justifyContent: 'center'
                                     }}
                                     onMouseEnter={(e) => {
-                                        if (!saving && !mealPlanMismatch) {
+                                        if (!saving && !mealPlanMismatchBlocksSave) {
                                             e.currentTarget.style.transform = 'scale(1.08)';
                                             e.currentTarget.style.boxShadow = '0 12px 24px -4px rgba(0, 0, 0, 0.4)';
                                         }
                                     }}
                                     onMouseLeave={(e) => {
-                                        if (!saving && !mealPlanMismatch) {
+                                        if (!saving && !mealPlanMismatchBlocksSave) {
                                             e.currentTarget.style.transform = 'scale(1.05)';
                                             e.currentTarget.style.boxShadow = '0 8px 16px -4px rgba(0, 0, 0, 0.3)';
                                         }

@@ -2735,7 +2735,8 @@ export async function getAvailableMealPlanTemplateWithAllDatesIncludingRecurring
  * dates in [startDate, endDate]. Uses one recurring fetch + batch custom items (2 queries) instead of N per date.
  * Use for client portal to load current month only and when user changes month.
  */
-export async function getAvailableMealPlanTemplateInRange(startDate: string, endDate: string): Promise<MealPlannerOrderResult[]> {
+export async function getAvailableMealPlanTemplateInRange(startDate: string, endDate: string, opts?: { includePastAndExpired?: boolean }): Promise<MealPlannerOrderResult[]> {
+    const includePastAndExpired = opts?.includePastAndExpired ?? false;
     const start = mealPlannerDateOnly(startDate);
     const end = mealPlannerDateOnly(endDate);
     if (!start || !end || start > end) return [];
@@ -2751,7 +2752,7 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
             for (let t = monthStart.getTime(); t <= monthEnd.getTime(); t += 86400000) {
                 const date = new Date(t);
                 const ds = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
-                if (ds >= today) fallback.push(ds);
+                if (includePastAndExpired || ds >= today) fallback.push(ds);
             }
             dates = fallback;
             if (dates.length === 0) return [];
@@ -2764,7 +2765,7 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
             ((a.name ?? '').trim() || 'Item').toLowerCase() === ((b.name ?? '').trim() || 'Item').toLowerCase();
         const list: MealPlannerOrderResult[] = [];
         for (const dateOnly of dates) {
-            if (dateOnly < today) continue;
+            if (!includePastAndExpired && dateOnly < today) continue;
             const custom = batchResult.get(dateOnly);
             const defaultDayItems = custom?.items ?? [];
             const combined: MealPlannerOrderDisplayItem[] = recurringItems.map((r) => ({
@@ -2785,7 +2786,7 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
                 else combined.push(dayEntry);
             }
             const expirationDate = custom?.expirationDate ?? null;
-            if (expirationDate != null && expirationDate !== '' && expirationDate < today) continue;
+            if (!includePastAndExpired && expirationDate != null && expirationDate !== '' && expirationDate < today) continue;
             const expectedTotalMeals = custom?.expectedTotalMeals != null && !Number.isNaN(Number(custom.expectedTotalMeals)) ? Number(custom.expectedTotalMeals) : null;
             list.push({
                 id: `template-${dateOnly}`,
@@ -2810,12 +2811,12 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
  * to show current month only; when user changes month, call again with that year/month.
  * One batch template fetch + one client range fetch + merge in memory.
  */
-export async function getMealPlanForMonth(clientId: string, year: number, month: number): Promise<MealPlannerOrderResult[]> {
+export async function getMealPlanForMonth(clientId: string, year: number, month: number, opts?: { includePastAndExpired?: boolean }): Promise<MealPlannerOrderResult[]> {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const lastDay = new Date(year, month, 0).getDate();
     const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     const [templateList, clientList] = await Promise.all([
-        getAvailableMealPlanTemplateInRange(monthStart, monthEnd),
+        getAvailableMealPlanTemplateInRange(monthStart, monthEnd, opts),
         getClientMealPlannerData(clientId, { startDate: monthStart, endDate: monthEnd })
     ]);
     const byDate = new Map<string, MealPlannerOrderResult>();
@@ -2828,7 +2829,6 @@ export async function getMealPlanForMonth(clientId: string, year: number, month:
         if (!o.scheduledDeliveryDate) continue;
         const templateOrder = byDate.get(o.scheduledDeliveryDate);
         if (!templateOrder) {
-            byDate.set(o.scheduledDeliveryDate, o);
             continue;
         }
         const clientByKey = new Map(o.items.map((i) => [(i.name ?? '').trim().toLowerCase(), i]));
@@ -9368,7 +9368,7 @@ export async function getClientProfilePageData(clientId: string) {
  * shared reference data to avoid duplicate getMenuItems/getVendors/getBoxTypes round-trips.
  * Use this instead of many separate calls to speed up /client-portal/[id].
  */
-export async function getClientPortalPageData(clientId: string) {
+export async function getClientPortalPageData(clientId: string, opts?: { includePastAndExpired?: boolean }) {
     if (!clientId) return null;
     try {
         const client = await getClient(clientId);
@@ -9408,7 +9408,7 @@ export async function getClientPortalPageData(clientId: string) {
         const [activeOrder, previousOrders, mealPlanData] = await Promise.all([
             getActiveOrderForClient(clientId, refData),
             getOrderHistory(clientId, undefined, refData),
-            client.serviceType === 'Food' ? getMealPlanForMonth(clientId, currentYear, currentMonth) : Promise.resolve([])
+            client.serviceType === 'Food' ? getMealPlanForMonth(clientId, currentYear, currentMonth, opts?.includePastAndExpired ? { includePastAndExpired: true } : undefined) : Promise.resolve([])
         ]);
 
         return {

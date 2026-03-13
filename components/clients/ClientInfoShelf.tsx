@@ -1027,13 +1027,16 @@ export function ClientInfoShelf({
                 </div>
 
                 <div className={styles.footer}>
-                    <button
+                    <Link
+                        href={`/admin/client-portal/${client.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className={styles.actionBtn}
-                        onClick={() => onOpenProfile(client.id)}
+                        style={{ textDecoration: 'none' }}
                     >
                         Open Order Details
                         <ExternalLink size={18} />
-                    </button>
+                    </Link>
                 </div>
             </div>
         </>
