@@ -9398,7 +9398,9 @@ export async function getClientPortalPageData(clientId: string, opts?: { include
         ]);
 
         const refData: OrderReferenceData = { menuItems, vendors, boxTypes };
-        const householdPeople = parent ? [parent, ...dependants] : [client, ...dependants];
+        // Only count Food clients for meal allowance; exclude Produce and other non-Food
+        const allHousehold = parent ? [parent, ...dependants] : [client, ...dependants];
+        const householdPeople = allHousehold.filter((p) => p?.serviceType === 'Food');
 
         // 2) Client-specific data reusing reference data (no duplicate menu/vendor/box fetches)
         // Food: load current month only for fast calendar (getMealPlanForMonth); other months load on demand in SavedMealPlanMonth
