@@ -135,6 +135,9 @@ export function Sidebar({
 
             <nav className={styles.nav}>
                 {navItems.filter(item => {
+                    if (userRole === 'brooklyn_admin') {
+                        return item.label === 'Client Dashboard' || item.label === 'Routes' || item.label === 'Meal Plan Edits';
+                    }
                     if (item.label === 'Admin Control') {
                         return userRole === 'admin' || userRole === 'super-admin';
                     }

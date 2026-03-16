@@ -2231,10 +2231,17 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
             ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
             : supabase;
 
-        const { data: clients, error } = await supabaseClient
+        const session = await getSession();
+        const brooklynOnly = session?.role === 'brooklyn_admin';
+
+        let clientsQuery = supabaseClient
             .from('clients')
             .select('id, full_name, meal_planner_data')
             .not('meal_planner_data', 'is', null);
+        if (brooklynOnly) {
+            clientsQuery = clientsQuery.eq('unite_account', 'Brooklyn');
+        }
+        const { data: clients, error } = await clientsQuery;
 
         if (error) {
             logQueryError(error, 'clients', 'select');
@@ -2285,29 +2292,39 @@ export async function getMealPlanEditCountsByMonth(startDate: string, endDate: s
             ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
             : supabase;
 
-        const { data: rpcRows, error: rpcError } = await supabaseClient.rpc('get_meal_plan_edit_counts', {
-            p_start_date: start,
-            p_end_date: end
-        });
+        const session = await getSession();
+        const brooklynOnly = session?.role === 'brooklyn_admin';
 
-        if (!rpcError && rpcRows && Array.isArray(rpcRows)) {
-            const result: Record<string, number> = {};
-            for (const row of rpcRows as { delivery_date: string; client_count: number }[]) {
-                const dateKey = row.delivery_date ? mealPlannerDateOnly(String(row.delivery_date)) : null;
-                if (dateKey) result[dateKey] = Number(row.client_count) || 0;
+        // RPC does not filter by unite_account; for Brooklyn admins use fallback only
+        if (!brooklynOnly) {
+            const { data: rpcRows, error: rpcError } = await supabaseClient.rpc('get_meal_plan_edit_counts', {
+                p_start_date: start,
+                p_end_date: end
+            });
+
+            if (!rpcError && rpcRows && Array.isArray(rpcRows)) {
+                const result: Record<string, number> = {};
+                for (const row of rpcRows as { delivery_date: string; client_count: number }[]) {
+                    const dateKey = row.delivery_date ? mealPlannerDateOnly(String(row.delivery_date)) : null;
+                    if (dateKey) result[dateKey] = Number(row.client_count) || 0;
+                }
+                return result;
             }
-            return result;
+
+            if (rpcError) {
+                console.warn('[getMealPlanEditCountsByMonth] RPC not available, using fallback:', rpcError.message);
+            }
         }
 
-        if (rpcError) {
-            console.warn('[getMealPlanEditCountsByMonth] RPC not available, using fallback:', rpcError.message);
-        }
-
-        // Fallback: scan clients.meal_planner_data in JS
-        const { data: clients, error } = await supabaseClient
+        // Fallback: scan clients.meal_planner_data in JS (supports brooklynOnly)
+        let fallbackQuery = supabaseClient
             .from('clients')
             .select('id, meal_planner_data')
             .not('meal_planner_data', 'is', null);
+        if (brooklynOnly) {
+            fallbackQuery = fallbackQuery.eq('unite_account', 'Brooklyn');
+        }
+        const { data: clients, error } = await fallbackQuery;
 
         if (error) {
             logQueryError(error, 'clients', 'select');
@@ -4311,7 +4328,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         billings: data.billings ? JSON.stringify(data.billings) : null,
         visits: data.visits ? JSON.stringify(data.visits) : null,
         sign_token: data.signToken || null,
-        produce_vendor_id: (data.serviceType === 'Produce' && data.produceVendorId) ? data.produceVendorId : null
+        produce_vendor_id: (data.serviceType === 'Produce' && data.produceVendorId) ? data.produceVendorId : null,
+        unite_account: data.uniteAccount ?? null
     };
 
     // Save upcoming_order if provided; sanitize to schema-only shape (UPCOMING_ORDER_SCHEMA)
@@ -8966,7 +8984,7 @@ export async function getNavigatorLogs(navigatorId: string) {
 
 // --- OPTIMIZED ACTIONS ---
 
-export async function getClientsPaginated(page: number, pageSize: number, searchQuery: string = '', filter?: 'needs-vendor') {
+export async function getClientsPaginated(page: number, pageSize: number, searchQuery: string = '', filter?: 'needs-vendor', options?: { brooklynOnly?: boolean }) {
     try {
         // If filtering for clients needing vendor assignment, get Boxes clients whose vendor is not set
         if (filter === 'needs-vendor') {
@@ -9119,6 +9137,9 @@ export async function getClientsPaginated(page: number, pageSize: number, search
         const endRow = page * pageSize - 1;
 
         let baseQuery = supabase.from('clients').select('*', { count: 'exact' });
+        if (options?.brooklynOnly) {
+            baseQuery = baseQuery.eq('unite_account', 'Brooklyn');
+        }
         if (searchQuery) {
             baseQuery = baseQuery.ilike('full_name', `%${searchQuery}%`);
         }

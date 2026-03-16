@@ -2,23 +2,31 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getSession } from "@/lib/session";
 
 /**
  * Returns clients from the clients table that are missing lat/lng (for manual geocoding).
  * Includes both primary clients and dependants (dependants can have their own orders and need geocoding).
  * Same filters as assignment: not paused, delivery true or null.
+ * Brooklyn admins: only clients with unite_account = 'Brooklyn'.
  */
 export async function GET() {
     try {
-        const { data: rows, error } = await supabase
+        const session = await getSession();
+        const brooklynOnly = session?.role === "brooklyn_admin";
+
+        let query = supabase
             .from("clients")
             .select(
                 "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id"
             )
             .eq("paused", false)
             .or("delivery.is.null,delivery.eq.true")
-            .or("lat.is.null,lng.is.null")
-            .order("id", { ascending: true });
+            .or("lat.is.null,lng.is.null");
+        if (brooklynOnly) {
+            query = query.eq("unite_account", "Brooklyn");
+        }
+        const { data: rows, error } = await query.order("id", { ascending: true });
 
         if (error) {
             console.error("[/api/route/clients-missing-geocode] error:", error);

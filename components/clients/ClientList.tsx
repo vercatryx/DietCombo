@@ -65,7 +65,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const loggedMissingVendorIds = useRef<Set<string>>(new Set());
 
     // Views
-    const [currentView, setCurrentView] = useState<'all' | 'brooklyn' | 'eligible' | 'ineligible' | 'billing' | 'needs-attention'>('all');
+    const [currentView, setCurrentView] = useState<'all' | 'brooklyn' | 'eligible' | 'ineligible' | 'billing' | 'needs-attention'>(
+        currentUser?.role === 'brooklyn_admin' ? 'brooklyn' : 'all'
+    );
 
     // Sorting State
     const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -364,13 +366,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     async function loadInitialData() {
         setIsLoading(true);
         try {
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
             const [sData, nData, vData, bData, mData, cRes, pvData] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, ''),
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined),
                 getCachedProduceVendors()
             ]);
 
@@ -404,13 +407,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             invalidateClientData();
 
             // Fetch fresh data (single request for all clients)
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
             const [sData, nData, vData, bData, mData, cRes] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '')
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined)
             ]);
 
             // Update all data
@@ -1692,6 +1696,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     )}
                 </div>
                 <div className={styles.headerActions}>
+                    {currentUser?.role !== 'brooklyn_admin' && (
                     <div className={styles.viewToggle}>
                         <button
                             className={`${styles.viewBtn} ${currentView === 'all' ? styles.viewBtnActive : ''}`}
@@ -1736,6 +1741,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             Orders
                         </button>
                     </div>
+                    )}
 
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                         <button className="btn btn-secondary" onClick={handleExportExcel} title="Download current client list as Excel">

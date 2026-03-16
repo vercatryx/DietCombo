@@ -149,7 +149,9 @@ async function validateAndInitialize() {
 
         const connSelect = document.getElementById('connection-select');
         if (connSelect) connSelect.value = activeConnection;
-        
+        const uniteAccountSelect = document.getElementById('unite-account');
+        if (uniteAccountSelect) uniteAccountSelect.value = activeConnection === 'brooklyn' ? 'Brooklyn' : 'Regular';
+
         await loadStatuses();
         await loadNavigators();
         
@@ -217,6 +219,9 @@ function setupEventListeners() {
             activeConnection = val;
             applyTheme();
             await chrome.storage.sync.set({ activeConnection });
+            // Default Unite Account to match connection
+            const uniteAccountEl = document.getElementById('unite-account');
+            if (uniteAccountEl) uniteAccountEl.value = val === 'brooklyn' ? 'Brooklyn' : 'Regular';
             const { baseUrl, apiKey } = getActiveConfig();
             if (!baseUrl || !apiKey) {
                 showStatus('form-status', `${val === 'brooklyn' ? 'Brooklyn' : 'Main'} connection not configured. Open Settings.`, 'error');
@@ -571,6 +576,7 @@ async function handleSubmit(e) {
             fullName: document.getElementById('full-name').value.trim(),
             statusId: document.getElementById('status').value,
             navigatorId: document.getElementById('navigator').value,
+            uniteAccount: document.getElementById('unite-account').value,
             address: fullAddress,
             apt: apt,
             city: city,
@@ -604,8 +610,8 @@ async function handleSubmit(e) {
         }
 
         // Validate required fields
-        if (!formData.fullName || !formData.statusId || !formData.navigatorId || !streetAddress || !city || !state || !zip || !formData.phone || !formData.serviceType || !formData.caseId) {
-            throw new Error('Please fill in all required fields');
+        if (!formData.fullName || !formData.statusId || !formData.navigatorId || !formData.uniteAccount || !streetAddress || !city || !state || !zip || !formData.phone || !formData.serviceType || !formData.caseId) {
+            throw new Error('Please fill in all required fields (including Unite Account)');
         }
 
         // Require geocoding before submit
@@ -671,6 +677,9 @@ async function handleSubmit(e) {
             } else {
                 navigatorSelect.selectedIndex = 0;
             }
+            // Reset Unite Account to default for current connection
+            const uniteAccountSelect = document.getElementById('unite-account');
+            if (uniteAccountSelect) uniteAccountSelect.value = activeConnection === 'brooklyn' ? 'Brooklyn' : 'Regular';
             // Show auth units field when default is Food
             const authUnitsGroup = document.getElementById('auth-units-group');
             authUnitsGroup.style.display = 'block';
