@@ -75,6 +75,8 @@ export function ClientInfoShelf({
         complex: c.complex ?? false,
         bill: c.bill ?? true,
         delivery: c.delivery ?? true,
+        uniteAccount: c.uniteAccount ?? 'Regular',
+        history: c.history ?? '',
     }), []);
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
@@ -189,6 +191,8 @@ export function ClientInfoShelf({
                     complex: editForm.complex,
                     bill: editForm.bill,
                     delivery: editForm.delivery,
+                    uniteAccount: editForm.uniteAccount || null,
+                    history: editForm.history || null,
                 },
                 { skipOrderSync: true }
             );
@@ -701,6 +705,39 @@ export function ClientInfoShelf({
                                         </a>
                                     ) : (
                                         '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Unite Account</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <select
+                                            className={styles.editSelect}
+                                            value={editForm.uniteAccount}
+                                            onChange={e => setEditForm({ ...editForm, uniteAccount: e.target.value })}
+                                        >
+                                            <option value="Regular">Regular</option>
+                                            <option value="Brooklyn">Brooklyn</option>
+                                        </select>
+                                    ) : (
+                                        client.uniteAccount?.trim() || '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>History</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <textarea
+                                            className={styles.editTextarea}
+                                            value={editForm.history}
+                                            onChange={e => setEditForm({ ...editForm, history: e.target.value })}
+                                            rows={3}
+                                            placeholder="History / notes"
+                                        />
+                                    ) : (
+                                        <span style={{ whiteSpace: 'pre-wrap' }}>{client.history?.trim() || '—'}</span>
                                     )}
                                 </div>
                             </div>

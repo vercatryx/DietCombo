@@ -4089,6 +4089,8 @@ function mapClientFromDB(c: any): ClientProfile {
         assignedDriverId: c.assigned_driver_id || null,
         produceVendorId: c.produce_vendor_id || null,
         mealPlannerData: c.meal_planner_data ?? null,
+        uniteAccount: c.unite_account || null,
+        history: c.history || null,
         createdAt: c.created_at,
         updatedAt: c.updated_at
     };
@@ -4613,6 +4615,8 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.visits !== undefined) payload.visits = data.visits ? JSON.stringify(data.visits) : null;
     if (data.signToken !== undefined) payload.sign_token = data.signToken || null;
     if (data.produceVendorId !== undefined) payload.produce_vendor_id = data.produceVendorId || null;
+    if (data.uniteAccount !== undefined) payload.unite_account = data.uniteAccount || null;
+    if (data.history !== undefined) payload.history = data.history || null;
 
     payload.updated_at = new Date().toISOString();
 

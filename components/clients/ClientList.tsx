@@ -65,7 +65,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const loggedMissingVendorIds = useRef<Set<string>>(new Set());
 
     // Views
-    const [currentView, setCurrentView] = useState<'all' | 'eligible' | 'ineligible' | 'billing' | 'needs-attention'>('all');
+    const [currentView, setCurrentView] = useState<'all' | 'brooklyn' | 'eligible' | 'ineligible' | 'billing' | 'needs-attention'>('all');
 
     // Sorting State
     const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -127,7 +127,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     // Sync currentView from URL (e.g. /clients?view=needs-attention)
     useEffect(() => {
         const view = searchParams.get('view');
-        if (view === 'needs-attention' || view === 'eligible' || view === 'ineligible' || view === 'all' || view === 'billing') {
+        if (view === 'needs-attention' || view === 'eligible' || view === 'ineligible' || view === 'all' || view === 'billing' || view === 'brooklyn') {
             setCurrentView(view);
         }
     }, [searchParams]);
@@ -468,7 +468,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
         // Filter by View
         let matchesView = true;
-        if (currentView === 'eligible') {
+        if (currentView === 'brooklyn') {
+            matchesView = (c.uniteAccount || '').trim() === 'Brooklyn';
+        } else if (currentView === 'eligible') {
             const status = statuses.find(s => s.id === c.statusId);
             // Show clients whose status allows deliveries
             matchesView = status ? status.deliveriesAllowed : false;
@@ -799,7 +801,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             alert('No clients to export. Adjust filters or search to include clients.');
             return;
         }
-        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount'];
+        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount', 'Unite Account', 'History'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
             client.email ?? '',
@@ -816,6 +818,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
             client.expirationDate ?? '',
             client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
+            client.uniteAccount ?? '',
+            client.history ?? '',
         ]);
         const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
         const wb = XLSX.utils.book_new();
@@ -1696,6 +1700,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             All Clients
                         </button>
                         <button
+                            className={`${styles.viewBtn} ${currentView === 'brooklyn' ? styles.viewBtnActive : ''}`}
+                            onClick={() => setCurrentView('brooklyn')}
+                        >
+                            Brooklyn
+                        </button>
+                        <button
                             className={`${styles.viewBtn} ${currentView === 'eligible' ? styles.viewBtnActive : ''}`}
                             onClick={() => setCurrentView('eligible')}
                         >
@@ -2315,8 +2325,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
                                 currentView === 'ineligible' ? 'No ineligible clients found.' :
                                     currentView === 'eligible' ? 'No eligible clients found.' :
-                                        currentView === 'needs-attention' ? 'No clients need attention.' :
-                                            'No clients found.'}
+                                        currentView === 'brooklyn' ? 'No Brooklyn clients found.' :
+                                            currentView === 'needs-attention' ? 'No clients need attention.' :
+                                                'No clients found.'}
                     </div>
                 )}
             </div>
