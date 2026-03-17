@@ -27,10 +27,10 @@ A Chrome extension that allows you to quickly add clients to DietCombo from Unit
 ## Configuration
 
 1. Open the extension sidebar
-2. Scroll to "API Configuration" section
-3. Enter your API URL (e.g., `https://your-domain.com`)
-4. Enter your API Key (set `EXTENSION_API_KEY` environment variable on your server)
-5. The configuration is automatically saved
+2. Click **Settings** (gear at the bottom)
+3. Enter **Base URL** (e.g., `https://customer.thedietfantasy.com`)
+4. Enter your **API Key** (set `EXTENSION_API_KEY` on your server)
+5. Click **Test connection** to verify, then **Save Settings**
 
 ## Usage
 
@@ -40,7 +40,7 @@ A Chrome extension that allows you to quickly add clients to DietCombo from Unit
    - **Basic Information**: Name, email
    - **Contact Information**: Phone numbers
    - **Address Information**: Full address with geocoding
-   - **Service Information**: Service type, status, navigator, etc.
+   - **Service Information**: Service type, status, navigator, Unite Account (Regular or Brooklyn), etc.
    - **Unite Us Information**: Case link (can be extracted from current page)
    - **Additional Information**: Notes, dislikes, flags
 4. Click "Geocode Address" to get coordinates (optional)

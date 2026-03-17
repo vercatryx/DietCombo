@@ -818,7 +818,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.dislikes ?? '',
             getStatusName(client.statusId),
             client.parentClientId ? '' : getNavigatorName(client.navigatorId),
-            client.serviceType === 'Produce' ? 'Produce' : 'Food',
+            (() => {
+                if (client.serviceType !== 'Produce') return 'Food';
+                const pv = produceVendors.find(v => v.id === client.produceVendorId);
+                return pv ? `produce-${pv.name.toLowerCase().replace(/\s+/g, '-')}` : 'Produce';
+            })(),
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
             client.expirationDate ?? '',
             client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
