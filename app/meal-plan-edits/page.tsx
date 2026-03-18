@@ -69,15 +69,36 @@ export default function MealPlanEditsPage() {
     return rows;
   }, [edits]);
 
+  const buildCookingSheetRows = useCallback(() => {
+    const totals = new Map<string, number>();
+    for (const entry of edits) {
+      for (const item of entry.items) {
+        if (item.quantity > 0) {
+          totals.set(item.name, (totals.get(item.name) ?? 0) + item.quantity);
+        }
+      }
+    }
+    return Array.from(totals.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, qty]) => ({ Item: name, 'Total Qty': qty }));
+  }, [edits]);
+
   const exportToExcel = useCallback(async () => {
     const XLSX = await import('xlsx');
+    const wb = XLSX.utils.book_new();
+
     const rows = buildExportRows();
     const ws = XLSX.utils.json_to_sheet(rows);
     ws['!cols'] = [{ wch: 28 }, { wch: 32 }, { wch: 8 }, { wch: 10 }];
-    const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Meal Plan Edits');
+
+    const cookingRows = buildCookingSheetRows();
+    const ws2 = XLSX.utils.json_to_sheet(cookingRows);
+    ws2['!cols'] = [{ wch: 36 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Cooking Sheet');
+
     XLSX.writeFile(wb, `meal-plan-edits-${selectedDate}.xlsx`);
-  }, [buildExportRows, selectedDate]);
+  }, [buildExportRows, buildCookingSheetRows, selectedDate]);
 
   const exportToPdf = useCallback(async () => {
     const { jsPDF } = await import('jspdf');

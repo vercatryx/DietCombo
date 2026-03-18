@@ -8,6 +8,9 @@
  *   (or 1 if only one); if none, uses sign_token signature PDF.
  *
  * GET /api/bill
+ * Query params:
+ *   ?date=YYYY-MM-DD   – billing window start (default 2026-02-23)
+ *   ?account=regular|brooklyn|both  – filter by unite_account (default: both)
  * No auth required.
  */
 
@@ -44,6 +47,16 @@ function parseBillDateFromRequest(request: NextRequest): string | null {
     return trimmed;
 }
 
+type AccountFilter = 'regular' | 'brooklyn' | 'both';
+
+/** Parse ?account= query param. Returns 'both' if missing/invalid. */
+function parseAccountFilter(request: NextRequest): AccountFilter {
+    const url = request.nextUrl ?? new URL(request.url);
+    const raw = (url.searchParams.get('account') || '').trim().toLowerCase();
+    if (raw === 'regular' || raw === 'brooklyn') return raw;
+    return 'both';
+}
+
 /** End date for 7-day billing window (start through end inclusive: start + 6 days). */
 function billDateEnd(startISO: string): string {
     const d = new Date(startISO + 'T00:00:00Z');
@@ -72,12 +85,21 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 export async function GET(request: NextRequest) {
     try {
         const billDate = parseBillDateFromRequest(request) ?? BILL_DATE_DEFAULT;
+        const accountFilter = parseAccountFilter(request);
 
         // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
-        const { data: clients, error: clientsError } = await supabase
+        let clientsQuery = supabase
             .from('clients')
-            .select('id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token')
+            .select('id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account')
             .order('id', { ascending: true });
+
+        if (accountFilter === 'brooklyn') {
+            clientsQuery = clientsQuery.eq('unite_account', 'Brooklyn');
+        } else if (accountFilter === 'regular') {
+            clientsQuery = clientsQuery.or('unite_account.eq.Regular,unite_account.is.null');
+        }
+
+        const { data: clients, error: clientsError } = await clientsQuery;
 
         if (clientsError) {
             console.error('[api/bill] Error fetching clients:', clientsError);
@@ -108,10 +130,18 @@ export async function GET(request: NextRequest) {
         });
 
         // 3. Fetch dependents for these households (match on parent_client_id)
-        const { data: dependents, error: dependentsError } = await supabase
+        let depsQuery = supabase
             .from('clients')
             .select('id, full_name, dob, cin, parent_client_id')
             .not('parent_client_id', 'is', null);
+
+        if (accountFilter === 'brooklyn') {
+            depsQuery = depsQuery.eq('unite_account', 'Brooklyn');
+        } else if (accountFilter === 'regular') {
+            depsQuery = depsQuery.or('unite_account.eq.Regular,unite_account.is.null');
+        }
+
+        const { data: dependents, error: dependentsError } = await depsQuery;
 
         if (dependentsError) {
             console.error('[api/bill] Error fetching dependents:', dependentsError);
