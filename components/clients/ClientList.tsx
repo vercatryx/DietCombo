@@ -805,6 +805,12 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             alert('No clients to export. Adjust filters or search to include clients.');
             return;
         }
+        // Map client id -> expiration date so dependents can use their parent's expiration
+        const expirationByClientId: Record<string, string> = {};
+        clients.forEach(c => { expirationByClientId[c.id] = c.expirationDate ?? ''; });
+        const getExportExpirationDate = (client: ClientProfile) =>
+            client.parentClientId ? (expirationByClientId[client.parentClientId] ?? '') : (client.expirationDate ?? '');
+
         const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount', 'Unite Account', 'History'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
@@ -824,7 +830,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 return pv ? `produce-${pv.name.toLowerCase().replace(/\s+/g, '-')}` : 'Produce';
             })(),
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
-            client.expirationDate ?? '',
+            getExportExpirationDate(client),
             client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
             client.uniteAccount ?? '',
             client.history ?? '',
