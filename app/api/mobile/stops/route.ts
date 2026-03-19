@@ -1,6 +1,6 @@
 // app/api/mobile/stops/route.ts
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, fetchAllRows } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -211,27 +211,16 @@ export async function GET(req: Request) {
     }
 
     // No driverId → return ALL stops for the day (flat array), ordered for stable UI
-    let allQuery = supabase
-        .from('stops')
-        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
-        .order('assigned_driver_id', { ascending: true })
-        .order('order', { ascending: true })
-        .order('id', { ascending: true });
-    
-    if (day !== "all") {
-        allQuery = allQuery.eq('day', day);
-    }
-    
-    // Filter by delivery_date if provided
-    if (deliveryDateParam) {
-        allQuery = allQuery.eq('delivery_date', deliveryDateParam);
-    }
-
-        const { data: all, error: allError } = await allQuery;
-        if (allError) {
-            console.error("[/api/mobile/stops] Error fetching all stops:", allError);
-            return NextResponse.json({ error: allError.message }, { status: 500 });
-        }
+    const all = await fetchAllRows(sb => {
+        let q = sb.from('stops')
+            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, order, completed, proof_url, delivery_date, order_id')
+            .order('assigned_driver_id', { ascending: true })
+            .order('order', { ascending: true })
+            .order('id', { ascending: true });
+        if (day !== "all") q = q.eq('day', day);
+        if (deliveryDateParam) q = q.eq('delivery_date', deliveryDateParam);
+        return q;
+    });
 
         const orderMapById = new Map<string, any>();
         const orderMapByClient = new Map<string, any>();

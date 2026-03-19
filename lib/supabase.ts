@@ -59,6 +59,27 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
     }
 });
 
+/**
+ * Paginate through all rows for a query that may exceed Supabase's 1000-row default limit.
+ * Usage: const rows = await fetchAllRows(sb => sb.from('orders').select('id, name').eq('status', 'active'));
+ */
+export async function fetchAllRows<T = any>(
+    buildQuery: (sb: typeof supabase) => any,
+    pageSize = 1000
+): Promise<T[]> {
+    const allData: T[] = [];
+    let from = 0;
+    while (true) {
+        const { data, error } = await buildQuery(supabase).range(from, from + pageSize - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allData.push(...data);
+        if (data.length < pageSize) break;
+        from += pageSize;
+    }
+    return allData;
+}
+
 // Helper function to check for DNS/connection errors
 export function isConnectionError(error: any): boolean {
     if (!error) return false;

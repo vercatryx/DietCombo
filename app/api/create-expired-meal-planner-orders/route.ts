@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         const menuItems = (menuItemsAdmin?.length ? menuItemsAdmin : menuItemsFromLib) as any[];
 
         const foodClientsAll = allClients.filter(
-            (c: any) => c.serviceType === 'Food' || (c.serviceType && String(c.serviceType).includes('Food'))
+            (c: any) => c.serviceType && String(c.serviceType).toLowerCase().includes('food')
         );
         // Only run for clients who are not paused and have delivery enabled
         const pausedDefault = false;
