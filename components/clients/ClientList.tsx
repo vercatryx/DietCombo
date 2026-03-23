@@ -65,7 +65,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const loggedMissingVendorIds = useRef<Set<string>>(new Set());
 
     // Views
-    const [currentView, setCurrentView] = useState<'all' | 'eligible' | 'ineligible' | 'billing' | 'needs-attention'>('all');
+    const [currentView, setCurrentView] = useState<'all' | 'brooklyn' | 'eligible' | 'ineligible' | 'billing' | 'needs-attention'>(
+        currentUser?.role === 'brooklyn_admin' ? 'brooklyn' : 'all'
+    );
 
     // Sorting State
     const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -127,7 +129,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     // Sync currentView from URL (e.g. /clients?view=needs-attention)
     useEffect(() => {
         const view = searchParams.get('view');
-        if (view === 'needs-attention' || view === 'eligible' || view === 'ineligible' || view === 'all' || view === 'billing') {
+        if (view === 'needs-attention' || view === 'eligible' || view === 'ineligible' || view === 'all' || view === 'billing' || view === 'brooklyn') {
             setCurrentView(view);
         }
     }, [searchParams]);
@@ -364,13 +366,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     async function loadInitialData() {
         setIsLoading(true);
         try {
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
             const [sData, nData, vData, bData, mData, cRes, pvData] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, ''),
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined),
                 getCachedProduceVendors()
             ]);
 
@@ -404,13 +407,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             invalidateClientData();
 
             // Fetch fresh data (single request for all clients)
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
             const [sData, nData, vData, bData, mData, cRes] = await Promise.all([
                 getStatuses(),
                 getNavigators(),
                 getVendors(),
                 getBoxTypes(),
                 getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '')
+                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined)
             ]);
 
             // Update all data
@@ -468,7 +472,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
         // Filter by View
         let matchesView = true;
-        if (currentView === 'eligible') {
+        if (currentView === 'brooklyn') {
+            matchesView = (c.uniteAccount || '').trim() === 'Brooklyn';
+        } else if (currentView === 'eligible') {
             const status = statuses.find(s => s.id === c.statusId);
             // Show clients whose status allows deliveries
             matchesView = status ? status.deliveriesAllowed : false;
@@ -799,7 +805,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             alert('No clients to export. Adjust filters or search to include clients.');
             return;
         }
-        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount'];
+        // Map client id -> expiration date so dependents can use their parent's expiration
+        const expirationByClientId: Record<string, string> = {};
+        clients.forEach(c => { expirationByClientId[c.id] = c.expirationDate ?? ''; });
+        const getExportExpirationDate = (client: ClientProfile) =>
+            client.parentClientId ? (expirationByClientId[client.parentClientId] ?? '') : (client.expirationDate ?? '');
+
+        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount', 'Unite Account', 'History'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
             client.email ?? '',
@@ -812,10 +824,16 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.dislikes ?? '',
             getStatusName(client.statusId),
             client.parentClientId ? '' : getNavigatorName(client.navigatorId),
-            client.serviceType === 'Produce' ? 'Produce' : 'Food',
+            (() => {
+                if (client.serviceType !== 'Produce') return 'Food';
+                const pv = produceVendors.find(v => v.id === client.produceVendorId);
+                return pv ? `produce-${pv.name.toLowerCase().replace(/\s+/g, '-')}` : 'Produce';
+            })(),
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
-            client.expirationDate ?? '',
+            getExportExpirationDate(client),
             client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
+            client.uniteAccount ?? '',
+            client.history ?? '',
         ]);
         const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
         const wb = XLSX.utils.book_new();
@@ -1688,12 +1706,19 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     )}
                 </div>
                 <div className={styles.headerActions}>
+                    {currentUser?.role !== 'brooklyn_admin' && (
                     <div className={styles.viewToggle}>
                         <button
                             className={`${styles.viewBtn} ${currentView === 'all' ? styles.viewBtnActive : ''}`}
                             onClick={() => setCurrentView('all')}
                         >
                             All Clients
+                        </button>
+                        <button
+                            className={`${styles.viewBtn} ${currentView === 'brooklyn' ? styles.viewBtnActive : ''}`}
+                            onClick={() => setCurrentView('brooklyn')}
+                        >
+                            Brooklyn
                         </button>
                         <button
                             className={`${styles.viewBtn} ${currentView === 'eligible' ? styles.viewBtnActive : ''}`}
@@ -1726,6 +1751,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             Orders
                         </button>
                     </div>
+                    )}
 
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                         <button className="btn btn-secondary" onClick={handleExportExcel} title="Download current client list as Excel">
@@ -2315,8 +2341,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
                                 currentView === 'ineligible' ? 'No ineligible clients found.' :
                                     currentView === 'eligible' ? 'No eligible clients found.' :
-                                        currentView === 'needs-attention' ? 'No clients need attention.' :
-                                            'No clients found.'}
+                                        currentView === 'brooklyn' ? 'No Brooklyn clients found.' :
+                                            currentView === 'needs-attention' ? 'No clients need attention.' :
+                                                'No clients found.'}
                     </div>
                 )}
             </div>

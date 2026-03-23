@@ -160,20 +160,23 @@ function getBillDate() {
 function downloadAllClients() {
     const apiBaseUrl = getSelectedApiBase();
     const date = getBillDate();
-    const urlWithQuery = `${apiBaseUrl}/api/bill?date=${date}`;
-    log('Fetching all clients from ' + urlWithQuery + '...', 'info');
+    const sel = document.getElementById('serverSelect');
+    const account = (sel && sel.value === 'brooklyn') ? 'brooklyn' : 'regular';
+    const label = account === 'brooklyn' ? 'Brooklyn' : 'Regular';
+    const urlWithQuery = `${apiBaseUrl}/api/bill?date=${date}&account=${account}`;
+    log(`Fetching ${label} clients from ${urlWithQuery}...`, 'info');
 
     fetch('/fetch-all-clients', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiBaseUrl, date })
+        body: JSON.stringify({ apiBaseUrl, date, account })
     })
         .then(r => r.json())
         .then(d => {
             if (d.error) {
                 log(`Fetch Error: ${d.error}`, 'error');
             } else {
-                log(d.message || `Loaded ${d.count} clients.`, 'success');
+                log(d.message || `Loaded ${d.count} ${label} clients.`, 'success');
             }
         })
         .catch(e => {

@@ -89,14 +89,20 @@ app.post('/fetch-requests', async (req, res) => {
     }
 });
 
-// Pull all clients from GET /api/bill (no auth). Optional ?date=YYYY-MM-DD. Maps to worker shape: name, url, date, endDate, amount, orderNumbers, proofURL(s).
+// Pull clients from GET /api/bill (no auth). Optional ?date=YYYY-MM-DD&account=regular|brooklyn|both.
 app.post('/fetch-all-clients', async (req, res) => {
     const apiBaseUrl = (req.body && req.body.apiBaseUrl) ? req.body.apiBaseUrl.trim() : 'http://customer.thedietfantasy.com';
     const dateParam = (req.body && req.body.date) ? String(req.body.date).trim() : null;
-    let url = `${apiBaseUrl.replace(/\/$/, '')}/api/bill`;
+    const accountParam = (req.body && req.body.account) ? String(req.body.account).trim().toLowerCase() : null;
+    const params = new URLSearchParams();
     if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
-        url += `?date=${dateParam}`;
+        params.set('date', dateParam);
     }
+    if (accountParam && ['regular', 'brooklyn', 'both'].includes(accountParam)) {
+        params.set('account', accountParam);
+    }
+    const qs = params.toString();
+    let url = `${apiBaseUrl.replace(/\/$/, '')}/api/bill${qs ? '?' + qs : ''}`;
     try {
         console.log('[Server] Fetching all clients from', url);
         const { data } = await axios.get(url, { timeout: 30000 });

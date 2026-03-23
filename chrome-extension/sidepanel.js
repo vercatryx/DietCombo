@@ -1,23 +1,15 @@
-// Configuration: two connection sets (main + Brooklyn)
-const DEFAULT_MAIN_BASE = 'https://customer.thedietfantasy.com';
-const DEFAULT_BROOKLYN_BASE = 'https://brooklyn.thedietfantasy.com';
+// Single connection config
+const DEFAULT_BASE = 'https://customer.thedietfantasy.com';
 
-let configMain = { baseUrl: DEFAULT_MAIN_BASE, apiKey: '' };
-let configBrooklyn = { baseUrl: DEFAULT_BROOKLYN_BASE, apiKey: '' };
-let activeConnection = 'main'; // 'main' | 'brooklyn'
+let config = { baseUrl: DEFAULT_BASE, apiKey: '' };
 let statuses = [];
 let navigators = [];
 
-function getActiveConfig() {
-    const c = activeConnection === 'brooklyn' ? configBrooklyn : configMain;
-    return { baseUrl: (c.baseUrl || '').replace(/\/$/, ''), apiKey: c.apiKey || '' };
-}
-
-function applyTheme() {
-    const body = document.getElementById('panel-body');
-    if (!body) return;
-    body.classList.remove('theme-main', 'theme-brooklyn');
-    body.classList.add(activeConnection === 'brooklyn' ? 'theme-brooklyn' : 'theme-main');
+function getConfig() {
+    return {
+        baseUrl: (config.baseUrl || '').replace(/\/$/, ''),
+        apiKey: config.apiKey || ''
+    };
 }
 
 // Initialize
@@ -27,39 +19,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
 });
 
-// Load configuration from storage (with migration from old single apiKey/baseUrl)
+// Load configuration from storage (with migration from old multi-connection keys)
 async function loadConfig() {
     const result = await chrome.storage.sync.get([
-        'configMain', 'configBrooklyn', 'activeConnection',
+        'config', 'configMain', 'configBrooklyn', 'activeConnection',
         'apiKey', 'baseUrl'
     ]);
-    if (result.configMain && typeof result.configMain === 'object') {
-        configMain = {
-            baseUrl: result.configMain.baseUrl || DEFAULT_MAIN_BASE,
+    if (result.config && typeof result.config === 'object') {
+        config = {
+            baseUrl: result.config.baseUrl || DEFAULT_BASE,
+            apiKey: result.config.apiKey || ''
+        };
+    } else if (result.configMain && typeof result.configMain === 'object') {
+        config = {
+            baseUrl: result.configMain.baseUrl || DEFAULT_BASE,
             apiKey: result.configMain.apiKey || ''
         };
+        await chrome.storage.sync.set({ config });
     }
-    if (result.configBrooklyn && typeof result.configBrooklyn === 'object') {
-        configBrooklyn = {
-            baseUrl: result.configBrooklyn.baseUrl || DEFAULT_BROOKLYN_BASE,
-            apiKey: result.configBrooklyn.apiKey || ''
-        };
-    }
-    if (result.activeConnection === 'brooklyn' || result.activeConnection === 'main') {
-        activeConnection = result.activeConnection;
-    }
-    // Migrate legacy single config to Main
     if (result.apiKey || result.baseUrl) {
-        const hasNew = (configMain.apiKey && configMain.baseUrl) || (configBrooklyn.apiKey && configBrooklyn.baseUrl);
+        const hasNew = config.apiKey && config.baseUrl;
         if (!hasNew) {
-            configMain = {
-                baseUrl: (result.baseUrl || '').trim() || DEFAULT_MAIN_BASE,
+            config = {
+                baseUrl: (result.baseUrl || '').trim() || DEFAULT_BASE,
                 apiKey: (result.apiKey || '').trim()
             };
-            await chrome.storage.sync.set({ configMain, activeConnection: 'main' });
+            await chrome.storage.sync.set({ config });
         }
     }
-    applyTheme();
 }
 
 // Validate API key and initialize
@@ -67,23 +54,19 @@ async function validateAndInitialize() {
     const validationSection = document.getElementById('validation-section');
     const errorSection = document.getElementById('error-section');
     const formSection = document.getElementById('form-section');
-    const connectionRow = document.getElementById('connection-row');
 
     // Show validation spinner
     validationSection.style.display = 'flex';
     errorSection.style.display = 'none';
     formSection.style.display = 'none';
-    if (connectionRow) connectionRow.style.display = 'none';
 
-    const { baseUrl, apiKey } = getActiveConfig();
+    const { baseUrl, apiKey } = getConfig();
 
-    // Check if active connection has API key and base URL
     if (!apiKey || !baseUrl) {
         validationSection.style.display = 'none';
         errorSection.style.display = 'flex';
-        const label = activeConnection === 'brooklyn' ? 'Brooklyn' : 'Diet Fantasy (Main)';
-        document.getElementById('error-text').textContent = 
-            `${label} connection is not configured. Please open Settings to set Base URL and API Key.`;
+        document.getElementById('error-text').textContent =
+            'Connection is not configured. Please open Settings to set Base URL and API Key.';
         return;
     }
 
@@ -144,12 +127,10 @@ async function validateAndInitialize() {
         validationSection.style.display = 'none';
         errorSection.style.display = 'none';
         formSection.style.display = 'block';
-        if (connectionRow) connectionRow.style.display = 'flex';
-        applyTheme();
 
-        const connSelect = document.getElementById('connection-select');
-        if (connSelect) connSelect.value = activeConnection;
-        
+        const uniteAccountSelect = document.getElementById('unite-account');
+        if (uniteAccountSelect) uniteAccountSelect.value = 'Regular';
+
         await loadStatuses();
         await loadNavigators();
         
@@ -202,34 +183,8 @@ function setupEventListeners() {
 
     // Test Main connection
     document.getElementById('test-main').addEventListener('click', async () => {
-        await testConnectionFor('main');
+        await testConnection();
     });
-    document.getElementById('test-brooklyn').addEventListener('click', async () => {
-        await testConnectionFor('brooklyn');
-    });
-
-    // Connection dropdown (which site to use)
-    const connectionSelect = document.getElementById('connection-select');
-    if (connectionSelect) {
-        connectionSelect.addEventListener('change', async () => {
-            const val = connectionSelect.value;
-            if (val !== 'main' && val !== 'brooklyn') return;
-            activeConnection = val;
-            applyTheme();
-            await chrome.storage.sync.set({ activeConnection });
-            const { baseUrl, apiKey } = getActiveConfig();
-            if (!baseUrl || !apiKey) {
-                showStatus('form-status', `${val === 'brooklyn' ? 'Brooklyn' : 'Main'} connection not configured. Open Settings.`, 'error');
-                return;
-            }
-            showStatus('form-status', 'Switched connection. Reloading...', 'info');
-            await loadStatuses();
-            await loadNavigators();
-            showStatus('form-status', '', 'success');
-            const form = document.getElementById('client-form');
-            if (form._validateForm) form._validateForm();
-        });
-    }
 
     // Form submission
     document.getElementById('client-form').addEventListener('submit', handleSubmit);
@@ -293,15 +248,11 @@ function setupEventListeners() {
 // Open settings modal
 function openSettings() {
     const modal = document.getElementById('settings-modal');
-    document.getElementById('settings-main-base-url').value = configMain.baseUrl || '';
-    document.getElementById('settings-main-api-key').value = configMain.apiKey || '';
-    document.getElementById('settings-brooklyn-base-url').value = configBrooklyn.baseUrl || '';
-    document.getElementById('settings-brooklyn-api-key').value = configBrooklyn.apiKey || '';
+    document.getElementById('settings-main-base-url').value = config.baseUrl || '';
+    document.getElementById('settings-main-api-key').value = config.apiKey || '';
     document.getElementById('settings-status').style.display = 'none';
     document.getElementById('settings-main-status').style.display = 'none';
     document.getElementById('settings-main-status').textContent = '';
-    document.getElementById('settings-brooklyn-status').style.display = 'none';
-    document.getElementById('settings-brooklyn-status').textContent = '';
     modal.style.display = 'flex';
 }
 
@@ -312,19 +263,12 @@ function closeSettings() {
 
 // Save settings
 async function saveSettings() {
-    const mainBaseUrl = document.getElementById('settings-main-base-url').value.trim().replace(/\/$/, '') || DEFAULT_MAIN_BASE;
-    const mainApiKey = document.getElementById('settings-main-api-key').value.trim();
-    const brooklynBaseUrl = document.getElementById('settings-brooklyn-base-url').value.trim().replace(/\/$/, '') || DEFAULT_BROOKLYN_BASE;
-    const brooklynApiKey = document.getElementById('settings-brooklyn-api-key').value.trim();
+    const baseUrl = document.getElementById('settings-main-base-url').value.trim().replace(/\/$/, '') || DEFAULT_BASE;
+    const apiKey = document.getElementById('settings-main-api-key').value.trim();
 
-    configMain = { baseUrl: mainBaseUrl, apiKey: mainApiKey };
-    configBrooklyn = { baseUrl: brooklynBaseUrl, apiKey: brooklynApiKey };
+    config = { baseUrl, apiKey };
 
-    await chrome.storage.sync.set({
-        configMain,
-        configBrooklyn,
-        activeConnection
-    });
+    await chrome.storage.sync.set({ config });
     showStatus('settings-status', 'Settings saved! Validating...', 'success');
 
     setTimeout(async () => {
@@ -333,9 +277,9 @@ async function saveSettings() {
     }, 1000);
 }
 
-// Test connection for a given connection key ('main' or 'brooklyn')
-async function testConnectionFor(which) {
-    const baseId = which === 'brooklyn' ? 'settings-brooklyn' : 'settings-main';
+// Test connection
+async function testConnection() {
+    const baseId = 'settings-main';
     const testApiKey = document.getElementById(`${baseId}-api-key`).value.trim();
     const testBaseUrl = document.getElementById(`${baseId}-base-url`).value.trim().replace(/\/$/, '');
 
@@ -407,7 +351,7 @@ async function testConnectionFor(which) {
 
 // Load statuses from API
 async function loadStatuses() {
-    const { baseUrl, apiKey } = getActiveConfig();
+    const { baseUrl, apiKey } = getConfig();
     try {
         const response = await fetch(`${baseUrl}/api/extension/statuses`, {
             method: 'GET',
@@ -468,7 +412,7 @@ async function loadStatuses() {
 
 // Load navigators from API
 async function loadNavigators() {
-    const { baseUrl, apiKey } = getActiveConfig();
+    const { baseUrl, apiKey } = getConfig();
     try {
         const response = await fetch(`${baseUrl}/api/extension/navigators`, {
             method: 'GET',
@@ -571,6 +515,7 @@ async function handleSubmit(e) {
             fullName: document.getElementById('full-name').value.trim(),
             statusId: document.getElementById('status').value,
             navigatorId: document.getElementById('navigator').value,
+            uniteAccount: document.getElementById('unite-account').value,
             address: fullAddress,
             apt: apt,
             city: city,
@@ -604,8 +549,8 @@ async function handleSubmit(e) {
         }
 
         // Validate required fields
-        if (!formData.fullName || !formData.statusId || !formData.navigatorId || !streetAddress || !city || !state || !zip || !formData.phone || !formData.serviceType || !formData.caseId) {
-            throw new Error('Please fill in all required fields');
+        if (!formData.fullName || !formData.statusId || !formData.navigatorId || !formData.uniteAccount || !streetAddress || !city || !state || !zip || !formData.phone || !formData.serviceType || !formData.caseId) {
+            throw new Error('Please fill in all required fields (including Unite Account)');
         }
 
         // Require geocoding before submit
@@ -613,7 +558,7 @@ async function handleSubmit(e) {
             throw new Error('Address must be geocoded before submitting. Fill in address, city, state, and ZIP, then wait for geocoding or click "Geocode Address".');
         }
 
-        const { baseUrl, apiKey } = getActiveConfig();
+        const { baseUrl, apiKey } = getConfig();
         const response = await fetch(`${baseUrl}/api/extension/create-client`, {
             method: 'POST',
             headers: {
@@ -671,6 +616,9 @@ async function handleSubmit(e) {
             } else {
                 navigatorSelect.selectedIndex = 0;
             }
+            // Reset Unite Account to default
+            const uniteAccountSelect = document.getElementById('unite-account');
+            if (uniteAccountSelect) uniteAccountSelect.value = 'Regular';
             // Show auth units field when default is Food
             const authUnitsGroup = document.getElementById('auth-units-group');
             authUnitsGroup.style.display = 'block';
@@ -1034,7 +982,7 @@ async function autoGeocode(manualCall) {
     const geocodeBtn = document.getElementById('geocode-btn');
     if (geocodeBtn) geocodeBtn.disabled = true;
 
-    const { baseUrl } = getActiveConfig();
+    const { baseUrl } = getConfig();
     try {
         const addressQuery = `${address}, ${city}, ${state} ${zip}`;
         const response = await fetch(`${baseUrl}/api/geocode?q=${encodeURIComponent(addressQuery)}&provider=auto`, {

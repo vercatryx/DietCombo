@@ -3017,45 +3017,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 }
             }
 
-            // Check each vendor meets their minimum requirement (across all delivery days)
-            if (orderConfig.deliveryDayOrders) {
-                // Multi-day format
-                for (const day of Object.keys(orderConfig.deliveryDayOrders)) {
-                    const daySelections = orderConfig.deliveryDayOrders[day].vendorSelections || [];
-                    for (const selection of daySelections) {
-                        if (!selection.vendorId) continue;
+            // Vendor minimum-meals check disabled for now
+            // (was: Check each vendor meets their minimum requirement)
 
-                        const vendor = vendors.find(v => v.id === selection.vendorId);
-                        if (!vendor) continue;
-
-                        const vendorMinimum = vendor.minimumMeals || 0;
-                        if (vendorMinimum > 0) {
-                            const vendorMealCount = getVendorMealCount(selection.vendorId, selection);
-                            if (vendorMealCount < vendorMinimum) {
-                                messages.push(`${vendor.name} (${day}): ${vendorMealCount} meals selected, but minimum is ${vendorMinimum}.`);
-                            }
-                        }
-                    }
-                }
-            } else if (orderConfig.vendorSelections) {
-                // Single day format
-                for (const selection of orderConfig.vendorSelections) {
-                    if (!selection.vendorId) continue;
-
-                    const vendor = vendors.find(v => v.id === selection.vendorId);
-                    if (!vendor) continue;
-
-                    const vendorMinimum = vendor.minimumMeals || 0;
-                    if (vendorMinimum > 0) {
-                        const vendorMealCount = getVendorMealCount(selection.vendorId, selection);
-                        if (vendorMealCount < vendorMinimum) {
-                            messages.push(`${vendor.name}: ${vendorMealCount} meals selected, but minimum is ${vendorMinimum}.`);
-                        }
-                    }
-                }
-            }
-
-            // Note: Category setValue validation is ONLY for Boxes serviceType, not Food
+            // Note: Category setValue validation is ONLY for Boxes serviceType, not Food is ONLY for Boxes serviceType, not Food
             // Food serviceType does not validate category set values
 
             if (messages.length > 0) {

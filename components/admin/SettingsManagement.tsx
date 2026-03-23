@@ -19,6 +19,7 @@ export function SettingsManagement() {
         const t = getTodayInAppTz();
         return t;
     });
+    const [createOrderAccountType, setCreateOrderAccountType] = useState<'All' | 'Regular' | 'Brooklyn'>('All');
     const [deleteDate, setDeleteDate] = useState('');
     const [deleteClicks, setDeleteClicks] = useState(0);
     const [deleting, setDeleting] = useState(false);
@@ -67,7 +68,9 @@ export function SettingsManagement() {
         setRunningExpired(true);
         setExpiredResult(null);
         try {
-            const res = await fetch(`/api/create-expired-meal-planner-orders?date=${createOrderDate}`, {
+            const params = new URLSearchParams({ date: createOrderDate });
+            if (createOrderAccountType !== 'All') params.set('accountType', createOrderAccountType);
+            const res = await fetch(`/api/create-expired-meal-planner-orders?${params}`, {
                 method: 'POST',
             });
             const data = await res.json();
@@ -76,9 +79,10 @@ export function SettingsManagement() {
                 return;
             }
             const ordersCreated = data.ordersCreated ?? 0;
+            const typeLabel = createOrderAccountType === 'All' ? 'all clients' : `${createOrderAccountType} clients`;
             const msg = ordersCreated > 0
-                ? `Created ${ordersCreated} order(s) for scheduled delivery ${createOrderDate}.`
-                : data.message || `No orders created for ${createOrderDate}.`;
+                ? `Created ${ordersCreated} order(s) for ${typeLabel} on ${createOrderDate}.`
+                : data.message || `No orders created for ${typeLabel} on ${createOrderDate}.`;
             setExpiredResult({ message: msg, success: true });
         } catch (err) {
             setExpiredResult({
@@ -223,13 +227,29 @@ export function SettingsManagement() {
                             disabled={runningExpired}
                         />
                     </div>
+                    <div className={styles.inputGroup} style={{ marginBottom: '0.75rem' }}>
+                        <label className={styles.label}>Account type</label>
+                        <select
+                            className={styles.select}
+                            value={createOrderAccountType}
+                            onChange={(e) => {
+                                setCreateOrderAccountType(e.target.value as 'All' | 'Regular' | 'Brooklyn');
+                                setExpiredResult(null);
+                            }}
+                            disabled={runningExpired}
+                        >
+                            <option value="All">All</option>
+                            <option value="Regular">Regular</option>
+                            <option value="Brooklyn">Brooklyn</option>
+                        </select>
+                    </div>
                     <button
                         type="button"
                         className={styles.actionButton}
                         onClick={handleRunCreateExpiredOrders}
                         disabled={runningExpired || !createOrderDate}
                     >
-                        {runningExpired ? 'Running...' : 'Create orders for this date'}
+                        {runningExpired ? 'Running...' : `Create orders for this date (${createOrderAccountType})`}
                     </button>
                     {expiredResult && (
                         <div className={expiredResult.success ? styles.success : styles.error} style={{ marginTop: '0.75rem' }}>

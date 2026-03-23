@@ -47,6 +47,22 @@ export default async function middleware(request: NextRequest) {
 
   // Role-based redirects when user is logged in
   if (session?.userId) {
+    // Brooklyn admin: only Client Dashboard (Brooklyn), Routes (Brooklyn), Meal Plan Edits (Brooklyn). No Orders, Billing, Admin.
+    if (session.role === 'brooklyn_admin') {
+      const allowed =
+        path === '/' ||
+        path.startsWith('/clients') ||
+        path.startsWith('/routes') ||
+        path.startsWith('/meal-plan-edits');
+      if (!allowed) {
+        return NextResponse.redirect(new URL('/clients', request.url));
+      }
+      if (path === '/login') {
+        return NextResponse.redirect(new URL('/clients', request.url));
+      }
+      return NextResponse.next();
+    }
+
     // Clients: only their own portal (and /sign/). No other clients, no admin routes.
     if (session.role === 'client') {
       const ownPortalBase = `/client-portal/${session.userId}`;
@@ -88,8 +104,8 @@ export default async function middleware(request: NextRequest) {
     if (path === '/login' && session.role === 'client') {
       return NextResponse.redirect(new URL(`/client-portal/${session.userId}`, request.url));
     }
-    if (path === '/login' && (session.role === 'admin' || session.role === 'super-admin' || session.role === 'navigator')) {
-      return NextResponse.redirect(new URL('/clients', request.url));
+    if (path === '/login' && (session.role === 'admin' || session.role === 'super-admin' || session.role === 'navigator' || session.role === 'brooklyn_admin')) {
+      return NextResponse.redirect(new URL(session.role === 'brooklyn_admin' ? '/clients' : '/clients', request.url));
     }
     if (path === '/login' && session.role === 'vendor') {
       return NextResponse.redirect(new URL('/vendor', request.url));

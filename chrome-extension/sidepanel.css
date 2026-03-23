@@ -40,17 +40,6 @@ body {
     --focus-ring: rgba(72, 190, 133, 0.22);
 }
 
-/* Brooklyn = blue theme (obvious blue tint + accent overrides) */
-.theme-brooklyn {
-    --bg-app: #bfdbfe;
-    --bg-surface: #ffffff;
-    --bg-surface-hover: #93c5fd;
-    --color-brand: #2563eb;
-    --color-primary: #2563eb;
-    --color-primary-hover: #1d4ed8;
-    --focus-ring: rgba(37, 99, 235, 0.22);
-}
-
 .container {
     display: flex;
     flex-direction: column;
@@ -655,7 +644,6 @@ body {
 }
 
 .config-main .config-block-title { color: #15803d; }
-.config-brooklyn .config-block-title { color: #2563eb; }
 
 .btn-test-connection {
     margin-top: 4px;

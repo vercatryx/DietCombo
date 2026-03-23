@@ -2,25 +2,33 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getSession } from "@/lib/session";
 
 /**
  * Lightweight endpoint for Routes page: clients (with assigned_driver_id) + driver id → name (+ color).
  * All filtering is done in the DB. Used by Client Assignment tab and Orders View (with orders-for-date).
+ * Brooklyn admins: only clients with unite_account = 'Brooklyn'.
  */
 export async function GET(req: Request) {
     try {
+        const session = await getSession();
+        const brooklynOnly = session?.role === "brooklyn_admin";
+
         const { searchParams } = new URL(req.url);
         const day = (searchParams.get("day") || "all").toLowerCase();
 
         // 1) Clients: only columns needed for assignment, filter paused/delivery in DB
-        const clientsQuery = supabase
+        let clientsQuery = supabase
             .from("clients")
             .select(
                 "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id, service_type"
             )
             .eq("paused", false)
-            .or("delivery.is.null,delivery.eq.true")
-            .order("id", { ascending: true });
+            .or("delivery.is.null,delivery.eq.true");
+        if (brooklynOnly) {
+            clientsQuery = clientsQuery.eq("unite_account", "Brooklyn");
+        }
+        clientsQuery = clientsQuery.order("id", { ascending: true });
 
         const { data: clientsRows, error: clientsError } = await clientsQuery;
 
@@ -32,10 +40,14 @@ export async function GET(req: Request) {
             );
         }
 
-        // 1b) Client stats (all clients, no filter) for routes page summary
-        const { data: statsRows } = await supabase
+        // 1b) Client stats for routes page summary (same Brooklyn filter when brooklyn_admin)
+        let statsQuery = supabase
             .from("clients")
             .select("id, parent_client_id, service_type, paused, delivery, lat, lng");
+        if (brooklynOnly) {
+            statsQuery = statsQuery.eq("unite_account", "Brooklyn");
+        }
+        const { data: statsRows } = await statsQuery;
         const rows = (statsRows || []) as { parent_client_id: string | null; service_type: string | null; paused: boolean; delivery: boolean; lat: number | null; lng: number | null }[];
         const hasFood = (st: string | null) => (st ?? "").toLowerCase().includes("food");
         const hasProduce = (st: string | null) => (st ?? "").toLowerCase().includes("produce");

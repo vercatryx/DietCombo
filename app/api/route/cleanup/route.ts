@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, fetchAllRows } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 
 const s = (v: unknown) => (v == null ? "" : String(v));
@@ -46,9 +46,9 @@ export async function POST(req: Request) {
 
         // Check which clients have stops for delivery dates, and which order_ids already have a stop
         // Stops are unique by order_id: one stop per order for the driver to handle
-        const { data: existingStops } = await supabase
-            .from('stops')
-            .select('client_id, delivery_date, day, order_id');
+        const existingStops = await fetchAllRows(sb =>
+            sb.from('stops').select('client_id, delivery_date, day, order_id')
+        );
         
         const clientStopsByDate = new Map<string, Set<string>>();
         const orderIdsWithStops = new Set<string>();
@@ -72,18 +72,20 @@ export async function POST(req: Request) {
         const activeOrderStatuses = ["pending", "scheduled", "confirmed"];
         
         // Get orders with scheduled_delivery_date
-        const { data: activeOrders } = await supabase
-            .from('orders')
-            .select('id, client_id, scheduled_delivery_date, delivery_day, status, case_id')
-            .in('status', activeOrderStatuses)
-            .not('scheduled_delivery_date', 'is', null);
+        const activeOrders = await fetchAllRows(sb =>
+            sb.from('orders')
+                .select('id, client_id, scheduled_delivery_date, delivery_day, status, case_id')
+                .in('status', activeOrderStatuses)
+                .not('scheduled_delivery_date', 'is', null)
+        );
 
         // Get upcoming_orders with delivery_day (we'll calculate delivery_date from this)
-        const { data: upcomingOrders } = await supabase
-            .from('upcoming_orders')
-            .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
-            .eq('status', 'scheduled')
-            .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null');
+        const upcomingOrders = await fetchAllRows(sb =>
+            sb.from('upcoming_orders')
+                .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id')
+                .eq('status', 'scheduled')
+                .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null')
+        );
 
         // Import getNextOccurrence and timezone helper (Eastern)
         const { getNextOccurrence, formatDateToYYYYMMDD } = await import('@/lib/order-dates');

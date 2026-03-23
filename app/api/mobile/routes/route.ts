@@ -1,6 +1,6 @@
 // app/api/mobile/routes/route.ts
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, fetchAllRows } from "@/lib/supabase";
 import { isProduceServiceType } from "@/lib/isProduceServiceType";
 
 export const dynamic = "force-dynamic";
@@ -128,9 +128,9 @@ export async function GET(req: Request) {
                 rawStops = stopsForDate || [];
             } else {
                 // No delivery_date: get stops by day (no stop_ids)
-                let stopsQuery = supabase.from('stops').select('id, completed, delivery_date, client_id, assigned_driver_id');
-                if (dayParam !== "all") stopsQuery = stopsQuery.eq('day', dayParam);
-                const { data: byDay } = await stopsQuery;
+                const byDay = dayParam !== "all"
+                    ? await fetchAllRows(sb => sb.from('stops').select('id, completed, delivery_date, client_id, assigned_driver_id').eq('day', dayParam))
+                    : await fetchAllRows(sb => sb.from('stops').select('id, completed, delivery_date, client_id, assigned_driver_id'));
                 rawStops = byDay || [];
             }
             const cids = [...new Set(rawStops.map((s: any) => s.client_id).filter(Boolean))];

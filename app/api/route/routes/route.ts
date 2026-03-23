@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, fetchAllRows } from "@/lib/supabase";
 import { isProduceServiceType } from "@/lib/isProduceServiceType";
 import { v4 as uuidv4 } from "uuid";
 
@@ -80,12 +80,8 @@ export async function GET(req: Request) {
 
         // 2) All stops - filter by delivery_date if provided
         // Normalize delivery_date to YYYY-MM-DD format for proper comparison (already set above)
-        let stopsQuery = supabase
-            .from('stops')
-            .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
-            .order('id', { ascending: true });
-        
-        // Filter by delivery_date if provided (date-only comparison so DATE and TIMESTAMP both match)
+        // Fetch stops with pagination to avoid Supabase 1000-row limit
+        let allStops: any[];
         if (normalizedDeliveryDate) {
             const nextDay = (() => {
                 const [y, m, d] = normalizedDeliveryDate.split('-').map(Number);
@@ -93,18 +89,35 @@ export async function GET(req: Request) {
                 return next.toISOString().slice(0, 10);
             })();
             if (day !== "all") {
-                stopsQuery = stopsQuery.or(
-                    `and(delivery_date.gte.${normalizedDeliveryDate},delivery_date.lt.${nextDay}),and(delivery_date.is.null,day.eq.${day})`
+                allStops = await fetchAllRows(sb =>
+                    sb.from('stops')
+                        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
+                        .order('id', { ascending: true })
+                        .or(`and(delivery_date.gte.${normalizedDeliveryDate},delivery_date.lt.${nextDay}),and(delivery_date.is.null,day.eq.${day})`)
                 );
             } else {
-                stopsQuery = stopsQuery.gte('delivery_date', normalizedDeliveryDate).lt('delivery_date', nextDay);
+                allStops = await fetchAllRows(sb =>
+                    sb.from('stops')
+                        .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
+                        .order('id', { ascending: true })
+                        .gte('delivery_date', normalizedDeliveryDate)
+                        .lt('delivery_date', nextDay)
+                );
             }
         } else if (day !== "all") {
-            // If no delivery_date but day is specified, filter by day
-            stopsQuery = stopsQuery.eq('day', day);
+            allStops = await fetchAllRows(sb =>
+                sb.from('stops')
+                    .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
+                    .order('id', { ascending: true })
+                    .eq('day', day)
+            );
+        } else {
+            allStops = await fetchAllRows(sb =>
+                sb.from('stops')
+                    .select('id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id')
+                    .order('id', { ascending: true })
+            );
         }
-        
-        const { data: allStops } = await stopsQuery;
         
         // If filtering by delivery_date, also fetch stops with NULL delivery_date that match the day
         // This handles legacy stops or stops where delivery_date wasn't set correctly
@@ -574,16 +587,13 @@ export async function GET(req: Request) {
 
         // Check which clients have stops for delivery dates, and which order_ids already have a stop
         // Stops are unique by order_id: one stop per order for the driver to handle
-        // When filtering by delivery_date, load ALL stops for that date so we don't create duplicates (avoid limit(10000) which caused duplicate stops when total stops > 10k)
-        let existingStopsQuery = supabase
-            .from('stops')
-            .select('client_id, delivery_date, day, order_id');
-        if (normalizedDeliveryDate) {
-            existingStopsQuery = existingStopsQuery.eq('delivery_date', normalizedDeliveryDate);
-        } else {
-            existingStopsQuery = existingStopsQuery.limit(10000);
-        }
-        const { data: existingStops } = await existingStopsQuery;
+        // Paginate to avoid Supabase 1000-row limit
+        const existingStops = normalizedDeliveryDate
+            ? await fetchAllRows(sb =>
+                sb.from('stops').select('client_id, delivery_date, day, order_id')
+                    .eq('delivery_date', normalizedDeliveryDate))
+            : await fetchAllRows(sb =>
+                sb.from('stops').select('client_id, delivery_date, day, order_id'));
 
         // Normalize delivery_date to YYYY-MM-DD so we match the format used from orders (avoids duplicate stop creation on every page visit)
         const normalizeDeliveryDate = (v: string | null | undefined): string | null => {
@@ -624,22 +634,21 @@ export async function GET(req: Request) {
         // Active order statuses: 'pending', 'scheduled', 'confirmed'
         const activeOrderStatuses = ["pending", "scheduled", "confirmed"];
         
-        // Get orders with scheduled_delivery_date
-        const { data: activeOrders } = await supabase
-            .from('orders')
-            .select('id, client_id, scheduled_delivery_date, delivery_day, status, case_id')
-            .in('status', activeOrderStatuses)
-            .not('scheduled_delivery_date', 'is', null);
+        const activeOrders = await fetchAllRows(sb =>
+            sb.from('orders')
+                .select('id, client_id, scheduled_delivery_date, delivery_day, status, case_id')
+                .in('status', activeOrderStatuses)
+                .not('scheduled_delivery_date', 'is', null)
+        );
 
         // Get upcoming_orders with delivery_day or scheduled_delivery_date
         // When filtering by delivery_date, also fetch upcoming orders with matching scheduled_delivery_date
-        let upcomingOrdersQuery = supabase
-            .from('upcoming_orders')
-            .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id, service_type')
-            .eq('status', 'scheduled')
-            .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null');
-        
-        const { data: upcomingOrders } = await upcomingOrdersQuery;
+        const upcomingOrders = await fetchAllRows(sb =>
+            sb.from('upcoming_orders')
+                .select('id, client_id, delivery_day, scheduled_delivery_date, status, case_id, service_type')
+                .eq('status', 'scheduled')
+                .or('delivery_day.not.is.null,scheduled_delivery_date.not.is.null')
+        );
         
         // If filtering by delivery_date, also fetch upcoming orders with matching scheduled_delivery_date
         // This ensures we get all upcoming orders for that specific date

@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
         const dateParam = searchParams.get('date');
+        const accountTypeParam = searchParams.get('accountType');
 
         let scheduledDeliveryDateStr: string;
         if (dateParam) {
@@ -73,20 +74,29 @@ export async function POST(request: NextRequest) {
         const menuItems = (menuItemsAdmin?.length ? menuItemsAdmin : menuItemsFromLib) as any[];
 
         const foodClientsAll = allClients.filter(
-            (c: any) => c.serviceType === 'Food' || (c.serviceType && String(c.serviceType).includes('Food'))
+            (c: any) => c.serviceType && String(c.serviceType).toLowerCase().includes('food')
         );
         // Only run for clients who are not paused and have delivery enabled
         const pausedDefault = false;
         const deliveryDefault = true;
-        const foodClients = foodClientsAll.filter(
+        let foodClients = foodClientsAll.filter(
             (c: any) => !(c.paused ?? pausedDefault) && (c.delivery ?? deliveryDefault)
         );
+
+        if (accountTypeParam && ['Regular', 'Brooklyn'].includes(accountTypeParam)) {
+            foodClients = foodClients.filter(
+                (c: any) => (c.uniteAccount || '').trim() === accountTypeParam
+            );
+            console.log(`[Create Meal Planner Orders] Filtered to ${accountTypeParam} clients: ${foodClients.length}`);
+        }
+
         const foodClientIds = foodClients.map((c: any) => c.id);
 
         if (foodClientIds.length === 0) {
+            const typeLabel = accountTypeParam ? ` (${accountTypeParam})` : '';
             return NextResponse.json({
                 success: true,
-                message: 'No Food service clients found',
+                message: `No Food service clients found${typeLabel}`,
                 ordersCreated: 0,
                 clientsProcessed: 0,
                 scheduledDeliveryDate: scheduledDeliveryDateStr

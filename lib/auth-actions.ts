@@ -114,9 +114,10 @@ export async function verifyOtp(email: string, code: string) {
                 await createSession('super-admin', 'Admin', 'super-admin');
                 redirect('/');
             } else if (id) {
-                const { data: admin } = await supabase.from('admins').select('name').eq('id', id).single();
-                await createSession(id, admin?.name || 'Admin', 'admin');
-                redirect('/');
+                const { data: admin } = await supabase.from('admins').select('name, role').eq('id', id).single();
+                const role = (admin?.role && admin.role !== 'admin') ? admin.role : 'admin';
+                await createSession(id, admin?.name || 'Admin', role);
+                redirect(role === 'brooklyn_admin' ? '/clients' : '/');
             }
         } else if (type === 'vendor' && id) {
             const { data: vendor } = await supabase.from('vendors').select('name').eq('id', id).single();
@@ -167,7 +168,7 @@ export async function login(prevState: any, formData: FormData) {
         // 2. Check Database Admins
         const { data: admin } = await supabase
             .from('admins')
-            .select('*')
+            .select('id, username, password, name, role')
             .eq('username', loginInput)
             .maybeSingle();
 
@@ -176,8 +177,9 @@ export async function login(prevState: any, formData: FormData) {
             if (!isMatch) {
                 return { message: 'Invalid credentials.' };
             }
-            await createSession(admin.id, admin.name || 'Admin', 'admin');
-            redirect('/');
+            const role = (admin.role && admin.role !== 'admin') ? admin.role : 'admin';
+            await createSession(admin.id, admin.name || 'Admin', role);
+            redirect(role === 'brooklyn_admin' ? '/clients' : '/');
         }
 
         // 3. Check Vendors (by Email) - normalize email for matching (ignore spaces and case)
@@ -427,7 +429,7 @@ export async function getAdmins() {
     try {
         const { data, error } = await supabase
             .from('admins')
-            .select('id, username, created_at, name')
+            .select('id, username, created_at, name, role')
             .order('created_at', { ascending: true });
         if (error) return [];
         return data || [];
@@ -437,11 +439,28 @@ export async function getAdmins() {
     }
 }
 
+export async function getBrooklynAdmins() {
+    await verifySession();
+    try {
+        const { data, error } = await supabase
+            .from('admins')
+            .select('id, username, created_at, name')
+            .eq('role', 'brooklyn_admin')
+            .order('created_at', { ascending: true });
+        if (error) return [];
+        return data || [];
+    } catch (error) {
+        console.error('Error fetching Brooklyn admins:', error);
+        return [];
+    }
+}
+
 export async function addAdmin(prevState: any, formData: FormData) {
     await verifySession();
     const username = formData.get('username') as string;
     const password = formData.get('password') as string;
     const name = (formData.get('name') as string) || 'Admin';
+    const role = (formData.get('role') as string) || 'admin';
 
     if (!username || !password) {
         return { message: 'Username and password are required.' };
@@ -463,7 +482,7 @@ export async function addAdmin(prevState: any, formData: FormData) {
     try {
         const { error } = await supabase
             .from('admins')
-            .insert([{ id, username, password: hashedPassword, name }]);
+            .insert([{ id, username, password: hashedPassword, name, role: role === 'brooklyn_admin' ? 'brooklyn_admin' : 'admin' }]);
         if (error) throw error;
     } catch (error) {
         console.error('Error adding admin:', error);

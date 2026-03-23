@@ -42,6 +42,7 @@ export function DependantInfoShelf({
         state: c.state || '',
         zip: c.zip || '',
         notes: c.dislikes ?? '',
+        history: c.history ?? '',
         serviceType: c.serviceType,
         produceVendorId: c.produceVendorId || null as string | null,
         paused: c.paused ?? false,
@@ -109,6 +110,7 @@ export function DependantInfoShelf({
                     state: editForm.state || null,
                     zip: editForm.zip || null,
                     dislikes: editForm.notes || null,
+                    history: editForm.history || null,
                     serviceType: editForm.serviceType,
                     produceVendorId: editForm.serviceType === 'Produce' ? editForm.produceVendorId : null,
                     paused: editForm.paused,
@@ -441,6 +443,29 @@ export function DependantInfoShelf({
                                         />
                                     ) : (
                                         <span style={{ whiteSpace: 'pre-wrap' }}>{client.dislikes?.trim() || '—'}</span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* History */}
+                    <div className={styles.section}>
+                        <h3>History</h3>
+                        <div className={styles.infoGrid}>
+                            <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                <div className={styles.label}>History</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <textarea
+                                            className={styles.editTextarea}
+                                            value={editForm.history}
+                                            onChange={e => setEditForm({ ...editForm, history: e.target.value })}
+                                            rows={3}
+                                            placeholder="History / notes"
+                                        />
+                                    ) : (
+                                        <span style={{ whiteSpace: 'pre-wrap' }}>{client.history?.trim() || '—'}</span>
                                     )}
                                 </div>
                             </div>

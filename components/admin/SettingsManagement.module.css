@@ -60,6 +60,26 @@
     border-color: transparent;
 }
 
+.select {
+    padding: 0.5rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    max-width: 20rem;
+    background-color: white;
+    cursor: pointer;
+}
+
+.select:focus {
+    outline: 2px solid #6366f1;
+    border-color: transparent;
+}
+
+.select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .toggleGroup {
     display: flex;
     flex-direction: column;

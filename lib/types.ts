@@ -72,6 +72,11 @@ export interface ClientProfile {
   /** Meal planner data: [{ scheduledDeliveryDate, items: [{ id, name, quantity, value? }] }]. Single source of truth. */
   mealPlannerData?: MealPlannerDateItem[] | null;
 
+  /** Account type: e.g. Regular, Brooklyn. Not shown on dashboard. */
+  uniteAccount?: string | null;
+  /** Free-form history/notes. Not shown on dashboard, editable in client sidebar. */
+  history?: string | null;
+
   createdAt: string;
   updatedAt: string;
 }

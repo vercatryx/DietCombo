@@ -2231,10 +2231,17 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
             ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
             : supabase;
 
-        const { data: clients, error } = await supabaseClient
+        const session = await getSession();
+        const brooklynOnly = session?.role === 'brooklyn_admin';
+
+        let clientsQuery = supabaseClient
             .from('clients')
             .select('id, full_name, meal_planner_data')
             .not('meal_planner_data', 'is', null);
+        if (brooklynOnly) {
+            clientsQuery = clientsQuery.eq('unite_account', 'Brooklyn');
+        }
+        const { data: clients, error } = await clientsQuery;
 
         if (error) {
             logQueryError(error, 'clients', 'select');
@@ -2285,29 +2292,39 @@ export async function getMealPlanEditCountsByMonth(startDate: string, endDate: s
             ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
             : supabase;
 
-        const { data: rpcRows, error: rpcError } = await supabaseClient.rpc('get_meal_plan_edit_counts', {
-            p_start_date: start,
-            p_end_date: end
-        });
+        const session = await getSession();
+        const brooklynOnly = session?.role === 'brooklyn_admin';
 
-        if (!rpcError && rpcRows && Array.isArray(rpcRows)) {
-            const result: Record<string, number> = {};
-            for (const row of rpcRows as { delivery_date: string; client_count: number }[]) {
-                const dateKey = row.delivery_date ? mealPlannerDateOnly(String(row.delivery_date)) : null;
-                if (dateKey) result[dateKey] = Number(row.client_count) || 0;
+        // RPC does not filter by unite_account; for Brooklyn admins use fallback only
+        if (!brooklynOnly) {
+            const { data: rpcRows, error: rpcError } = await supabaseClient.rpc('get_meal_plan_edit_counts', {
+                p_start_date: start,
+                p_end_date: end
+            });
+
+            if (!rpcError && rpcRows && Array.isArray(rpcRows)) {
+                const result: Record<string, number> = {};
+                for (const row of rpcRows as { delivery_date: string; client_count: number }[]) {
+                    const dateKey = row.delivery_date ? mealPlannerDateOnly(String(row.delivery_date)) : null;
+                    if (dateKey) result[dateKey] = Number(row.client_count) || 0;
+                }
+                return result;
             }
-            return result;
+
+            if (rpcError) {
+                console.warn('[getMealPlanEditCountsByMonth] RPC not available, using fallback:', rpcError.message);
+            }
         }
 
-        if (rpcError) {
-            console.warn('[getMealPlanEditCountsByMonth] RPC not available, using fallback:', rpcError.message);
-        }
-
-        // Fallback: scan clients.meal_planner_data in JS
-        const { data: clients, error } = await supabaseClient
+        // Fallback: scan clients.meal_planner_data in JS (supports brooklynOnly)
+        let fallbackQuery = supabaseClient
             .from('clients')
             .select('id, meal_planner_data')
             .not('meal_planner_data', 'is', null);
+        if (brooklynOnly) {
+            fallbackQuery = fallbackQuery.eq('unite_account', 'Brooklyn');
+        }
+        const { data: clients, error } = await fallbackQuery;
 
         if (error) {
             logQueryError(error, 'clients', 'select');
@@ -2735,7 +2752,8 @@ export async function getAvailableMealPlanTemplateWithAllDatesIncludingRecurring
  * dates in [startDate, endDate]. Uses one recurring fetch + batch custom items (2 queries) instead of N per date.
  * Use for client portal to load current month only and when user changes month.
  */
-export async function getAvailableMealPlanTemplateInRange(startDate: string, endDate: string): Promise<MealPlannerOrderResult[]> {
+export async function getAvailableMealPlanTemplateInRange(startDate: string, endDate: string, opts?: { includePastAndExpired?: boolean }): Promise<MealPlannerOrderResult[]> {
+    const includePastAndExpired = opts?.includePastAndExpired ?? false;
     const start = mealPlannerDateOnly(startDate);
     const end = mealPlannerDateOnly(endDate);
     if (!start || !end || start > end) return [];
@@ -2751,7 +2769,7 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
             for (let t = monthStart.getTime(); t <= monthEnd.getTime(); t += 86400000) {
                 const date = new Date(t);
                 const ds = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
-                if (ds >= today) fallback.push(ds);
+                if (includePastAndExpired || ds >= today) fallback.push(ds);
             }
             dates = fallback;
             if (dates.length === 0) return [];
@@ -2764,7 +2782,7 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
             ((a.name ?? '').trim() || 'Item').toLowerCase() === ((b.name ?? '').trim() || 'Item').toLowerCase();
         const list: MealPlannerOrderResult[] = [];
         for (const dateOnly of dates) {
-            if (dateOnly < today) continue;
+            if (!includePastAndExpired && dateOnly < today) continue;
             const custom = batchResult.get(dateOnly);
             const defaultDayItems = custom?.items ?? [];
             const combined: MealPlannerOrderDisplayItem[] = recurringItems.map((r) => ({
@@ -2785,7 +2803,7 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
                 else combined.push(dayEntry);
             }
             const expirationDate = custom?.expirationDate ?? null;
-            if (expirationDate != null && expirationDate !== '' && expirationDate < today) continue;
+            if (!includePastAndExpired && expirationDate != null && expirationDate !== '' && expirationDate < today) continue;
             const expectedTotalMeals = custom?.expectedTotalMeals != null && !Number.isNaN(Number(custom.expectedTotalMeals)) ? Number(custom.expectedTotalMeals) : null;
             list.push({
                 id: `template-${dateOnly}`,
@@ -2810,12 +2828,12 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
  * to show current month only; when user changes month, call again with that year/month.
  * One batch template fetch + one client range fetch + merge in memory.
  */
-export async function getMealPlanForMonth(clientId: string, year: number, month: number): Promise<MealPlannerOrderResult[]> {
+export async function getMealPlanForMonth(clientId: string, year: number, month: number, opts?: { includePastAndExpired?: boolean }): Promise<MealPlannerOrderResult[]> {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const lastDay = new Date(year, month, 0).getDate();
     const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     const [templateList, clientList] = await Promise.all([
-        getAvailableMealPlanTemplateInRange(monthStart, monthEnd),
+        getAvailableMealPlanTemplateInRange(monthStart, monthEnd, opts),
         getClientMealPlannerData(clientId, { startDate: monthStart, endDate: monthEnd })
     ]);
     const byDate = new Map<string, MealPlannerOrderResult>();
@@ -2828,7 +2846,6 @@ export async function getMealPlanForMonth(clientId: string, year: number, month:
         if (!o.scheduledDeliveryDate) continue;
         const templateOrder = byDate.get(o.scheduledDeliveryDate);
         if (!templateOrder) {
-            byDate.set(o.scheduledDeliveryDate, o);
             continue;
         }
         const clientByKey = new Map(o.items.map((i) => [(i.name ?? '').trim().toLowerCase(), i]));
@@ -4089,6 +4106,8 @@ function mapClientFromDB(c: any): ClientProfile {
         assignedDriverId: c.assigned_driver_id || null,
         produceVendorId: c.produce_vendor_id || null,
         mealPlannerData: c.meal_planner_data ?? null,
+        uniteAccount: c.unite_account || null,
+        history: c.history || null,
         createdAt: c.created_at,
         updatedAt: c.updated_at
     };
@@ -4309,7 +4328,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         billings: data.billings ? JSON.stringify(data.billings) : null,
         visits: data.visits ? JSON.stringify(data.visits) : null,
         sign_token: data.signToken || null,
-        produce_vendor_id: (data.serviceType === 'Produce' && data.produceVendorId) ? data.produceVendorId : null
+        produce_vendor_id: (data.serviceType === 'Produce' && data.produceVendorId) ? data.produceVendorId : null,
+        unite_account: data.uniteAccount ?? null
     };
 
     // Save upcoming_order if provided; sanitize to schema-only shape (UPCOMING_ORDER_SCHEMA)
@@ -4613,6 +4633,8 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.visits !== undefined) payload.visits = data.visits ? JSON.stringify(data.visits) : null;
     if (data.signToken !== undefined) payload.sign_token = data.signToken || null;
     if (data.produceVendorId !== undefined) payload.produce_vendor_id = data.produceVendorId || null;
+    if (data.uniteAccount !== undefined) payload.unite_account = data.uniteAccount || null;
+    if (data.history !== undefined) payload.history = data.history || null;
 
     payload.updated_at = new Date().toISOString();
 
@@ -8962,7 +8984,7 @@ export async function getNavigatorLogs(navigatorId: string) {
 
 // --- OPTIMIZED ACTIONS ---
 
-export async function getClientsPaginated(page: number, pageSize: number, searchQuery: string = '', filter?: 'needs-vendor') {
+export async function getClientsPaginated(page: number, pageSize: number, searchQuery: string = '', filter?: 'needs-vendor', options?: { brooklynOnly?: boolean }) {
     try {
         // If filtering for clients needing vendor assignment, get Boxes clients whose vendor is not set
         if (filter === 'needs-vendor') {
@@ -9115,6 +9137,9 @@ export async function getClientsPaginated(page: number, pageSize: number, search
         const endRow = page * pageSize - 1;
 
         let baseQuery = supabase.from('clients').select('*', { count: 'exact' });
+        if (options?.brooklynOnly) {
+            baseQuery = baseQuery.eq('unite_account', 'Brooklyn');
+        }
         if (searchQuery) {
             baseQuery = baseQuery.ilike('full_name', `%${searchQuery}%`);
         }
@@ -9368,7 +9393,7 @@ export async function getClientProfilePageData(clientId: string) {
  * shared reference data to avoid duplicate getMenuItems/getVendors/getBoxTypes round-trips.
  * Use this instead of many separate calls to speed up /client-portal/[id].
  */
-export async function getClientPortalPageData(clientId: string) {
+export async function getClientPortalPageData(clientId: string, opts?: { includePastAndExpired?: boolean }) {
     if (!clientId) return null;
     try {
         const client = await getClient(clientId);
@@ -9398,7 +9423,9 @@ export async function getClientPortalPageData(clientId: string) {
         ]);
 
         const refData: OrderReferenceData = { menuItems, vendors, boxTypes };
-        const householdPeople = parent ? [parent, ...dependants] : [client, ...dependants];
+        // Only count Food clients for meal allowance; exclude Produce and other non-Food
+        const allHousehold = parent ? [parent, ...dependants] : [client, ...dependants];
+        const householdPeople = allHousehold.filter((p) => p?.serviceType === 'Food');
 
         // 2) Client-specific data reusing reference data (no duplicate menu/vendor/box fetches)
         // Food: load current month only for fast calendar (getMealPlanForMonth); other months load on demand in SavedMealPlanMonth
@@ -9408,7 +9435,7 @@ export async function getClientPortalPageData(clientId: string) {
         const [activeOrder, previousOrders, mealPlanData] = await Promise.all([
             getActiveOrderForClient(clientId, refData),
             getOrderHistory(clientId, undefined, refData),
-            client.serviceType === 'Food' ? getMealPlanForMonth(clientId, currentYear, currentMonth) : Promise.resolve([])
+            client.serviceType === 'Food' ? getMealPlanForMonth(clientId, currentYear, currentMonth, opts?.includePastAndExpired ? { includePastAndExpired: true } : undefined) : Promise.resolve([])
         ]);
 
         return {

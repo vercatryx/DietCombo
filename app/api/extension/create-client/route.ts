@@ -15,6 +15,7 @@ import { isValidUniteUsUrl } from '@/lib/utils';
  *   fullName: string
  *   statusId: string
  *   navigatorId?: string
+ *   uniteAccount: 'Regular' | 'Brooklyn' (required)
  *   address: string
  *   phone: string
  *   email?: string
@@ -72,6 +73,7 @@ export async function POST(request: NextRequest) {
             lastName,
             statusId,
             navigatorId,
+            uniteAccount,
             address,
             apt,
             city,
@@ -104,6 +106,15 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({
                 success: false,
                 error: 'Missing required fields: fullName, statusId, navigatorId, address, phone, serviceType, and caseId are required'
+            }, { status: 400 });
+        }
+
+        // Unite account is required (Regular or Brooklyn)
+        const validUniteAccounts = ['Regular', 'Brooklyn'];
+        if (!uniteAccount || typeof uniteAccount !== 'string' || !validUniteAccounts.includes(uniteAccount.trim())) {
+            return NextResponse.json({
+                success: false,
+                error: 'uniteAccount is required and must be "Regular" or "Brooklyn"'
             }, { status: 400 });
         }
 
@@ -184,6 +195,7 @@ export async function POST(request: NextRequest) {
             complex: complex ?? false,
             bill: bill ?? true,
             delivery: delivery ?? true,
+            uniteAccount: uniteAccount.trim(),
             caseIdExternal: caseId.trim(), // Store Unite Us link in case_id_external
             activeOrder: {
                 serviceType: serviceType as ServiceType,
