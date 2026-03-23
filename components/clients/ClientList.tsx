@@ -811,6 +811,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         const getExportExpirationDate = (client: ClientProfile) =>
             client.parentClientId ? (expirationByClientId[client.parentClientId] ?? '') : (client.expirationDate ?? '');
 
+        const uniteAccountByClientId: Record<string, string> = {};
+        clients.forEach(c => { uniteAccountByClientId[c.id] = c.uniteAccount ?? ''; });
+        const getExportUniteAccount = (client: ClientProfile) =>
+            client.parentClientId ? (uniteAccountByClientId[client.parentClientId] ?? '') : (client.uniteAccount ?? '');
+
         const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount', 'Unite Account', 'History'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
@@ -832,7 +837,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
             getExportExpirationDate(client),
             client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
-            client.uniteAccount ?? '',
+            getExportUniteAccount(client),
             client.history ?? '',
         ]);
         const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
