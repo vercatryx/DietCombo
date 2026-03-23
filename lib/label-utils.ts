@@ -28,6 +28,8 @@ interface LabelGenerationOptions {
     filenameSuffix?: string;
     /** When provided, used for the right label (order details) instead of formatOrderedItemsForCSV (e.g. only items changed from default) */
     formatOrderedItemsForRightLabel?: (order: Order) => string;
+    /** When true, do not start a new page when the driver changes (used for small edited-mealplan PDFs) */
+    skipDriverPageBreak?: boolean;
 }
 
 /** Line height factor for a given font size (inches per pt). Matches pdfRouteLabels behavior. */
@@ -81,7 +83,8 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         deliveryDate,
         getDriverInfo,
         getNotes,
-        filenameSuffix
+        filenameSuffix,
+        skipDriverPageBreak
     } = options;
 
     if (orders.length === 0) {
@@ -125,7 +128,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         const driverKey = driverInfo != null ? `${driverInfo.driverNumber}:${driverInfo.driverColor}` : null;
 
         // When getDriverInfo is provided: each driver starts on a new page (leave bottom of previous page blank)
-        if (getDriverInfo && index > 0 && driverKey != null && driverKey !== prevDriverKey) {
+        if (!skipDriverPageBreak && getDriverInfo && index > 0 && driverKey != null && driverKey !== prevDriverKey) {
             doc.addPage();
             labelsOnCurrentPage = 0;
         }
@@ -404,7 +407,7 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
         const driverKeyAlt = driverInfoForBreak != null ? `${driverInfoForBreak.driverNumber}:${driverInfoForBreak.driverColor}` : null;
 
         // When getDriverInfo is provided: each driver starts on a new page (leave bottom of previous page blank)
-        if (getDriverInfo && index > 0 && driverKeyAlt != null && driverKeyAlt !== prevDriverKeyAlt) {
+        if (!options.skipDriverPageBreak && getDriverInfo && index > 0 && driverKeyAlt != null && driverKeyAlt !== prevDriverKeyAlt) {
             doc.addPage();
             rowsOnCurrentPage = 0;
         }

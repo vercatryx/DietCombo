@@ -1052,9 +1052,16 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 ...(stopNumber != null && { stopNumber })
             };
         };
+        const editedClientIds = new Set(
+            clientsForExport
+                .filter(c => c.mealPlannerData?.some(d => d.scheduledDeliveryDate === dateKey))
+                .map(c => c.id)
+        );
+        const isEdited = (order: any) => editedClientIds.has(order.client_id);
         const isComplex = (order: any) => !!(clientById.get(order.client_id)?.complex);
-        const ordersNonComplex = ordersForLabels.filter((o: any) => !isComplex(o));
-        const ordersComplex = ordersForLabels.filter((o: any) => isComplex(o));
+        const ordersEdited = ordersForLabels.filter((o: any) => isEdited(o));
+        const ordersNonComplex = ordersForLabels.filter((o: any) => !isEdited(o) && !isComplex(o));
+        const ordersComplex = ordersForLabels.filter((o: any) => !isEdited(o) && isComplex(o));
         const commonOpts = {
             getClientName: getClientNameForExport,
             getClientAddress: getClientAddressForExport,
@@ -1070,6 +1077,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         }
         if (ordersComplex.length > 0) {
             await generateLabelsPDF({ ...commonOpts, orders: ordersComplex, filenameSuffix: '_complex' });
+        }
+        if (ordersEdited.length > 0) {
+            await generateLabelsPDF({ ...commonOpts, orders: ordersEdited, filenameSuffix: '_edited', skipDriverPageBreak: true });
         }
         } finally {
             setIsExporting(false);
@@ -1130,9 +1140,16 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     ...(stopNumber != null && { stopNumber })
                 };
             };
+            const editedClientIdsAlt = new Set(
+                clientsForExport
+                    .filter(c => c.mealPlannerData?.some(d => d.scheduledDeliveryDate === dateKey))
+                    .map(c => c.id)
+            );
+            const isEditedAlt = (order: any) => editedClientIdsAlt.has(order.client_id);
             const isComplexAlt = (order: any) => !!(clientById.get(order.client_id)?.complex);
-            const ordersNonComplexAlt = ordersForLabelsAlt.filter((o: any) => !isComplexAlt(o));
-            const ordersComplexAlt = ordersForLabelsAlt.filter((o: any) => isComplexAlt(o));
+            const ordersEditedAlt = ordersForLabelsAlt.filter((o: any) => isEditedAlt(o));
+            const ordersNonComplexAlt = ordersForLabelsAlt.filter((o: any) => !isEditedAlt(o) && !isComplexAlt(o));
+            const ordersComplexAlt = ordersForLabelsAlt.filter((o: any) => !isEditedAlt(o) && isComplexAlt(o));
 
             // Fetch default order template for "that day" so right label can show only items changed from default
             const defaultTemplate = await getDefaultOrderTemplate('Food');
@@ -1214,6 +1231,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             }
             if (ordersComplexAlt.length > 0) {
                 await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersComplexAlt, filenameSuffix: '_complex' });
+            }
+            if (ordersEditedAlt.length > 0) {
+                await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersEditedAlt, filenameSuffix: '_edited', skipDriverPageBreak: true });
             }
         } finally {
             setIsExporting(false);

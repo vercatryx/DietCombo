@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { isProduceServiceType } from "@/lib/isProduceServiceType";
 import { v4 as uuidv4 } from "uuid";
 
 const sid = (v: unknown) => (v === null || v === undefined ? "" : String(v));
@@ -25,6 +26,8 @@ export async function GET(req: Request) {
         const day = (searchParams.get("day") || "all").toLowerCase();
         const deliveryDate = searchParams.get("delivery_date") || null;
         const light = searchParams.get("light") === "1" || searchParams.get("light") === "true";
+        const excludeProduce =
+            searchParams.get("exclude_produce") === "1" || searchParams.get("exclude_produce") === "true";
         const debug = searchParams.get("debug") === "1" || searchParams.get("debug") === "true";
         let debugOrderNumbersByClientCount = 0;
         const serverLog: string[] = [];
@@ -131,7 +134,7 @@ export async function GET(req: Request) {
         const { data: clients } = clientIds.length > 0
             ? await supabase
                 .from('clients')
-                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type')
                 .in('id', clientIds)
             : { data: [] };
 
@@ -153,6 +156,7 @@ export async function GET(req: Request) {
         const shouldShowStop = (stop: any) => {
             const client = stop?.userId != null ? clientById.get(String(stop.userId)) : clientById.get(String((stop as any).client_id));
             if (!client) return true; // no client record → show (legacy)
+            if (excludeProduce && isProduceServiceType((client as any).service_type)) return false;
             if (client.paused) return false;
             return isDeliverableClient(client);
         };

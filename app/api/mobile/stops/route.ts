@@ -1,6 +1,7 @@
 // app/api/mobile/stops/route.ts
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { isProduceServiceType } from "@/lib/isProduceServiceType";
 
 export const dynamic = "force-dynamic";
 
@@ -55,12 +56,13 @@ export async function GET(req: Request) {
             stops = stopsData || [];
             const clientIds = [...new Set(stops.map((s: any) => s.client_id).filter(Boolean))];
             const { data: clients } = clientIds.length > 0
-                ? await supabase.from('clients').select('id, assigned_driver_id').in('id', clientIds)
+                ? await supabase.from('clients').select('id, assigned_driver_id, service_type').in('id', clientIds)
                 : { data: [] };
             const clientById = new Map((clients || []).map((c: any) => [String(c.id), c]));
             const byClient = new Map<string, any>();
             for (const s of stops) {
                 const c = clientById.get(String(s.client_id));
+                if (c && isProduceServiceType(c.service_type)) continue;
                 const assignedDriver = (c?.assigned_driver_id ?? s?.assigned_driver_id) ? String(c?.assigned_driver_id ?? s.assigned_driver_id) : null;
                 if (assignedDriver === driverId && s.client_id) byClient.set(String(s.client_id), s);
             }
@@ -227,11 +229,21 @@ export async function GET(req: Request) {
         allQuery = allQuery.eq('delivery_date', deliveryDateParam);
     }
 
-        const { data: all, error: allError } = await allQuery;
+        const { data: allRaw, error: allError } = await allQuery;
         if (allError) {
             console.error("[/api/mobile/stops] Error fetching all stops:", allError);
             return NextResponse.json({ error: allError.message }, { status: 500 });
         }
+
+        const clientIdsForProduce = [...new Set((allRaw || []).map((s: any) => s.client_id).filter(Boolean))];
+        const { data: clientsProduce } = clientIdsForProduce.length > 0
+            ? await supabase.from('clients').select('id, service_type').in('id', clientIdsForProduce)
+            : { data: [] };
+        const produceClientIdSet = new Set<string>();
+        for (const c of clientsProduce || []) {
+            if (isProduceServiceType((c as any).service_type)) produceClientIdSet.add(String((c as any).id));
+        }
+        const all = (allRaw || []).filter((s: any) => !s.client_id || !produceClientIdSet.has(String(s.client_id)));
 
         const orderMapById = new Map<string, any>();
         const orderMapByClient = new Map<string, any>();
