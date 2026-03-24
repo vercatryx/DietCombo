@@ -26,6 +26,7 @@ model AppSettings {
   weeklyCutoffTime        String?  @default("17:00") @map("weekly_cutoff_time") @db.VarChar(50)
   reportEmail             String?  @map("report_email") @db.VarChar(255)
   enablePasswordlessLogin Boolean? @default(false) @map("enable_passwordless_login")
+  textOnDelivery          Boolean? @default(false) @map("text_on_delivery")
   createdAt               DateTime @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt               DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 

@@ -1,12 +1,48 @@
 'use server';
 
 import { uploadFile } from '@/lib/storage';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
+import { sendSms, formatDeliveryTimestamp } from '@/lib/telnyx';
+
+async function sendDeliveryNotification(
+    supabase: SupabaseClient,
+    clientId: string,
+) {
+    try {
+        const { data: settings } = await supabase
+            .from('app_settings')
+            .select('text_on_delivery')
+            .eq('id', '1')
+            .single();
+
+        if (!settings?.text_on_delivery) return;
+
+        const { data: client } = await supabase
+            .from('clients')
+            .select('phone_number, secondary_phone_number, full_name')
+            .eq('id', clientId)
+            .single();
+
+        if (!client) return;
+
+        const timestamp = formatDeliveryTimestamp(new Date());
+        const name = client.full_name?.split(' ')[0] || '';
+        const greeting = name ? `Hello ${name}, this` : 'Hello, this';
+        const message = `${greeting} is The Diet Fantasy. Your food has been delivered on ${timestamp}. If you have any questions, please don't hesitate to reach out.`;
+
+        const numbers = [client.phone_number, client.secondary_phone_number].filter(Boolean) as string[];
+        for (const number of numbers) {
+            await sendSms(number, message);
+        }
+    } catch (err) {
+        console.error('[Delivery SMS] Failed to send notification:', err);
+    }
+}
 
 export async function processDeliveryProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -31,12 +67,12 @@ export async function processDeliveryProof(formData: FormData) {
     try {
         // 1. Verify Order matches
         let table: 'orders' | 'upcoming_orders' = 'orders';
-        let foundOrder: { id: string } | null = null;
+        let foundOrder: { id: string; client_id: string } | null = null;
 
         // Try finding in orders
         const { data: orderData } = await supabaseAdmin
             .from('orders')
-            .select('id')
+            .select('id, client_id')
             .eq('order_number', orderNumber)
             .maybeSingle();
 
@@ -48,7 +84,7 @@ export async function processDeliveryProof(formData: FormData) {
             if (uuidRegex.test(orderNumber)) {
                 const { data: orderById } = await supabaseAdmin
                     .from('orders')
-                    .select('id')
+                    .select('id, client_id')
                     .eq('id', orderNumber)
                     .maybeSingle();
                 foundOrder = orderById;
@@ -61,7 +97,7 @@ export async function processDeliveryProof(formData: FormData) {
 
             const { data: upcomingOrder } = await supabaseAdmin
                 .from('upcoming_orders')
-                .select('id')
+                .select('id, client_id')
                 .eq('order_number', orderNumber)
                 .maybeSingle();
 
@@ -73,7 +109,7 @@ export async function processDeliveryProof(formData: FormData) {
                 if (uuidRegex.test(orderNumber)) {
                     const { data: upcomingById } = await supabaseAdmin
                         .from('upcoming_orders')
-                        .select('id')
+                        .select('id, client_id')
                         .eq('id', orderNumber)
                         .maybeSingle();
                     foundOrder = upcomingById;
@@ -87,6 +123,7 @@ export async function processDeliveryProof(formData: FormData) {
         }
 
         const orderId = foundOrder.id;
+        const clientId = foundOrder.client_id;
 
         // 2. Handle File Upload or Test URL
         let publicUrl: string;
@@ -120,6 +157,7 @@ export async function processDeliveryProof(formData: FormData) {
             // Sync proof to stops so driver app shows proof for this order
             await supabaseAdmin.from('stops').update({ proof_url: publicUrl }).eq('order_id', orderId);
             revalidatePath('/admin');
+            sendDeliveryNotification(supabaseAdmin, clientId).catch(() => {});
             return { success: true, url: publicUrl };
         }
 
@@ -197,7 +235,8 @@ export async function processDeliveryProof(formData: FormData) {
             }
         }
 
-        revalidatePath('/admin'); // Revalidate admin views
+        revalidatePath('/admin');
+        sendDeliveryNotification(supabaseAdmin, clientId).catch(() => {});
 
         return { success: true, url: publicUrl };
     } catch (error: any) {

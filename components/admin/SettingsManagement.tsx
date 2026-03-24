@@ -197,6 +197,21 @@ export function SettingsManagement() {
                     </p>
                 </div>
 
+                <div className={styles.toggleGroup}>
+                    <label className={styles.toggleLabel}>
+                        <input
+                            type="checkbox"
+                            checked={settings.textOnDelivery || false}
+                            onChange={(e) => handleChange('textOnDelivery', e.target.checked)}
+                        />
+                        <span>Text on delivery</span>
+                    </label>
+                    <p className={styles.helper}>
+                        When enabled, an SMS notification is sent to the client&apos;s phone number(s) as soon as
+                        a driver uploads proof of delivery.
+                    </p>
+                </div>
+
                 <div className={styles.buttonRow}>
                     <button type="submit" className={styles.saveButton} disabled={saving}>
                         {saving ? 'Saving...' : 'Save settings'}

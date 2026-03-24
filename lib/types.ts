@@ -348,6 +348,7 @@ export interface AppSettings {
   weeklyCutoffTime: string; // e.g. "17:00"
   reportEmail?: string; // Email address for delivery simulation reports
   enablePasswordlessLogin?: boolean;
+  textOnDelivery?: boolean;
 }
 
 export interface OrderHistoryLog {

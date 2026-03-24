@@ -1014,17 +1014,18 @@ export async function deleteBoxType(id: string) {
 export async function getSettings() {
     try {
         const { data, error } = await supabase.from('app_settings').select('*').eq('id', '1').single();
-        if (error || !data) return { weeklyCutoffDay: 'Friday', weeklyCutoffTime: '17:00', reportEmail: '', enablePasswordlessLogin: false };
+        if (error || !data) return { weeklyCutoffDay: 'Friday', weeklyCutoffTime: '17:00', reportEmail: '', enablePasswordlessLogin: false, textOnDelivery: false };
 
         return {
             weeklyCutoffDay: data.weekly_cutoff_day,
             weeklyCutoffTime: data.weekly_cutoff_time,
             reportEmail: data.report_email || '',
-            enablePasswordlessLogin: data.enable_passwordless_login || false
+            enablePasswordlessLogin: data.enable_passwordless_login || false,
+            textOnDelivery: data.text_on_delivery || false
         };
     } catch (error) {
         console.error('Error fetching settings:', error);
-        return { weeklyCutoffDay: 'Friday', weeklyCutoffTime: '17:00', reportEmail: '', enablePasswordlessLogin: false };
+        return { weeklyCutoffDay: 'Friday', weeklyCutoffTime: '17:00', reportEmail: '', enablePasswordlessLogin: false, textOnDelivery: false };
     }
 }
 
@@ -1036,7 +1037,8 @@ export async function updateSettings(settings: AppSettings) {
                 weekly_cutoff_day: settings.weeklyCutoffDay,
                 weekly_cutoff_time: settings.weeklyCutoffTime,
                 report_email: settings.reportEmail || null,
-                enable_passwordless_login: settings.enablePasswordlessLogin || false
+                enable_passwordless_login: settings.enablePasswordlessLogin || false,
+                text_on_delivery: settings.textOnDelivery || false
             })
             .eq('id', '1');
         handleError(error);
