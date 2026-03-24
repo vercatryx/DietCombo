@@ -9,20 +9,29 @@ const AUTO_REPLY =
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const event = body?.data;
+        console.log('[Telnyx Inbound] Webhook received:', JSON.stringify(body).slice(0, 500));
 
-        if (event?.event_type !== 'message.received') {
+        const msg = body?.data?.payload || body?.data;
+        if (!msg) {
+            console.log('[Telnyx Inbound] No data in payload, skipping');
             return NextResponse.json({ ok: true });
         }
 
-        const from = event?.payload?.from?.phone_number;
+        if (msg.direction !== 'inbound') {
+            console.log('[Telnyx Inbound] Not inbound, skipping');
+            return NextResponse.json({ ok: true });
+        }
+
+        const from = msg.from?.phone_number;
         if (!from) {
+            console.log('[Telnyx Inbound] No from number, skipping');
             return NextResponse.json({ ok: true });
         }
 
-        await sendSms(from, AUTO_REPLY);
+        console.log(`[Telnyx Inbound] Sending auto-reply to ${from}`);
+        const result = await sendSms(from, AUTO_REPLY);
+        console.log(`[Telnyx Inbound] sendSms result:`, JSON.stringify(result));
 
-        console.log(`[Telnyx Inbound] Auto-replied to ${from}`);
         return NextResponse.json({ ok: true });
     } catch (err) {
         console.error('[Telnyx Inbound] Webhook error:', err);

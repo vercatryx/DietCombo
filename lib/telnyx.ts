@@ -1,8 +1,8 @@
-const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
-const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER;
-
 export async function sendSms(to: string, text: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  if (!TELNYX_API_KEY || !TELNYX_FROM_NUMBER) {
+  const apiKey = process.env.TELNYX_API_KEY;
+  const fromNumber = process.env.TELNYX_FROM_NUMBER;
+
+  if (!apiKey || !fromNumber) {
     console.error('[Telnyx] Missing TELNYX_API_KEY or TELNYX_FROM_NUMBER');
     return { success: false, error: 'Telnyx not configured' };
   }
@@ -18,9 +18,9 @@ export async function sendSms(to: string, text: string): Promise<{ success: bool
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${TELNYX_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ from: TELNYX_FROM_NUMBER, to: e164, text }),
+      body: JSON.stringify({ from: fromNumber, to: e164, text }),
     });
 
     const data = await res.json().catch(() => ({}));
