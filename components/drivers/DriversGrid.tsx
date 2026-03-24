@@ -112,22 +112,20 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
                     return Number.isFinite(lat) && Number.isFinite(lng);
                 });
 
-                const actualTotal = cardStops.length;
-                const apiTotal = d.totalStops ?? (d.stopIds?.length ?? 0);
-                const total = actualTotal > 0 ? actualTotal : apiTotal;
-                const done = cardStops.length > 0 
+                const dataLoaded = allCardStops.length > 0;
+                const total = dataLoaded ? cardStops.length : (d.totalStops ?? (d.stopIds?.length ?? 0));
+                const done = dataLoaded 
                     ? cardStops.filter((s: any) => !!s?.completed).length 
                     : (d.completedStops ?? 0);
                 const pct = total > 0 ? (done / total) * 100 : 0;
 
-                const proofCount = cardStops.length > 0
+                const proofCount = dataLoaded
                     ? cardStops.filter((s: any) => !!((s?.proofUrl ?? s?.proof_url) || "").trim()).length
                     : 0;
                 const pctProof = total > 0 ? (proofCount / total) * 100 : 0;
 
-                // Unique addresses for this driver (ignoring apt#). When stops not yet loaded, use total from API.
                 const uniqueAddrCount = (() => {
-                    if (cardStops.length === 0) return total;
+                    if (!dataLoaded) return total;
                     const set = new Set();
                     for (const s of cardStops) {
                         const key = makeAddressKey(s);
