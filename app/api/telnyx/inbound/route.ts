@@ -19,9 +19,7 @@ export async function POST(request: Request) {
 
         console.log(`[Telnyx Inbound] Message from ${from}: "${text.slice(0, 100)}"`);
 
-        handleInboundSms(from, text).catch(err => {
-            console.error('[Telnyx Inbound] Bot error:', err);
-        });
+        await handleInboundSms(from, text);
 
         return NextResponse.json({ ok: true });
     } catch (err) {
