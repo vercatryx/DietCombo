@@ -532,6 +532,7 @@ export default function RoutesPage() {
                 color: color,
                 polygon: [],
                 stops,
+                totalStops: (r.stops || []).length,
             };
         });
     }, [routes, driverIdToColor]);

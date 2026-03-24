@@ -504,7 +504,7 @@ export default function DriversDialog({
                     dislikes: u.dislikes || "",
                 }))
                 .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-            return { id: driverId, driverId, name: dname, color, polygon: [], stops };
+            return { id: driverId, driverId, name: dname, color, polygon: [], stops, totalStops: (r.stops || []).length };
         });
     }, [routes]);
 

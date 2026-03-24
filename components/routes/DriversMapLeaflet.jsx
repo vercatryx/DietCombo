@@ -948,13 +948,13 @@ export default function DriversMapLeaflet({
                 driverId: d.driverId,
                 name: d.name,
                 color: d.color,
-                count: (d.stops || []).filter(hasLL).length,
+                count: d.totalStops ?? (d.stops || []).length,
             })),
         [sortedDrivers]
     );
     const totalAssigned = useMemo(
         () =>
-            visibleDrivers.reduce((s, d) => s + (d.stops || []).filter(hasLL).length, 0),
+            visibleDrivers.reduce((s, d) => s + (d.totalStops ?? (d.stops || []).length), 0),
         [visibleDrivers]
     );
 
