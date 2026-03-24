@@ -38,11 +38,12 @@ export async function POST(req: Request) {
             }
         }
 
-        // Get all clients including assigned_driver_id
-        const { data: allClients } = await supabase
-            .from('clients')
-            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
-            .order('id', { ascending: true });
+        // Get all clients including assigned_driver_id (paginated to support >1000 clients)
+        const allClients = await fetchAllRows((sb: any) =>
+            sb.from('clients')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
+                .order('id', { ascending: true })
+        );
 
         // Check which clients have stops for delivery dates, and which order_ids already have a stop
         // Stops are unique by order_id: one stop per order for the driver to handle

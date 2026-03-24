@@ -105,10 +105,13 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
     return (
         <div className="grid">
             {filteredDrivers.map((d) => {
-                const cardStops = getStopsForDriver(d);
+                const allCardStops = getStopsForDriver(d);
+                const cardStops = allCardStops.filter((s: any) => {
+                    const lat = Number(s?.lat);
+                    const lng = Number(s?.lng);
+                    return Number.isFinite(lat) && Number.isFinite(lng);
+                });
 
-                // Use actual loaded stops count instead of API count to ensure consistency
-                // Only fall back to API count if we have no loaded stops data
                 const actualTotal = cardStops.length;
                 const apiTotal = d.totalStops ?? (d.stopIds?.length ?? 0);
                 const total = actualTotal > 0 ? actualTotal : apiTotal;

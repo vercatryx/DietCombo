@@ -223,7 +223,7 @@ export default function DriversDialog({
     const loadRoutes = React.useCallback(async () => {
         setBusy(true);
         try {
-            let url = `/api/route/routes?day=${selectedDay}`;
+            let url = `/api/route/routes?day=${selectedDay}&exclude_produce=1`;
             if (selectedDeliveryDate) {
                 url += `&delivery_date=${selectedDeliveryDate}`;
             }
@@ -274,7 +274,7 @@ export default function DriversDialog({
             setBusy(true);
             try {
                 // Load initial data
-                let url1 = `/api/route/routes?day=${selectedDay}`;
+                let url1 = `/api/route/routes?day=${selectedDay}&exclude_produce=1`;
                 if (selectedDeliveryDate) {
                     url1 += `&delivery_date=${selectedDeliveryDate}`;
                 }
@@ -349,7 +349,7 @@ export default function DriversDialog({
 
                 if (res3.ok) {
                     // Reload after cleanup
-                    let url4 = `/api/route/routes?day=${selectedDay}`;
+                    let url4 = `/api/route/routes?day=${selectedDay}&exclude_produce=1`;
                     if (selectedDeliveryDate) {
                         url4 += `&delivery_date=${selectedDeliveryDate}`;
                     }
@@ -504,7 +504,7 @@ export default function DriversDialog({
                     dislikes: u.dislikes || "",
                 }))
                 .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-            return { id: driverId, driverId, name: dname, color, polygon: [], stops, totalStops: (r.stops || []).length };
+            return { id: driverId, driverId, name: dname, color, polygon: [], stops };
         });
     }, [routes]);
 

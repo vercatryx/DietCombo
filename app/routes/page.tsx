@@ -226,7 +226,7 @@ export default function RoutesPage() {
         try {
             // Same API as driver page: /api/route/routes with delivery_date for driver_route_order ordering
             const dateNorm = selectedDeliveryDate ? selectedDeliveryDate.split("T")[0].split(" ")[0] : null;
-            let url = `/api/route/routes?day=${selectedDay}&light=1`;
+            let url = `/api/route/routes?day=${selectedDay}&light=1&exclude_produce=1`;
             if (dateNorm) {
                 url += `&delivery_date=${encodeURIComponent(dateNorm)}`;
             }
@@ -532,7 +532,6 @@ export default function RoutesPage() {
                 color: color,
                 polygon: [],
                 stops,
-                totalStops: (r.stops || []).length,
             };
         });
     }, [routes, driverIdToColor]);

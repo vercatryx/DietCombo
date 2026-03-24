@@ -144,14 +144,18 @@ export async function GET(req: Request) {
         for (const s of allStopsCombined) if (s.client_id) clientIdSet.add(String(s.client_id));
         const clientIds = Array.from(clientIdSet);
 
-        const { data: clients } = clientIds.length > 0
-            ? await supabase
+        const CLIENTS_BATCH = 500;
+        const clientsArr: any[] = [];
+        for (let i = 0; i < clientIds.length; i += CLIENTS_BATCH) {
+            const batch = clientIds.slice(i, i + CLIENTS_BATCH);
+            const { data } = await supabase
                 .from('clients')
                 .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type')
-                .in('id', clientIds)
-            : { data: [] };
+                .in('id', batch);
+            if (data) clientsArr.push(...data);
+        }
 
-        const clientById = new Map((clients || []).map((c) => [c.id, {
+        const clientById = new Map(clientsArr.map((c) => [c.id, {
             ...c,
             first: c.first_name,
             last: c.last_name,
@@ -291,24 +295,29 @@ export async function GET(req: Request) {
         
         // Also fetch orders by client_id for fallback matching (for stops without order_id)
         if (clientIds.length > 0) {
-            // Get all orders - expand status filter to include more statuses
-            // Also check upcoming_orders table
-            const { data: orders } = await supabase
-                .from('orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number, proof_of_delivery_url')
-                .in('client_id', clientIds)
-                .not('status', 'eq', 'cancelled')
-                .order('created_at', { ascending: false });
+            const ordersFallback: any[] = [];
+            const upcomingOrdersFallback: any[] = [];
+            for (let i = 0; i < clientIds.length; i += ORDERS_BATCH) {
+                const batch = clientIds.slice(i, i + ORDERS_BATCH);
+                const { data: ob } = await supabase
+                    .from('orders')
+                    .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number, proof_of_delivery_url')
+                    .in('client_id', batch)
+                    .not('status', 'eq', 'cancelled')
+                    .order('created_at', { ascending: false });
+                if (ob) ordersFallback.push(...ob);
+                const { data: ub } = await supabase
+                    .from('upcoming_orders')
+                    .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
+                    .in('client_id', batch)
+                    .not('status', 'eq', 'cancelled')
+                    .order('created_at', { ascending: false });
+                if (ub) upcomingOrdersFallback.push(...ub);
+            }
+            const orders = ordersFallback;
+            const upcomingOrders = upcomingOrdersFallback;
             
-            // Also check upcoming_orders
-            const { data: upcomingOrders } = await supabase
-                .from('upcoming_orders')
-                .select('id, client_id, created_at, scheduled_delivery_date, actual_delivery_date, status, case_id, order_number')
-                .in('client_id', clientIds)
-                .not('status', 'eq', 'cancelled')
-                .order('created_at', { ascending: false });
-            
-            console.log(`[route/routes] Found ${orders?.length || 0} orders and ${upcomingOrders?.length || 0} upcoming orders for ${clientIds.length} clients (for fallback matching)`);
+            console.log(`[route/routes] Found ${orders.length} orders and ${upcomingOrders.length} upcoming orders for ${clientIds.length} clients (for fallback matching)`);
             
             // Use same source as /orders page: prefer orders table, then fill gaps from upcoming_orders
             const normalizeDate = (dateStr: string | null | undefined): string | null => {
@@ -491,13 +500,14 @@ export async function GET(req: Request) {
         const driverIdsForRoutes = drivers.map((d) => String(d.id));
         let routeOrderByDriver: Map<string, { client_id: string }[]> = new Map();
         if (normalizedDeliveryDate && driverIdsForRoutes.length > 0) {
-            const { data: routeOrderRows } = await supabase
-                .from("driver_route_order")
-                .select("driver_id, client_id, position")
-                .in("driver_id", driverIdsForRoutes)
-                .order("position", { ascending: true })
-                .order("client_id", { ascending: true });
-            for (const row of routeOrderRows || []) {
+            const routeOrderAllRows = await fetchAllRows((sb: any) =>
+                sb.from("driver_route_order")
+                    .select("driver_id, client_id, position")
+                    .in("driver_id", driverIdsForRoutes)
+                    .order("position", { ascending: true })
+                    .order("client_id", { ascending: true })
+            );
+            for (const row of routeOrderAllRows) {
                 const did = String(row.driver_id);
                 if (!routeOrderByDriver.has(did)) routeOrderByDriver.set(did, []);
                 routeOrderByDriver.get(did)!.push({ client_id: String(row.client_id) });
@@ -800,10 +810,11 @@ export async function GET(req: Request) {
         }
 
         // Fetch all clients with their assigned_driver_id for stop creation
-        const { data: allClientsWithDriver } = await supabase
-            .from('clients')
-            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
-            .order('id', { ascending: true });
+        const allClientsWithDriver = await fetchAllRows((sb: any) =>
+            sb.from('clients')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
+                .order('id', { ascending: true })
+        );
         
         // Create a map of client_id -> assigned_driver_id for quick lookup
         const clientDriverMap = new Map<string, string | null>();
