@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from './supabase-env';
-import { sendSms, formatDeliveryTimestamp } from './telnyx';
+import { sendSms } from './telnyx';
 import { getTodayInAppTz, APP_TIMEZONE } from './timezone';
 import { mealPlannerDateOnly, mealPlannerCutoffDate } from './meal-planner-utils';
 
@@ -21,32 +21,25 @@ function getSupabaseAdmin(): SupabaseClient {
 export async function identifyClientByPhone(
     supabase: SupabaseClient,
     phone: string,
-): Promise<{ id: string; full_name: string; service_type: string; phone_number: string; secondary_phone_number: string | null; address: string | null; apt: string | null; city: string | null; state: string | null; zip: string | null; parent_client_id: string | null; expiration_date: string | null; approved_meals_per_week: number | null }[]> {
-    const cleaned = phone.replace(/[^\d+]/g, '');
-    const digits = cleaned.replace(/\D/g, '');
-    const e164 = cleaned.startsWith('+') ? cleaned : `+1${digits}`;
-
-    const patterns = [e164, digits, digits.slice(-10)];
-    const seen = new Set<string>();
-    const results: any[] = [];
-
-    for (const p of patterns) {
-        if (!p || p.length < 10) continue;
-        const { data } = await supabase
-            .from('clients')
-            .select('id, full_name, service_type, phone_number, secondary_phone_number, address, apt, city, state, zip, parent_client_id, expiration_date, approved_meals_per_week')
-            .or(`phone_number.ilike.%${p}%,secondary_phone_number.ilike.%${p}%`);
-        if (data) {
-            for (const row of data) {
-                if (!seen.has(row.id)) {
-                    seen.add(row.id);
-                    results.push(row);
-                }
-            }
-        }
-        if (results.length > 0) break;
+): Promise<any[]> {
+    const digits = phone.replace(/\D/g, '');
+    const last10 = digits.slice(-10);
+    console.log('[identifyClientByPhone] input:', phone, '→ digits:', digits, '→ last10:', last10);
+    if (last10.length < 7) {
+        console.log('[identifyClientByPhone] Too few digits, returning empty');
+        return [];
     }
-    return results;
+
+    const fuzzy = '%' + last10.split('').join('%') + '%';
+    console.log('[identifyClientByPhone] fuzzy pattern:', fuzzy);
+
+    const { data, error } = await supabase
+        .from('clients')
+        .select('id, full_name, email, service_type, phone_number, secondary_phone_number, address, apt, city, state, zip, parent_client_id, expiration_date, approved_meals_per_week')
+        .or(`phone_number.ilike.${fuzzy},secondary_phone_number.ilike.${fuzzy}`);
+
+    console.log('[identifyClientByPhone] results:', data?.length ?? 0, 'error:', error?.message ?? 'none');
+    return data ?? [];
 }
 
 // ── Conversation history ────────────────────────────────────────────
@@ -90,74 +83,69 @@ async function pruneOldMessages(supabase: SupabaseClient, phone: string) {
         .lt('created_at', cutoff);
 }
 
-// ── Tool definitions for Claude ─────────────────────────────────────
+// ── Tool definitions ────────────────────────────────────────────────
 
 function defineBotTools(): Anthropic.Tool[] {
     return [
         {
             name: 'get_account_info',
-            description: 'Get the client\'s account information including name, address, phone numbers, service type, and all household members (dependents) on this account.',
-            input_schema: {
-                type: 'object' as const,
-                properties: {},
-                required: [],
-            },
+            description: 'Get full account details: name, email, phones, address, service type, household members, dislikes, notes, etc.',
+            input_schema: { type: 'object' as const, properties: {}, required: [] },
         },
         {
-            name: 'get_meal_plan_for_date',
-            description: 'Get the client\'s saved meal plan (items and quantities) for a specific delivery date. Returns what is currently ordered for that date.',
-            input_schema: {
-                type: 'object' as const,
-                properties: {
-                    date: { type: 'string', description: 'Delivery date in YYYY-MM-DD format' },
-                },
-                required: ['date'],
-            },
-        },
-        {
-            name: 'get_available_menu_for_date',
-            description: 'Get all available menu items for a specific delivery date. Use this to show the client what they can order.',
-            input_schema: {
-                type: 'object' as const,
-                properties: {
-                    date: { type: 'string', description: 'Delivery date in YYYY-MM-DD format' },
-                },
-                required: ['date'],
-            },
-        },
-        {
-            name: 'get_meal_plan_for_month',
-            description: 'Get the client\'s meal plan for an entire month, showing all delivery dates and what is ordered on each. Use when the client wants to see their schedule or upcoming deliveries.',
+            name: 'get_delivery_dates_overview',
+            description: 'Get all delivery dates for a month. For each date shows: editable status, whether the client has customized it (differs from default), and total items. Call this first when discussing meal plans.',
             input_schema: {
                 type: 'object' as const,
                 properties: {
                     year: { type: 'number', description: 'Year (e.g. 2026)' },
-                    month: { type: 'number', description: 'Month number 1-12 (e.g. 4 for April)' },
+                    month: { type: 'number', description: 'Month 1-12' },
                 },
                 required: ['year', 'month'],
             },
         },
         {
-            name: 'save_meal_plan_for_date',
-            description: 'Update the meal plan for a specific delivery date. Provide the complete list of items and quantities. The date must be today or in the future. Always confirm with the client before saving.',
+            name: 'get_day_details',
+            description: 'Get full details for a specific delivery date in one call. Returns: (1) the default order (what they get if unchanged), (2) the client\'s current order (if customized), (3) alternative items available that are not in the current order. Use this when the client picks a date to view or edit.',
             input_schema: {
                 type: 'object' as const,
                 properties: {
-                    date: { type: 'string', description: 'Delivery date in YYYY-MM-DD format' },
+                    date: { type: 'string', description: 'YYYY-MM-DD' },
+                },
+                required: ['date'],
+            },
+        },
+        {
+            name: 'save_meal_plan_for_date',
+            description: 'Save the meal plan for a date. Provide the COMPLETE list of items and quantities (items not listed will be set to 0). Always confirm with the client before calling this.',
+            input_schema: {
+                type: 'object' as const,
+                properties: {
+                    date: { type: 'string', description: 'YYYY-MM-DD' },
                     items: {
                         type: 'array',
-                        description: 'Complete list of items for this date',
                         items: {
                             type: 'object',
                             properties: {
-                                name: { type: 'string', description: 'Item name (must match an available menu item exactly)' },
-                                quantity: { type: 'number', description: 'Quantity to order (0 to remove)' },
+                                name: { type: 'string', description: 'Exact item name from the menu' },
+                                quantity: { type: 'number', description: 'Quantity (0 to remove)' },
                             },
                             required: ['name', 'quantity'],
                         },
                     },
                 },
                 required: ['date', 'items'],
+            },
+        },
+        {
+            name: 'get_delivery_history',
+            description: 'Get recent delivery history for the client (includes all household members). Shows delivery dates, times, and proof of delivery photo links.',
+            input_schema: {
+                type: 'object' as const,
+                properties: {
+                    limit: { type: 'number', description: 'Number of recent deliveries to return (default 5, max 10)' },
+                },
+                required: [],
             },
         },
     ];
@@ -174,100 +162,139 @@ async function executeTool(
     switch (toolName) {
         case 'get_account_info':
             return executeGetAccountInfo(supabase, clientId);
-        case 'get_meal_plan_for_date':
-            return executeGetMealPlanForDate(supabase, clientId, args.date);
-        case 'get_available_menu_for_date':
-            return executeGetAvailableMenu(supabase, clientId, args.date);
-        case 'get_meal_plan_for_month':
-            return executeGetMealPlanForMonth(supabase, clientId, args.year, args.month);
+        case 'get_delivery_dates_overview':
+            return executeGetDeliveryDatesOverview(supabase, clientId, args.year, args.month);
+        case 'get_day_details':
+            return executeGetDayDetails(supabase, clientId, args.date);
         case 'save_meal_plan_for_date':
             return executeSaveMealPlan(supabase, clientId, args.date, args.items);
+        case 'get_delivery_history':
+            return executeGetDeliveryHistory(supabase, clientId, args.limit);
         default:
             return JSON.stringify({ error: `Unknown tool: ${toolName}` });
     }
 }
 
 async function executeGetAccountInfo(supabase: SupabaseClient, clientId: string): Promise<string> {
-    const { data: client } = await supabase
-        .from('clients')
-        .select('id, full_name, phone_number, secondary_phone_number, address, apt, city, state, zip, service_type, approved_meals_per_week, expiration_date, parent_client_id')
-        .eq('id', clientId)
-        .single();
-
+    const { data: client } = await supabase.from('clients').select('*').eq('id', clientId).single();
     if (!client) return JSON.stringify({ error: 'Client not found' });
 
     const { data: dependents } = await supabase
         .from('clients')
-        .select('id, full_name, service_type')
+        .select('id, full_name, email, phone_number, service_type, dob')
         .eq('parent_client_id', clientId)
         .order('full_name');
 
-    const fullAddress = [client.address, client.apt, client.city, client.state, client.zip]
-        .filter(Boolean).join(', ');
+    const fullAddress = [client.address, client.apt, client.city, client.state, client.zip].filter(Boolean).join(', ');
 
     return JSON.stringify({
-        name: client.full_name,
-        phone: client.phone_number,
-        secondary_phone: client.secondary_phone_number,
-        address: fullAddress || 'Not on file',
-        service_type: client.service_type,
-        approved_meals_per_week: client.approved_meals_per_week,
-        expiration_date: client.expiration_date,
-        household_members: (dependents ?? []).map((d: any) => d.full_name),
+        name: client.full_name, first_name: client.first_name, last_name: client.last_name,
+        email: client.email, phone: client.phone_number, secondary_phone: client.secondary_phone_number,
+        address: fullAddress || 'Not on file', city: client.city, state: client.state, zip: client.zip, county: client.county,
+        service_type: client.service_type, expiration_date: client.expiration_date,
+        dob: client.dob, cin: client.cin,
+        dislikes: client.dislikes, notes: client.notes,
+        household_members: (dependents ?? []).map((d: any) => ({
+            name: d.full_name, email: d.email, phone: d.phone_number, service_type: d.service_type, dob: d.dob,
+        })),
     });
 }
 
-async function executeGetMealPlanForDate(supabase: SupabaseClient, clientId: string, date: string): Promise<string> {
+async function executeGetDeliveryDatesOverview(supabase: SupabaseClient, clientId: string, year: number, month: number): Promise<string> {
+    const today = getTodayInAppTz();
+    const { getMealPlanForMonth, getClientMealPlannerData } = await import('./actions');
+
+    const [plans, clientData] = await Promise.all([
+        getMealPlanForMonth(clientId, year, month),
+        getClientMealPlannerData(clientId, {
+            startDate: `${year}-${String(month).padStart(2, '0')}-01`,
+            endDate: `${year}-${String(month).padStart(2, '0')}-${new Date(year, month, 0).getDate()}`,
+        }),
+    ]);
+
+    const clientDatesSet = new Set(clientData.map(d => mealPlannerDateOnly(d.scheduledDeliveryDate)));
+
+    if (plans.length === 0) {
+        return JSON.stringify({ year, month, message: 'No deliveries scheduled this month.', dates: [] });
+    }
+
+    return JSON.stringify({
+        year, month,
+        dates: plans.map(p => {
+            const d = mealPlannerDateOnly(p.scheduledDeliveryDate);
+            const expired = p.expirationDate != null && p.expirationDate !== '' && p.expirationDate < today;
+            const isPast = d < today;
+            return {
+                date: d,
+                day: p.deliveryDay,
+                editable: !expired && !isPast,
+                locked_reason: isPast ? 'past' : expired ? 'expired' : null,
+                customized: clientDatesSet.has(d),
+                total_items: p.totalItems,
+            };
+        }),
+    });
+}
+
+async function executeGetDayDetails(supabase: SupabaseClient, clientId: string, date: string): Promise<string> {
     const dateOnly = mealPlannerDateOnly(date);
+    const today = getTodayInAppTz();
     const [yearStr, monthStr] = dateOnly.split('-');
     const year = parseInt(yearStr);
     const month = parseInt(monthStr);
 
-    const { getMealPlanForMonth } = await import('./actions');
-    const plans = await getMealPlanForMonth(clientId, year, month);
+    const { getMealPlanForMonth, getCombinedMenuItemsForDate, getClientMealPlannerData } = await import('./actions');
+
+    const [plans, allMenuItems, clientData] = await Promise.all([
+        getMealPlanForMonth(clientId, year, month),
+        getCombinedMenuItemsForDate(dateOnly, clientId),
+        getClientMealPlannerData(clientId, { startDate: dateOnly, endDate: dateOnly }),
+    ]);
+
+    // Get household size for meal limit calculation
+    const { data: deps } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', clientId);
+    const foodDeps = (deps ?? []).filter((d: any) => d.service_type === 'Food');
+    const householdSize = 1 + foodDeps.length;
+
     const dayPlan = plans.find(p => mealPlannerDateOnly(p.scheduledDeliveryDate) === dateOnly);
 
     if (!dayPlan) {
-        return JSON.stringify({ date: dateOnly, message: 'No delivery scheduled for this date', items: [] });
+        return JSON.stringify({ date: dateOnly, error: 'No delivery scheduled for this date.' });
     }
+
+    const expired = dayPlan.expirationDate != null && dayPlan.expirationDate !== '' && dayPlan.expirationDate < today;
+    const isPast = dateOnly < today;
+    const editable = !expired && !isPast;
+
+    const defaultOrder = allMenuItems.map(i => ({ name: i.name, default_quantity: i.quantity }));
+    const currentOrder = dayPlan.items.map(i => ({ name: i.name, quantity: i.quantity, value: i.value ?? 1 }));
+
+    const clientSaved = clientData.find(d => mealPlannerDateOnly(d.scheduledDeliveryDate) === dateOnly);
+    const customized = !!clientSaved;
+
+    const currentByName = new Map(currentOrder.map(i => [i.name.trim().toLowerCase(), i.quantity]));
+    const alternatives = allMenuItems
+        .filter(i => {
+            const qty = currentByName.get(i.name.trim().toLowerCase());
+            return qty === undefined || qty === 0;
+        })
+        .map(i => ({ name: i.name, default_quantity: i.quantity }));
+
+    const perDateLimit = (dayPlan.expectedTotalMeals ?? 0) * householdSize;
+    const currentTotal = currentOrder.reduce((sum, i) => sum + (i.value ?? 1) * Math.max(0, i.quantity), 0);
 
     return JSON.stringify({
         date: dateOnly,
-        delivery_day: dayPlan.deliveryDay,
-        total_items: dayPlan.totalItems,
-        expected_total_meals: dayPlan.expectedTotalMeals,
-        items: dayPlan.items.map(i => ({ name: i.name, quantity: i.quantity })),
-    });
-}
-
-async function executeGetAvailableMenu(supabase: SupabaseClient, clientId: string, date: string): Promise<string> {
-    const dateOnly = mealPlannerDateOnly(date);
-    const { getCombinedMenuItemsForDate } = await import('./actions');
-    const items = await getCombinedMenuItemsForDate(dateOnly, clientId);
-
-    return JSON.stringify({
-        date: dateOnly,
-        available_items: items.map(i => ({ name: i.name, default_quantity: i.quantity })),
-    });
-}
-
-async function executeGetMealPlanForMonth(supabase: SupabaseClient, clientId: string, year: number, month: number): Promise<string> {
-    const { getMealPlanForMonth } = await import('./actions');
-    const plans = await getMealPlanForMonth(clientId, year, month);
-
-    if (plans.length === 0) {
-        return JSON.stringify({ year, month, message: 'No deliveries scheduled this month', dates: [] });
-    }
-
-    return JSON.stringify({
-        year,
-        month,
-        dates: plans.map(p => ({
-            date: p.scheduledDeliveryDate,
-            day: p.deliveryDay,
-            total_items: p.totalItems,
-            items: p.items.map(i => ({ name: i.name, quantity: i.quantity })),
-        })),
+        editable,
+        locked_reason: isPast ? 'past' : expired ? `expired on ${dayPlan.expirationDate}` : null,
+        customized,
+        meal_limit_for_day: perDateLimit,
+        current_meal_total: currentTotal,
+        household_size: householdSize,
+        note: perDateLimit > 0 ? `This household has ${householdSize} Food member(s). The limit for this day is ${perDateLimit} meals. Each item counts as its "value" toward the total (most items = 1).` : undefined,
+        default_order: defaultOrder,
+        current_order: currentOrder,
+        alternative_items: alternatives,
     });
 }
 
@@ -281,208 +308,254 @@ async function executeSaveMealPlan(
     const today = getTodayInAppTz();
     const cutoff = mealPlannerCutoffDate();
 
-    if (dateOnly < today) {
-        return JSON.stringify({ success: false, error: 'Cannot edit meal plans for past dates.' });
-    }
-    if (dateOnly < cutoff) {
-        return JSON.stringify({ success: false, error: 'This date is past the editing cutoff.' });
+    if (dateOnly < today) return JSON.stringify({ success: false, error: 'Cannot edit past dates.' });
+    if (dateOnly < cutoff) return JSON.stringify({ success: false, error: 'Past the editing cutoff.' });
+
+    const { getCombinedMenuItemsForDate, getMealPlannerCustomItems, saveClientMealPlannerData } = await import('./actions');
+
+    const { expirationDate } = await getMealPlannerCustomItems(dateOnly, null);
+    if (expirationDate && expirationDate < today) {
+        return JSON.stringify({ success: false, error: `Editing expired on ${expirationDate}.` });
     }
 
-    const { getCombinedMenuItemsForDate } = await import('./actions');
     const availableItems = await getCombinedMenuItemsForDate(dateOnly, clientId);
     const availableByName = new Map(availableItems.map(i => [i.name.trim().toLowerCase(), i]));
 
-    const mappedItems = items.map((item, idx) => {
-        const match = availableByName.get(item.name.trim().toLowerCase());
-        return {
-            id: match?.id ?? `sms-${idx}`,
-            name: match?.name ?? item.name,
-            quantity: Math.max(0, item.quantity),
-            value: match?.value ?? null,
-        };
-    });
-
     const unmatched = items.filter(i => !availableByName.has(i.name.trim().toLowerCase()));
     if (unmatched.length > 0) {
+        return JSON.stringify({ success: false, error: `Not on the menu: ${unmatched.map(i => i.name).join(', ')}` });
+    }
+
+    const mappedItems = items.map((item, idx) => {
+        const match = availableByName.get(item.name.trim().toLowerCase());
+        return { id: match?.id ?? `sms-${idx}`, name: match?.name ?? item.name, quantity: Math.max(0, item.quantity), value: match?.value ?? null };
+    });
+
+    // Enforce meal limit
+    const { data: deps } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', clientId);
+    const foodDeps = (deps ?? []).filter((d: any) => d.service_type === 'Food');
+    const householdSize = 1 + foodDeps.length;
+
+    const { getMealPlanForMonth: getMPM } = await import('./actions');
+    const [y, m] = dateOnly.split('-').map(Number);
+    const plans = await getMPM(clientId, y, m);
+    const dayPlan = plans.find(p => mealPlannerDateOnly(p.scheduledDeliveryDate) === dateOnly);
+    const perDateLimit = ((dayPlan?.expectedTotalMeals ?? 0) * householdSize);
+    const newTotal = mappedItems.reduce((sum, i) => sum + ((i.value ?? 1) * Math.max(0, i.quantity)), 0);
+
+    if (perDateLimit > 0 && newTotal !== perDateLimit) {
+        const diff = newTotal - perDateLimit;
+        const direction = diff > 0 ? `over by ${diff}` : `under by ${Math.abs(diff)}`;
         return JSON.stringify({
             success: false,
-            error: `These items are not on the menu for ${dateOnly}: ${unmatched.map(i => i.name).join(', ')}. Use get_available_menu_for_date to see valid items.`,
+            error: `Order total is ${newTotal} but must be exactly ${perDateLimit} (${householdSize} people x ${dayPlan?.expectedTotalMeals ?? 0} per day). Currently ${direction}. Please adjust quantities.`,
         });
     }
 
-    const { saveClientMealPlannerData } = await import('./actions');
     const result = await saveClientMealPlannerData(clientId, dateOnly, mappedItems);
+    if (!result.ok) return JSON.stringify({ success: false, error: result.error || 'Failed to save.' });
 
-    if (!result.ok) {
-        return JSON.stringify({ success: false, error: result.error || 'Failed to save.' });
+    return JSON.stringify({ success: true, date: dateOnly, saved_items: mappedItems.map(i => ({ name: i.name, quantity: i.quantity })), meal_total: newTotal, meal_limit: perDateLimit });
+}
+
+async function executeGetDeliveryHistory(supabase: SupabaseClient, clientId: string, limit?: number): Promise<string> {
+    const count = Math.min(Math.max(limit ?? 5, 1), 10);
+    const today = getTodayInAppTz();
+
+    const { data: deps } = await supabase.from('clients').select('id').eq('parent_client_id', clientId);
+    const allIds = [clientId, ...(deps ?? []).map((d: any) => d.id)];
+
+    // Get orders with scheduled dates in the past (delivered) — group by scheduled date to avoid duplicates from household members
+    const { data: orders, error } = await supabase
+        .from('orders')
+        .select('id, client_id, scheduled_delivery_date, actual_delivery_date, proof_of_delivery_url, status, order_number')
+        .in('client_id', allIds)
+        .lte('scheduled_delivery_date', today + 'T23:59:59')
+        .order('scheduled_delivery_date', { ascending: false })
+        .limit(count * 3); // fetch extra since multiple household members create separate orders per date
+
+    if (error) return JSON.stringify({ error: error.message });
+    if (!orders || orders.length === 0) return JSON.stringify({ deliveries: [], message: 'No delivery history found.' });
+
+    // Group by scheduled date — household orders on the same date = one delivery
+    const byDate = new Map<string, any>();
+    for (const o of orders) {
+        const dateKey = o.scheduled_delivery_date?.slice(0, 10) ?? '';
+        if (!dateKey) continue;
+        const existing = byDate.get(dateKey);
+        if (!existing) {
+            byDate.set(dateKey, o);
+        } else if (!existing.proof_of_delivery_url && o.proof_of_delivery_url) {
+            byDate.set(dateKey, o);
+        }
     }
 
-    return JSON.stringify({
-        success: true,
-        date: dateOnly,
-        saved_items: mappedItems.map(i => ({ name: i.name, quantity: i.quantity })),
+    const deliveries = Array.from(byDate.values()).slice(0, count).map((o: any) => {
+        const deliveredAt = o.actual_delivery_date ? new Date(o.actual_delivery_date) : null;
+        const scheduledDate = o.scheduled_delivery_date ? new Date(o.scheduled_delivery_date + (o.scheduled_delivery_date.includes('T') ? '' : 'T12:00:00')) : null;
+
+        const deliveryTime = deliveredAt
+            ? new Intl.DateTimeFormat('en-US', {
+                timeZone: APP_TIMEZONE, weekday: 'short', month: 'short', day: 'numeric',
+                hour: 'numeric', minute: '2-digit', hour12: true,
+            }).format(deliveredAt)
+            : null;
+
+        const scheduledFormatted = scheduledDate
+            ? new Intl.DateTimeFormat('en-US', {
+                timeZone: APP_TIMEZONE, weekday: 'short', month: 'short', day: 'numeric',
+            }).format(scheduledDate)
+            : o.scheduled_delivery_date?.slice(0, 10) ?? 'Unknown';
+
+        return {
+            scheduled_date: scheduledFormatted,
+            delivered_at: deliveryTime,
+            proof_url: o.proof_of_delivery_url || null,
+        };
     });
+
+    return JSON.stringify({ deliveries });
 }
 
 // ── System prompt ───────────────────────────────────────────────────
 
 function buildSystemPrompt(
-    client: { full_name: string; service_type: string; approved_meals_per_week: number | null; expiration_date: string | null },
+    client: { full_name: string; email: string | null; service_type: string; approved_meals_per_week: number | null; expiration_date: string | null },
     householdCount: number,
 ): string {
     const now = new Date();
     const timestamp = new Intl.DateTimeFormat('en-US', {
-        timeZone: APP_TIMEZONE,
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
+        timeZone: APP_TIMEZONE, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
     }).format(now);
 
-    return `You are The Diet Fantasy's SMS assistant. You help clients manage their meal deliveries via text message.
+    const mealsPerPerson = client.approved_meals_per_week != null ? Math.floor(client.approved_meals_per_week / householdCount) : null;
 
-ABOUT THE SERVICE:
-The Diet Fantasy is a medically tailored meal delivery service. Clients receive food deliveries on scheduled dates. Each delivery date has a menu of available items and the client chooses quantities for each item.
+    return `You are The Diet Fantasy's SMS assistant. Keep all responses SHORT — this is SMS and costs money per message.
 
-CLIENT CONTEXT:
-- Name: ${client.full_name}
-- Service type: ${client.service_type}
-- Approved meals per week: ${client.approved_meals_per_week ?? 'Not set'}
-- Account expiration: ${client.expiration_date ?? 'None'}
-- Household size: ${householdCount} ${householdCount === 1 ? 'person' : 'people'}
-- Current date/time: ${timestamp}
+CLIENT: ${client.full_name} | ${client.service_type} | Household: ${householdCount} people | ${timestamp}
+MEAL LIMITS: ${client.approved_meals_per_week ?? '?'} meals/week total for the household (${householdCount} Food member(s))${mealsPerPerson ? ` — about ${mealsPerPerson} per person per week` : ''}.
+The get_day_details tool returns meal_limit_for_day which is the EXACT daily limit for the household. This accounts for household size already.
 
-CAPABILITIES:
-- View account information (name, address, phones, household members)
-- View meal plan for any delivery date (what's currently ordered)
-- View available menu items for a delivery date
-- View the full month schedule
-- Edit meal plans for future delivery dates (change item quantities)
+YOU OFFER THREE THINGS:
+1. Account Info — view account details (read-only)
+2. Meal Plan — view and edit meal orders for delivery dates
+3. Delivery History — view recent deliveries with proof of delivery photos
+
+DELIVERY HISTORY FLOW:
+- When the client asks about deliveries or proof of delivery, call get_delivery_history.
+- Show each delivery on its own line with: scheduled date, delivery time (if available), and proof link.
+- If delivered_at is available: "Wed, Mar 19 — Delivered at 5:32 PM — Proof: [link]"
+- If delivered_at is null but proof exists: "Wed, Mar 19 — Proof: [link]"
+- If no proof and no delivery time: "Wed, Mar 19 — Delivered (no proof photo on file — this can happen due to poor internet connection at the delivery location)"
+- Only mention the internet connection reason once, not for every entry.
+
+MEAL PLAN FLOW:
+1. Greet the client and ask: account info, meal plan, or delivery history?
+2. For meal plans, call get_delivery_dates_overview for the relevant month.
+3. Present dates. For each date show ONLY:
+   - The date in friendly format (e.g. "Thu, Apr 16")
+   - EDITABLE or LOCKED
+   - "edited" if they customized it, nothing extra if not
+   - Do NOT show item counts in the date list
+4. When the client picks a date, call get_day_details ONCE. Show them:
+   a) Their CURRENT ORDER (items with qty > 0). If not customized, label it "Default order".
+   b) The MEAL LIMIT for the day from meal_limit_for_day. Explain: "Your household can order up to X items for this day (Y people x Z per person)."
+   c) Their current total from current_meal_total vs the limit.
+   d) AVAILABLE ALTERNATIVES — other items they can swap in (from alternative_items). List these separately under "Other available items:" with each item on its own line.
+   e) Tell them: to change, say the item name and new quantity (e.g. "pizza pita 2, acai 0").
+5. When they give changes, calculate the new total BEFORE presenting. Each item's cost toward the limit is its "value" (most items = 1).
+   - The total MUST EXACTLY EQUAL meal_limit_for_day. Not over, not under.
+   - If the new total DOES NOT equal meal_limit_for_day: DO NOT offer to save. Instead:
+     a) Say the total is X but needs to be exactly Y (over by Z / under by Z).
+     b) Show the FULL updated order (all items with quantities) so they can see everything.
+     c) Explain they can change the quantity of ANY item to hit the target. Give an example like: "To adjust, change an item quantity, e.g. 'tuna wrap 0' or 'cheesecake 3'. Just tell me which items to change."
+   - If the new total EXACTLY equals the limit: show the updated order and ask to confirm.
+6. Only after the total is within the limit AND the client confirms, call save_meal_plan_for_date with the COMPLETE item list.
+   - The backend will also enforce the limit and reject saves that exceed it.
 
 RULES:
-1. Be concise. This is SMS — keep responses short and clear. Use line breaks, not long paragraphs.
-2. When showing menus or orders, use a simple list format (item name: quantity).
-3. Before saving changes, always confirm with the client what you're about to save.
-4. You can only edit meal plans for today or future dates, never past dates.
-5. When editing, always fetch the current plan first, then the available menu, so you know valid item names.
-6. Be professional and friendly. Sign off as "The Diet Fantasy" only on the first message.
-7. If the client asks something outside your capabilities, let them know and suggest they call (845) 478-6605 for further assistance.
-8. Dates should be shown in a friendly format like "Monday, April 7" not "2026-04-07".`;
+- NEVER use emojis. Plain text only.
+- Be extremely concise. No filler text. Use short lists.
+- Show dates as "Thu, Apr 16" not "2026-04-16".
+- Only dates from get_delivery_dates_overview are valid delivery days.
+- Only dates marked editable can be changed. If locked, say so briefly.
+- NEVER allow saving an order unless the total EXACTLY matches meal_limit_for_day. Always check totals first.
+- Confirm once before saving. When the client says "yes", "confirm", "save", or similar affirmative — IMMEDIATELY call save_meal_plan_for_date. Do NOT ask again.
+- For anything outside your capabilities: "Please call (845) 478-6605."
+- First message only: sign off with "— The Diet Fantasy"
+- At the end of every conversation (after saving, or when done helping), remind them: "You can also make these changes yourself at http://customer.thedietfantasy.com/ — log in with your email (${client.email ?? 'on file'})."`;
 }
 
 // ── Main conversation handler ───────────────────────────────────────
 
 export async function handleInboundSms(phone: string, messageText: string): Promise<void> {
     const supabase = getSupabaseAdmin();
-
     const clients = await identifyClientByPhone(supabase, phone);
 
     if (clients.length === 0) {
         await sendSms(
             phone,
             'Thank you for your message. This number is not able to receive replies. ' +
-            'For any questions or support, please call us at (845) 478-6605. ' +
-            '— The Diet Fantasy',
+            'For any questions or support, please call us at (845) 478-6605. — The Diet Fantasy',
         );
         return;
     }
 
-    // Use first matched Food client; filter to Food service type
-    const foodClients = clients.filter(c => c.service_type === 'Food');
+    const foodClients = clients.filter((c: any) => c.service_type === 'Food');
     const client = foodClients[0] ?? clients[0];
-
     if (!client) {
         await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.');
         return;
     }
 
     const clientId = client.id;
-
     await pruneOldMessages(supabase, phone);
     await saveMessage(supabase, phone, clientId, 'user', messageText);
 
     const history = await loadHistory(supabase, phone);
 
-    const { data: dependents } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('parent_client_id', clientId);
-    const householdCount = 1 + (dependents?.length ?? 0);
+    const { data: dependents } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', clientId);
+    const foodDependents = (dependents ?? []).filter((d: any) => d.service_type === 'Food');
+    const householdCount = 1 + foodDependents.length;
 
     const systemPrompt = buildSystemPrompt(
-        {
-            full_name: client.full_name,
-            service_type: client.service_type,
-            approved_meals_per_week: client.approved_meals_per_week,
-            expiration_date: client.expiration_date,
-        },
+        { full_name: client.full_name, email: client.email, service_type: client.service_type, approved_meals_per_week: client.approved_meals_per_week, expiration_date: client.expiration_date },
         householdCount,
     );
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const tools = defineBotTools();
-
-    const messages: Anthropic.MessageParam[] = history.map(h => ({
-        role: h.role,
-        content: h.content,
-    }));
+    const messages: Anthropic.MessageParam[] = history.map(h => ({ role: h.role, content: h.content }));
 
     let response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        system: systemPrompt,
-        tools,
-        messages,
+        model: 'claude-sonnet-4-20250514', max_tokens: 1024, system: systemPrompt, tools, messages,
     });
 
-    while (response.stop_reason === 'tool_use') {
-        const toolBlocks = response.content.filter(
-            (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
-        );
-
+    let iterations = 0;
+    while (response.stop_reason === 'tool_use' && iterations < 10) {
+        iterations++;
+        const toolBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const block of toolBlocks) {
-            console.log(`[SMS Bot] Tool call: ${block.name}`, JSON.stringify(block.input).slice(0, 200));
+            console.log(`[SMS Bot] Tool: ${block.name}`, JSON.stringify(block.input).slice(0, 200));
             const result = await executeTool(supabase, clientId, block.name, block.input);
-            console.log(`[SMS Bot] Tool result (${block.name}):`, result.slice(0, 300));
-            toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: result,
-            });
+            console.log(`[SMS Bot] Result (${block.name}):`, result.slice(0, 300));
+            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
         }
-
         messages.push({ role: 'assistant', content: response.content });
         messages.push({ role: 'user', content: toolResults });
-
         response = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 1024,
-            system: systemPrompt,
-            tools,
-            messages,
+            model: 'claude-sonnet-4-20250514', max_tokens: 1024, system: systemPrompt, tools, messages,
         });
     }
 
-    const textBlocks = response.content.filter(
-        (b): b is Anthropic.TextBlock => b.type === 'text',
-    );
+    const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
     const replyText = textBlocks.map(b => b.text).join('\n').trim();
+    if (!replyText) { console.warn('[SMS Bot] Empty response'); return; }
 
-    if (!replyText) {
-        console.warn('[SMS Bot] Claude returned empty response');
-        return;
-    }
-
-    const truncated = replyText.length > MAX_SMS_LENGTH
-        ? replyText.slice(0, MAX_SMS_LENGTH - 3) + '...'
-        : replyText;
-
+    const truncated = replyText.length > MAX_SMS_LENGTH ? replyText.slice(0, MAX_SMS_LENGTH - 3) + '...' : replyText;
     await saveMessage(supabase, phone, clientId, 'assistant', truncated);
     await sendSms(phone, truncated);
-
-    console.log(`[SMS Bot] Replied to ${phone} (client: ${client.full_name}): ${truncated.slice(0, 100)}...`);
+    console.log(`[SMS Bot] Replied to ${phone} (${client.full_name}): ${truncated.slice(0, 100)}...`);
 }
