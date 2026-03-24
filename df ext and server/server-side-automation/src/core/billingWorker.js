@@ -399,7 +399,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
         req.status = 'processing';
         req.message = 'Starting...';
         emitEvent('queue', fullRequests);
-        emitSlotStatus('Starting', req.name);
+        emitSlotStatus('Starting client', req.name);
         emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Processing ${req.name} (${i + 1}/${toProcess.length})` });
 
         // API Status Tracking
@@ -448,7 +448,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                 try {
                     // --- Login Check ---
                     if (!(await isLoggedIn())) {
-                        emitSlotStatus('Login', req.name);
+                        emitSlotStatus('UniteUs login', req.name);
                         emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Logging in...` });
                         const authOpts = (options.page != null && options.context != null) ? { page, context: options.context } : {};
                         const loginOk = await performLoginSequence(EMAIL, PASSWORD, authOpts);
@@ -456,6 +456,9 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                             throw new Error('[AUTH] Login failed');
                         }
                         await sleep(2000);
+                        emitSlotStatus('Session ready', req.name);
+                    } else {
+                        emitSlotStatus('Already signed in', req.name);
                     }
 
                     // --- Navigation and Refinement ---
@@ -469,11 +472,12 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     }
 
                     const attemptLabel = `(S${restartAttempt + 1}/R${refreshAttempt + 1})`;
-                    emitSlotStatus('Navigating', req.name);
+                    emitSlotStatus(`Open client URL ${attemptLabel}`, req.name);
                     emitEvent('log', { message: `Navigating to ${req.url} ${attemptLabel}...` });
                     await page.goto(req.url, { waitUntil: 'networkidle', timeout: 60000 });
                     await sleep(3000);
 
+                    emitSlotStatus('Read auth table & limits', req.name);
                     // Scrape Auth Info for Clamping
                     const authInfo = await fetchAuthDetailsFromPage(page);
                     emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}[Auth] Scraped from page: authorizedDates="${authInfo.authorizedDates || '—'}", dateOpened="${authInfo.dateOpened || '—'}", authorizedAmount="${authInfo.authorizedAmount || '—'}"` });
@@ -494,6 +498,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     if (req.clientId) {
                         const amountNum = parseFloat(String(authInfo.authorizedAmount || '').replace(/[$,]/g, '')) || null;
                         if (amountNum != null && expirationISO) {
+                            emitSlotStatus('Push auth to app API', req.name);
                             await updateClientAuthorization(req.clientId, amountNum, expirationISO, apiConfig, emitEvent, slotLabel);
                         } else {
                             const reason = !amountNum && !expirationISO ? 'missing amount and expiration' : !amountNum ? 'missing authorized amount' : 'missing expiration date';
@@ -504,6 +509,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     }
 
                     if (dateOpened || authEnd) {
+                        emitSlotStatus('Clamp dates to auth window', req.name);
                         const currentStart = new Date(req.start + 'T00:00:00Z');
                         const currentEnd = new Date(req.end + 'T00:00:00Z');
                         let finalStart = currentStart;
@@ -542,6 +548,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
 
                     // --- Proof URL Fallback ---
                     if (!req.proofURL) {
+                        emitSlotStatus('Build proof / attestation PDF', req.name);
                         const clientDetails = await fetchClientDetailsFromPage(page);
                         req.proofURL = await generateProofUrl(clientDetails, req, apiConfig);
 
@@ -556,7 +563,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                         emitEvent('log', { message: `Generated proof URL: ${req.fileName}` });
                     }
 
-                    emitSlotStatus('Billing', req.name);
+                    emitSlotStatus('Fill billing form & submit', req.name);
                     const result = await executeBillingOnPage(page, req);
 
                     // --- Handle Result ---
@@ -616,6 +623,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     }
                     lastRefreshError = e.message;
                     const { step, type, details } = parseBillingError(e.message);
+                    emitSlotStatus(`Retry: refresh ${refreshAttempt} (${step})`, req.name);
                     emitEvent('log', { message: `Refresh attempt ${refreshAttempt} failed | Step: ${step} | Type: ${type} | ${details}`, type: 'warning' });
                     await page.reload({ waitUntil: 'networkidle' }).catch(() => { });
                     await sleep(2000);
@@ -626,6 +634,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                 restartAttempt++;
                 const { step, type } = parseBillingError(lastRefreshError || '');
                 if (restartAttempt < MAX_RESTARTS) {
+                    emitSlotStatus(`New browser session ${restartAttempt + 1}/${MAX_RESTARTS}`, req.name);
                     emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Session failed (last failure: Step: ${step}, Type: ${type}). Restarting browser (Attempt ${restartAttempt + 1}/${MAX_RESTARTS})...`, type: 'warning' });
                     page = options.getPageOrRestart ? await options.getPageOrRestart() : await restartBrowser();
                     setupPageLogging(page);

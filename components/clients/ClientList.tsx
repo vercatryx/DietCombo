@@ -2099,48 +2099,48 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                         )}
                     </span>
 
+                    {/* Navigator column (all views, including needs-attention) */}
+                    <span style={{ minWidth: '160px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                        <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('navigator')}>
+                            Navigator {getSortIcon('navigator')}
+                        </span>
+                        <Filter
+                            size={14}
+                            style={{ cursor: 'pointer', opacity: navigatorFilter ? 1 : 0.5, color: navigatorFilter ? 'var(--color-primary)' : 'inherit', filter: navigatorFilter ? 'drop-shadow(0 0 3px var(--color-primary))' : 'none' }}
+                            onClick={(e) => { e.stopPropagation(); setOpenFilterMenu(openFilterMenu === 'navigator' ? null : 'navigator'); }}
+                        />
+                        {openFilterMenu === 'navigator' && (
+                            <div style={{
+                                position: 'absolute', top: '100%', left: 0, marginTop: '4px',
+                                backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
+                                zIndex: 1000, minWidth: '200px', maxHeight: '300px', overflowY: 'auto'
+                            }}>
+                                <div onClick={() => { setNavigatorFilter(null); setOpenFilterMenu(null); }}
+                                    style={{
+                                        padding: '8px 12px', cursor: 'pointer',
+                                        backgroundColor: !navigatorFilter ? 'var(--bg-surface-hover)' : 'transparent',
+                                        fontWeight: !navigatorFilter ? 600 : 400
+                                    }}>
+                                    All Navigators
+                                </div>
+                                {navigators.map(navigator => (
+                                    <div key={navigator.id}
+                                        onClick={() => { setNavigatorFilter(navigator.id); setOpenFilterMenu(null); }}
+                                        style={{
+                                            padding: '8px 12px', cursor: 'pointer',
+                                            backgroundColor: navigatorFilter === navigator.id ? 'var(--bg-surface-hover)' : 'transparent',
+                                            fontWeight: navigatorFilter === navigator.id ? 600 : 400
+                                        }}>
+                                        {navigator.name}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </span>
+
                     {currentView !== 'needs-attention' && (
                         <>
-                            {/* Navigator column with filter */}
-                            <span style={{ minWidth: '160px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
-                                <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('navigator')}>
-                                    Navigator {getSortIcon('navigator')}
-                                </span>
-                                <Filter
-                                    size={14}
-                                    style={{ cursor: 'pointer', opacity: navigatorFilter ? 1 : 0.5, color: navigatorFilter ? 'var(--color-primary)' : 'inherit', filter: navigatorFilter ? 'drop-shadow(0 0 3px var(--color-primary))' : 'none' }}
-                                    onClick={(e) => { e.stopPropagation(); setOpenFilterMenu(openFilterMenu === 'navigator' ? null : 'navigator'); }}
-                                />
-                                {openFilterMenu === 'navigator' && (
-                                    <div style={{
-                                        position: 'absolute', top: '100%', left: 0, marginTop: '4px',
-                                        backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)',
-                                        borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
-                                        zIndex: 1000, minWidth: '200px', maxHeight: '300px', overflowY: 'auto'
-                                    }}>
-                                        <div onClick={() => { setNavigatorFilter(null); setOpenFilterMenu(null); }}
-                                            style={{
-                                                padding: '8px 12px', cursor: 'pointer',
-                                                backgroundColor: !navigatorFilter ? 'var(--bg-surface-hover)' : 'transparent',
-                                                fontWeight: !navigatorFilter ? 600 : 400
-                                            }}>
-                                            All Navigators
-                                        </div>
-                                        {navigators.map(navigator => (
-                                            <div key={navigator.id}
-                                                onClick={() => { setNavigatorFilter(navigator.id); setOpenFilterMenu(null); }}
-                                                style={{
-                                                    padding: '8px 12px', cursor: 'pointer',
-                                                    backgroundColor: navigatorFilter === navigator.id ? 'var(--bg-surface-hover)' : 'transparent',
-                                                    fontWeight: navigatorFilter === navigator.id ? 600 : 400
-                                                }}>
-                                                {navigator.name}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </span>
-
                             {/* Screening column with filter */}
                             <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
                                 <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('screening')}>
@@ -2286,9 +2286,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     </span>
                                 )}
                             </span>
+                            <span title={isDependent ? '' : getNavigatorName(client.navigatorId)} style={{ minWidth: '160px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getNavigatorName(client.navigatorId)}</span>
                             {currentView !== 'needs-attention' && (
                                 <>
-                                    <span title={isDependent ? '' : getNavigatorName(client.navigatorId)} style={{ minWidth: '160px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getNavigatorName(client.navigatorId)}</span>
                                     <span style={{ minWidth: '140px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getScreeningStatus(client)}</span>
                                     <span title={isDependent ? undefined : (client.dislikes || undefined)} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
                                         {isDependent ? '-' : (client.dislikes || '-')}

@@ -2,8 +2,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const XLSX = require('xlsx');
 const { launchBrowser, launchBrowserInstance, closeAllBrowserInstances } = require('./core/browser');
 const { billingWorker, fetchRequestsFromApi } = require('./core/billingWorker');
+const envSettings = require('./envSettings');
+
+// Settings UI persists CONCURRENT_BROWSERS / HEADLESS to the same .env as DOTENV_PATH (see electron-main).
 
 // Load .env from DOTENV_PATH (packaged app) or project root
 const dotenvPath = process.env.DOTENV_PATH || path.join(__dirname, '..', '.env');
@@ -43,6 +47,14 @@ function eventsHandler(req, res) {
         res.write(`event: queue\ndata: ${JSON.stringify(currentRequests)}\n\n`);
     }
 
+    // Idle slot strip: configured browser slots from .env
+    try {
+        const s = envSettings.readSettings();
+        res.write(`event: slotCount\ndata: ${JSON.stringify({ count: s.concurrentBrowsers })}\n\n`);
+    } catch (e) {
+        console.warn('[SSE] slotCount init:', e.message);
+    }
+
     req.on('close', () => {
         clients = clients.filter(c => c.id !== clientId);
     });
@@ -59,6 +71,79 @@ app.get('/events', eventsHandler);
 // State
 let isRunning = false;
 let currentRequests = null;
+
+// --- Settings (.env), open folder, Excel export ---
+app.get('/api/settings', (req, res) => {
+    try {
+        const s = envSettings.readSettings();
+        res.json({
+            ...s,
+            isRunning,
+            minConcurrent: envSettings.MIN_CONCURRENT,
+            maxConcurrent: envSettings.MAX_CONCURRENT
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/settings', (req, res) => {
+    if (isRunning) {
+        return res.status(409).json({ error: 'Automation is running; wait for it to finish before changing settings.' });
+    }
+    const body = req.body || {};
+    const hasConcurrent = body.concurrentBrowsers != null;
+    const hasHeadless = body.headless != null;
+    if (!hasConcurrent && !hasHeadless) {
+        return res.status(400).json({ error: 'Provide concurrentBrowsers and/or headless' });
+    }
+    try {
+        const updates = {};
+        if (hasConcurrent) updates.concurrentBrowsers = body.concurrentBrowsers;
+        if (hasHeadless) updates.headless = body.headless;
+        const saved = envSettings.writeSettings(updates);
+        res.json({ ...saved, isRunning });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/open-env-folder', (req, res) => {
+    try {
+        envSettings.openEnvFolder();
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/export-queue.xlsx', (req, res) => {
+    const queue = Array.isArray(currentRequests) ? currentRequests : [];
+    if (queue.length === 0) {
+        return res.status(400).json({ error: 'No queue loaded. Download clients from the server first.' });
+    }
+    const rows = queue.map((r) => ({
+        'Client name': r.name || '',
+        Id: r.id != null ? String(r.id) : r.orderID != null ? String(r.orderID) : '',
+        ClientId: r.clientId != null ? String(r.clientId) : '',
+        Start: r.start || r.date || '',
+        End: r.end || r.endDate || '',
+        Status: r.status || 'pending',
+        Message: r.message || '',
+        'Order numbers': Array.isArray(r.orderNumbers) ? r.orderNumbers.join(', ') : '',
+        URL: r.url || ''
+    }));
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Queue');
+    const buf = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="billing-queue-${stamp}.xlsx"`);
+    res.send(buf);
+});
 
 // Routes
 app.post('/fetch-requests', async (req, res) => {
@@ -201,6 +286,7 @@ app.post('/process-billing', async (req, res) => {
     res.json({ message: 'Automation started', source: source });
 
     isRunning = true;
+    broadcast('automationState', { isRunning: true });
     broadcast('log', { message: `--- Starting Automation Run (${source}) ---`, type: 'info' });
 
     // API config for update-status: used for 'api' source and for 'queue' when apiBaseUrl (+ optional apiKey) provided
@@ -269,6 +355,7 @@ app.post('/process-billing', async (req, res) => {
             }
         } finally {
             isRunning = false;
+            broadcast('automationState', { isRunning: false });
         }
     })();
 });

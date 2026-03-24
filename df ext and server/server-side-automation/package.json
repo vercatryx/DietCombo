@@ -1,7 +1,7 @@
 {
   "name": "df-billing-automation-server",
   "version": "1.0.0",
-  "description": "Server-side automation for DF Billing using Playwright",
+  "description": "Diet Fantasy billing automation (Playwright)",
   "main": "electron-main.js",
   "scripts": {
     "start": "node src/server.js",
@@ -18,7 +18,8 @@
     "axios": "^1.13.2",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "playwright": "^1.40.1"
+    "playwright": "^1.40.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -27,7 +28,7 @@
   },
   "build": {
     "appId": "com.dietfantasy.billing-automation",
-    "productName": "DF Billing Automation",
+    "productName": "Diet Fantasy Billing",
     "files": [
       "src/**/*",
       "public/**/*",

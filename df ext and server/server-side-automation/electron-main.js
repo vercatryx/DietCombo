@@ -54,12 +54,14 @@ function createWindow() {
     const win = new BrowserWindow({
         width: 1200,
         height: 800,
+        title: 'Diet Fantasy Billing',
         autoHideMenuBar: true,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
         },
     });
+    win.setTitle('Diet Fantasy Billing');
     win.loadURL(`http://localhost:${PORT}`);
     win.on('closed', () => {
         app.quit();
