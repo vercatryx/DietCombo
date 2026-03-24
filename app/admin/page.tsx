@@ -19,7 +19,6 @@ import { MealSelectionManagement } from '@/components/admin/MealSelectionManagem
 import { SettingsManagement } from '@/components/admin/SettingsManagement';
 import { ProduceVendorManagement } from '@/components/admin/ProduceVendorManagement';
 import { BrooklynAdminManagement } from '@/components/admin/BrooklynAdminManagement';
-
 type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'brooklyn-admins' | 'form' | 'meals' | 'settings' | 'template' | 'produce-vendors';
 
 export default function AdminPage() {
