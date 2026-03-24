@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { handleInboundSms } from '@/lib/sms-bot';
 
 export async function POST(request: Request) {
@@ -19,7 +19,15 @@ export async function POST(request: Request) {
 
         console.log(`[Telnyx Inbound] Message from ${from}: "${text.slice(0, 100)}"`);
 
-        await handleInboundSms(from, text);
+        // Respond to Telnyx immediately, then process the bot in the background.
+        // after() keeps the Vercel function alive until the work completes.
+        after(async () => {
+            try {
+                await handleInboundSms(from, text);
+            } catch (err) {
+                console.error('[Telnyx Inbound] Bot error:', err);
+            }
+        });
 
         return NextResponse.json({ ok: true });
     } catch (err) {
