@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
 import { randomUUID } from 'crypto';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
 export async function processDeliveryProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -14,7 +15,7 @@ export async function processDeliveryProof(formData: FormData) {
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     // Allow test URL to bypass file requirement

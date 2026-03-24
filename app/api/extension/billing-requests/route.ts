@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseServiceOrAnonKey } from '@/lib/supabase-env';
 
 // Initialize Supabase client
 // We might need to use the service role key if we need access to restricted tables,
@@ -13,7 +14,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // Let's grab the env vars for Supabase.
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = getSupabaseServiceOrAnonKey()!;
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 

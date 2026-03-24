@@ -26,7 +26,7 @@ export async function GET(req: Request) {
             // Check for RLS/permission errors
             if (clientsError.code === 'PGRST301' || clientsError.message?.includes('permission denied')) {
                 console.error("[/api/users] ⚠️  RLS (Row Level Security) may be blocking this query.");
-                console.error("[/api/users] SOLUTION: Set SUPABASE_SERVICE_ROLE_KEY in your environment variables.");
+                console.error("[/api/users] SOLUTION: Set SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY).");
             }
             
             return NextResponse.json({ 

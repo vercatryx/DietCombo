@@ -9,6 +9,7 @@ import { getNextOccurrence } from '@/lib/order-dates';
 import { getCurrentTime } from '@/lib/time';
 import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
 import { randomUUID } from 'crypto';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
 export async function processProduceProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -17,7 +18,7 @@ export async function processProduceProof(formData: FormData) {
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     // Allow test URL to bypass file requirement
@@ -213,7 +214,7 @@ export async function processProduceProof(formData: FormData) {
 export async function getClientForProduce(clientId: string) {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     try {
@@ -284,7 +285,7 @@ export async function uploadProduceProofOnly(formData: FormData) {
 export async function createProduceOrderWithProof(clientId: string, deliveryProofUrl: string) {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     try {
@@ -422,7 +423,7 @@ export async function createProduceOrderWithProof(clientId: string, deliveryProo
 export async function createProduceOrder(clientId: string) {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     try {

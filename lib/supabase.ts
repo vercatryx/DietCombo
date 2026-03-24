@@ -1,62 +1,85 @@
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseDbApiKey, getSupabaseDbKeySource, getSupabaseServerSecretKey } from './supabase-env';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabasePublishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabaseServerSecret = getSupabaseServerSecretKey();
 
-// Debug logging for environment variables
+// New secret → publishable → legacy JWTs. Publishable before legacy avoids "Legacy API keys are disabled"
+// when old service_role is still in .env but turned off in the dashboard.
+const supabaseClientKey = getSupabaseDbApiKey();
+
 if (process.env.NODE_ENV !== 'production') {
+    const src = getSupabaseDbKeySource();
     console.log('[supabase] Environment check:');
     console.log(`  NEXT_PUBLIC_SUPABASE_URL: ${supabaseUrl ? '✅ Set' : '❌ Missing'}`);
-    console.log(`  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${supabaseAnonKey ? '✅ Set' : '❌ Missing'}`);
-    console.log(`  SUPABASE_SERVICE_ROLE_KEY: ${supabaseServiceKey ? '✅ Set' : '⚠️  Missing (will use anon key)'}`);
-    
+    console.log(`  SUPABASE_SECRET_KEY (sb_secret_*): ${process.env.SUPABASE_SECRET_KEY ? '✅ Set' : '—'}`);
+    console.log(
+        `  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${supabasePublishableKey ? '✅ Set' : '❌ Missing'}`
+    );
+    console.log(
+        `  SUPABASE_SERVICE_ROLE_KEY (legacy JWT): ${process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ Set' : '—'}`
+    );
+    console.log(`  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${supabaseAnonKey ? '✅ Set (legacy)' : '—'}`);
+    console.log(
+        `  [supabase] Active DB key source: ${src ?? 'none'} (secret > publishable > legacy service > legacy anon)`
+    );
+
     if (supabaseUrl) {
         console.log(`  Supabase URL: ${supabaseUrl.substring(0, 30)}...`);
     }
+    if (
+        process.env.SUPABASE_SERVICE_ROLE_KEY &&
+        src &&
+        src !== 'legacy_service' &&
+        src !== 'secret'
+    ) {
+        console.warn(
+            '[supabase] 💡 Legacy SUPABASE_SERVICE_ROLE_KEY is set but not used (new key takes priority). If the dashboard disabled legacy keys, remove the old var from .env.local to avoid confusion.'
+        );
+    }
 }
 
-// Prioritize service role key for server-side operations to bypass RLS
-// If service role key is not available, fall back to anon key (may fail if RLS is enabled)
-const supabaseKey = supabaseServiceKey || supabaseAnonKey;
-
-if (!supabaseUrl || !supabaseKey) {
-    const missing = [];
+if (!supabaseUrl || !supabaseClientKey) {
+    const missing: string[] = [];
     if (!supabaseUrl) missing.push('NEXT_PUBLIC_SUPABASE_URL');
-    if (!supabaseAnonKey) missing.push('NEXT_PUBLIC_SUPABASE_ANON_KEY');
-    if (!supabaseServiceKey && !supabaseAnonKey) missing.push('SUPABASE_SERVICE_ROLE_KEY (or ANON_KEY)');
+    if (!getSupabaseDbApiKey()) {
+        missing.push(
+            'SUPABASE_SECRET_KEY, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY, or (legacy) SUPABASE_SERVICE_ROLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY'
+        );
+    }
     console.error('[supabase] ❌ Missing environment variables:', missing.join(', '));
     throw new Error(`Missing Supabase environment variables: ${missing.join(', ')}`);
 }
 
-// Log warning if service role key is not set (RLS may block queries)
-if (!supabaseServiceKey && process.env.NODE_ENV !== 'production') {
-    console.warn('[supabase] ⚠️  SUPABASE_SERVICE_ROLE_KEY not set. Using anon key. Queries may fail if RLS is enabled.');
-    console.warn('[supabase] 💡 To fix: Add SUPABASE_SERVICE_ROLE_KEY to your .env.local file');
+if (!supabaseServerSecret && process.env.NODE_ENV !== 'production') {
+    console.warn(
+        '[supabase] ⚠️  No SUPABASE_SECRET_KEY / SUPABASE_SERVICE_ROLE_KEY. Some admin-only actions may fail RLS; add sb_secret_* for full access.'
+    );
 }
 
-// Extract hostname for validation
 let hostname: string | null = null;
 try {
     const url = new URL(supabaseUrl);
     hostname = url.hostname;
-} catch (error) {
+} catch {
     console.error('[supabase] ❌ Invalid Supabase URL format:', supabaseUrl);
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
+export const supabase = createClient(supabaseUrl, supabaseClientKey, {
     auth: {
         autoRefreshToken: false,
-        persistSession: false
+        persistSession: false,
     },
     db: {
-        schema: 'public'
+        schema: 'public',
     },
     global: {
         headers: {
-            'x-client-info': 'dietcombo-app'
-        }
-    }
+            'x-client-info': 'dietcombo-app',
+        },
+    },
 });
 
 /**
@@ -80,13 +103,13 @@ export async function fetchAllRows<T = any>(
     return allData;
 }
 
-// Helper function to check for DNS/connection errors
-export function isConnectionError(error: any): boolean {
-    if (!error) return false;
-    const message = error.message || '';
-    const details = error.details || '';
+export function isConnectionError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const e = error as { message?: string; details?: string };
+    const message = e.message || '';
+    const details = e.details || '';
     const combined = `${message} ${details}`.toLowerCase();
-    
+
     return (
         combined.includes('enotfound') ||
         combined.includes('getaddrinfo') ||
@@ -96,17 +119,17 @@ export function isConnectionError(error: any): boolean {
     );
 }
 
-// Helper function to provide helpful error messages
-export function getConnectionErrorHelp(error: any): string {
+export function getConnectionErrorHelp(error: unknown): string {
     if (!isConnectionError(error)) return '';
-    
-    const hostnameMatch = error.message?.match(/([a-z0-9]+\.supabase\.co)/);
-    const hostname = hostnameMatch ? hostnameMatch[1] : 'your-project';
-    
+
+    const e = error as { message?: string };
+    const hostnameMatch = e.message?.match(/([a-z0-9]+\.supabase\.co)/);
+    const host = hostnameMatch ? hostnameMatch[1] : 'your-project';
+
     return `
 🔴 DNS/Connection Error Detected!
 
-The hostname "${hostname}" cannot be resolved. This usually means:
+The hostname "${host}" cannot be resolved. This usually means:
 
 1. 🛡️  Cloudflare WARP is blocking (if you have WARP enabled)
    → Configure WARP Split Tunneling to exclude *.supabase.co

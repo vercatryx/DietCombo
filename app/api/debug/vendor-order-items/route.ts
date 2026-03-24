@@ -7,6 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest } from 'next/server';
 import { toCalendarDateKeyInAppTz } from '@/lib/timezone';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
 const VENDOR_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
@@ -15,12 +16,12 @@ export async function GET(request: NextRequest) {
     const dateParam = request.nextUrl.searchParams.get('date') || '2026-02-16';
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceKey = getSupabaseDbApiKey();
     const usedServiceRole = !!serviceKey;
 
     if (!url || !serviceKey) {
         return Response.json({
-            error: 'Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY',
+            error: 'Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SECRET_KEY',
             usedServiceRole: false,
         }, { status: 500 });
     }

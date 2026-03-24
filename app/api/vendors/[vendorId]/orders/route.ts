@@ -8,6 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest } from 'next/server';
 import { getOrdersByVendor } from '@/lib/actions';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
 export async function GET(
     request: NextRequest,
@@ -21,7 +22,7 @@ export async function GET(
     }
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceKey = getSupabaseDbApiKey();
     if (!url || !serviceKey) {
         return Response.json({ error: 'Server missing Supabase config' }, { status: 500 });
     }

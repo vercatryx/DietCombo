@@ -16,6 +16,7 @@ import { getWeekStart, getWeekEnd, getWeekRangeString, isDateInWeek } from './ut
 import { toDateStringInAppTz } from './timezone';
 
 import { supabase } from '@/lib/supabase';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
 // ---------------------------------------------------------------------------
 // REFERENCE DATA HELPERS (used by getOrderById and getBillingHistory)
@@ -164,7 +165,7 @@ export async function getOrdersPaginatedBilling(
     pageSize: number,
     filters?: GetOrdersBillingFilters,
 ): Promise<{ orders: any[]; total: number }> {
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceRoleKey = getSupabaseDbApiKey();
     const db = serviceRoleKey
         ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
         : supabase;
@@ -321,7 +322,7 @@ async function getOrdersWithSearchFallback(
 }
 
 export async function getAllOrders(): Promise<any[]> {
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceRoleKey = getSupabaseDbApiKey();
     const db = serviceRoleKey
         ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
         : supabase;
@@ -351,7 +352,7 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
     if (!orderId) return null;
 
     let supabaseClient = supabase;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceRoleKey = getSupabaseDbApiKey();
     if (serviceRoleKey) {
         supabaseClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, {
             auth: { persistSession: false },
@@ -571,8 +572,8 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
 
 export async function deleteOrder(orderId: string): Promise<{ success: boolean; message?: string }> {
     if (!orderId) return { success: false, message: 'Order ID is required' };
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceRoleKey) return { success: false, message: 'Server configuration error: SUPABASE_SERVICE_ROLE_KEY required for delete' };
+    const serviceRoleKey = getSupabaseDbApiKey();
+    if (!serviceRoleKey) return { success: false, message: 'Server configuration error: SUPABASE_SECRET_KEY (or legacy service role) required for delete' };
     try {
         const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, {
             auth: { persistSession: false },
@@ -710,7 +711,7 @@ export async function getBillingHistory(clientId: string): Promise<any[]> {
 
 export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<BillingRequest[]> {
     let supabaseClient = supabase;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceRoleKey = getSupabaseDbApiKey();
     if (serviceRoleKey) {
         supabaseClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, {
             auth: { persistSession: false },

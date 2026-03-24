@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { decrypt } from '@/lib/session';
+import { mergeSupabaseCookies, updateSession } from '@/utils/supabase/middleware';
 
 // Protected (admin) routes — require auth; unauthenticated users redirect to /login
 const protectedRoutes = ['/admin', '/clients', '/billing', '/vendors', '/orders', '/routes', '/forms', '/'];
@@ -14,6 +15,9 @@ export default async function middleware(request: NextRequest) {
   if (path.startsWith('/_next') || path.startsWith('/static') || path.includes('.')) {
     return NextResponse.next();
   }
+
+  const supabaseRes = await updateSession(request);
+  const redirectWithSb = (url: URL) => mergeSupabaseCookies(supabaseRes, NextResponse.redirect(url));
 
   // /vendors/produce is public only when accessed with a token (vendor link); otherwise it requires login
   const vendorsProduceWithToken =
@@ -40,9 +44,9 @@ export default async function middleware(request: NextRequest) {
   // Redirect to login if accessing protected/vendor route without session
   if (!isPublicRoute && !session?.userId) {
     if (path === '/vendor-login') {
-      return NextResponse.redirect(new URL('/login', request.url));
+      return redirectWithSb(new URL('/login', request.url));
     }
-    return NextResponse.redirect(new URL('/login', request.url));
+    return redirectWithSb(new URL('/login', request.url));
   }
 
   // Role-based redirects when user is logged in
@@ -55,12 +59,12 @@ export default async function middleware(request: NextRequest) {
         path.startsWith('/routes') ||
         path.startsWith('/meal-plan-edits');
       if (!allowed) {
-        return NextResponse.redirect(new URL('/clients', request.url));
+        return redirectWithSb(new URL('/clients', request.url));
       }
       if (path === '/login') {
-        return NextResponse.redirect(new URL('/clients', request.url));
+        return redirectWithSb(new URL('/clients', request.url));
       }
-      return NextResponse.next();
+      return supabaseRes;
     }
 
     // Clients: only their own portal (and /sign/). No other clients, no admin routes.
@@ -69,21 +73,21 @@ export default async function middleware(request: NextRequest) {
       const isOwnPortal = path === ownPortalBase || path.startsWith(ownPortalBase + '/');
       const isSignRoute = path.startsWith('/sign/');
       if (!isOwnPortal && !isSignRoute) {
-        return NextResponse.redirect(new URL(ownPortalBase, request.url));
+        return redirectWithSb(new URL(ownPortalBase, request.url));
       }
-      return NextResponse.next();
+      return supabaseRes;
     }
 
     // Admin / super-admin: full access to all app routes (only vendor portal redirects to /clients)
     if (session.role === 'admin' || session.role === 'super-admin') {
       if (isVendorRoute) {
-        return NextResponse.redirect(new URL('/clients', request.url));
+        return redirectWithSb(new URL('/clients', request.url));
       }
-      return NextResponse.next();
+      return supabaseRes;
     }
 
     if (session.role === 'vendor' && isProtectedRoute && !isVendorRoute) {
-      return NextResponse.redirect(new URL('/vendor', request.url));
+      return redirectWithSb(new URL('/vendor', request.url));
     }
 
     if (session.role === 'navigator') {
@@ -94,30 +98,30 @@ export default async function middleware(request: NextRequest) {
         path.startsWith('/orders') ||
         path.startsWith('/vendors')
       ) {
-        return NextResponse.next();
+        return supabaseRes;
       }
       if (isProtectedRoute || path === '/') {
-        return NextResponse.redirect(new URL('/clients', request.url));
+        return redirectWithSb(new URL('/clients', request.url));
       }
     }
 
     if (path === '/login' && session.role === 'client') {
-      return NextResponse.redirect(new URL(`/client-portal/${session.userId}`, request.url));
+      return redirectWithSb(new URL(`/client-portal/${session.userId}`, request.url));
     }
     if (path === '/login' && (session.role === 'admin' || session.role === 'super-admin' || session.role === 'navigator' || session.role === 'brooklyn_admin')) {
-      return NextResponse.redirect(new URL(session.role === 'brooklyn_admin' ? '/clients' : '/clients', request.url));
+      return redirectWithSb(new URL(session.role === 'brooklyn_admin' ? '/clients' : '/clients', request.url));
     }
     if (path === '/login' && session.role === 'vendor') {
-      return NextResponse.redirect(new URL('/vendor', request.url));
+      return redirectWithSb(new URL('/vendor', request.url));
     }
     if (path === '/vendor-login') {
       return session.role === 'vendor'
-        ? NextResponse.redirect(new URL('/vendor', request.url))
-        : NextResponse.redirect(new URL('/login', request.url));
+        ? redirectWithSb(new URL('/vendor', request.url))
+        : redirectWithSb(new URL('/login', request.url));
     }
   }
 
-  return NextResponse.next();
+  return supabaseRes;
 }
 
 export const config = {

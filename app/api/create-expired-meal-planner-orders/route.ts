@@ -10,6 +10,7 @@ import {
     getDefaultVendorId,
     generateBatchOrderNumbers
 } from '@/lib/actions';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
 /**
  * API Route: Create Orders for Meal Planner by Scheduled Delivery Date
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
 
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
 
         // 2. Pre-fetch all reference data in parallel

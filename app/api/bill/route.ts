@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseServiceOrAnonKey } from '@/lib/supabase-env';
 
 const AMOUNT_PER_PERSON = 336;
 const AMOUNT_PER_PERSON_PRODUCE = 146;
@@ -78,8 +79,7 @@ function buildUniteUsUrl(caseId: string | null | undefined, contactClientId: str
 }
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseServiceKey = getSupabaseServiceOrAnonKey()!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function GET(request: NextRequest) {

@@ -983,7 +983,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         
         // RLS and permission errors
         if (error?.code === 'PGRST301' || errorString.includes('permission denied') || errorString.includes('rls') || errorString.includes('row-level security')) {
-            return 'Database permission error. Please contact support. If this persists, check that SUPABASE_SERVICE_ROLE_KEY is configured correctly.';
+            return 'Database permission error. Please contact support. If this persists, check that SUPABASE_SECRET_KEY (server) is configured correctly.';
         }
         
         // Foreign key violations

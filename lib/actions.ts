@@ -16,6 +16,7 @@ import {
     DAY_NAME_TO_NUMBER
 } from './order-dates';
 import { supabase, isConnectionError, getConnectionErrorHelp } from './supabase';
+import { getSupabaseDbApiKey } from './supabase-env';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
@@ -55,7 +56,7 @@ function handleError(error: any, context?: string) {
         // Check for RLS/permission errors
         if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS') || error.message?.includes('row-level security')) {
             console.error('⚠️  RLS (Row Level Security) may be blocking this query. Consider:');
-            console.error('   1. Setting SUPABASE_SERVICE_ROLE_KEY environment variable');
+            console.error('   1. Setting SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY)');
             console.error('   2. Running sql/disable-rls.sql to disable RLS');
             console.error('   3. Running sql/enable-permissive-rls.sql to add permissive policies');
         }
@@ -358,7 +359,7 @@ export async function getVendors() {
         }
         
         // Check if we're using service role key (important for RLS)
-        const isUsingServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+        const isUsingServiceKey = !!getSupabaseDbApiKey();
         if (!isUsingServiceKey) {
             console.warn('[getVendors] ??????  Not using service role key - RLS may block queries');
         }
@@ -376,7 +377,7 @@ export async function getVendors() {
             
             // If RLS error, provide helpful message
             if (error.code === 'PGRST301' || error.message?.includes('permission denied') || error.message?.includes('RLS')) {
-                console.error('[getVendors] ??? RLS is blocking the query. Ensure SUPABASE_SERVICE_ROLE_KEY is set in environment variables.');
+                console.error('[getVendors] ??? RLS is blocking the query. Set SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY).');
             }
             return [];
         }
@@ -653,7 +654,7 @@ export async function deleteMenuItem(id: string) {
 
 export async function updateMenuItemOrder(updates: { id: string; sortOrder: number }[]) {
     // Perform updates in parallel
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const promises = updates.map(({ id, sortOrder }) =>
         supabaseAdmin.from('menu_items').update({ sort_order: sortOrder }).eq('id', id)
     );
@@ -714,7 +715,7 @@ export async function updateCategory(id: string, name: string, setValue?: number
 
 export async function updateCategoryOrder(updates: { id: string; sortOrder: number }[]) {
     // Perform updates in parallel
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const promises = updates.map(({ id, sortOrder }) =>
         supabaseAdmin.from('item_categories').update({ sort_order: sortOrder }).eq('id', id)
     );
@@ -1277,7 +1278,7 @@ export async function saveDefaultOrderTemplate(template: any, serviceType?: stri
 async function getMealPlannerClientIds(): Promise<string[]> {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
     const { data: rows, error } = await supabaseAdmin
         .from('clients')
@@ -1329,7 +1330,7 @@ async function getFoodClientIds(): Promise<string[]> {
 async function getFoodClientIdsAdmin(): Promise<string[]> {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
     const { data: rows, error } = await supabaseAdmin
         .from('clients')
@@ -1428,7 +1429,7 @@ export async function propagateDefaultTemplateToFoodClients(template: any): Prom
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
     const todayStr = formatDateToYYYYMMDD(today);
 
@@ -1725,7 +1726,7 @@ export async function saveClientMealPlannerData(
 
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
 
         const { data: row, error: fetchErr } = await supabaseAdmin
@@ -1782,7 +1783,7 @@ export async function saveClientMealPlannerDataFull(
         const newData = prepareMealPlannerDataForUpdate(orders);
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
         const { error } = await supabaseAdmin
             .from('clients')
@@ -2098,8 +2099,8 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
     endDate?: string
 ): Promise<MealPlannerOrderResult[]> {
     try {
-        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseClient = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
 
         let query = supabaseClient
@@ -2227,8 +2228,8 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
     const dateOnly = mealPlannerDateOnly(deliveryDate);
     if (!dateOnly) return [];
     try {
-        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseClient = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
 
         const session = await getSession();
@@ -2288,8 +2289,8 @@ export async function getMealPlanEditCountsByMonth(startDate: string, endDate: s
     const start = mealPlannerDateOnly(startDate);
     const end = mealPlannerDateOnly(endDate);
     try {
-        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseClient = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
 
         const session = await getSession();
@@ -2361,8 +2362,8 @@ export async function getMealPlanEditCountsByMonth(startDate: string, endDate: s
 export async function getDefaultTemplateMealPlanDatesForFuture(): Promise<string[]> {
     try {
         const today = getTodayInAppTz();
-        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseClient = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
         const { data: rows, error } = await supabaseClient
             .from('meal_planner_custom_items')
@@ -2402,8 +2403,8 @@ export async function getDefaultTemplateMealPlanDatesInRange(
     endDate?: string | null
 ): Promise<string[]> {
     try {
-        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseClient = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
         let q = supabaseClient
             .from('meal_planner_custom_items')
@@ -3056,7 +3057,7 @@ async function syncMealPlannerCustomItemsToOrders(
     const dateOnly = mealPlannerDateOnly(calendarDate);
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     const clientIds =
@@ -3315,7 +3316,7 @@ async function syncMealPlannerCustomItemsToMealPlannerOrders(
     const dateOnly = mealPlannerDateOnly(calendarDate);
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     const clientIds =
@@ -3425,8 +3426,8 @@ export async function getMealPlannerOrders(
     endDate: string
 ): Promise<MealPlannerOrderResult[]> {
     try {
-        const supabaseClient = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseClient = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
         const start = mealPlannerDateOnly(startDate);
         const end = mealPlannerDateOnly(endDate);
@@ -3509,8 +3510,8 @@ export async function getClientsWhoChangedFromDefaultForDate(deliveryDate: strin
     if (!deliveryDate || deliveryDate === 'no-date') return [];
     try {
         const dateOnly = mealPlannerDateOnly(deliveryDate);
-        const supabaseAdmin = process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+        const supabaseAdmin = getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!)
             : supabase;
         const { data, error } = await supabaseAdmin.rpc('get_clients_changed_from_default', {
             p_delivery_date: dateOnly
@@ -3556,7 +3557,7 @@ export async function saveMealPlannerCustomItems(
 
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
 
         // Delete existing items for this date (service role so RLS does not block)
@@ -3723,7 +3724,7 @@ export async function insertMealPlannerCustomItemForClient(
         const trimName = (name ?? '').trim() || 'Item';
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
         const { data, error } = await supabaseAdmin
             .from('meal_planner_custom_items')
@@ -3762,7 +3763,7 @@ export async function updateMealPlannerCustomItemQuantity(
         const qty = Math.max(0, Math.floor(Number(quantity)));
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
         const { error } = await supabaseAdmin
             .from('meal_planner_custom_items')
@@ -3795,7 +3796,7 @@ export async function updateMealPlannerOrderItemQuantity(
         const qty = Math.max(0, Math.floor(Number(quantity)));
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
         const { data: item, error: fetchErr } = await supabaseAdmin
             .from('meal_planner_order_items')
@@ -3847,7 +3848,7 @@ export async function saveClientMealPlannerOrderQuantities(
     try {
         const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
+            getSupabaseDbApiKey()!
         );
         const orderIds = orders.map((o) => o.id).filter(Boolean);
         if (orderIds.length === 0) return { ok: true };
@@ -4168,13 +4169,13 @@ export async function getClients() {
  * Use for exports and API routes that need every client to avoid "Unknown Client".
  */
 export async function getClientsUnlimited(): Promise<ClientProfile[]> {
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    if (!getSupabaseDbApiKey()) {
         const list = await getClients();
         return list.filter((c): c is ClientProfile => c != null);
     }
     const admin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
     return getClientsForAdmin(admin);
 }
@@ -6857,7 +6858,7 @@ async function syncSingleOrderForDeliveryDay(
             });
             
             if (isRLSError) {
-                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Set SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY).`);
             }
             
             throw new Error(`Failed to update upcoming order: ${updateError.message || 'Unknown error'}`);
@@ -6908,7 +6909,7 @@ async function syncSingleOrderForDeliveryDay(
             console.error('[syncSingleOrderForDeliveryDay] Error creating upcoming order:', errorDetails);
             
             if (isRLSError) {
-                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Please ensure SUPABASE_SERVICE_ROLE_KEY is configured correctly.`);
+                throw new Error(`Database permission error: Row-level security (RLS) is blocking this operation. Set SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY).`);
             }
             
             // Provide more specific error messages based on error type
@@ -9601,8 +9602,8 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string,
 
     // Use provided client (e.g. from API route with service role) or create one
     const db = options?.db ?? (
-        process.env.SUPABASE_SERVICE_ROLE_KEY
-            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } })
+        getSupabaseDbApiKey()
+            ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!, { auth: { autoRefreshToken: false, persistSession: false } })
             : supabase
     );
 
@@ -9725,7 +9726,7 @@ export async function getOrdersByVendor(vendorId: string, deliveryDate?: string,
             }
         }
 
-        const usedServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+        const usedServiceRole = !!getSupabaseDbApiKey();
         const dbProvided = !!options?.db;
         console.log('[getOrdersByVendor] Processing orders', { vendorId, deliveryDate, filteredCount: filteredOrders.length, usedServiceRole, dbProvided });
 
@@ -11631,7 +11632,7 @@ export async function addMealCategory(mealType: string, name: string, setValue?:
     if (setValue !== undefined) {
         payload.set_value = setValue;
     }
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const { data: res, error } = await supabaseAdmin.from('breakfast_categories').insert([payload]).select().single();
     handleError(error, 'addMealCategory');
     revalidatePath('/admin');
@@ -11649,21 +11650,21 @@ export async function updateMealCategory(id: string, name: string, setValue?: nu
     if (setValue !== undefined) {
         payload.set_value = setValue;
     }
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const { error } = await supabaseAdmin.from('breakfast_categories').update(payload).eq('id', id);
     handleError(error, 'updateMealCategory');
     revalidatePath('/admin');
 }
 
 export async function deleteMealCategory(id: string) {
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const { error } = await supabaseAdmin.from('breakfast_categories').delete().eq('id', id);
     handleError(error, 'deleteMealCategory');
     revalidatePath('/admin');
 }
 
 export async function deleteMealType(mealType: string) {
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     // Delete all categories for this meal type. 
     // Items will cascade delete because of FK 'ON DELETE CASCADE' on breakfast_items.category_id
     const { error } = await supabaseAdmin
@@ -11711,7 +11712,7 @@ export async function addMealItem(data: { categoryId: string, name: string, quot
         payload.price_each = data.priceEach;
     }
 
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const { data: res, error } = await supabaseAdmin.from('breakfast_items').insert([payload]).select().single();
     handleError(error, 'addMealItem');
     revalidatePath('/admin');
@@ -11729,7 +11730,7 @@ export async function updateMealItem(id: string, data: Partial<{ name: string, q
 
     // R2 Cleanup: If image is being updated/removed, delete the old one
     if (data.imageUrl !== undefined) {
-        const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+        const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
         const { data: existing } = await supabaseAdmin.from('breakfast_items').select('image_url').eq('id', id).single();
         const oldUrl = existing?.image_url;
 
@@ -11743,14 +11744,14 @@ export async function updateMealItem(id: string, data: Partial<{ name: string, q
         }
     }
 
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const { error } = await supabaseAdmin.from('breakfast_items').update(payload).eq('id', id);
     handleError(error, 'updateMealItem');
     revalidatePath('/admin');
 }
 
 export async function deleteMealItem(id: string) {
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const { data: item } = await supabaseAdmin.from('breakfast_items').select('image_url').eq('id', id).single();
     const { error } = await supabaseAdmin.from('breakfast_items').delete().eq('id', id);
     if (!error && item?.image_url) {
@@ -11766,7 +11767,7 @@ export async function deleteMealItem(id: string) {
 }
 
 export async function updateMealItemOrder(updates: { id: string; sortOrder: number }[]) {
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const promises = updates.map(({ id, sortOrder }) =>
         supabaseAdmin.from('breakfast_items').update({ sort_order: sortOrder }).eq('id', id)
     );
@@ -11776,7 +11777,7 @@ export async function updateMealItemOrder(updates: { id: string; sortOrder: numb
 }
 
 export async function updateMealCategoryOrder(updates: { id: string; sortOrder: number }[]) {
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
     const promises = updates.map(({ id, sortOrder }) =>
         supabaseAdmin.from('breakfast_categories').update({ sort_order: sortOrder }).eq('id', id)
     );
@@ -11828,7 +11829,7 @@ export async function saveClientFoodOrder(clientId: string, data: Partial<Client
     // Use Service Role client to bypass RLS for custom auth or public portal
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     // CRITICAL FIX: If fullActiveOrder is provided, use it directly instead of fetching from DB
@@ -12065,7 +12066,7 @@ async function syncMealPlannerToOrders(
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     const caseId = await getUpcomingOrderCaseIdForFoodClient(supabaseAdmin, clientId);
@@ -12170,7 +12171,7 @@ export async function saveClientMealOrder(clientId: string, data: Partial<Client
     // Use Service Role client to bypass RLS for custom auth or public portal
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     // Get current client data to preserve existing upcoming_order structure
@@ -12284,7 +12285,7 @@ export async function saveClientBoxOrder(clientId: string, data: Partial<ClientB
     const session = await getSession();
     const updatedBy = session?.userId || null;
     // if (!session || !session.userId) throw new Error('Unauthorized');
-    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
 
     // Full replacement strategy: Delete all existing box orders for this client first
     const { error: deleteError } = await supabaseAdmin

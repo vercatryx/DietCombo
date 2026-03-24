@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { OrderDeliveryFlow } from './OrderDeliveryFlow';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
@@ -10,7 +11,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
   const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+    getSupabaseDbApiKey()!
   );
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
   let query = supabaseAdmin.from('orders').select('order_number').limit(1);
@@ -40,7 +41,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
     // Use Service Role to bypass RLS for public delivery page
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!
+        getSupabaseDbApiKey()!
     );
 
     // Verify if it is a UUID

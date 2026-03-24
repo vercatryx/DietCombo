@@ -1,6 +1,7 @@
 // app/api/mobile/routes/route.ts
 import { NextResponse } from "next/server";
 import { supabase, fetchAllRows } from "@/lib/supabase";
+import { getSupabaseDbApiKey } from "@/lib/supabase-env";
 import { isProduceServiceType } from "@/lib/isProduceServiceType";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export async function GET(req: Request) {
     console.log("[mobile/routes] GET start");
     
     // Check if we're using service role key
-    const isUsingServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const isUsingServiceKey = !!getSupabaseDbApiKey();
     if (!isUsingServiceKey) {
         console.warn("[mobile/routes] ⚠️  Not using service role key - RLS may block queries");
     }

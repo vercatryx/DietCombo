@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { revalidatePath } from 'next/cache';
 
 const REQUIRED_CLICKS = 5;
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        const serviceRoleKey = getSupabaseDbApiKey();
         if (!serviceRoleKey) {
             return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
         }
