@@ -1,10 +1,5 @@
 import { NextResponse } from 'next/server';
-import { sendSms } from '@/lib/telnyx';
-
-const AUTO_REPLY =
-    'Thank you for your message. This number is not able to receive replies. ' +
-    'For any questions or support, please call us at (845) 478-6605. ' +
-    '— The Diet Fantasy';
+import { handleInboundSms } from '@/lib/sms-bot';
 
 export async function POST(request: Request) {
     try {
@@ -12,25 +7,21 @@ export async function POST(request: Request) {
         console.log('[Telnyx Inbound] Webhook received:', JSON.stringify(body).slice(0, 500));
 
         const msg = body?.data?.payload || body?.data;
-        if (!msg) {
-            console.log('[Telnyx Inbound] No data in payload, skipping');
-            return NextResponse.json({ ok: true });
-        }
-
-        if (msg.direction !== 'inbound') {
-            console.log('[Telnyx Inbound] Not inbound, skipping');
+        if (!msg || msg.direction !== 'inbound') {
             return NextResponse.json({ ok: true });
         }
 
         const from = msg.from?.phone_number;
-        if (!from) {
-            console.log('[Telnyx Inbound] No from number, skipping');
+        const text = msg.text?.trim();
+        if (!from || !text) {
             return NextResponse.json({ ok: true });
         }
 
-        console.log(`[Telnyx Inbound] Sending auto-reply to ${from}`);
-        const result = await sendSms(from, AUTO_REPLY);
-        console.log(`[Telnyx Inbound] sendSms result:`, JSON.stringify(result));
+        console.log(`[Telnyx Inbound] Message from ${from}: "${text.slice(0, 100)}"`);
+
+        handleInboundSms(from, text).catch(err => {
+            console.error('[Telnyx Inbound] Bot error:', err);
+        });
 
         return NextResponse.json({ ok: true });
     } catch (err) {
