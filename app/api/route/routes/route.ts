@@ -346,8 +346,13 @@ export async function GET(req: Request) {
         // 6) Hydrate each stop, preferring live Client fields when available
         const stopById = new Map<string, any>();
 
-        for (const s of allStopsCombined) {
-            const c = s.client_id ? clientById.get(s.client_id) : undefined;
+        const normalizeDateForStopRow = (dateStr: string | null | undefined): string | null => {
+            if (!dateStr) return null;
+            return String(dateStr).split("T")[0].split(" ")[0];
+        };
+
+        function hydrateStopRowIntoById(s: any): void {
+            const c = s.client_id ? clientById.get(String(s.client_id)) : undefined;
             // Priority: stops.name (from DB), then client full_name/first+last, then address, then "Client {id}"
             const stopNameRaw = s.name ?? (s as any).Name;
             const stopName = (stopNameRaw != null && String(stopNameRaw).trim()) ? String(stopNameRaw).trim() : null;
@@ -373,14 +378,10 @@ export async function GET(req: Request) {
             
             // Fallback: Match by client_id + delivery_date if no direct order_id match
             // Also: when order from order_id has no order_number (e.g. upcoming_order), try client+date to get order with order_number (e.g. from orders table)
-            const normalizeDateForStop = (dateStr: string | null | undefined): string | null => {
-                if (!dateStr) return null;
-                return String(dateStr).split('T')[0].split(' ')[0];
-            };
             if (s.client_id) {
                 const cid = String(s.client_id);
                 const orderFromClientAndDate = s.delivery_date
-                    ? orderMapByClientAndDate.get(`${cid}|${normalizeDateForStop(s.delivery_date) || ''}`) || null
+                    ? orderMapByClientAndDate.get(`${cid}|${normalizeDateForStopRow(s.delivery_date) || ""}`) || null
                     : null;
                 const orderFromClient = orderMapByClient.get(cid) || null;
                 // If primary order lacks order_number, prefer one that has it (e.g. processed order in orders table)
@@ -434,7 +435,7 @@ export async function GET(req: Request) {
                 proofUrl: (() => {
                     const fromStop = (s.proof_url && String(s.proof_url).trim()) || null;
                     const cid = s.client_id ? String(s.client_id) : '';
-                    const dateKey = cid && s.delivery_date ? `${cid}|${normalizeDateForStop(s.delivery_date) || ''}` : '';
+                    const dateKey = cid && s.delivery_date ? `${cid}|${normalizeDateForStopRow(s.delivery_date) || ""}` : "";
                     const orderByClientAndDate = dateKey ? orderMapByClientAndDate.get(dateKey) : null;
                     const orderByClient = cid ? orderMapByClient.get(cid) : null;
                     const fromOrderById = (order?.proof_of_delivery_url && String(order.proof_of_delivery_url).trim()) || null;
@@ -465,6 +466,10 @@ export async function GET(req: Request) {
                 deliveryDate: order?.actual_delivery_date || order?.scheduled_delivery_date || null,
                 orderStatus: order?.status || null,
             });
+        }
+
+        for (const s of allStopsCombined) {
+            hydrateStopRowIntoById(s);
         }
 
         const stopsWithOrderNumber = Array.from(stopById.values()).filter((s: any) => (s?.orderNumber ?? s?.order_number) != null && (s?.orderNumber ?? s?.order_number) !== '');
@@ -498,6 +503,150 @@ export async function GET(req: Request) {
                 routeOrderByDriver.get(did)!.push({ client_id: String(row.client_id) });
             }
         }
+
+        // 6b) driver_route_order lists clients who should have a stop for this date, but GET+delivery_date+light skips step 9.
+        // Create (or hydrate) missing stops so ordered count matches DB reality.
+        if (normalizedDeliveryDate && routeOrderByDriver.size > 0) {
+            const hasStopForClientOnDate = (cid: string) => {
+                for (const st of stopById.values()) {
+                    const c = st?.client_id ?? st?.userId ?? null;
+                    if (!c || String(c) !== String(cid)) continue;
+                    const dd = st.delivery_date ? String(st.delivery_date).split("T")[0].split(" ")[0] : "";
+                    if (dd === normalizedDeliveryDate) return true;
+                }
+                return false;
+            };
+            const missingOrderedClientIds = new Set<string>();
+            for (const [, ordRows] of routeOrderByDriver) {
+                for (const r of ordRows || []) {
+                    const cid = String(r.client_id);
+                    if (!hasStopForClientOnDate(cid)) missingOrderedClientIds.add(cid);
+                }
+            }
+            if (missingOrderedClientIds.size > 0) {
+                const strC = (v: unknown) => (v == null ? "" : String(v));
+                const numC = (v: unknown) => (typeof v === "number" ? v : null);
+                const missingArr = [...missingOrderedClientIds];
+                const toLoadClients = missingArr.filter((id) => !clientById.has(id));
+                if (toLoadClients.length > 0) {
+                    const { data: extraClients } = await supabase
+                        .from("clients")
+                        .select(
+                            "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type"
+                        )
+                        .in("id", toLoadClients);
+                    for (const c of extraClients || []) {
+                        clientById.set(String(c.id), {
+                            ...c,
+                            first: c.first_name,
+                            last: c.last_name,
+                            fullName: c.full_name,
+                            full_name: c.full_name,
+                            phone: c.phone_number,
+                            assigned_driver_id: c.assigned_driver_id,
+                        });
+                    }
+                }
+                const { data: existingGapRows } = await supabase
+                    .from("stops")
+                    .select(
+                        "id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id"
+                    )
+                    .eq("delivery_date", normalizedDeliveryDate)
+                    .in("client_id", missingArr);
+                const existingStopRowByClient = new Map<string, any>();
+                for (const row of existingGapRows || []) {
+                    const k = String(row.client_id);
+                    if (!existingStopRowByClient.has(k)) existingStopRowByClient.set(k, row);
+                }
+                const orderByClientForGap = new Map<string, any>();
+                const GAP_ORD_BATCH = 80;
+                for (let i = 0; i < missingArr.length; i += GAP_ORD_BATCH) {
+                    const batch = missingArr.slice(i, i + GAP_ORD_BATCH);
+                    const { data: orows } = await supabase
+                        .from("orders")
+                        .select(
+                            "id, client_id, scheduled_delivery_date, order_number, proof_of_delivery_url, status, created_at, actual_delivery_date"
+                        )
+                        .eq("scheduled_delivery_date", normalizedDeliveryDate)
+                        .in("client_id", batch)
+                        .not("status", "eq", "cancelled");
+                    for (const o of orows || []) {
+                        const cid = String(o.client_id);
+                        if (!orderByClientForGap.has(cid)) orderByClientForGap.set(cid, o);
+                    }
+                }
+                const needUpcoming = missingArr.filter((cid) => !orderByClientForGap.has(cid));
+                for (let i = 0; i < needUpcoming.length; i += GAP_ORD_BATCH) {
+                    const batch = needUpcoming.slice(i, i + GAP_ORD_BATCH);
+                    const { data: urows } = await supabase
+                        .from("upcoming_orders")
+                        .select("id, client_id, scheduled_delivery_date, order_number, status, created_at, actual_delivery_date")
+                        .eq("scheduled_delivery_date", normalizedDeliveryDate)
+                        .eq("status", "scheduled")
+                        .in("client_id", batch);
+                    for (const o of urows || []) {
+                        const cid = String(o.client_id);
+                        if (!orderByClientForGap.has(cid)) orderByClientForGap.set(cid, o);
+                    }
+                }
+                const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+                const dow = dayNames[new Date(`${normalizedDeliveryDate}T12:00:00`).getDay()];
+                const insertedGapIds: string[] = [];
+                for (const cid of missingOrderedClientIds) {
+                    const exRow = existingStopRowByClient.get(cid);
+                    if (exRow) {
+                        hydrateStopRowIntoById(exRow);
+                        continue;
+                    }
+                    const c = clientById.get(cid) as any;
+                    if (!c) continue;
+                    if (c.paused || !isDeliverableClient(c)) continue;
+                    const orderRow = orderByClientForGap.get(cid);
+                    if (!orderRow) continue;
+                    orderMapById.set(String(orderRow.id), orderRow);
+                    orderMapByClientAndDate.set(`${cid}|${normalizedDeliveryDate}`, orderRow);
+                    const nm =
+                        (c.full_name && String(c.full_name).trim()) ||
+                        `${c.first ?? c.first_name ?? ""} ${c.last ?? c.last_name ?? ""}`.trim() ||
+                        "Unnamed";
+                    const newId = uuidv4();
+                    const { error: insErr } = await supabase.from("stops").insert({
+                        id: newId,
+                        day: dow,
+                        delivery_date: normalizedDeliveryDate,
+                        client_id: cid,
+                        order_id: orderRow.id,
+                        name: nm,
+                        address: strC(c.address),
+                        apt: c.apt ? strC(c.apt) : null,
+                        city: strC(c.city),
+                        state: strC(c.state),
+                        zip: strC(c.zip),
+                        phone: c.phone_number ? strC(c.phone_number) : null,
+                        dislikes: c.dislikes || null,
+                        lat: numC(c.lat),
+                        lng: numC(c.lng),
+                        assigned_driver_id: c.assigned_driver_id ?? null,
+                    });
+                    if (insErr) {
+                        serverLog.push(`[route/routes] gap stop insert failed client=${cid}: ${insErr.message}`);
+                        continue;
+                    }
+                    insertedGapIds.push(newId);
+                }
+                if (insertedGapIds.length > 0) {
+                    const { data: freshGap } = await supabase
+                        .from("stops")
+                        .select(
+                            "id, client_id, name, address, apt, city, state, zip, phone, lat, lng, dislikes, delivery_date, completed, proof_url, day, assigned_driver_id, order_id"
+                        )
+                        .in("id", insertedGapIds);
+                    for (const row of freshGap || []) hydrateStopRowIntoById(row);
+                }
+            }
+        }
+
         // Prefer client.assigned_driver_id; fallback to stop when client null (stops often populated from creation)
         // Use client_id or userId (hydrated stop may use either)
         const stopByDriverAndClient = new Map<string, any>();
@@ -513,43 +662,75 @@ export async function GET(req: Request) {
             }
         }
 
-        const driverIdToRouteIdx = new Map<string, number>();
-        const routes = drivers.map((d, idx) => {
-            const driverId = String(d.id);
-            driverIdToRouteIdx.set(driverId, idx);
-            const stops: any[] = [];
-            const stopIdSet = new Set<string>();
+        // One stop per client+delivery_date (for fallback when driver_route_order driver ≠ clients.assigned_driver_id)
+        const stopByClientAndDate = new Map<string, any>();
+        if (normalizedDeliveryDate) {
+            for (const s of stopById.values()) {
+                const cid = s?.client_id ?? s?.userId ?? null;
+                if (!cid) continue;
+                const dd = s.delivery_date ? String(s.delivery_date).split("T")[0].split(" ")[0] : "";
+                if (dd !== normalizedDeliveryDate) continue;
+                const k = `${String(cid)}|${normalizedDeliveryDate}`;
+                if (!stopByClientAndDate.has(k)) stopByClientAndDate.set(k, s);
+            }
+        }
 
-            const orderList = routeOrderByDriver.get(driverId);
-            if (orderList && orderList.length > 0 && normalizedDeliveryDate) {
-                for (const row of orderList) {
-                    const stop = stopByDriverAndClient.get(`${driverId}|${row.client_id}`);
-                    if (stop && !stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
-                        stops.push(stop);
-                        stopIdSet.add(sid(stop.id));
-                    }
+        /** Stops already placed on some driver's route — route-order pass runs for all drivers before tail (see below). */
+        const stopsClaimedGlobally = new Set<string>();
+
+        const routeBuckets = drivers.map((d) => ({
+            d,
+            driverId: String(d.id),
+            stops: [] as any[],
+            stopIdSet: new Set<string>(),
+            orderList: routeOrderByDriver.get(String(d.id)),
+        }));
+
+        // Pass 1 — ordered stops only, every driver first (so route list wins over another driver's tail)
+        for (const b of routeBuckets) {
+            if (!b.orderList?.length || !normalizedDeliveryDate) continue;
+            for (const row of b.orderList) {
+                let stop = stopByDriverAndClient.get(`${b.driverId}|${row.client_id}`);
+                if (!stop) {
+                    stop = stopByClientAndDate.get(`${row.client_id}|${normalizedDeliveryDate}`) ?? null;
                 }
-                // Tail: include any other stops for this driver/date not yet in list (prefer client, fallback to stop)
-                for (const [_, stop] of stopById.entries()) {
-                    const client = stop?.client_id ? clientById.get(String(stop.client_id)) : undefined;
-                    const assignedDriverId = (client?.assigned_driver_id ?? stop?.assigned_driver_id) ? String(client?.assigned_driver_id ?? stop.assigned_driver_id) : null;
-                    if (assignedDriverId === driverId && !stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
-                        stops.push(stop);
-                        stopIdSet.add(sid(stop.id));
-                    }
+                if (stop && !b.stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
+                    if (stopsClaimedGlobally.has(sid(stop.id))) continue;
+                    b.stops.push(stop);
+                    b.stopIdSet.add(sid(stop.id));
+                    stopsClaimedGlobally.add(sid(stop.id));
                 }
             }
-            // No stop_ids fallback — driver_route_order + client.assigned_driver_id only (allows DB column removal)
+        }
 
-            // Ensure color is always set - use driver color or fallback to palette
-            const driverColor = (d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey" && d.color !== null && d.color !== undefined)
-                ? d.color
-                : colorPalette[idx % colorPalette.length];
+        // Pass 2 — tail: assigned-driver stops not already on any route
+        for (const b of routeBuckets) {
+            if (!b.orderList?.length || !normalizedDeliveryDate) continue;
+            for (const [, stop] of stopById.entries()) {
+                const client = stop?.client_id ? clientById.get(String(stop.client_id)) : undefined;
+                const assignedDriverId = (client?.assigned_driver_id ?? stop?.assigned_driver_id)
+                    ? String(client?.assigned_driver_id ?? stop.assigned_driver_id)
+                    : null;
+                if (assignedDriverId === b.driverId && !b.stopIdSet.has(sid(stop.id)) && shouldShowStop(stop)) {
+                    if (stopsClaimedGlobally.has(sid(stop.id))) continue;
+                    b.stops.push(stop);
+                    b.stopIdSet.add(sid(stop.id));
+                    stopsClaimedGlobally.add(sid(stop.id));
+                }
+            }
+        }
+
+        const routes = routeBuckets.map((b, idx) => {
+            const d = b.d;
+            const driverColor =
+                d.color && d.color !== "#666" && d.color !== "gray" && d.color !== "grey" && d.color !== null && d.color !== undefined
+                    ? d.color
+                    : colorPalette[idx % colorPalette.length];
             return {
                 driverId: d.id,
                 driverName: d.name,
-                color: driverColor, // Always return a valid color
-                stops,
+                color: driverColor,
+                stops: b.stops,
             };
         });
         
