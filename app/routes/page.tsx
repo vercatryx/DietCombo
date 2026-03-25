@@ -523,8 +523,7 @@ export default function RoutesPage() {
                         completed: u.completed,
                         dislikes: u.dislikes || "",
                     };
-                })
-                .filter((s: any) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+                });
             return {
                 id: driverId,
                 driverId: driverId,

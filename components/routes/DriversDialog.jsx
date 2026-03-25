@@ -502,8 +502,7 @@ export default function DriversDialog({
                     orderStatus: u.orderStatus || null,
                     completed: u.completed,
                     dislikes: u.dislikes || "",
-                }))
-                .filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+                }));
             return { id: driverId, driverId, name: dname, color, polygon: [], stops };
         });
     }, [routes]);

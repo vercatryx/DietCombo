@@ -43,34 +43,12 @@ function makeAddressKey(stop: any) {
     return addrNoUnit;
 }
 
-/**
- * Same geocoding check as DriversMapLeaflet's hasLL / getLL — keeps counts in sync.
- * Rejects null, NaN, and (0,0) junk coordinates.
- */
-function hasValidCoords(s: any): boolean {
-    if (!s) return false;
-    const toNum = (v: any): number | null => {
-        if (v == null) return null;
-        if (typeof v === "number") return Number.isFinite(v) ? v : null;
-        if (typeof v === "string") { const n = parseFloat(v); return Number.isFinite(n) ? n : null; }
-        return null;
-    };
-    const lat = toNum(s.lat ?? s.latitude);
-    const lng = toNum(s.lng ?? s.longitude);
-    if (lat == null || lng == null) return false;
-    if (Math.abs(lat) < 0.00001 && Math.abs(lng) < 0.00001) return false;
-    return true;
-}
-
 export default function DriversGrid({ drivers = [], allStops = [], selectedDate = '' }: { drivers?: any[]; allStops?: any[]; selectedDate?: string }) {
     // Use d.stops directly from the API response (same data the routes page uses).
-    // No re-filtering by date — the API already returns only stops for the requested date.
+    // No client-side filtering — the API already filters by date, produce, etc.
     const filteredDrivers = useMemo(() => {
         if (!selectedDate) return drivers;
-        return drivers.filter((d) => {
-            const stops: any[] = d.stops || [];
-            return stops.filter(hasValidCoords).length > 0;
-        });
+        return drivers.filter((d) => (d.stops || []).length > 0);
     }, [drivers, selectedDate]);
 
     // Show empty state if no drivers
@@ -96,20 +74,19 @@ export default function DriversGrid({ drivers = [], allStops = [], selectedDate 
     return (
         <div className="grid">
             {filteredDrivers.map((d) => {
-                const rawStops: any[] = d.stops || [];
-                const cardStops = rawStops.filter(hasValidCoords);
+                const stops: any[] = d.stops || [];
 
-                const total = cardStops.length;
-                const done = cardStops.filter((s: any) => !!s?.completed).length;
+                const total = stops.length;
+                const done = stops.filter((s: any) => !!s?.completed).length;
                 const pct = total > 0 ? (done / total) * 100 : 0;
 
-                const proofCount = cardStops.filter((s: any) => !!((s?.proofUrl ?? s?.proof_url) || "").trim()).length;
+                const proofCount = stops.filter((s: any) => !!((s?.proofUrl ?? s?.proof_url) || "").trim()).length;
                 const pctProof = total > 0 ? (proofCount / total) * 100 : 0;
 
                 const uniqueAddrCount = (() => {
-                    if (cardStops.length === 0) return 0;
+                    if (stops.length === 0) return 0;
                     const set = new Set();
-                    for (const s of cardStops) {
+                    for (const s of stops) {
                         const key = makeAddressKey(s);
                         if (key) set.add(key);
                     }
