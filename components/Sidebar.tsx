@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck, MessageSquare } from 'lucide-react';
+import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -17,7 +17,6 @@ const navItems = [
     { label: 'Routes', href: '/routes', icon: Route },
     { label: 'Meal Plan Edits', href: '/meal-plan-edits', icon: CalendarCheck },
     { label: 'Admin Control', href: '/admin', icon: Settings },
-    { label: 'SMS Usage', href: '/admin/sms-usage', icon: MessageSquare },
 ];
 
 import { useTime } from '@/lib/time-context';
@@ -154,8 +153,11 @@ export function Sidebar({
                     return true;
                 }).map((item) => {
                     const Icon = item.icon;
-                    const isActive = pathname.startsWith(item.href);
+                    const isActive = item.label === 'Admin Control'
+                        ? pathname === '/admin'
+                        : pathname.startsWith(item.href);
                     const isMyHistory = item.label === 'My History' && userRole === 'navigator';
+                    const isAdmin = item.label === 'Admin Control';
 
                     return (
                         <div key={item.href} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -167,6 +169,23 @@ export function Sidebar({
                                 <Icon size={20} />
                                 {!isCollapsed && <span>{item.label}</span>}
                             </Link>
+                            {isAdmin && !isCollapsed && (
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    {[
+                                        { label: 'SMS Bot Test', href: '/admin/sms-bot' },
+                                        { label: 'SMS Usage', href: '/admin/sms-usage' },
+                                    ].map(sub => (
+                                        <Link
+                                            key={sub.href}
+                                            href={sub.href}
+                                            className={`${styles.navItem} ${pathname === sub.href ? styles.active : ''}`}
+                                            style={{ paddingLeft: '2.75rem', fontSize: '0.85rem' }}
+                                        >
+                                            <span>{sub.label}</span>
+                                        </Link>
+                                    ))}
+                                </div>
+                            )}
                             {isMyHistory && !isCollapsed && (
                                 <div style={{
                                     paddingLeft: '3rem',
