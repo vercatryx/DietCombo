@@ -60,8 +60,11 @@ async function loadHistory(
     // Filter out broken/empty entries
     const raw = (data ?? []).filter((r: any) =>
         r.content &&
+        r.role !== 'system' &&
         r.content !== '(No response)' &&
+        !r.content.startsWith('[processed:') &&
         !r.content.startsWith('Something went wrong') &&
+        !r.content.startsWith('Sorry, we hit a temporary issue') &&
         !r.content.startsWith('Thank you for your message. This number is not able to receive replies')
     );
 
