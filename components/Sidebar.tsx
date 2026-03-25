@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck } from 'lucide-react';
+import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck, MessageSquare } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -17,6 +17,7 @@ const navItems = [
     { label: 'Routes', href: '/routes', icon: Route },
     { label: 'Meal Plan Edits', href: '/meal-plan-edits', icon: CalendarCheck },
     { label: 'Admin Control', href: '/admin', icon: Settings },
+    { label: 'SMS Usage', href: '/admin/sms-usage', icon: MessageSquare },
 ];
 
 import { useTime } from '@/lib/time-context';

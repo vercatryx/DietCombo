@@ -41,10 +41,30 @@ async function flagNumberDoNotText(clientId: string, e164: string, reason: strin
   }
 }
 
+async function logOutboundSms(entry: {
+  clientId?: string; clientName?: string; phoneTo: string; messageType: string;
+  telnyxMessageId?: string; success: boolean; error?: string;
+}) {
+  try {
+    const supabase = getAdminSupabase();
+    await supabase.from('sms_outbound_log').insert({
+      client_id: entry.clientId || null,
+      client_name: entry.clientName || null,
+      phone_to: entry.phoneTo,
+      message_type: entry.messageType,
+      telnyx_message_id: entry.telnyxMessageId || null,
+      success: entry.success,
+      error: entry.error || null,
+    });
+  } catch (err) {
+    console.error('[Telnyx] Failed to log outbound SMS:', err);
+  }
+}
+
 export async function sendSms(
   to: string,
   text: string,
-  options?: { clientId?: string },
+  options?: { clientId?: string; clientName?: string; messageType?: string },
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   const apiKey = process.env.TELNYX_API_KEY;
   const fromNumber = process.env.TELNYX_FROM_NUMBER;
@@ -58,6 +78,8 @@ export async function sendSms(
   if (!e164) {
     return { success: false, error: `Invalid phone number: ${to}` };
   }
+
+  const msgType = options?.messageType || 'unknown';
 
   try {
     const res = await fetch('https://api.telnyx.com/v2/messages', {
@@ -76,6 +98,8 @@ export async function sendSms(
       const errorCode = data?.errors?.[0]?.code || '';
       console.error('[Telnyx] API error:', res.status, data);
 
+      logOutboundSms({ clientId: options?.clientId, clientName: options?.clientName, phoneTo: e164, messageType: msgType, success: false, error: `${res.status}/${errorCode}: ${errorDetail}` });
+
       if (options?.clientId && SMS_UNFIXABLE_CODES.has(res.status)) {
         const reason = `Telnyx ${res.status}/${errorCode}: ${errorDetail}`.slice(0, 255);
         await flagNumberDoNotText(options.clientId, e164, reason);
@@ -86,9 +110,11 @@ export async function sendSms(
 
     const messageId = data?.data?.id;
     console.log(`[Telnyx] SMS queued to ${e164} (id: ${messageId})`);
+    logOutboundSms({ clientId: options?.clientId, clientName: options?.clientName, phoneTo: e164, messageType: msgType, telnyxMessageId: messageId, success: true });
     return { success: true, messageId };
   } catch (err: any) {
     console.error('[Telnyx] Network error:', err);
+    logOutboundSms({ clientId: options?.clientId, clientName: options?.clientName, phoneTo: e164, messageType: msgType, success: false, error: err.message });
     return { success: false, error: err.message };
   }
 }
@@ -102,12 +128,14 @@ export async function sendSms(
 export async function sendSmsToClient(
   client: {
     id: string;
+    full_name?: string | null;
     phone_number?: string | null;
     secondary_phone_number?: string | null;
     do_not_text?: boolean;
     do_not_text_numbers?: Record<string, string> | null;
   },
   text: string,
+  messageType = 'delivery_notification',
 ): Promise<{ success: boolean; error?: string }> {
   if (client.do_not_text) {
     console.log(`[Telnyx] Skipping client ${client.id} — do_not_text is set`);
@@ -125,7 +153,7 @@ export async function sendSmsToClient(
 
   let lastResult: { success: boolean; error?: string } = { success: false, error: 'No numbers tried' };
   for (const number of textable) {
-    lastResult = await sendSms(number, text, { clientId: client.id });
+    lastResult = await sendSms(number, text, { clientId: client.id, clientName: client.full_name || undefined, messageType });
     if (lastResult.success) return lastResult;
     console.log(`[Telnyx] Failed to send to ${number} for client ${client.id}, trying next...`);
   }

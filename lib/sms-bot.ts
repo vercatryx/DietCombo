@@ -559,6 +559,7 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
                 phone,
                 'Thank you for your message. This number is not able to receive replies. ' +
                 'For any questions or support, please call us at (845) 478-6605. — The Diet Fantasy',
+                { messageType: 'bot_reply' },
             );
             return;
         }
@@ -566,7 +567,7 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
         const foodClients = clients.filter((c: any) => c.service_type === 'Food');
         const client = foodClients[0] ?? clients[0];
         if (!client) {
-            await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.');
+            await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.', { messageType: 'bot_reply' });
             return;
         }
 
@@ -638,11 +639,11 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
         if (replyText !== FALLBACK_MSG) {
             await saveMessage(supabase, phone, clientId, 'assistant', truncated);
         }
-        await sendSms(phone, truncated, { clientId });
+        await sendSms(phone, truncated, { clientId, clientName: client.full_name, messageType: 'bot_reply' });
         console.log(`[SMS Bot] Replied to ${phone} (${client.full_name}): ${truncated.slice(0, 100)}...`);
 
     } catch (err: any) {
         console.error('[SMS Bot] Fatal error:', err);
-        await sendSms(phone, FALLBACK_MSG).catch(() => {});
+        await sendSms(phone, FALLBACK_MSG, { messageType: 'bot_reply' }).catch(() => {});
     }
 }
