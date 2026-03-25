@@ -422,8 +422,13 @@ async function executeSetEmail(supabase: SupabaseClient, clientId: string, email
         return JSON.stringify({ success: false, error: 'Invalid email format.' });
     }
 
-    const { error } = await supabase.from('clients').update({ email: trimmed }).eq('id', clientId);
-    if (error) return JSON.stringify({ success: false, error: error.message });
+    console.log(`[SMS Bot] Setting email for client ${clientId} to ${trimmed}`);
+    const { data, error } = await supabase.from('clients').update({ email: trimmed }).eq('id', clientId).select('id, email');
+    if (error) {
+        console.error(`[SMS Bot] Failed to set email for ${clientId}:`, error);
+        return JSON.stringify({ success: false, error: error.message });
+    }
+    console.log(`[SMS Bot] Email update result:`, data);
 
     return JSON.stringify({ success: true, email: trimmed, message: `Email set to ${trimmed}. You can now log in at http://customer.thedietfantasy.com/ with this email.` });
 }
@@ -592,6 +597,26 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
         if (!client) {
             await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.', { messageType: 'bot_reply' });
             return;
+        }
+
+        // Restore the active account from the most recent conversation message.
+        // This persists switch_account across separate webhook calls.
+        if (clients.length > 1) {
+            const { data: lastMsg } = await supabase
+                .from('sms_conversations')
+                .select('client_id')
+                .eq('phone_number', phone)
+                .not('client_id', 'is', null)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+            if (lastMsg?.client_id) {
+                const restored = clients.find((c: any) => c.id === lastMsg.client_id);
+                if (restored) {
+                    client = restored;
+                    console.log(`[SMS Bot] Restored active account from history: ${restored.full_name} (${restored.id})`);
+                }
+            }
         }
 
         let activeClientId = client.id;
