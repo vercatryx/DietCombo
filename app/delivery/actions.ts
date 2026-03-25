@@ -7,7 +7,7 @@ import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
-import { sendSms, formatDeliveryTimestamp } from '@/lib/telnyx';
+import { sendSmsToClient, formatDeliveryTimestamp } from '@/lib/telnyx';
 
 async function sendDeliveryNotification(
     supabase: SupabaseClient,
@@ -24,7 +24,7 @@ async function sendDeliveryNotification(
 
         const { data: client } = await supabase
             .from('clients')
-            .select('phone_number, secondary_phone_number, full_name, do_not_text')
+            .select('id, phone_number, secondary_phone_number, full_name, do_not_text, do_not_text_numbers')
             .eq('id', clientId)
             .single();
 
@@ -35,10 +35,7 @@ async function sendDeliveryNotification(
         const greeting = name ? `Hello ${name}, this` : 'Hello, this';
         const message = `${greeting} is The Diet Fantasy. Your food has been delivered on ${timestamp}. If you have any questions, please don't hesitate to reach out.`;
 
-        const numbers = [client.phone_number, client.secondary_phone_number].filter(Boolean) as string[];
-        for (const number of numbers) {
-            await sendSms(number, message, { clientId });
-        }
+        await sendSmsToClient(client, message);
     } catch (err) {
         console.error('[Delivery SMS] Failed to send notification:', err);
     }

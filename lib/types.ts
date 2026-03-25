@@ -59,6 +59,7 @@ export interface ClientProfile {
   delivery?: boolean;
   doNotText?: boolean;
   doNotTextReason?: string | null;
+  doNotTextNumbers?: Record<string, string> | null;
   dislikes?: string | null;
   latitude?: number | null;
   longitude?: number | null;

@@ -4099,6 +4099,7 @@ function mapClientFromDB(c: any): ClientProfile {
         delivery: c.delivery ?? true,
         doNotText: c.do_not_text ?? false,
         doNotTextReason: c.do_not_text_reason || null,
+        doNotTextNumbers: c.do_not_text_numbers || {},
         dislikes: c.dislikes || null,
         latitude: c.latitude ?? null,
         longitude: c.longitude ?? null,
@@ -4630,6 +4631,7 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.delivery !== undefined) payload.delivery = data.delivery;
     if (data.doNotText !== undefined) payload.do_not_text = data.doNotText;
     if (data.doNotTextReason !== undefined) payload.do_not_text_reason = data.doNotTextReason;
+    if (data.doNotTextNumbers !== undefined) payload.do_not_text_numbers = data.doNotTextNumbers;
     if (data.dislikes !== undefined) payload.dislikes = data.dislikes || null;
     if (data.latitude !== undefined) payload.latitude = data.latitude ?? null;
     if (data.longitude !== undefined) payload.longitude = data.longitude ?? null;

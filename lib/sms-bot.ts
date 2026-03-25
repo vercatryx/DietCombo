@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from './supabase-env';
-import { sendSms } from './telnyx';
+import { sendSms, normalizePhone } from './telnyx';
 import { getTodayInAppTz, APP_TIMEZONE } from './timezone';
 import { mealPlannerDateOnly, mealPlannerCutoffDate } from './meal-planner-utils';
 
@@ -35,7 +35,7 @@ export async function identifyClientByPhone(
 
     const { data, error } = await supabase
         .from('clients')
-        .select('id, full_name, email, service_type, phone_number, secondary_phone_number, address, apt, city, state, zip, parent_client_id, expiration_date, approved_meals_per_week, do_not_text')
+        .select('id, full_name, email, service_type, phone_number, secondary_phone_number, address, apt, city, state, zip, parent_client_id, expiration_date, approved_meals_per_week, do_not_text, do_not_text_numbers')
         .or(`phone_number.ilike.${fuzzy},secondary_phone_number.ilike.${fuzzy}`);
 
     console.log('[identifyClientByPhone] results:', data?.length ?? 0, 'error:', error?.message ?? 'none');
@@ -569,12 +569,20 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
             return;
         }
 
-        if (client.do_not_text) {
-            console.log(`[SMS Bot] Skipping client ${client.id} (${client.full_name}) — do_not_text is set`);
-            return;
-        }
-
         const clientId = client.id;
+
+        // Client is actively texting us, so this number works.
+        // If it was previously flagged, clear the flag for this number.
+        const e164Phone = normalizePhone(phone);
+        const flaggedMap: Record<string, string> = client.do_not_text_numbers || {};
+        if (e164Phone && flaggedMap[e164Phone]) {
+            delete flaggedMap[e164Phone];
+            await supabase.from('clients').update({
+                do_not_text_numbers: flaggedMap,
+                do_not_text: false,
+            }).eq('id', clientId);
+            console.log(`[SMS Bot] Cleared do_not_text for ${e164Phone} (client ${clientId}) — they texted us`);
+        }
         await pruneOldMessages(supabase, phone);
         await saveMessage(supabase, phone, clientId, 'user', messageText);
 

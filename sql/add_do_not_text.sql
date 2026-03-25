@@ -1,2 +1,3 @@
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS do_not_text BOOLEAN DEFAULT false;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS do_not_text_reason VARCHAR(255);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS do_not_text_numbers JSONB DEFAULT '{}';

@@ -194,6 +194,7 @@ export function ClientInfoShelf({
                     delivery: editForm.delivery,
                     doNotText: editForm.doNotText,
                     doNotTextReason: editForm.doNotText ? undefined : null,
+                    doNotTextNumbers: editForm.doNotText ? undefined : {},
                     uniteAccount: editForm.uniteAccount || null,
                     history: editForm.history || null,
                 },
@@ -597,8 +598,12 @@ export function ClientInfoShelf({
                                             </div>
                                         ) : '—'
                                     )}
-                                    {!isEditing && client.doNotText && client.doNotTextReason && (
-                                        <div style={{ fontSize: '0.75rem', color: '#991b1b', marginTop: '4px' }}>{client.doNotTextReason}</div>
+                                    {!isEditing && client.doNotTextNumbers && Object.keys(client.doNotTextNumbers).length > 0 && (
+                                        <div style={{ fontSize: '0.75rem', color: '#991b1b', marginTop: '4px' }}>
+                                            {Object.entries(client.doNotTextNumbers).map(([num, reason]) => (
+                                                <div key={num}>{num}: {reason}</div>
+                                            ))}
+                                        </div>
                                     )}
                                 </div>
                             </div>
