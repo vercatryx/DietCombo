@@ -153,11 +153,8 @@ export function Sidebar({
                     return true;
                 }).map((item) => {
                     const Icon = item.icon;
-                    const isActive = item.label === 'Admin Control'
-                        ? pathname === '/admin'
-                        : pathname.startsWith(item.href);
+                    const isActive = pathname.startsWith(item.href);
                     const isMyHistory = item.label === 'My History' && userRole === 'navigator';
-                    const isAdmin = item.label === 'Admin Control';
 
                     return (
                         <div key={item.href} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -169,23 +166,6 @@ export function Sidebar({
                                 <Icon size={20} />
                                 {!isCollapsed && <span>{item.label}</span>}
                             </Link>
-                            {isAdmin && !isCollapsed && (
-                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                    {[
-                                        { label: 'SMS Bot Test', href: '/admin/sms-bot' },
-                                        { label: 'SMS Usage', href: '/admin/sms-usage' },
-                                    ].map(sub => (
-                                        <Link
-                                            key={sub.href}
-                                            href={sub.href}
-                                            className={`${styles.navItem} ${pathname === sub.href ? styles.active : ''}`}
-                                            style={{ paddingLeft: '2.75rem', fontSize: '0.85rem' }}
-                                        >
-                                            <span>{sub.label}</span>
-                                        </Link>
-                                    ))}
-                                </div>
-                            )}
                             {isMyHistory && !isCollapsed && (
                                 <div style={{
                                     paddingLeft: '3rem',

@@ -19,7 +19,8 @@ import { MealSelectionManagement } from '@/components/admin/MealSelectionManagem
 import { SettingsManagement } from '@/components/admin/SettingsManagement';
 import { ProduceVendorManagement } from '@/components/admin/ProduceVendorManagement';
 import { BrooklynAdminManagement } from '@/components/admin/BrooklynAdminManagement';
-type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'brooklyn-admins' | 'form' | 'meals' | 'settings' | 'template' | 'produce-vendors';
+import { SmsUsageReport } from '@/components/admin/SmsUsageReport';
+type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'brooklyn-admins' | 'form' | 'meals' | 'settings' | 'template' | 'produce-vendors' | 'sms-usage';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('template');
@@ -116,6 +117,12 @@ export default function AdminPage() {
                     Produce Vendors
                 </button>
                 <button
+                    className={`${styles.tab} ${activeTab === 'sms-usage' ? styles.activeTab : ''}`}
+                    onClick={() => setActiveTab('sms-usage')}
+                >
+                    SMS Usage
+                </button>
+                <button
                     className={`${styles.tab} ${activeTab === 'settings' ? styles.activeTab : ''}`}
                     onClick={() => setActiveTab('settings')}
                 >
@@ -153,6 +160,7 @@ export default function AdminPage() {
                 {activeTab === 'admins' && <AdminManagement />}
                 {activeTab === 'brooklyn-admins' && <BrooklynAdminManagement />}
                 {activeTab === 'produce-vendors' && <ProduceVendorManagement />}
+                {activeTab === 'sms-usage' && <SmsUsageReport />}
                 {activeTab === 'settings' && <SettingsManagement />}
                 {activeTab === 'meals' && <MealSelectionManagement />}
                 {activeTab === 'template' && mainVendor && (

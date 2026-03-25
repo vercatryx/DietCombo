@@ -32,7 +32,7 @@ function getDefaultDates() {
   };
 }
 
-export default function SmsUsagePage() {
+export function SmsUsageReport() {
   const defaults = getDefaultDates();
   const [fromDate, setFromDate] = useState(defaults.from);
   const [toDate, setToDate] = useState(defaults.to);
@@ -55,16 +55,7 @@ export default function SmsUsagePage() {
   }
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '2rem 1rem' }}>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <Link href="/admin" style={{ color: 'var(--color-primary)', textDecoration: 'none', fontSize: '0.875rem' }}>
-          &larr; Back to Admin
-        </Link>
-      </div>
-
-      <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-        SMS Usage Report
-      </h1>
+    <div>
       <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
         Track outbound text messages per client for a given date range.
       </p>
