@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
-import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, isOrderUnderVendor, orderHasDeliveryProof, resolveOrderId, getClientsUnlimited } from '@/lib/actions';
+import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, saveDeliveryProofUrlAndProcessOrder, updateOrderDeliveryProof, isOrderUnderVendor, orderHasDeliveryProof, resolveOrderId, getClientsUnlimited, mergeRouteAssignedDriverIntoClients } from '@/lib/actions';
 import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
 import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText, Loader2 } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
@@ -112,7 +112,8 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             setExpandedOrders(allOrderKeys);
 
             setOrders(filteredOrders);
-            setClients(clientsData);
+            const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsData || []);
+            setClients(clientsMerged);
             setMenuItems(menuItemsData);
             setMealItems(mealItemsData || []);
             setBoxTypes(boxTypesData);
@@ -127,10 +128,10 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             });
             setProofUrls(initialProofUrls);
 
-            if (filteredOrders.length > 0 && clientsData?.length) {
+            if (filteredOrders.length > 0 && clientsMerged.length) {
                 const drivers = await getDriversForDate(deliveryDate);
                 const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : undefined;
-                const { sortedOrders } = sortOrdersByDriver(filteredOrders, clientsData, drivers, clientIdToStopNumber);
+                const { sortedOrders } = sortOrdersByDriver(filteredOrders, clientsMerged, drivers, clientIdToStopNumber);
                 setDisplayOrders(sortedOrders);
             } else {
                 setDisplayOrders(filteredOrders);
@@ -340,8 +341,9 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders, driverIdToNumber } = await getSortedOrders(clientsForExport);
-        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders, driverIdToNumber } = await getSortedOrders(clientsMerged);
+        const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : {};
         const getDriverStop = (order: any) => {
             const client = clientById.get(order.client_id);
@@ -428,8 +430,9 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             return;
         }
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrders(clientsForExport, freshOrders);
-        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrders(clientsMerged, freshOrders);
+        const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         const seenClientDate = new Set<string>();
         const ordersForLabels = sortedOrders.filter((o: any) => {
             const key = `${o.client_id}|${o.scheduled_delivery_date ?? ''}`;

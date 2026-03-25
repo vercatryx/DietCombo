@@ -15,7 +15,7 @@ import {
     formatDateToYYYYMMDD,
     DAY_NAME_TO_NUMBER
 } from './order-dates';
-import { supabase, isConnectionError, getConnectionErrorHelp } from './supabase';
+import { supabase, fetchAllRows, isConnectionError, getConnectionErrorHelp } from './supabase';
 import { getSupabaseDbApiKey } from './supabase-env';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
@@ -9526,8 +9526,10 @@ export async function getDriversForDate(deliveryDate: string | null): Promise<{ 
 
 /**
  * Get 1-based stop number per client for a delivery date (from driver_route_order + stops).
- * Uses client.assigned_driver_id as source of truth (matches vendor export and routes page).
- * Returns {} if no date or table missing.
+ * Each client should appear in at most one driver's route (enforced by cleanup + optional DB unique).
+ * Numbering follows that route order for clients who actually have a stop on this date.
+ * We do not require clients.assigned_driver_id to match the route driver — that field can lag
+ * after route dedup/sync and would otherwise yield missing stop numbers on vendor exports.
  */
 export async function getStopNumbersForDeliveryDate(deliveryDate: string | null): Promise<Record<string, number>> {
     if (!deliveryDate || !/^\d{4}-\d{2}-\d{2}/.test(deliveryDate)) return {};
@@ -9535,46 +9537,32 @@ export async function getStopNumbersForDeliveryDate(deliveryDate: string | null)
     try {
         const { data: stopsRows } = await supabase
             .from('stops')
-            .select('client_id, assigned_driver_id')
+            .select('client_id')
             .eq('delivery_date', dateOnly)
             .not('client_id', 'is', null);
         if (!stopsRows?.length) return {};
-        const clientIds = [...new Set(stopsRows.map((s: any) => String(s.client_id)).filter(Boolean))];
-        const { data: clients } = clientIds.length > 0
-            ? await supabase.from('clients').select('id, assigned_driver_id').in('id', clientIds)
-            : { data: [] };
-        const clientById = new Map((clients || []).map((c: any) => [String(c.id), c]));
-        const driverIds = [...new Set([
-            ...(clients || []).map((c: any) => c?.assigned_driver_id).filter(Boolean).map(String),
-            ...(stopsRows || []).map((s: any) => s?.assigned_driver_id).filter(Boolean).map(String)
-        ])];
-        const clientHasStopForDriver = new Set<string>();
-        for (const s of stopsRows) {
-            const c = clientById.get(String(s.client_id));
-            const driverId = (c?.assigned_driver_id ?? (s as any).assigned_driver_id) ? String(c?.assigned_driver_id ?? (s as any).assigned_driver_id) : null;
-            if (driverId) clientHasStopForDriver.add(`${driverId}|${String(s.client_id)}`);
-        }
+        const clientsWithStopOnDate = new Set(stopsRows.map((s: any) => String(s.client_id)).filter(Boolean));
         const { data: orderRows } = await supabase
             .from('driver_route_order')
             .select('driver_id, client_id, position')
-            .in('driver_id', driverIds)
+            .order('driver_id')
             .order('position', { ascending: true })
             .order('client_id', { ascending: true });
         if (!orderRows?.length) return {};
-        const clientToStopNumber: Record<string, number> = {};
         const byDriver = new Map<string, { client_id: string; position: number }[]>();
         for (const row of orderRows) {
             const did = String(row.driver_id);
             if (!byDriver.has(did)) byDriver.set(did, []);
             byDriver.get(did)!.push({ client_id: String(row.client_id), position: row.position ?? 0 });
         }
-        for (const [driverId, list] of byDriver.entries()) {
+        const clientToStopNumber: Record<string, number> = {};
+        for (const [, list] of byDriver.entries()) {
+            const sorted = [...list].sort((a, b) => a.position - b.position || a.client_id.localeCompare(b.client_id));
             let stopNum = 0;
-            for (const { client_id } of list) {
-                if (clientHasStopForDriver.has(`${driverId}|${client_id}`)) {
-                    stopNum += 1;
-                    clientToStopNumber[client_id] = stopNum;
-                }
+            for (const { client_id } of sorted) {
+                if (!clientsWithStopOnDate.has(client_id)) continue;
+                stopNum += 1;
+                clientToStopNumber[client_id] = stopNum;
             }
         }
         return clientToStopNumber;
@@ -9582,6 +9570,52 @@ export async function getStopNumbersForDeliveryDate(deliveryDate: string | null)
         console.error('[getStopNumbersForDeliveryDate] Error:', err);
         return {};
     }
+}
+
+/**
+ * client_id → driver_id from driver_route_order using the same name-rank claim order as
+ * /api/route/assignment-data. Vendor exports use this so grouping matches actual routes when
+ * clients.assigned_driver_id is stale after route dedup.
+ */
+export async function getClientIdToRouteDriverMap(): Promise<Map<string, string>> {
+    const driversList = await getDriversForDate(null);
+    const sortedDriverIds = [...driversList]
+        .sort((a, b) => driverRankByName(a.name) - driverRankByName(b.name))
+        .map((d) => d.id);
+    const allRouteOrder = await fetchAllRows((sb: any) =>
+        sb.from('driver_route_order').select('driver_id, client_id, position').order('position', { ascending: true })
+    );
+    const routeByDriver = new Map<string, string[]>();
+    for (const row of allRouteOrder || []) {
+        const did = String(row.driver_id);
+        const cid = String(row.client_id);
+        if (!routeByDriver.has(did)) routeByDriver.set(did, []);
+        routeByDriver.get(did)!.push(cid);
+    }
+    const clientToDriver = new Map<string, string>();
+    for (const driverId of sortedDriverIds) {
+        const list = routeByDriver.get(driverId) || [];
+        for (const cid of list) {
+            if (!clientToDriver.has(cid)) clientToDriver.set(cid, driverId);
+        }
+    }
+    for (const [driverId, list] of routeByDriver) {
+        if (sortedDriverIds.includes(driverId)) continue;
+        for (const cid of list) {
+            if (!clientToDriver.has(cid)) clientToDriver.set(cid, driverId);
+        }
+    }
+    return clientToDriver;
+}
+
+/** Overlay driver_route_order driver onto client profiles for export sorting (labels, CSV, Excel). */
+export async function mergeRouteAssignedDriverIntoClients(clients: ClientProfile[]): Promise<ClientProfile[]> {
+    const routeMap = await getClientIdToRouteDriverMap();
+    return clients.map((c) => {
+        const rid = routeMap.get(c.id);
+        if (!rid) return c;
+        return { ...c, assignedDriverId: rid };
+    });
 }
 
 /**

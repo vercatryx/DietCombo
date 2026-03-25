@@ -5,8 +5,20 @@ import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
 import { getVendors, getClients, getMenuItems, getBoxTypes, getCategories } from '@/lib/cached-data';
-import { getClientsUnlimited } from '@/lib/actions';
-import { getOrdersByVendor, getDriversForDate, getStopNumbersForDeliveryDate, getMealItems, isOrderUnderVendor, updateOrderDeliveryProof, orderHasDeliveryProof, resolveOrderId, getClientsWhoChangedFromDefaultForDate, getDefaultOrderTemplate } from '@/lib/actions';
+import {
+    getClientsUnlimited,
+    getOrdersByVendor,
+    getDriversForDate,
+    getStopNumbersForDeliveryDate,
+    mergeRouteAssignedDriverIntoClients,
+    getMealItems,
+    isOrderUnderVendor,
+    updateOrderDeliveryProof,
+    orderHasDeliveryProof,
+    resolveOrderId,
+    getClientsWhoChangedFromDefaultForDate,
+    getDefaultOrderTemplate,
+} from '@/lib/actions';
 import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { generateLabelsPDF, generateLabelsPDFTwoPerCustomer, generateTablePDF } from '@/lib/label-utils';
@@ -715,8 +727,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
-        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsMerged);
+        const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         const deliveryDateForStop = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStop ? await getStopNumbersForDeliveryDate(deliveryDateForStop) : {};
         const getDriverStop = (order: any) => {
@@ -866,8 +879,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
-        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsMerged);
+        const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         const deliveryDateForStop = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStop ? await getStopNumbersForDeliveryDate(deliveryDateForStop) : {};
         const getDriverStop = (order: any) => {
@@ -930,8 +944,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
-        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders, driverIdToNumber } = await getSortedOrdersForDate(dateKey, dateOrders, clientsMerged);
+        const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         const deliveryDateForStop = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStop ? await getStopNumbersForDeliveryDate(deliveryDateForStop) : {};
         const getDriverStop = (order: any) => {
@@ -973,7 +988,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         flushSync(() => setIsExporting(true));
         try {
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders } = await getSortedOrdersForDate(dateKey, dateOrders, clientsForExport);
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders } = await getSortedOrdersForDate(dateKey, dateOrders, clientsMerged);
         const changedNames = dateKey !== 'no-date' ? await getClientsWhoChangedFromDefaultForDate(dateKey) : [];
         const changedRows: string[][] = changedNames.length > 0
             ? [['Client Name'], ...changedNames.map((n) => [n])]
@@ -1018,8 +1034,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         }
         // Use getClientsUnlimited to bypass 1000-row limit and avoid "Unknown Client" on exports
         const clientsForExport = await getClientsUnlimited();
-        const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsForExport);
-        const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsMerged);
+        const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         // One label per client per date: dedupe in case DB has duplicate orders for same client+date (e.g. from prior dependant-creation logic).
         const seenClientDate = new Set<string>();
         const ordersForLabels = sortedOrders.filter((o: any) => {
@@ -1108,8 +1125,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 return;
             }
             const clientsForExport = await getClientsUnlimited();
-            const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrdersAlt, clientsForExport);
-            const clientById = new Map(clientsForExport.map(c => [c.id, c]));
+            const clientsMergedAlt = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+            const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrdersAlt, clientsMergedAlt);
+            const clientById = new Map(clientsMergedAlt.map(c => [c.id, c]));
             const seenClientDateAlt = new Set<string>();
             const ordersForLabelsAlt = sortedOrders.filter((o: any) => {
                 const key = `${o.client_id}|${o.scheduled_delivery_date ?? ''}`;
