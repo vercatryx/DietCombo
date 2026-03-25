@@ -1,4 +1,23 @@
-export async function sendSms(to: string, text: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+import { createClient } from '@supabase/supabase-js';
+import { getSupabaseDbApiKey } from './supabase-env';
+
+const SMS_UNFIXABLE_CODES = new Set([400, 403, 404, 422]);
+
+async function flagDoNotText(clientId: string, reason: string) {
+  try {
+    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
+    await supabase.from('clients').update({ do_not_text: true, do_not_text_reason: reason }).eq('id', clientId);
+    console.log(`[Telnyx] Flagged client ${clientId} as do_not_text: ${reason}`);
+  } catch (err) {
+    console.error('[Telnyx] Failed to flag do_not_text:', err);
+  }
+}
+
+export async function sendSms(
+  to: string,
+  text: string,
+  options?: { clientId?: string },
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
   const apiKey = process.env.TELNYX_API_KEY;
   const fromNumber = process.env.TELNYX_FROM_NUMBER;
 
@@ -26,8 +45,16 @@ export async function sendSms(to: string, text: string): Promise<{ success: bool
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
+      const errorDetail = data?.errors?.[0]?.detail || 'unknown';
+      const errorCode = data?.errors?.[0]?.code || '';
       console.error('[Telnyx] API error:', res.status, data);
-      return { success: false, error: `Telnyx ${res.status}: ${data?.errors?.[0]?.detail || 'unknown'}` };
+
+      if (options?.clientId && SMS_UNFIXABLE_CODES.has(res.status)) {
+        const reason = `Telnyx ${res.status}/${errorCode}: ${errorDetail}`.slice(0, 255);
+        flagDoNotText(options.clientId, reason);
+      }
+
+      return { success: false, error: `Telnyx ${res.status}: ${errorDetail}` };
     }
 
     const messageId = data?.data?.id;

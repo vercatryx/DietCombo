@@ -35,7 +35,7 @@ export async function identifyClientByPhone(
 
     const { data, error } = await supabase
         .from('clients')
-        .select('id, full_name, email, service_type, phone_number, secondary_phone_number, address, apt, city, state, zip, parent_client_id, expiration_date, approved_meals_per_week')
+        .select('id, full_name, email, service_type, phone_number, secondary_phone_number, address, apt, city, state, zip, parent_client_id, expiration_date, approved_meals_per_week, do_not_text')
         .or(`phone_number.ilike.${fuzzy},secondary_phone_number.ilike.${fuzzy}`);
 
     console.log('[identifyClientByPhone] results:', data?.length ?? 0, 'error:', error?.message ?? 'none');
@@ -569,6 +569,11 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
             return;
         }
 
+        if (client.do_not_text) {
+            console.log(`[SMS Bot] Skipping client ${client.id} (${client.full_name}) — do_not_text is set`);
+            return;
+        }
+
         const clientId = client.id;
         await pruneOldMessages(supabase, phone);
         await saveMessage(supabase, phone, clientId, 'user', messageText);
@@ -624,7 +629,7 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
         if (replyText !== FALLBACK_MSG) {
             await saveMessage(supabase, phone, clientId, 'assistant', truncated);
         }
-        await sendSms(phone, truncated);
+        await sendSms(phone, truncated, { clientId });
         console.log(`[SMS Bot] Replied to ${phone} (${client.full_name}): ${truncated.slice(0, 100)}...`);
 
     } catch (err: any) {

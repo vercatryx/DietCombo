@@ -57,6 +57,8 @@ export interface ClientProfile {
   complex?: boolean;
   bill?: boolean;
   delivery?: boolean;
+  doNotText?: boolean;
+  doNotTextReason?: string | null;
   dislikes?: string | null;
   latitude?: number | null;
   longitude?: number | null;

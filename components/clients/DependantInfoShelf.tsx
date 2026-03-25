@@ -49,6 +49,7 @@ export function DependantInfoShelf({
         complex: c.complex ?? false,
         bill: c.bill ?? true,
         delivery: c.delivery ?? true,
+        doNotText: c.doNotText ?? false,
     }), []);
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
@@ -117,6 +118,8 @@ export function DependantInfoShelf({
                     complex: editForm.complex,
                     bill: editForm.bill,
                     delivery: editForm.delivery,
+                    doNotText: editForm.doNotText,
+                    doNotTextReason: editForm.doNotText ? undefined : null,
                 },
                 { skipOrderSync: true }
             );
@@ -513,16 +516,28 @@ export function DependantInfoShelf({
                                                 />
                                                 <span>Delivery</span>
                                             </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={editForm.doNotText}
+                                                    onChange={e => setEditForm({ ...editForm, doNotText: e.target.checked })}
+                                                />
+                                                <span>Do Not Text</span>
+                                            </label>
                                         </div>
                                     ) : (
-                                        (client.paused || client.complex || client.bill || client.delivery) ? (
+                                        (client.paused || client.complex || client.bill || client.delivery || client.doNotText) ? (
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                                                 {client.paused && <span className={styles.flagChip}>Paused</span>}
                                                 {client.complex && <span className={styles.flagChip}>Complex</span>}
                                                 {client.bill && <span className={styles.flagChip}>Bill</span>}
                                                 {client.delivery && <span className={styles.flagChip}>Delivery</span>}
+                                                {client.doNotText && <span className={styles.flagChip} style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>Do Not Text</span>}
                                             </div>
                                         ) : '—'
+                                    )}
+                                    {!isEditing && client.doNotText && client.doNotTextReason && (
+                                        <div style={{ fontSize: '0.75rem', color: '#991b1b', marginTop: '4px' }}>{client.doNotTextReason}</div>
                                     )}
                                 </div>
                             </div>

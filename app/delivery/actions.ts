@@ -24,11 +24,11 @@ async function sendDeliveryNotification(
 
         const { data: client } = await supabase
             .from('clients')
-            .select('phone_number, secondary_phone_number, full_name')
+            .select('phone_number, secondary_phone_number, full_name, do_not_text')
             .eq('id', clientId)
             .single();
 
-        if (!client) return;
+        if (!client || client.do_not_text) return;
 
         const timestamp = formatDeliveryTimestamp(new Date());
         const name = client.full_name?.split(' ')[0] || '';
@@ -37,7 +37,7 @@ async function sendDeliveryNotification(
 
         const numbers = [client.phone_number, client.secondary_phone_number].filter(Boolean) as string[];
         for (const number of numbers) {
-            await sendSms(number, message);
+            await sendSms(number, message, { clientId });
         }
     } catch (err) {
         console.error('[Delivery SMS] Failed to send notification:', err);
