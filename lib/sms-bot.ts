@@ -513,72 +513,88 @@ RULES:
 // ── Main conversation handler ───────────────────────────────────────
 
 export async function handleInboundSms(phone: string, messageText: string): Promise<void> {
-    const supabase = getSupabaseAdmin();
-    const clients = await identifyClientByPhone(supabase, phone);
+    const FALLBACK_MSG = 'Sorry, we hit a temporary issue. Please try again or call (845) 478-6605 for help. — The Diet Fantasy';
 
-    if (clients.length === 0) {
-        await sendSms(
-            phone,
-            'Thank you for your message. This number is not able to receive replies. ' +
-            'For any questions or support, please call us at (845) 478-6605. — The Diet Fantasy',
-        );
-        return;
-    }
+    try {
+        const supabase = getSupabaseAdmin();
+        const clients = await identifyClientByPhone(supabase, phone);
 
-    const foodClients = clients.filter((c: any) => c.service_type === 'Food');
-    const client = foodClients[0] ?? clients[0];
-    if (!client) {
-        await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.');
-        return;
-    }
-
-    const clientId = client.id;
-    await pruneOldMessages(supabase, phone);
-    await saveMessage(supabase, phone, clientId, 'user', messageText);
-
-    const history = await loadHistory(supabase, phone);
-
-    const { data: dependents } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', clientId);
-    const foodDependents = (dependents ?? []).filter((d: any) => d.service_type === 'Food');
-    const householdCount = 1 + foodDependents.length;
-
-    const systemPrompt = buildSystemPrompt(
-        { full_name: client.full_name, email: client.email, service_type: client.service_type, approved_meals_per_week: client.approved_meals_per_week, expiration_date: client.expiration_date },
-        householdCount,
-    );
-
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const tools = defineBotTools();
-    const messages: Anthropic.MessageParam[] = history.map(h => ({ role: h.role, content: h.content }));
-
-    let response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514', max_tokens: 1024, system: systemPrompt, tools, messages,
-    });
-
-    let iterations = 0;
-    while (response.stop_reason === 'tool_use' && iterations < 10) {
-        iterations++;
-        const toolBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const block of toolBlocks) {
-            console.log(`[SMS Bot] Tool: ${block.name}`, JSON.stringify(block.input).slice(0, 200));
-            const result = await executeTool(supabase, clientId, block.name, block.input);
-            console.log(`[SMS Bot] Result (${block.name}):`, result.slice(0, 300));
-            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+        if (clients.length === 0) {
+            await sendSms(
+                phone,
+                'Thank you for your message. This number is not able to receive replies. ' +
+                'For any questions or support, please call us at (845) 478-6605. — The Diet Fantasy',
+            );
+            return;
         }
-        messages.push({ role: 'assistant', content: response.content });
-        messages.push({ role: 'user', content: toolResults });
-        response = await anthropic.messages.create({
+
+        const foodClients = clients.filter((c: any) => c.service_type === 'Food');
+        const client = foodClients[0] ?? clients[0];
+        if (!client) {
+            await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.');
+            return;
+        }
+
+        const clientId = client.id;
+        await pruneOldMessages(supabase, phone);
+        await saveMessage(supabase, phone, clientId, 'user', messageText);
+
+        const history = await loadHistory(supabase, phone);
+
+        const { data: dependents } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', clientId);
+        const foodDependents = (dependents ?? []).filter((d: any) => d.service_type === 'Food');
+        const householdCount = 1 + foodDependents.length;
+
+        const systemPrompt = buildSystemPrompt(
+            { full_name: client.full_name, email: client.email, service_type: client.service_type, approved_meals_per_week: client.approved_meals_per_week, expiration_date: client.expiration_date },
+            householdCount,
+        );
+
+        const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+        const tools = defineBotTools();
+        const messages: Anthropic.MessageParam[] = history.map(h => ({ role: h.role, content: h.content }));
+
+        let response = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514', max_tokens: 1024, system: systemPrompt, tools, messages,
         });
+
+        let iterations = 0;
+        while (response.stop_reason === 'tool_use' && iterations < 10) {
+            iterations++;
+            const toolBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+            const toolResults: Anthropic.ToolResultBlockParam[] = [];
+            for (const block of toolBlocks) {
+                console.log(`[SMS Bot] Tool: ${block.name}`, JSON.stringify(block.input).slice(0, 200));
+                const result = await executeTool(supabase, clientId, block.name, block.input);
+                console.log(`[SMS Bot] Result (${block.name}):`, result.slice(0, 300));
+                toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
+            }
+            messages.push({ role: 'assistant', content: response.content });
+            messages.push({ role: 'user', content: toolResults });
+            response = await anthropic.messages.create({
+                model: 'claude-sonnet-4-20250514', max_tokens: 1024, system: systemPrompt, tools, messages,
+            });
+        }
+
+        const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
+        let replyText = textBlocks.map(b => b.text).join('\n').trim();
+
+        if (!replyText) {
+            console.warn('[SMS Bot] Empty response from Claude, sending fallback');
+            // Clear bad history so next message starts fresh
+            await supabase.from('sms_conversations').delete().eq('phone_number', phone);
+            replyText = FALLBACK_MSG;
+        }
+
+        const truncated = replyText.length > MAX_SMS_LENGTH ? replyText.slice(0, MAX_SMS_LENGTH - 3) + '...' : replyText;
+        if (replyText !== FALLBACK_MSG) {
+            await saveMessage(supabase, phone, clientId, 'assistant', truncated);
+        }
+        await sendSms(phone, truncated);
+        console.log(`[SMS Bot] Replied to ${phone} (${client.full_name}): ${truncated.slice(0, 100)}...`);
+
+    } catch (err: any) {
+        console.error('[SMS Bot] Fatal error:', err);
+        await sendSms(phone, FALLBACK_MSG).catch(() => {});
     }
-
-    const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
-    const replyText = textBlocks.map(b => b.text).join('\n').trim();
-    if (!replyText) { console.warn('[SMS Bot] Empty response'); return; }
-
-    const truncated = replyText.length > MAX_SMS_LENGTH ? replyText.slice(0, MAX_SMS_LENGTH - 3) + '...' : replyText;
-    await saveMessage(supabase, phone, clientId, 'assistant', truncated);
-    await sendSms(phone, truncated);
-    console.log(`[SMS Bot] Replied to ${phone} (${client.full_name}): ${truncated.slice(0, 100)}...`);
 }
