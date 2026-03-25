@@ -161,6 +161,17 @@ function defineBotTools(): Anthropic.Tool[] {
             },
         },
         {
+            name: 'set_email',
+            description: 'Set or update the client\'s email address. Confirm the email with the client before calling this. This email is used to log into the client portal.',
+            input_schema: {
+                type: 'object' as const,
+                properties: {
+                    email: { type: 'string', description: 'The email address to set' },
+                },
+                required: ['email'],
+            },
+        },
+        {
             name: 'get_delivery_history',
             description: 'Get recent delivery history for the client (includes all household members). Shows delivery dates, times, and proof of delivery photo links.',
             input_schema: {
@@ -191,6 +202,8 @@ async function executeTool(
             return executeGetDayDetails(supabase, clientId, args.date);
         case 'save_meal_plan_for_date':
             return executeSaveMealPlan(supabase, clientId, args.date, args.items);
+        case 'set_email':
+            return executeSetEmail(supabase, clientId, args.email);
         case 'get_delivery_history':
             return executeGetDeliveryHistory(supabase, clientId, args.limit);
         default:
@@ -381,6 +394,18 @@ async function executeSaveMealPlan(
     return JSON.stringify({ success: true, date: dateOnly, saved_items: mappedItems.map(i => ({ name: i.name, quantity: i.quantity })), meal_total: newTotal, meal_limit: perDateLimit });
 }
 
+async function executeSetEmail(supabase: SupabaseClient, clientId: string, email: string): Promise<string> {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+        return JSON.stringify({ success: false, error: 'Invalid email format.' });
+    }
+
+    const { error } = await supabase.from('clients').update({ email: trimmed }).eq('id', clientId);
+    if (error) return JSON.stringify({ success: false, error: error.message });
+
+    return JSON.stringify({ success: true, email: trimmed, message: `Email set to ${trimmed}. You can now log in at http://customer.thedietfantasy.com/ with this email.` });
+}
+
 async function executeGetDeliveryHistory(supabase: SupabaseClient, clientId: string, limit?: number): Promise<string> {
     const count = Math.min(Math.max(limit ?? 5, 1), 10);
     const today = getTodayInAppTz();
@@ -460,10 +485,16 @@ CLIENT: ${client.full_name} | ${client.service_type} | Household: ${householdCou
 MEAL LIMITS: ${client.approved_meals_per_week ?? '?'} meals/week total for the household (${householdCount} Food member(s))${mealsPerPerson ? ` — about ${mealsPerPerson} per person per week` : ''}.
 The get_day_details tool returns meal_limit_for_day which is the EXACT daily limit for the household. This accounts for household size already.
 
-YOU OFFER THREE THINGS:
+YOU OFFER THESE SERVICES:
 1. Account Info — view account details (read-only)
 2. Meal Plan — view and edit meal orders for delivery dates
 3. Delivery History — view recent deliveries with proof of delivery photos
+4. Set Email — set or update their email for portal login${client.email ? '' : '\n\nIMPORTANT: This client has NO EMAIL on file. After greeting, recommend they set one so they can log into the portal. Say something like: "I notice you don\'t have an email on file yet. Would you like to set one? It lets you manage your orders online at customer.thedietfantasy.com."'}
+
+SET EMAIL FLOW:
+- When the client wants to set or change their email, ask them for the email address.
+- Confirm the email back to them before saving (e.g. "Set your email to john@example.com?").
+- Once confirmed, call set_email. Tell them they can now log in at http://customer.thedietfantasy.com/ with that email.
 
 DELIVERY HISTORY FLOW:
 - When the client asks about deliveries or proof of delivery, call get_delivery_history.
