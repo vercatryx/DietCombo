@@ -340,19 +340,54 @@ export async function POST(req: Request) {
             }
         }
 
-        // Step 2: Sync driver_route_order — every client with assigned_driver_id must have a row (INSERT ON CONFLICT DO NOTHING)
+        // Step 2a: Dedup driver_route_order — each client must be in exactly one driver's route.
+        // If a client appears under multiple drivers, keep the non-Driver-0 entry (or first by name rank).
+        let dupsCleaned = 0;
+        const allRouteOrderRows = await fetchAllRows((sb: any) =>
+            sb.from('driver_route_order')
+                .select('driver_id, client_id')
+                .order('client_id')
+        );
+        const routeEntriesByClient = new Map<string, string[]>();
+        for (const row of allRouteOrderRows || []) {
+            const cid = String(row.client_id);
+            if (!routeEntriesByClient.has(cid)) routeEntriesByClient.set(cid, []);
+            routeEntriesByClient.get(cid)!.push(String(row.driver_id));
+        }
+        const DRIVER_0_ID = '5a0eb640-f761-4c07-98e1-341147fd6f56';
+        for (const [clientId, driverIds] of routeEntriesByClient) {
+            if (driverIds.length <= 1) continue;
+            // Keep the non-Driver-0 entry; if none, keep first
+            const keepDriverId = driverIds.find(d => d !== DRIVER_0_ID) || driverIds[0];
+            const removeDriverIds = driverIds.filter(d => d !== keepDriverId);
+            for (const removeId of removeDriverIds) {
+                const { error: delErr } = await supabase
+                    .from('driver_route_order')
+                    .delete()
+                    .eq('driver_id', removeId)
+                    .eq('client_id', clientId);
+                if (!delErr) dupsCleaned++;
+                else console.warn('[route/cleanup] dedup delete error:', delErr?.message);
+            }
+        }
+        if (dupsCleaned > 0) console.log(`[route/cleanup] Cleaned ${dupsCleaned} duplicate driver_route_order entries`);
+
+        // Step 2b: Sync driver_route_order — every client with assigned_driver_id must have a row,
+        // but ONLY if the client is not already in ANY driver's route (prevents creating duplicates).
         let listSynced = 0;
+        const clientsAlreadyRouted = new Set<string>();
+        for (const row of allRouteOrderRows || []) clientsAlreadyRouted.add(String(row.client_id));
+        // Remove cleaned entries from the set so we can re-add them correctly
+        for (const [clientId, driverIds] of routeEntriesByClient) {
+            if (driverIds.length > 1) {
+                // After dedup, only the "keep" entry remains — it's still in the set
+            }
+        }
         const assigned = (allClients || []).filter((c: any) => c.assigned_driver_id != null);
         for (const client of assigned) {
             const driverId = String(client.assigned_driver_id);
             const clientId = String(client.id);
-            const { data: existing } = await supabase
-                .from('driver_route_order')
-                .select('driver_id')
-                .eq('driver_id', driverId)
-                .eq('client_id', clientId)
-                .maybeSingle();
-            if (existing) continue;
+            if (clientsAlreadyRouted.has(clientId)) continue;
             const { data: maxRow } = await supabase
                 .from('driver_route_order')
                 .select('position')
@@ -364,7 +399,10 @@ export async function POST(req: Request) {
             const { error: insErr } = await supabase
                 .from('driver_route_order')
                 .insert({ driver_id: driverId, client_id: clientId, position: pos });
-            if (!insErr) listSynced++;
+            if (!insErr) {
+                listSynced++;
+                clientsAlreadyRouted.add(clientId);
+            }
             if (insErr && insErr.code !== "23505") console.warn('[route/cleanup] driver_route_order insert:', insErr?.message);
         }
 
@@ -415,9 +453,10 @@ export async function POST(req: Request) {
         return NextResponse.json(
             {
                 stopsCreated,
+                dupsCleaned,
                 listSynced,
                 ordersSet,
-                message: `Created ${stopsCreated} stops; synced ${listSynced} driver_route_order rows; set order for ${ordersSet} stops.`,
+                message: `Created ${stopsCreated} stops; cleaned ${dupsCleaned} duplicate route entries; synced ${listSynced} driver_route_order rows; set order for ${ordersSet} stops.`,
             },
             { headers: { "Cache-Control": "no-store" } }
         );

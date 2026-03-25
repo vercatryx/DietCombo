@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, fetchAllRows } from "@/lib/supabase";
 import { getSession } from "@/lib/session";
 
 /**
@@ -80,39 +80,8 @@ export async function GET(req: Request) {
             ).length,
         };
 
-        // Read from row with fallbacks for casing (Supabase/Postgres typically use lowercase)
-        const pick = (row: any, ...keys: string[]) => {
-            for (const k of keys) {
-                const v = row[k];
-                if (v != null && v !== "") return String(v);
-            }
-            return "";
-        };
-        const clients = (clientsRows || []).map((c: any) => ({
-            id: c.id,
-            first: pick(c, "first_name", "firstName"),
-            last: pick(c, "last_name", "lastName"),
-            name: pick(c, "full_name", "fullName"),
-            full_name: pick(c, "full_name", "fullName"),
-            address: pick(c, "address", "Address"),
-            apt: c.apt != null && c.apt !== "" ? String(c.apt) : null,
-            city: pick(c, "city", "City"),
-            state: pick(c, "state", "State"),
-            zip: pick(c, "zip", "Zip", "zip_code", "postal_code"),
-            phone: c.phone_number != null && c.phone_number !== "" ? String(c.phone_number) : null,
-            lat: c.lat != null ? Number(c.lat) : null,
-            lng: c.lng != null ? Number(c.lng) : null,
-            paused: Boolean(c.paused),
-            delivery: c.delivery !== undefined ? Boolean(c.delivery) : true,
-            assigned_driver_id: c.assigned_driver_id ?? null,
-            assignedDriverId: c.assigned_driver_id ?? null,
-            parent_client_id: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
-            parentClientId: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
-            service_type: c.service_type != null && c.service_type !== "" ? String(c.service_type) : null,
-            serviceType: c.service_type != null && c.service_type !== "" ? String(c.service_type) : null,
-        }));
-
         // 2) Drivers: id + name + color from drivers and routes tables (DB-side)
+        // Fetched early so we can sort by name rank when building clientToRouteDriver
         let driversQuery = supabase
             .from("drivers")
             .select("id, name, color")
@@ -153,6 +122,74 @@ export async function GET(req: Request) {
                 color: r.color && r.color !== "#666" ? r.color : palette[driverList.length % palette.length],
             });
         });
+
+        // Fetch driver_route_order so client grouping matches the routes/drivers page.
+        // Process in driver name-rank order (Driver 0, 1, 2, …) matching the routes API claim order.
+        const allRouteOrder = await fetchAllRows((sb: any) =>
+            sb.from('driver_route_order')
+                .select('driver_id, client_id')
+                .order('position', { ascending: true })
+        );
+        const driverRankByName = (name: string) => {
+            const m = /driver\s+(\d+)/i.exec(name || "");
+            return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+        };
+        const sortedDriverIds = [...driverList].sort((a, b) => driverRankByName(a.name) - driverRankByName(b.name)).map(d => d.id);
+        const routeByDriver = new Map<string, string[]>();
+        for (const row of allRouteOrder || []) {
+            const did = String(row.driver_id);
+            if (!routeByDriver.has(did)) routeByDriver.set(did, []);
+            routeByDriver.get(did)!.push(String(row.client_id));
+        }
+        const clientToRouteDriver = new Map<string, string>();
+        for (const driverId of sortedDriverIds) {
+            const clientIds = routeByDriver.get(driverId) || [];
+            for (const cid of clientIds) {
+                if (!clientToRouteDriver.has(cid)) {
+                    clientToRouteDriver.set(cid, driverId);
+                }
+            }
+        }
+        for (const [driverId, clientIds] of routeByDriver) {
+            if (sortedDriverIds.includes(driverId)) continue;
+            for (const cid of clientIds) {
+                if (!clientToRouteDriver.has(cid)) {
+                    clientToRouteDriver.set(cid, driverId);
+                }
+            }
+        }
+
+        // Read from row with fallbacks for casing (Supabase/Postgres typically use lowercase)
+        const pick = (row: any, ...keys: string[]) => {
+            for (const k of keys) {
+                const v = row[k];
+                if (v != null && v !== "") return String(v);
+            }
+            return "";
+        };
+        const clients = (clientsRows || []).map((c: any) => ({
+            id: c.id,
+            first: pick(c, "first_name", "firstName"),
+            last: pick(c, "last_name", "lastName"),
+            name: pick(c, "full_name", "fullName"),
+            full_name: pick(c, "full_name", "fullName"),
+            address: pick(c, "address", "Address"),
+            apt: c.apt != null && c.apt !== "" ? String(c.apt) : null,
+            city: pick(c, "city", "City"),
+            state: pick(c, "state", "State"),
+            zip: pick(c, "zip", "Zip", "zip_code", "postal_code"),
+            phone: c.phone_number != null && c.phone_number !== "" ? String(c.phone_number) : null,
+            lat: c.lat != null ? Number(c.lat) : null,
+            lng: c.lng != null ? Number(c.lng) : null,
+            paused: Boolean(c.paused),
+            delivery: c.delivery !== undefined ? Boolean(c.delivery) : true,
+            assigned_driver_id: clientToRouteDriver.get(String(c.id)) ?? c.assigned_driver_id ?? null,
+            assignedDriverId: clientToRouteDriver.get(String(c.id)) ?? c.assigned_driver_id ?? null,
+            parent_client_id: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
+            parentClientId: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
+            service_type: c.service_type != null && c.service_type !== "" ? String(c.service_type) : null,
+            serviceType: c.service_type != null && c.service_type !== "" ? String(c.service_type) : null,
+        }));
 
         return NextResponse.json(
             { clients, drivers: driverList, stats },
