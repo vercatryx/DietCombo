@@ -112,8 +112,24 @@ async function pruneOldMessages(supabase: SupabaseClient, phone: string) {
 
 // ── Tool definitions ────────────────────────────────────────────────
 
-function defineBotTools(): Anthropic.Tool[] {
-    return [
+function defineBotTools(hasMultipleAccounts: boolean): Anthropic.Tool[] {
+    const tools: Anthropic.Tool[] = [];
+
+    if (hasMultipleAccounts) {
+        tools.push({
+            name: 'switch_account',
+            description: 'Switch to a different client account linked to this phone number. Use the client_id from the accounts list in the system prompt.',
+            input_schema: {
+                type: 'object' as const,
+                properties: {
+                    client_id: { type: 'string', description: 'The ID of the client account to switch to' },
+                },
+                required: ['client_id'],
+            },
+        });
+    }
+
+    tools.push(
         {
             name: 'get_account_info',
             description: 'Get full account details: name, email, phones, address, service type, household members, dislikes, notes, etc.',
@@ -186,7 +202,9 @@ function defineBotTools(): Anthropic.Tool[] {
                 required: [],
             },
         },
-    ];
+    );
+
+    return tools;
 }
 
 // ── Tool executors ──────────────────────────────────────────────────
@@ -474,6 +492,7 @@ async function executeGetDeliveryHistory(supabase: SupabaseClient, clientId: str
 function buildSystemPrompt(
     client: { full_name: string; email: string | null; service_type: string; approved_meals_per_week: number | null; expiration_date: string | null },
     householdCount: number,
+    allAccounts?: { id: string; full_name: string; service_type: string }[],
 ): string {
     const now = new Date();
     const timestamp = new Intl.DateTimeFormat('en-US', {
@@ -483,11 +502,15 @@ function buildSystemPrompt(
 
     const mealsPerPerson = client.approved_meals_per_week != null ? Math.floor(client.approved_meals_per_week / householdCount) : null;
 
+    const multiAccountNote = allAccounts && allAccounts.length > 1
+        ? `\n\nMULTIPLE ACCOUNTS: This phone number is linked to ${allAccounts.length} accounts:\n${allAccounts.map(a => `- ${a.full_name} (${a.service_type}) — ID: ${a.id}`).join('\n')}\nYou are currently managing: ${client.full_name}. If the client asks to manage a different account, use the switch_account tool with the appropriate client_id. When greeting, mention which account you are on and that they can switch.`
+        : '';
+
     return `You are The Diet Fantasy's SMS assistant. Keep all responses SHORT — this is SMS and costs money per message.
 
 CLIENT: ${client.full_name} | ${client.service_type} | Household: ${householdCount} people | ${timestamp}
 MEAL LIMITS: ${client.approved_meals_per_week ?? '?'} meals/week total for the household (${householdCount} Food member(s))${mealsPerPerson ? ` — about ${mealsPerPerson} per person per week` : ''}.
-The get_day_details tool returns meal_limit_for_day which is the EXACT daily limit for the household. This accounts for household size already.
+The get_day_details tool returns meal_limit_for_day which is the EXACT daily limit for the household. This accounts for household size already.${multiAccountNote}
 
 YOU OFFER THESE SERVICES:
 1. Account Info — view account details (read-only)
@@ -565,42 +588,52 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
         }
 
         const foodClients = clients.filter((c: any) => c.service_type === 'Food');
-        const client = foodClients[0] ?? clients[0];
+        let client = foodClients[0] ?? clients[0];
         if (!client) {
             await sendSms(phone, 'We couldn\'t find your account. Please call (845) 478-6605 for assistance.', { messageType: 'bot_reply' });
             return;
         }
 
-        const clientId = client.id;
+        let activeClientId = client.id;
 
         // Client is actively texting us, so this number works.
-        // If it was previously flagged, clear the flag for this number.
+        // Clear do_not_text flag for this number on all matched accounts.
         const e164Phone = normalizePhone(phone);
-        const flaggedMap: Record<string, string> = client.do_not_text_numbers || {};
-        if (e164Phone && flaggedMap[e164Phone]) {
-            delete flaggedMap[e164Phone];
-            await supabase.from('clients').update({
-                do_not_text_numbers: flaggedMap,
-                do_not_text: false,
-            }).eq('id', clientId);
-            console.log(`[SMS Bot] Cleared do_not_text for ${e164Phone} (client ${clientId}) — they texted us`);
+        for (const c of clients) {
+            const flaggedMap: Record<string, string> = c.do_not_text_numbers || {};
+            if (e164Phone && flaggedMap[e164Phone]) {
+                delete flaggedMap[e164Phone];
+                await supabase.from('clients').update({
+                    do_not_text_numbers: flaggedMap,
+                    do_not_text: false,
+                }).eq('id', c.id);
+                console.log(`[SMS Bot] Cleared do_not_text for ${e164Phone} (client ${c.id}) — they texted us`);
+            }
         }
+
         await pruneOldMessages(supabase, phone);
-        await saveMessage(supabase, phone, clientId, 'user', messageText);
+        await saveMessage(supabase, phone, activeClientId, 'user', messageText);
 
         const history = await loadHistory(supabase, phone);
 
-        const { data: dependents } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', clientId);
-        const foodDependents = (dependents ?? []).filter((d: any) => d.service_type === 'Food');
-        const householdCount = 1 + foodDependents.length;
+        const allAccounts = clients
+            .filter((c: any) => !c.parent_client_id)
+            .map((c: any) => ({ id: c.id, full_name: c.full_name, service_type: c.service_type }));
 
-        const systemPrompt = buildSystemPrompt(
-            { full_name: client.full_name, email: client.email, service_type: client.service_type, approved_meals_per_week: client.approved_meals_per_week, expiration_date: client.expiration_date },
-            householdCount,
-        );
+        async function buildPromptForClient(c: any) {
+            const { data: deps } = await supabase.from('clients').select('id, service_type').eq('parent_client_id', c.id);
+            const foodDeps = (deps ?? []).filter((d: any) => d.service_type === 'Food');
+            return { prompt: buildSystemPrompt(
+                { full_name: c.full_name, email: c.email, service_type: c.service_type, approved_meals_per_week: c.approved_meals_per_week, expiration_date: c.expiration_date },
+                1 + foodDeps.length,
+                allAccounts.length > 1 ? allAccounts : undefined,
+            ), householdCount: 1 + foodDeps.length };
+        }
+
+        let { prompt: systemPrompt } = await buildPromptForClient(client);
 
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-        const tools = defineBotTools();
+        const tools = defineBotTools(allAccounts.length > 1);
         const messages: Anthropic.MessageParam[] = history.map(h => ({ role: h.role, content: h.content }));
 
         let response = await anthropic.messages.create({
@@ -614,7 +647,24 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
             const toolResults: Anthropic.ToolResultBlockParam[] = [];
             for (const block of toolBlocks) {
                 console.log(`[SMS Bot] Tool: ${block.name}`, JSON.stringify(block.input).slice(0, 200));
-                const result = await executeTool(supabase, clientId, block.name, block.input);
+
+                if (block.name === 'switch_account') {
+                    const targetId = (block.input as any).client_id;
+                    const target = clients.find((c: any) => c.id === targetId);
+                    if (target) {
+                        client = target;
+                        activeClientId = target.id;
+                        const rebuilt = await buildPromptForClient(target);
+                        systemPrompt = rebuilt.prompt;
+                        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Switched to ${target.full_name} (${target.service_type}). All subsequent tool calls will use this account.` });
+                        console.log(`[SMS Bot] Switched to client ${target.id} (${target.full_name})`);
+                    } else {
+                        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Error: account ID "${targetId}" not found for this phone number.` });
+                    }
+                    continue;
+                }
+
+                const result = await executeTool(supabase, activeClientId, block.name, block.input);
                 console.log(`[SMS Bot] Result (${block.name}):`, result.slice(0, 300));
                 toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
             }
@@ -637,9 +687,9 @@ export async function handleInboundSms(phone: string, messageText: string): Prom
 
         const truncated = replyText.length > MAX_SMS_LENGTH ? replyText.slice(0, MAX_SMS_LENGTH - 3) + '...' : replyText;
         if (replyText !== FALLBACK_MSG) {
-            await saveMessage(supabase, phone, clientId, 'assistant', truncated);
+            await saveMessage(supabase, phone, activeClientId, 'assistant', truncated);
         }
-        await sendSms(phone, truncated, { clientId, clientName: client.full_name, messageType: 'bot_reply' });
+        await sendSms(phone, truncated, { clientId: activeClientId, clientName: client.full_name, messageType: 'bot_reply' });
         console.log(`[SMS Bot] Replied to ${phone} (${client.full_name}): ${truncated.slice(0, 100)}...`);
 
     } catch (err: any) {
