@@ -5,7 +5,7 @@ import { sendSms } from './telnyx';
 import { getTodayInAppTz, APP_TIMEZONE } from './timezone';
 import { mealPlannerDateOnly, mealPlannerCutoffDate } from './meal-planner-utils';
 
-const CONVERSATION_TTL_HOURS = 24;
+const CONVERSATION_TTL_HOURS = 2;
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_SMS_LENGTH = 1500;
 
@@ -56,7 +56,30 @@ async function loadHistory(
         .gte('created_at', cutoff)
         .order('created_at', { ascending: true })
         .limit(MAX_HISTORY_MESSAGES);
-    return (data ?? []).map((r: any) => ({ role: r.role, content: r.content }));
+
+    // Filter out broken/empty entries
+    const raw = (data ?? []).filter((r: any) =>
+        r.content &&
+        r.content !== '(No response)' &&
+        !r.content.startsWith('Something went wrong') &&
+        !r.content.startsWith('Thank you for your message. This number is not able to receive replies')
+    );
+
+    // Ensure strict user/assistant alternation (Claude API requirement)
+    const history: { role: 'user' | 'assistant'; content: string }[] = [];
+    for (const row of raw) {
+        if (history.length > 0 && history[history.length - 1].role === row.role) {
+            history[history.length - 1].content += '\n' + row.content;
+        } else {
+            history.push({ role: row.role, content: row.content });
+        }
+    }
+    // Must start with user and end with user
+    while (history.length > 0 && history[0].role !== 'user') history.shift();
+    while (history.length > 0 && history[history.length - 1].role !== 'user') history.pop();
+
+    console.log('[SMS Bot] History:', history.length, 'messages, roles:', history.map(h => h.role).join(','));
+    return history;
 }
 
 async function saveMessage(

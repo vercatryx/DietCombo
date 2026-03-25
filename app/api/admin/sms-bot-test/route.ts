@@ -10,7 +10,7 @@ function getSupabaseAdmin() {
     return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
 }
 
-const CONVERSATION_TTL_HOURS = 24;
+const CONVERSATION_TTL_HOURS = 2;
 const MAX_HISTORY_MESSAGES = 20;
 
 function defineBotTools(): Anthropic.Tool[] {
