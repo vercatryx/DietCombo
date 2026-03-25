@@ -1,7 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from './supabase-env';
-import { sendSms, normalizePhone } from './telnyx';
+import { sendSms } from './telnyx';
+import { normalizePhone } from './phone-utils';
 import { getTodayInAppTz, APP_TIMEZONE } from './timezone';
 import { mealPlannerDateOnly, mealPlannerCutoffDate } from './meal-planner-utils';
 

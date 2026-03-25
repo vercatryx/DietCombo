@@ -10,8 +10,9 @@ import {
     MapPinned
 } from 'lucide-react';
 import { ClientProfile, ClientStatus, Navigator, Submission, ProduceVendor } from '@/lib/types';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { addDependent, getDependentsByParentId, updateClient, deleteClient } from '@/lib/actions';
+import { getAllClientNumbers, normalizePhone } from '@/lib/phone-utils';
 import { getProduceVendors } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
@@ -76,6 +77,7 @@ export function ClientInfoShelf({
         bill: c.bill ?? true,
         delivery: c.delivery ?? true,
         doNotText: c.doNotText ?? false,
+        doNotTextNumbers: c.doNotTextNumbers ?? {} as Record<string, string>,
         uniteAccount: c.uniteAccount ?? 'Regular',
         history: c.history ?? '',
     }), []);
@@ -194,7 +196,7 @@ export function ClientInfoShelf({
                     delivery: editForm.delivery,
                     doNotText: editForm.doNotText,
                     doNotTextReason: editForm.doNotText ? undefined : null,
-                    doNotTextNumbers: editForm.doNotText ? undefined : {},
+                    doNotTextNumbers: editForm.doNotTextNumbers,
                     uniteAccount: editForm.uniteAccount || null,
                     history: editForm.history || null,
                 },
@@ -582,10 +584,40 @@ export function ClientInfoShelf({
                                                 <input
                                                     type="checkbox"
                                                     checked={editForm.doNotText}
-                                                    onChange={e => setEditForm({ ...editForm, doNotText: e.target.checked })}
+                                                    onChange={e => setEditForm({ ...editForm, doNotText: e.target.checked, doNotTextNumbers: e.target.checked ? editForm.doNotTextNumbers : {} })}
                                                 />
-                                                <span>Do Not Text</span>
+                                                <span>Do Not Text (all)</span>
                                             </label>
+                                            {(() => {
+                                                const nums = getAllClientNumbers(client);
+                                                if (nums.length === 0) return null;
+                                                const map = editForm.doNotTextNumbers || {};
+                                                return nums.map(raw => {
+                                                    const e164 = normalizePhone(raw);
+                                                    if (!e164) return null;
+                                                    const flagged = !!map[e164];
+                                                    return (
+                                                        <label key={e164} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.85rem', color: '#991b1b' }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={flagged}
+                                                                onChange={e => {
+                                                                    const next = { ...map };
+                                                                    if (e.target.checked) {
+                                                                        next[e164] = 'Manually flagged';
+                                                                    } else {
+                                                                        delete next[e164];
+                                                                    }
+                                                                    const allNums = getAllClientNumbers(client);
+                                                                    const allFlagged = allNums.every(r => { const n = normalizePhone(r); return !n || !!next[n]; });
+                                                                    setEditForm({ ...editForm, doNotTextNumbers: next, doNotText: allFlagged });
+                                                                }}
+                                                            />
+                                                            <span>No text: {raw}</span>
+                                                        </label>
+                                                    );
+                                                });
+                                            })()}
                                         </div>
                                     ) : (
                                         (client.paused || client.complex || client.bill || client.delivery || client.doNotText) ? (
