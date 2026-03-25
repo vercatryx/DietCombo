@@ -1154,7 +1154,6 @@ export default function RoutesPage() {
                                     saveCurrentRun(true);
                                     refreshAssignmentData();
                                 }}
-                                routeMapDrivers={mapDrivers}
                             />
                         </div>
                     </div>

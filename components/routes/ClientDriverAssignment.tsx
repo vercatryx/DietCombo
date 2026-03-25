@@ -67,8 +67,6 @@ interface ClientDriverAssignmentProps {
     selectedDeliveryDate?: string;
     readOnly?: boolean;
     onDriverAssigned?: () => void;
-    /** Route-based drivers+stops from the routes API (same data as drivers page). When provided, the embedded map sidebar uses these counts. */
-    routeMapDrivers?: any[];
 }
 
 const DEFAULT_PALETTE = [
@@ -85,8 +83,7 @@ export default function ClientDriverAssignment({
     selectedDay,
     selectedDeliveryDate,
     readOnly = false,
-    onDriverAssigned,
-    routeMapDrivers
+    onDriverAssigned
 }: ClientDriverAssignmentProps) {
     const [searchTerm, setSearchTerm] = useState('');
     const [savingClientId, setSavingClientId] = useState<string | null>(null);
@@ -423,13 +420,12 @@ export default function ClientDriverAssignment({
                 )}
             </Box>
 
-            {/* Map View — use route-based drivers for sidebar counts when available */}
+            {/* Map View */}
             <Box sx={{ flex: 1, position: 'relative', minHeight: 0 }}>
                 {(() => {
                     const Component = DriversMapLeaflet as any;
-                    const driversForMap = (routeMapDrivers && routeMapDrivers.length > 0) ? routeMapDrivers : mapDrivers;
                     return <Component
-                        drivers={driversForMap}
+                        drivers={mapDrivers}
                         unrouted={unroutedStops}
                         onReassign={readOnly ? undefined : handleMapReassign}
                         driversForAssignment={driversForDropdown}
