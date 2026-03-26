@@ -816,7 +816,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         const getExportUniteAccount = (client: ClientProfile) =>
             client.parentClientId ? (uniteAccountByClientId[client.parentClientId] ?? '') : (client.uniteAccount ?? '');
 
-        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount', 'Unite Account', 'History'];
+        const headers = ['Name', 'Email', 'Phone', 'Secondary Phone', 'Address', 'City', 'State', 'Zip', 'Dislikes', 'Status', 'Navigator', 'Service Type', 'Parent Client', 'Expiration Date', 'Authorized Amount', 'Voucher Amount', 'Unite Account', 'History'];
         const rows = filteredClients.map(client => [
             client.fullName || '',
             client.email ?? '',
@@ -837,6 +837,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             client.parentClientId ? (getParentClientName(client) ?? '') : '',
             getExportExpirationDate(client),
             client.authorizedAmount != null ? Number(client.authorizedAmount) : '',
+            client.serviceType === 'Produce' ? (client.voucherAmount ?? '') : '',
             getExportUniteAccount(client),
             client.history ?? '',
         ]);

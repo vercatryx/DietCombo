@@ -67,8 +67,7 @@ export function ClientInfoShelf({
         notes: c.dislikes ?? '',
         caseIdExternal: c.caseIdExternal || '',
         authorizedAmount: c.authorizedAmount || 0,
-        voucherAmountRegular: c.voucherAmountRegular ?? '',
-        voucherAmountDependents: c.voucherAmountDependents ?? '',
+        voucherAmount: c.voucherAmount ?? '',
         expirationDate: c.expirationDate || '',
         approvedMealsPerWeek: c.approvedMealsPerWeek || 0,
         caseId: c.activeOrder?.caseId || '',
@@ -188,8 +187,7 @@ export function ClientInfoShelf({
                     dislikes: editForm.notes || null,
                     caseIdExternal: editForm.caseIdExternal || null,
                     authorizedAmount: editForm.authorizedAmount,
-                    voucherAmountRegular: editForm.serviceType === 'Produce' ? (editForm.voucherAmountRegular?.trim() || null) : null,
-                    voucherAmountDependents: editForm.serviceType === 'Produce' ? (editForm.voucherAmountDependents?.trim() || null) : null,
+                    voucherAmount: editForm.serviceType === 'Produce' ? (editForm.voucherAmount?.trim() || null) : null,
                     expirationDate: editForm.expirationDate || null,
                     approvedMealsPerWeek: editForm.approvedMealsPerWeek,
                     serviceType: editForm.serviceType,
@@ -841,40 +839,22 @@ export function ClientInfoShelf({
                                 </div>
                             </div>
                             {(isEditing ? editForm.serviceType : client.serviceType) === 'Produce' && (
-                                <>
-                                    <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                        <div className={styles.label}>Voucher amount (regular)</div>
-                                        <div className={styles.value}>
-                                            {isEditing ? (
-                                                <input
-                                                    type="text"
-                                                    className={styles.editInput}
-                                                    value={editForm.voucherAmountRegular}
-                                                    onChange={e => setEditForm({ ...editForm, voucherAmountRegular: e.target.value })}
-                                                    placeholder="e.g. amount or reference"
-                                                />
-                                            ) : (
-                                                <span style={{ whiteSpace: 'pre-wrap' }}>{client.voucherAmountRegular?.trim() || '—'}</span>
-                                            )}
-                                        </div>
+                                <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                    <div className={styles.label}>Voucher amount</div>
+                                    <div className={styles.value}>
+                                        {isEditing ? (
+                                            <input
+                                                type="text"
+                                                className={styles.editInput}
+                                                value={editForm.voucherAmount}
+                                                onChange={e => setEditForm({ ...editForm, voucherAmount: e.target.value })}
+                                                placeholder="e.g. amount or reference"
+                                            />
+                                        ) : (
+                                            <span style={{ whiteSpace: 'pre-wrap' }}>{client.voucherAmount?.trim() || '—'}</span>
+                                        )}
                                     </div>
-                                    <div className={styles.infoItem + ' ' + styles.fullWidth}>
-                                        <div className={styles.label}>Voucher amount (dependents)</div>
-                                        <div className={styles.value}>
-                                            {isEditing ? (
-                                                <input
-                                                    type="text"
-                                                    className={styles.editInput}
-                                                    value={editForm.voucherAmountDependents}
-                                                    onChange={e => setEditForm({ ...editForm, voucherAmountDependents: e.target.value })}
-                                                    placeholder="e.g. amount or reference"
-                                                />
-                                            ) : (
-                                                <span style={{ whiteSpace: 'pre-wrap' }}>{client.voucherAmountDependents?.trim() || '—'}</span>
-                                            )}
-                                        </div>
-                                    </div>
-                                </>
+                                </div>
                             )}
                             <div className={styles.infoItem + ' ' + styles.fullWidth}>
                                 <div className={styles.label}>

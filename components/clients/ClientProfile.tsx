@@ -4184,8 +4184,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     serviceType: formData.serviceType ?? 'Food',
                     approvedMealsPerWeek: defaultApprovedMeals,
                     authorizedAmount: formData.authorizedAmount ?? null,
-                    voucherAmountRegular: formData.serviceType === 'Produce' ? (formData.voucherAmountRegular?.trim() || null) : null,
-                    voucherAmountDependents: formData.serviceType === 'Produce' ? (formData.voucherAmountDependents?.trim() || null) : null,
+                    voucherAmount: formData.serviceType === 'Produce' ? (formData.voucherAmount?.trim() || null) : null,
                     expirationDate: formData.expirationDate ?? null,
                     // New fields from dietfantasy
                     firstName: formData.firstName ?? null,
@@ -4445,8 +4444,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             }
 
             if (formData.serviceType !== 'Produce') {
-                updateData.voucherAmountRegular = null;
-                updateData.voucherAmountDependents = null;
+                updateData.voucherAmount = null;
             }
 
             await recordClientChange(clientId, summary, 'Admin');
@@ -6819,23 +6817,12 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                     </p>
                                                 </div>
                                                 <div className={styles.formGroup}>
-                                                    <label className="label">Voucher amount (regular)</label>
+                                                    <label className="label">Voucher amount</label>
                                                     <input
                                                         type="text"
                                                         className="input"
-                                                        value={formData.voucherAmountRegular ?? ''}
-                                                        onChange={e => setFormData({ ...formData, voucherAmountRegular: e.target.value || null })}
-                                                        placeholder="Free text"
-                                                        style={{ maxWidth: '420px' }}
-                                                    />
-                                                </div>
-                                                <div className={styles.formGroup}>
-                                                    <label className="label">Voucher amount (dependents)</label>
-                                                    <input
-                                                        type="text"
-                                                        className="input"
-                                                        value={formData.voucherAmountDependents ?? ''}
-                                                        onChange={e => setFormData({ ...formData, voucherAmountDependents: e.target.value || null })}
+                                                        value={formData.voucherAmount ?? ''}
+                                                        onChange={e => setFormData({ ...formData, voucherAmount: e.target.value || null })}
                                                         placeholder="Free text"
                                                         style={{ maxWidth: '420px' }}
                                                     />
