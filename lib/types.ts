@@ -37,6 +37,10 @@ export interface ClientProfile {
 
   // Authorization fields
   authorizedAmount?: number | null;
+  /** Produce only: free-text voucher amount for the primary client (hidden for Food). */
+  voucherAmountRegular?: string | null;
+  /** Produce only: free-text voucher amount for dependents (hidden for Food). */
+  voucherAmountDependents?: string | null;
   expirationDate?: string | null; // ISO Date string (DATE type in database)
 
   // Order Configuration (Active Request)
