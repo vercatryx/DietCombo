@@ -46,6 +46,7 @@ export function DependantInfoShelf({
         history: c.history ?? '',
         serviceType: c.serviceType,
         produceVendorId: c.produceVendorId || null as string | null,
+        voucherAmount: c.voucherAmount ?? '',
         paused: c.paused ?? false,
         complex: c.complex ?? false,
         bill: c.bill ?? true,
@@ -116,6 +117,7 @@ export function DependantInfoShelf({
                     history: editForm.history || null,
                     serviceType: editForm.serviceType,
                     produceVendorId: editForm.serviceType === 'Produce' ? editForm.produceVendorId : null,
+                    voucherAmount: editForm.serviceType === 'Produce' ? (editForm.voucherAmount?.trim() || null) : null,
                     paused: editForm.paused,
                     complex: editForm.complex,
                     bill: editForm.bill,
@@ -294,6 +296,24 @@ export function DependantInfoShelf({
                                     )}
                                 </div>
                             </div>
+                            {(isEditing ? editForm.serviceType : client.serviceType) === 'Produce' && (
+                                <div className={styles.infoItem + ' ' + styles.fullWidth}>
+                                    <div className={styles.label}>Voucher amount</div>
+                                    <div className={styles.value}>
+                                        {isEditing ? (
+                                            <input
+                                                type="text"
+                                                className={styles.editInput}
+                                                value={editForm.voucherAmount}
+                                                onChange={e => setEditForm({ ...editForm, voucherAmount: e.target.value })}
+                                                placeholder="e.g. amount or reference"
+                                            />
+                                        ) : (
+                                            <span style={{ whiteSpace: 'pre-wrap' }}>{client.voucherAmount?.trim() || '—'}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 

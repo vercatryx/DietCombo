@@ -4077,6 +4077,7 @@ function mapClientFromDB(c: any): ClientProfile {
         dob: c.dob || null,
         cin: c.cin ?? null,
         authorizedAmount: c.authorized_amount ?? null,
+        voucherAmount: c.voucher_amount ?? null,
         expirationDate: c.expiration_date || null,
         activeOrder: activeOrder ?? undefined,
         // New fields from dietfantasy
@@ -4399,7 +4400,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         billings: payload.billings,
         visits: payload.visits,
         sign_token: payload.sign_token,
-        produce_vendor_id: payload.produce_vendor_id
+        produce_vendor_id: payload.produce_vendor_id,
+        voucher_amount: data.serviceType === 'Produce' ? (data.voucherAmount?.trim() || null) : null
     };
     
     const { data: res, error: insertError } = await supabase
@@ -4509,7 +4511,8 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         lat: payload.lat,
         lng: payload.lng,
         geocoded_at: payload.geocoded_at,
-        produce_vendor_id: (serviceType === 'Produce' && produceVendorId) ? produceVendorId : null
+        produce_vendor_id: (serviceType === 'Produce' && produceVendorId) ? produceVendorId : null,
+        voucher_amount: null
     };
     const { data: res, error: insertError } = await supabase
         .from('clients')
@@ -4601,6 +4604,10 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.dob !== undefined) payload.dob = data.dob || null;
     if (data.cin !== undefined) payload.cin = data.cin ?? null;
     if (data.authorizedAmount !== undefined) payload.authorized_amount = data.authorizedAmount ?? null;
+    if (data.voucherAmount !== undefined) {
+        const v = data.voucherAmount;
+        payload.voucher_amount = typeof v === 'string' && v.trim() ? v.trim() : null;
+    }
     if (data.expirationDate !== undefined) payload.expiration_date = data.expirationDate || null;
     // Sanitize upcoming_order to schema-only fields before persisting (UPCOMING_ORDER_SCHEMA)
     // When skipOrderSync is true (e.g. "save details only"), do not touch upcoming_order so we only update client fields.

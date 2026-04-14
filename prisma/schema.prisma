@@ -140,6 +140,7 @@ model Client {
   dob                  DateTime?           @db.Date
   cin                  String?             @db.VarChar(50)
   authorizedAmount     Decimal?            @map("authorized_amount") @db.Decimal(10, 2)
+  voucherAmount        String?             @map("voucher_amount")
   expirationDate       DateTime?           @map("expiration_date") @db.Date
   activeOrder          Json?               @map("upcoming_order")
   mealPlannerData      Json?               @map("meal_planner_data")

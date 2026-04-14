@@ -4184,6 +4184,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     serviceType: formData.serviceType ?? 'Food',
                     approvedMealsPerWeek: defaultApprovedMeals,
                     authorizedAmount: formData.authorizedAmount ?? null,
+                    voucherAmount: formData.serviceType === 'Produce' ? (formData.voucherAmount?.trim() || null) : null,
                     expirationDate: formData.expirationDate ?? null,
                     // New fields from dietfantasy
                     firstName: formData.firstName ?? null,
@@ -4440,6 +4441,10 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             // Ensure approvedMealsPerWeek is always sent for Food clients (backend expects it)
             if (formData.serviceType === 'Food') {
                 updateData.approvedMealsPerWeek = formData.approvedMealsPerWeek ?? client?.approvedMealsPerWeek ?? 0;
+            }
+
+            if (formData.serviceType !== 'Produce') {
+                updateData.voucherAmount = null;
             }
 
             await recordClientChange(clientId, summary, 'Admin');
@@ -6810,6 +6815,17 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                                     }}>
                                                         Bill amount is set from the default order template and cannot be modified here.
                                                     </p>
+                                                </div>
+                                                <div className={styles.formGroup}>
+                                                    <label className="label">Voucher amount</label>
+                                                    <input
+                                                        type="text"
+                                                        className="input"
+                                                        value={formData.voucherAmount ?? ''}
+                                                        onChange={e => setFormData({ ...formData, voucherAmount: e.target.value || null })}
+                                                        placeholder="Free text"
+                                                        style={{ maxWidth: '420px' }}
+                                                    />
                                                 </div>
                                             </div>
                                         )}
