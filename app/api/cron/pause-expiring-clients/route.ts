@@ -6,7 +6,11 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendEmail } from "@/lib/email";
 
-const NOTIFY_EMAIL = "stslansky@gmail.com";
+const NOTIFY_EMAILS = [
+  "stslansky@gmail.com",
+  "customersupport@thedietfantasy.com",
+  "hshloimie@gmail.com",
+];
 
 function escapeHtml(s: string): string {
   return s
@@ -135,7 +139,7 @@ export async function GET(req: Request) {
       </table>
     `;
     const emailResult = await sendEmail({
-      to: NOTIFY_EMAIL,
+      to: NOTIFY_EMAILS.join(", "),
       subject: `Diet Fantasy: ${list.length} client(s) paused (expiration ${startDate}–${endDate})`,
       html,
     });
