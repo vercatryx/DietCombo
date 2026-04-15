@@ -1,8 +1,8 @@
 import { NextResponse, after } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
-import { identifyClientByPhone } from '@/lib/sms-bot';
-import { answerCall, transferCall } from '@/lib/telnyx-voice';
+import { runAssistantTurn } from '@/lib/bot-core';
+import { answerCall, speakText, startTranscription, stopTranscription } from '@/lib/telnyx-voice';
 
 function getSupabaseAdmin() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
@@ -41,6 +41,40 @@ function pickBestClientId(clients: any[]): string | null {
   const foodClients = clients.filter((c: any) => c.service_type === 'Food');
   const client = foodClients[0] ?? clients[0];
   return client?.id ?? null;
+}
+
+type CallState = {
+  callControlId: string;
+  phone: string;
+  isSpeaking: boolean;
+  buffer: string;
+  lastHeardAt: number;
+  timer?: ReturnType<typeof setTimeout>;
+  utteranceSeq: number;
+};
+
+const callStateById = new Map<string, CallState>();
+const SILENCE_MS = 1200;
+
+function getOrInitState(callControlId: string, phone: string): CallState {
+  const existing = callStateById.get(callControlId);
+  if (existing) return existing;
+  const s: CallState = {
+    callControlId,
+    phone,
+    isSpeaking: false,
+    buffer: '',
+    lastHeardAt: 0,
+    utteranceSeq: 0,
+  };
+  callStateById.set(callControlId, s);
+  return s;
+}
+
+function cleanupState(callControlId: string) {
+  const s = callStateById.get(callControlId);
+  if (s?.timer) clearTimeout(s.timer);
+  callStateById.delete(callControlId);
 }
 
 function asIsoOrNull(v: any): string | null {
@@ -132,22 +166,91 @@ export async function POST(request: Request) {
     after(async () => {
       try {
         const supabase = getSupabaseAdmin();
-        const matched = await identifyClientByPhone(supabase, primaryPhone);
-        const clientId = pickBestClientId(matched);
+        const clientId = null;
 
-        // If this is a brand new inbound call, immediately answer + transfer it to the work number.
-        // Without issuing call control commands, the caller will just ring until timeout.
-        if (eventType === 'call.initiated' && callControlId) {
-          const forwardTo = process.env.TELNYX_VOICE_FORWARD_TO;
-          if (!forwardTo) {
-            console.warn('[Telnyx Voice] TELNYX_VOICE_FORWARD_TO not set; not transferring call.');
-          } else {
+        // Voice AI flow
+        if (callControlId) {
+          const state = getOrInitState(callControlId, primaryPhone);
+
+          if (eventType === 'call.initiated') {
             const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
             const ans = await answerCall(callControlId, `answer-${cmdBase}`);
             if (!ans.ok) console.error('[Telnyx Voice] Answer failed:', ans.error);
 
-            const tx = await transferCall(callControlId, forwardTo, `transfer-${cmdBase}`);
-            if (!tx.ok) console.error('[Telnyx Voice] Transfer failed:', tx.error);
+            state.isSpeaking = true;
+            await speakText(
+              callControlId,
+              'Hi, this is The Diet Fantasy. How can I help you today? — The Diet Fantasy',
+              { commandId: `greet-${cmdBase}`, voice: 'female' },
+            );
+
+            // Start transcription (we’ll resume after speaking ends too)
+            const tx = await startTranscription(callControlId, { language: 'en', commandId: `tx-${cmdBase}` });
+            if (!tx.ok) console.error('[Telnyx Voice] Transcription start failed:', tx.error);
+          }
+
+          if (eventType === 'call.speak.ended') {
+            state.isSpeaking = false;
+            // Ensure transcription is active
+            const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
+            const tx = await startTranscription(callControlId, { language: 'en', commandId: `tx-${cmdBase}` });
+            if (!tx.ok) {
+              // likely already active; ignore
+            }
+          }
+
+          if (eventType === 'call.transcription' && !state.isSpeaking) {
+            const transcript =
+              payload?.transcription?.text ||
+              payload?.transcription_data?.transcript ||
+              payload?.transcription_data?.text ||
+              payload?.text ||
+              '';
+
+            const text = String(transcript || '').trim();
+            if (text) {
+              state.buffer = (state.buffer ? state.buffer + ' ' : '') + text;
+              state.lastHeardAt = Date.now();
+            }
+
+            if (state.timer) clearTimeout(state.timer);
+            state.timer = setTimeout(async () => {
+              try {
+                const elapsed = Date.now() - state.lastHeardAt;
+                if (elapsed < SILENCE_MS - 50) return;
+                const utterance = state.buffer.trim();
+                state.buffer = '';
+                if (!utterance) return;
+
+                state.utteranceSeq++;
+                const utteranceId = `${callControlId}-${state.utteranceSeq}`;
+
+                // Avoid transcribing our own TTS while speaking
+                await stopTranscription(callControlId, { commandId: `stop-${utteranceId}` }).catch(() => {});
+
+                const { replyText } = await runAssistantTurn({
+                  supabase,
+                  channel: 'voice',
+                  phone: state.phone,
+                  conversationTable: 'call_conversations',
+                  where: { call_control_id: callControlId, phone_number: state.phone },
+                  messageText: utterance,
+                  restoreActiveClientFromTable: true,
+                  clientIdRestoreWhere: { call_control_id: callControlId, phone_number: state.phone },
+                });
+
+                state.isSpeaking = true;
+                const cmdBase = `${utteranceId}-${Date.now()}`;
+                const sp = await speakText(callControlId, replyText, { commandId: `speak-${cmdBase}`, voice: 'female' });
+                if (!sp.ok) console.error('[Telnyx Voice] Speak failed:', sp.error);
+              } catch (err) {
+                console.error('[Telnyx Voice] Utterance handler failed:', err);
+              }
+            }, SILENCE_MS);
+          }
+
+          if (eventType === 'call.hangup') {
+            cleanupState(callControlId);
           }
         }
 

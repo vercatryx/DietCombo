@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
-import { identifyClientByPhone } from '@/lib/sms-bot';
+import { identifyClientByPhone } from '@/lib/bot-core';
 import { getTodayInAppTz, APP_TIMEZONE } from '@/lib/timezone';
 import { mealPlannerDateOnly, mealPlannerCutoffDate } from '@/lib/meal-planner-utils';
 import Anthropic from '@anthropic-ai/sdk';

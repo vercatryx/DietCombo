@@ -37,3 +37,44 @@ export async function transferCall(callControlId: string, to: string, commandId?
   );
 }
 
+export async function speakText(
+  callControlId: string,
+  payload: string,
+  options?: {
+    voice?: 'female' | 'male';
+    language?: string;
+    payloadType?: 'text' | 'ssml';
+    serviceLevel?: 'basic' | 'premium';
+    commandId?: string;
+  },
+): Promise<TelnyxCommandResult> {
+  return telnyxPost(`/calls/${encodeURIComponent(callControlId)}/actions/speak`, {
+    payload,
+    voice: options?.voice ?? 'female',
+    ...(options?.language ? { language: options.language } : {}),
+    ...(options?.payloadType ? { payload_type: options.payloadType } : {}),
+    ...(options?.serviceLevel ? { service_level: options.serviceLevel } : {}),
+    ...(options?.commandId ? { command_id: options.commandId } : {}),
+  });
+}
+
+export async function startTranscription(
+  callControlId: string,
+  options?: { language?: string; transcriptionEngine?: string; commandId?: string },
+): Promise<TelnyxCommandResult> {
+  return telnyxPost(`/calls/${encodeURIComponent(callControlId)}/actions/transcription_start`, {
+    ...(options?.language ? { language: options.language } : {}),
+    ...(options?.transcriptionEngine ? { transcription_engine: options.transcriptionEngine } : {}),
+    ...(options?.commandId ? { command_id: options.commandId } : {}),
+  });
+}
+
+export async function stopTranscription(
+  callControlId: string,
+  options?: { commandId?: string },
+): Promise<TelnyxCommandResult> {
+  return telnyxPost(`/calls/${encodeURIComponent(callControlId)}/actions/transcription_stop`, {
+    ...(options?.commandId ? { command_id: options.commandId } : {}),
+  });
+}
+
