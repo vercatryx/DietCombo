@@ -71,6 +71,10 @@ export interface SavedMealPlanMonthProps {
   loadByMonth?: boolean;
   /** When true, show all dates including past and expired (admin override). */
   adminMode?: boolean;
+  /** When changed, focus this date in the UI (selects day + moves calendar month). */
+  jumpToDate?: string | null;
+  /** Used with jumpToDate so the same date can be re-jumped. */
+  jumpNonce?: number;
 }
 
 function applyOrders(orders: MealPlannerOrderResult[], setOrders: (o: MealPlannerOrderResult[]) => void) {
@@ -89,7 +93,7 @@ function scaleTemplateQuantities(list: MealPlannerOrderResult[], multiplier: num
   }));
 }
 
-export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1, loadByMonth = false, adminMode = false }: SavedMealPlanMonthProps) {
+export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChange, initialOrders, preloadInProgress, autoSave = true, editedDatesResetTrigger, includeRecurringInTemplate = false, householdSize = 1, loadByMonth = false, adminMode = false, jumpToDate = null, jumpNonce = 0 }: SavedMealPlanMonthProps) {
   const [orders, setOrders] = useState<MealPlannerOrderResult[]>([]);
   const [loadingDates, setLoadingDates] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -309,6 +313,17 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
+
+  // Allow parent to focus a specific date (e.g. when save validation reports a mismatch)
+  useEffect(() => {
+    const key = (jumpToDate ?? '').trim().slice(0, 10);
+    if (!key) return;
+    if (!validDateSet.has(key)) return;
+    const d = new Date(key + 'T12:00:00');
+    if (Number.isNaN(d.getTime())) return;
+    setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+    setSelectedDate(key);
+  }, [jumpToDate, jumpNonce, validDateSet]);
 
   // When loadByMonth (portal): fetch that month when user changes calendar month (prev/next).
   // Skip fetch only when we're on the initial month AND orders already contain dates for that month

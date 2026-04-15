@@ -81,6 +81,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
     const [mealPlanEditedDates, setMealPlanEditedDates] = useState<string[]>([]);
     const [mealPlanEditedResetTrigger, setMealPlanEditedResetTrigger] = useState(0);
     const [mealPlanDiscardTrigger, setMealPlanDiscardTrigger] = useState(0);
+    const [mealPlanJump, setMealPlanJump] = useState<{ date: string; nonce: number } | null>(null);
 
     // Reset missing-items toast when client changes so it can show again for another client
     useEffect(() => {
@@ -536,16 +537,26 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 validationErrors.push('Please select at least one item before saving');
             }
 
-            // Per-date: total meals must equal expected for that day (expectedTotalMeals × household size). Block save if any date does not match.
+            // Per-date: total meals must equal expected for that day (expectedTotalMeals × household size). Block save and include which day(s) are wrong.
             const householdSize = Math.max(1, householdPeople?.length ?? 1);
+            const editedSet = new Set(mealPlanEditedDates.map((d) => String(d).slice(0, 10)));
+            const perDayMismatches: { date: string; current: number; expected: number }[] = [];
             for (const order of mealPlanOrders) {
+                const dateKey = String(order?.scheduledDeliveryDate ?? '').slice(0, 10);
+                if (orderAndMealPlanOnly && editedSet.size > 0 && !editedSet.has(dateKey)) continue;
                 const expectedForDay = (order.expectedTotalMeals ?? 0) * householdSize;
                 if (expectedForDay <= 0) continue;
                 const currentForDay = (order.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0);
                 if (currentForDay !== expectedForDay) {
-                    validationErrors.push(`Total meals for each day must equal the expected amount. At least one day has ${currentForDay} selected but must be exactly ${expectedForDay}.`);
-                    break;
+                    perDayMismatches.push({ date: dateKey, current: currentForDay, expected: expectedForDay });
                 }
+            }
+            if (perDayMismatches.length > 0) {
+                const list = perDayMismatches
+                    .slice(0, 5)
+                    .map((m) => `${formatDateForMismatch(m.date)}: ${m.current} selected, must be ${m.expected}`)
+                    .join('; ');
+                validationErrors.push(`Total meals for each day must equal the expected amount. Fix: ${list}${perDayMismatches.length > 5 ? ` (and ${perDayMismatches.length - 5} more)` : ''}.`);
             }
             // Also check aggregate for non–meal-plan path (recurring order)
             const totalValueFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
@@ -1785,6 +1796,12 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         return `${month} ${day} (${weekday})`;
     };
 
+    const jumpToMealPlanDate = (iso: string) => {
+        const key = String(iso ?? '').trim().slice(0, 10);
+        if (!key) return;
+        setMealPlanJump((prev) => ({ date: key, nonce: (prev?.nonce ?? 0) + 1 }));
+    };
+
     const mainContent = (
             <div className={styles.wideGrid}>
                 {!orderAndMealPlanOnly && (
@@ -2493,6 +2510,8 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                             includeRecurringInTemplate={true}
                             householdSize={mealPlanHouseholdSize}
                             loadByMonth={true}
+                            jumpToDate={mealPlanJump?.date ?? null}
+                            jumpNonce={mealPlanJump?.nonce ?? 0}
                         />
                     </section>
                     );
@@ -2840,7 +2859,28 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                                 color: '#991b1b',
                                                 fontWeight: 600
                                             }}>
-                                                {adminMode ? 'Warning: ' : 'Cannot save because of the mismatch. '}The following edited days have wrong amounts: {mealPlanMismatchedEditedDates.map(formatDateForMismatch).join(', ')}.{adminMode ? '' : ' Adjust quantities so each day\u0027s total matches the required amount.'}
+                                                {adminMode ? 'Warning: ' : 'Cannot save because of the mismatch. '}Click a day to jump to it and fix the quantities:
+                                                {' '}
+                                                {mealPlanMismatchedEditedDates.map((d, idx) => (
+                                                    <button
+                                                        key={d}
+                                                        type="button"
+                                                        onClick={() => jumpToMealPlanDate(d)}
+                                                        className="btn btn-ghost btn-sm"
+                                                        style={{
+                                                            marginLeft: idx === 0 ? 6 : 4,
+                                                            padding: '2px 8px',
+                                                            border: '1px solid rgba(153, 27, 27, 0.25)',
+                                                            background: 'rgba(255,255,255,0.6)',
+                                                            color: '#991b1b',
+                                                            fontWeight: 800,
+                                                            borderRadius: 999
+                                                        }}
+                                                    >
+                                                        {formatDateForMismatch(d)}
+                                                    </button>
+                                                ))}
+                                                {adminMode ? '' : ' Adjust quantities so each day\u0027s total matches the required amount.'}
                                             </div>
                                         </div>
                                     </>
