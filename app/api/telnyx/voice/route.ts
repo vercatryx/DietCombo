@@ -1,4 +1,4 @@
-import { NextResponse, after } from 'next/server';
+import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { runAssistantTurn } from '@/lib/bot-core';
@@ -163,117 +163,118 @@ export async function POST(request: Request) {
       asIntOrNull(payload?.duration) ??
       null;
 
-    after(async () => {
-      try {
-        const supabase = getSupabaseAdmin();
-        const clientId = null;
+    // IMPORTANT: For Voice, execute commands inline (not deferred).
+    // If the request ends before commands are sent, the call will be silent.
+    const supabase = getSupabaseAdmin();
+    const clientId = null;
 
-        // Voice AI flow
-        if (callControlId) {
-          const state = getOrInitState(callControlId, primaryPhone);
+    // Voice AI flow
+    if (callControlId) {
+      const state = getOrInitState(callControlId, primaryPhone);
 
-          if (eventType === 'call.initiated') {
-            const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
-            const ans = await answerCall(callControlId, `answer-${cmdBase}`);
-            if (!ans.ok) console.error('[Telnyx Voice] Answer failed:', ans.error);
+      if (eventType === 'call.initiated') {
+        const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
+        const ans = await answerCall(callControlId, `answer-${cmdBase}`);
+        if (!ans.ok) console.error('[Telnyx Voice] Answer failed:', ans.error);
+      }
 
-            state.isSpeaking = true;
-            await speakText(
-              callControlId,
-              'Hi, this is The Diet Fantasy. How can I help you today? — The Diet Fantasy',
-              { commandId: `greet-${cmdBase}`, voice: 'female' },
-            );
-
-            // Start transcription (we’ll resume after speaking ends too)
-            const tx = await startTranscription(callControlId, { language: 'en', commandId: `tx-${cmdBase}` });
-            if (!tx.ok) console.error('[Telnyx Voice] Transcription start failed:', tx.error);
-          }
-
-          if (eventType === 'call.speak.ended') {
-            state.isSpeaking = false;
-            // Ensure transcription is active
-            const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
-            const tx = await startTranscription(callControlId, { language: 'en', commandId: `tx-${cmdBase}` });
-            if (!tx.ok) {
-              // likely already active; ignore
-            }
-          }
-
-          if (eventType === 'call.transcription' && !state.isSpeaking) {
-            const transcript =
-              payload?.transcription?.text ||
-              payload?.transcription_data?.transcript ||
-              payload?.transcription_data?.text ||
-              payload?.text ||
-              '';
-
-            const text = String(transcript || '').trim();
-            if (text) {
-              state.buffer = (state.buffer ? state.buffer + ' ' : '') + text;
-              state.lastHeardAt = Date.now();
-            }
-
-            if (state.timer) clearTimeout(state.timer);
-            state.timer = setTimeout(async () => {
-              try {
-                const elapsed = Date.now() - state.lastHeardAt;
-                if (elapsed < SILENCE_MS - 50) return;
-                const utterance = state.buffer.trim();
-                state.buffer = '';
-                if (!utterance) return;
-
-                state.utteranceSeq++;
-                const utteranceId = `${callControlId}-${state.utteranceSeq}`;
-
-                // Avoid transcribing our own TTS while speaking
-                await stopTranscription(callControlId, { commandId: `stop-${utteranceId}` }).catch(() => {});
-
-                const { replyText } = await runAssistantTurn({
-                  supabase,
-                  channel: 'voice',
-                  phone: state.phone,
-                  conversationTable: 'call_conversations',
-                  where: { call_control_id: callControlId, phone_number: state.phone },
-                  messageText: utterance,
-                  restoreActiveClientFromTable: true,
-                  clientIdRestoreWhere: { call_control_id: callControlId, phone_number: state.phone },
-                });
-
-                state.isSpeaking = true;
-                const cmdBase = `${utteranceId}-${Date.now()}`;
-                const sp = await speakText(callControlId, replyText, { commandId: `speak-${cmdBase}`, voice: 'female' });
-                if (!sp.ok) console.error('[Telnyx Voice] Speak failed:', sp.error);
-              } catch (err) {
-                console.error('[Telnyx Voice] Utterance handler failed:', err);
-              }
-            }, SILENCE_MS);
-          }
-
-          if (eventType === 'call.hangup') {
-            cleanupState(callControlId);
-          }
+      // Speak only once the call is answered (more reliable than on initiated).
+      if (eventType === 'call.answered') {
+        const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
+        if (!state.isSpeaking) {
+          state.isSpeaking = true;
+          const sp = await speakText(
+            callControlId,
+            'Hi, this is The Diet Fantasy. How can I help you today?',
+            { commandId: `greet-${cmdBase}`, voice: 'female' },
+          );
+          if (!sp.ok) console.error('[Telnyx Voice] Greet speak failed:', sp.error);
         }
 
-        await supabase.from('call_events').insert({
-          phone_number: primaryPhone,
-          client_id: clientId,
-          direction: 'inbound',
-          provider: 'telnyx',
-          telnyx_event_id: telnyxEventId,
-          telnyx_call_control_id: callControlId,
-          event_type: eventType,
-          status,
-          started_at: startedAt,
-          ended_at: endedAt,
-          duration_seconds: durationSeconds,
-          from_number: fromNumber,
-          to_number: toNumber,
-          raw_payload: body,
-        });
-      } catch (err) {
-        console.error('[Telnyx Voice] Failed to log call event:', err);
+        const tx = await startTranscription(callControlId, { language: 'en', commandId: `tx-${cmdBase}` });
+        if (!tx.ok) console.error('[Telnyx Voice] Transcription start failed:', tx.error);
       }
-    });
+
+      if (eventType === 'call.speak.ended') {
+        state.isSpeaking = false;
+        const cmdBase = `${telnyxEventId || callControlId}-${Date.now()}`;
+        await startTranscription(callControlId, { language: 'en', commandId: `tx-${cmdBase}` });
+      }
+
+      if (eventType === 'call.transcription' && !state.isSpeaking) {
+        const transcript =
+          payload?.transcription?.text ||
+          payload?.transcription_data?.transcript ||
+          payload?.transcription_data?.text ||
+          payload?.text ||
+          '';
+
+        const text = String(transcript || '').trim();
+        if (text) {
+          state.buffer = (state.buffer ? state.buffer + ' ' : '') + text;
+          state.lastHeardAt = Date.now();
+        }
+
+        if (state.timer) clearTimeout(state.timer);
+        state.timer = setTimeout(async () => {
+          try {
+            const elapsed = Date.now() - state.lastHeardAt;
+            if (elapsed < SILENCE_MS - 50) return;
+            const utterance = state.buffer.trim();
+            state.buffer = '';
+            if (!utterance) return;
+
+            state.utteranceSeq++;
+            const utteranceId = `${callControlId}-${state.utteranceSeq}`;
+
+            await stopTranscription(callControlId, { commandId: `stop-${utteranceId}` }).catch(() => {});
+
+            const { replyText } = await runAssistantTurn({
+              supabase,
+              channel: 'voice',
+              phone: state.phone,
+              conversationTable: 'call_conversations',
+              where: { call_control_id: callControlId, phone_number: state.phone },
+              messageText: utterance,
+              restoreActiveClientFromTable: true,
+              clientIdRestoreWhere: { call_control_id: callControlId, phone_number: state.phone },
+            });
+
+            state.isSpeaking = true;
+            const cmdBase = `${utteranceId}-${Date.now()}`;
+            const sp = await speakText(callControlId, replyText, { commandId: `speak-${cmdBase}`, voice: 'female' });
+            if (!sp.ok) console.error('[Telnyx Voice] Speak failed:', sp.error);
+          } catch (err) {
+            console.error('[Telnyx Voice] Utterance handler failed:', err);
+          }
+        }, SILENCE_MS);
+      }
+
+      if (eventType === 'call.hangup') {
+        cleanupState(callControlId);
+      }
+    }
+
+    try {
+      await supabase.from('call_events').insert({
+        phone_number: primaryPhone,
+        client_id: clientId,
+        direction: 'inbound',
+        provider: 'telnyx',
+        telnyx_event_id: telnyxEventId,
+        telnyx_call_control_id: callControlId,
+        event_type: eventType,
+        status,
+        started_at: startedAt,
+        ended_at: endedAt,
+        duration_seconds: durationSeconds,
+        from_number: fromNumber,
+        to_number: toNumber,
+        raw_payload: body,
+      });
+    } catch (err) {
+      console.error('[Telnyx Voice] Failed to log call event:', err);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err) {
