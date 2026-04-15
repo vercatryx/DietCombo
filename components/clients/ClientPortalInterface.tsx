@@ -567,16 +567,21 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                     const list: { date: string; current: number; expected: number }[] = [];
                     for (const order of mealPlanOrders) {
                         const dateKey = String(order?.scheduledDeliveryDate ?? '').slice(0, 10);
-                        if (orderAndMealPlanOnly && editedSet.size > 0 && !editedSet.has(dateKey)) continue;
+                        // For the aggregate error, we want to show *which dates are off* even if the user
+                        // hasn't edited that day in this session or expectedTotalMeals is missing/0.
                         const expectedForDay = (order.expectedTotalMeals ?? 0) * householdSize;
-                        if (expectedForDay <= 0) continue;
                         const currentForDay = (order.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0);
-                        if (currentForDay !== expectedForDay) list.push({ date: dateKey, current: currentForDay, expected: expectedForDay });
+                        if (expectedForDay > 0) {
+                            if (currentForDay !== expectedForDay) list.push({ date: dateKey, current: currentForDay, expected: expectedForDay });
+                        } else if (currentForDay > 0) {
+                            // Expected missing/zero but user has meals selected — still surface it as a "date to check".
+                            list.push({ date: dateKey, current: currentForDay, expected: 0 });
+                        }
                     }
                     return list;
                 })());
                 const detailsText = mismatchDetails.length > 0
-                    ? ` Dates to fix: ${mismatchDetails.slice(0, 5).map((m) => `${formatDateForMismatch(m.date)} (${m.current}/${m.expected})`).join(', ')}${mismatchDetails.length > 5 ? ` (and ${mismatchDetails.length - 5} more)` : ''}.`
+                    ? ` Dates to fix: ${mismatchDetails.slice(0, 5).map((m) => m.expected > 0 ? `${formatDateForMismatch(m.date)} (${m.current}/${m.expected})` : `${formatDateForMismatch(m.date)} (${m.current}/—)`).join(', ')}${mismatchDetails.length > 5 ? ` (and ${mismatchDetails.length - 5} more)` : ''}.`
                     : '';
                 if (totalValue > totalExpectedFromPlan) {
                     validationErrors.push(`Total meals (${totalValue}) exceeds the expected total for your delivery dates (${totalExpectedFromPlan}). Please reduce to match.${detailsText}`);
