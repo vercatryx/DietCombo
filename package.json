@@ -15,6 +15,8 @@
     "verify-driver-order-numbers": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-order-numbers.ts",
     "test-driver-page-order-numbers": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-driver-page-order-numbers.ts",
     "verify-driver-proof-urls": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-driver-proof-urls.ts",
+    "debug-bill-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/debug-bill-client-by-name.ts",
+    "check-customer-bill": "node scripts/check-customer-api-bill-for-name.mjs",
     "sync-dependants-from-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/sync-dependants-from-parent.ts",
     "diagnose-expired-order-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-expired-order-client.ts",
     "diagnose-order-items-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-order-items-doubles.ts",

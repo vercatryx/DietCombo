@@ -82,29 +82,46 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = getSupabaseServiceOrAnonKey()!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+/**
+ * Supabase REST has a default row limit (often 1000). For endpoints like /api/bill
+ * we must paginate or we silently drop clients that sort beyond the first page.
+ */
+async function fetchAllRows<T = any>(build: (from: number, to: number) => any, pageSize = 1000): Promise<T[]> {
+    const all: T[] = [];
+    let from = 0;
+    while (true) {
+        const to = from + pageSize - 1;
+        const { data, error } = await build(from, to);
+        if (error) throw error;
+        const chunk = (data || []) as T[];
+        if (chunk.length === 0) break;
+        all.push(...chunk);
+        if (chunk.length < pageSize) break;
+        from += pageSize;
+    }
+    return all;
+}
+
 export async function GET(request: NextRequest) {
     try {
         const billDate = parseBillDateFromRequest(request) ?? BILL_DATE_DEFAULT;
         const accountFilter = parseAccountFilter(request);
 
         // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
-        let clientsQuery = supabase
-            .from('clients')
-            .select('id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account')
-            .order('id', { ascending: true });
-
-        if (accountFilter === 'brooklyn') {
-            clientsQuery = clientsQuery.eq('unite_account', 'Brooklyn');
-        } else if (accountFilter === 'regular') {
-            clientsQuery = clientsQuery.or('unite_account.eq.Regular,unite_account.is.null');
-        }
-
-        const { data: clients, error: clientsError } = await clientsQuery;
-
-        if (clientsError) {
-            console.error('[api/bill] Error fetching clients:', clientsError);
-            throw new Error(clientsError.message);
-        }
+        const selectClients =
+            'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account';
+        const clients = await fetchAllRows<any>(
+            (from, to) => {
+                let q = supabase.from('clients').select(selectClients).order('id', { ascending: true }).range(from, to);
+                if (accountFilter === 'brooklyn') {
+                    q = q.eq('unite_account', 'Brooklyn');
+                } else if (accountFilter === 'regular') {
+                    q = q.or('unite_account.eq.Regular,unite_account.is.null');
+                }
+                return q;
+            },
+            1000
+        );
 
         if (!clients || clients.length === 0) {
             return NextResponse.json([]);
@@ -130,21 +147,28 @@ export async function GET(request: NextRequest) {
         });
 
         // 3. Fetch dependents for these households (match on parent_client_id)
-        let depsQuery = supabase
-            .from('clients')
-            .select('id, full_name, dob, cin, parent_client_id')
-            .not('parent_client_id', 'is', null);
-
-        if (accountFilter === 'brooklyn') {
-            depsQuery = depsQuery.eq('unite_account', 'Brooklyn');
-        } else if (accountFilter === 'regular') {
-            depsQuery = depsQuery.or('unite_account.eq.Regular,unite_account.is.null');
-        }
-
-        const { data: dependents, error: dependentsError } = await depsQuery;
-
-        if (dependentsError) {
+        let dependents: any[] = [];
+        try {
+            dependents = await fetchAllRows<any>(
+                (from, to) => {
+                    let q = supabase
+                        .from('clients')
+                        .select('id, full_name, dob, cin, parent_client_id, unite_account')
+                        .not('parent_client_id', 'is', null)
+                        .order('id', { ascending: true })
+                        .range(from, to);
+                    if (accountFilter === 'brooklyn') {
+                        q = q.eq('unite_account', 'Brooklyn');
+                    } else if (accountFilter === 'regular') {
+                        q = q.or('unite_account.eq.Regular,unite_account.is.null');
+                    }
+                    return q;
+                },
+                1000
+            );
+        } catch (dependentsError: any) {
             console.error('[api/bill] Error fetching dependents:', dependentsError);
+            dependents = [];
         }
 
         const parentIdSet = new Set(billableClientIds);
