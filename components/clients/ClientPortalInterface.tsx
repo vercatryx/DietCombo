@@ -563,10 +563,25 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             const totalValue = mealPlanOrders.length > 0 ? totalValueFromPlan : getTotalMealCountAllDays();
             const totalExpectedFromPlan = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0) * householdSize;
             if (totalExpectedFromPlan > 0 && totalValue !== totalExpectedFromPlan && validationErrors.every(e => !e.includes('Total meals for each day'))) {
+                const mismatchDetails = (perDayMismatches.length > 0 ? perDayMismatches : (() => {
+                    const list: { date: string; current: number; expected: number }[] = [];
+                    for (const order of mealPlanOrders) {
+                        const dateKey = String(order?.scheduledDeliveryDate ?? '').slice(0, 10);
+                        if (orderAndMealPlanOnly && editedSet.size > 0 && !editedSet.has(dateKey)) continue;
+                        const expectedForDay = (order.expectedTotalMeals ?? 0) * householdSize;
+                        if (expectedForDay <= 0) continue;
+                        const currentForDay = (order.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0);
+                        if (currentForDay !== expectedForDay) list.push({ date: dateKey, current: currentForDay, expected: expectedForDay });
+                    }
+                    return list;
+                })());
+                const detailsText = mismatchDetails.length > 0
+                    ? ` Dates to fix: ${mismatchDetails.slice(0, 5).map((m) => `${formatDateForMismatch(m.date)} (${m.current}/${m.expected})`).join(', ')}${mismatchDetails.length > 5 ? ` (and ${mismatchDetails.length - 5} more)` : ''}.`
+                    : '';
                 if (totalValue > totalExpectedFromPlan) {
-                    validationErrors.push(`Total meals (${totalValue}) exceeds the expected total for your delivery dates (${totalExpectedFromPlan}). Please reduce to match.`);
+                    validationErrors.push(`Total meals (${totalValue}) exceeds the expected total for your delivery dates (${totalExpectedFromPlan}). Please reduce to match.${detailsText}`);
                 } else {
-                    validationErrors.push(`Total meals (${totalValue}) is less than the expected total for your delivery dates (${totalExpectedFromPlan}). Please add items to match.`);
+                    validationErrors.push(`Total meals (${totalValue}) is less than the expected total for your delivery dates (${totalExpectedFromPlan}). Please add items to match.${detailsText}`);
                 }
             }
 
