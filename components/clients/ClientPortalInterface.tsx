@@ -72,8 +72,8 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
     // UI State
     const [saving, setSaving] = useState(false);
     const [savingProfile, setSavingProfile] = useState(false);
-    const [message, setMessage] = useState<string | null>('');
-    const [profileMessage, setProfileMessage] = useState<string | null>('');
+    const [message, setMessage] = useState<string | null>(null);
+    const [profileMessage, setProfileMessage] = useState<string | null>(null);
     const [missingItemsToastDismissed, setMissingItemsToastDismissed] = useState(false);
     /** Current meal plan orders (from SavedMealPlanMonth) for saving only when user clicks Save. */
     const [mealPlanOrders, setMealPlanOrders] = useState<any[]>([]);
@@ -2865,6 +2865,19 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                     </>
                                 )}
                             </div>
+                            {!!message && !saving && (
+                                <div
+                                    className="save-bar-message"
+                                    style={{
+                                        width: '100%',
+                                        marginTop: '0.35rem',
+                                        fontWeight: 700,
+                                        color: message.toLowerCase().includes('error') ? '#991b1b' : '#065f46'
+                                    }}
+                                >
+                                    {message}
+                                </div>
+                            )}
                             <div className="save-bar-buttons" style={{ display: 'flex', flexWrap: 'wrap' }}>
                                 <button
                                     onClick={handleDiscard}
