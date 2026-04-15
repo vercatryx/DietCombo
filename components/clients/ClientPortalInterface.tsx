@@ -316,6 +316,18 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
 
         function applyTemplateToState(template: any) {
             if (!template) return;
+            const householdSize = Math.max(1, householdPeople?.length ?? 1);
+            const scaleItemsForHousehold = (items: Record<string, any> | null | undefined) => {
+                const base = items || {};
+                if (householdSize <= 1) return { ...base };
+                const scaled: Record<string, number> = {};
+                for (const [itemId, qty] of Object.entries(base)) {
+                    const n = Number(qty) || 0;
+                    const next = n * householdSize;
+                    if (next > 0) scaled[itemId] = next;
+                }
+                return scaled;
+            };
             const templateVs = template.vendorSelections || [];
             const applied: any = { serviceType: 'Food', caseId: template.caseId, notes: template.notes };
             if (template.deliveryDayOrders && typeof template.deliveryDayOrders === 'object' && Object.keys(template.deliveryDayOrders).length > 0) {
@@ -324,14 +336,14 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                     const dayVal = dayOrder as { vendorSelections?: any[] };
                     const selections = (dayVal.vendorSelections || []).map((vs: any) => ({
                         vendorId: defaultVendorId || vs.vendorId || '',
-                        items: { ...(vs.items || {}) }
+                        items: scaleItemsForHousehold(vs.items)
                     }));
                     if (selections.length > 0) applied.deliveryDayOrders[day] = { vendorSelections: selections };
                 }
             }
             if (!applied.deliveryDayOrders || Object.keys(applied.deliveryDayOrders).length === 0) {
                 applied.vendorSelections = templateVs.length > 0
-                    ? templateVs.map((vs: any) => ({ vendorId: defaultVendorId || vs.vendorId || '', items: { ...(vs.items || {}) } }))
+                    ? templateVs.map((vs: any) => ({ vendorId: defaultVendorId || vs.vendorId || '', items: scaleItemsForHousehold(vs.items) }))
                     : [{ vendorId: defaultVendorId || '', items: {} }];
             }
             setOrderConfig(applied);
@@ -383,7 +395,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 (upcomingOrder as any)?.id
         ) : null;
         lastUpcomingOrderIdRef.current = currentUpcomingOrderId;
-    }, [upcomingOrder, activeOrder, client, vendors]);
+    }, [upcomingOrder, activeOrder, client, vendors, householdPeople]);
 
     // Box Logic - Load quotas if boxTypeId is set (supports both legacy and new format)
     useEffect(() => {

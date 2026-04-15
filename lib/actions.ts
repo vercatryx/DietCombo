@@ -2831,7 +2831,12 @@ export async function getAvailableMealPlanTemplateInRange(startDate: string, end
  * to show current month only; when user changes month, call again with that year/month.
  * One batch template fetch + one client range fetch + merge in memory.
  */
-export async function getMealPlanForMonth(clientId: string, year: number, month: number, opts?: { includePastAndExpired?: boolean }): Promise<MealPlannerOrderResult[]> {
+export async function getMealPlanForMonth(
+    clientId: string,
+    year: number,
+    month: number,
+    opts?: { includePastAndExpired?: boolean; householdSize?: number }
+): Promise<MealPlannerOrderResult[]> {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const lastDay = new Date(year, month, 0).getDate();
     const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
@@ -2839,8 +2844,18 @@ export async function getMealPlanForMonth(clientId: string, year: number, month:
         getAvailableMealPlanTemplateInRange(monthStart, monthEnd, opts),
         getClientMealPlannerData(clientId, { startDate: monthStart, endDate: monthEnd })
     ]);
+    const householdSize = Math.max(1, Number(opts?.householdSize) || 1);
+    const scaledTemplateList = householdSize <= 1
+        ? templateList
+        : (templateList ?? []).map((o) => ({
+            ...o,
+            items: (o.items ?? []).map((i) => ({
+                ...i,
+                quantity: Math.max(0, (Number(i.quantity) || 0) * householdSize)
+            }))
+        }));
     const byDate = new Map<string, MealPlannerOrderResult>();
-    for (const o of templateList) {
+    for (const o of scaledTemplateList) {
         if (o.scheduledDeliveryDate) byDate.set(o.scheduledDeliveryDate, o);
     }
     const nameEq = (a: { name?: string | null }, b: { name?: string | null }) =>
@@ -9451,7 +9466,16 @@ export async function getClientPortalPageData(clientId: string, opts?: { include
         const [activeOrder, previousOrders, mealPlanData] = await Promise.all([
             getActiveOrderForClient(clientId, refData),
             getOrderHistory(clientId, undefined, refData),
-            client.serviceType === 'Food' ? getMealPlanForMonth(clientId, currentYear, currentMonth, opts?.includePastAndExpired ? { includePastAndExpired: true } : undefined) : Promise.resolve([])
+            client.serviceType === 'Food'
+                ? getMealPlanForMonth(
+                    clientId,
+                    currentYear,
+                    currentMonth,
+                    opts?.includePastAndExpired
+                        ? { includePastAndExpired: true, householdSize: Math.max(1, householdPeople.length) }
+                        : { householdSize: Math.max(1, householdPeople.length) }
+                )
+                : Promise.resolve([])
         ]);
 
         return {

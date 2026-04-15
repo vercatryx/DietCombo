@@ -240,7 +240,12 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
       setLoadingDates(true);
       const thisFetchId = fetchIdRef.current + 1;
       fetchIdRef.current = thisFetchId;
-      getMealPlanForMonth(effectiveClientId, now.getFullYear(), now.getMonth() + 1, adminMode ? { includePastAndExpired: true } : undefined)
+      getMealPlanForMonth(
+        effectiveClientId,
+        now.getFullYear(),
+        now.getMonth() + 1,
+        adminMode ? { includePastAndExpired: true, householdSize } : { householdSize }
+      )
         .then((list) => {
           if (fetchIdRef.current !== thisFetchId) return;
           clientEditedDatesRef.current = new Set(list.map((o) => o.scheduledDeliveryDate).filter(Boolean));
@@ -338,7 +343,12 @@ export function SavedMealPlanMonth({ clientId, onOrdersChange, onEditedDatesChan
     setLoadingDates(true);
     const thisFetchId = fetchIdRef.current + 1;
     fetchIdRef.current = thisFetchId;
-    getMealPlanForMonth(effectiveClientId, y, m, adminMode ? { includePastAndExpired: true } : undefined)
+    getMealPlanForMonth(
+      effectiveClientId,
+      y,
+      m,
+      adminMode ? { includePastAndExpired: true, householdSize } : { householdSize }
+    )
       .then((list) => {
         if (fetchIdRef.current !== thisFetchId) return;
         clientEditedDatesRef.current = new Set(list.map((o) => o.scheduledDeliveryDate).filter(Boolean));
