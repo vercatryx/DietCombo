@@ -1,45 +1,13 @@
 'use server';
 
 import { uploadFile } from '@/lib/storage';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
-import { sendSmsToClient, formatDeliveryTimestamp } from '@/lib/telnyx';
-
-async function sendDeliveryNotification(
-    supabase: SupabaseClient,
-    clientId: string,
-) {
-    try {
-        const { data: settings } = await supabase
-            .from('app_settings')
-            .select('text_on_delivery')
-            .eq('id', '1')
-            .single();
-
-        if (!settings?.text_on_delivery) return;
-
-        const { data: client } = await supabase
-            .from('clients')
-            .select('id, phone_number, secondary_phone_number, full_name, do_not_text, do_not_text_numbers')
-            .eq('id', clientId)
-            .single();
-
-        if (!client || client.do_not_text) return;
-
-        const timestamp = formatDeliveryTimestamp(new Date());
-        const name = client.full_name?.split(' ')[0] || '';
-        const greeting = name ? `Hello ${name}, this` : 'Hello, this';
-        const message = `${greeting} is The Diet Fantasy. Your food has been delivered on ${timestamp}. If you have any questions, please don't hesitate to reach out.`;
-
-        await sendSmsToClient(client, message);
-    } catch (err) {
-        console.error('[Delivery SMS] Failed to send notification:', err);
-    }
-}
+import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 
 export async function processDeliveryProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -154,7 +122,7 @@ export async function processDeliveryProof(formData: FormData) {
             // Sync proof to stops so driver app shows proof for this order
             await supabaseAdmin.from('stops').update({ proof_url: publicUrl }).eq('order_id', orderId);
             revalidatePath('/admin');
-            sendDeliveryNotification(supabaseAdmin, clientId).catch(() => {});
+            sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
             return { success: true, url: publicUrl };
         }
 
@@ -233,7 +201,7 @@ export async function processDeliveryProof(formData: FormData) {
         }
 
         revalidatePath('/admin');
-        sendDeliveryNotification(supabaseAdmin, clientId).catch(() => {});
+        sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
 
         return { success: true, url: publicUrl };
     } catch (error: any) {

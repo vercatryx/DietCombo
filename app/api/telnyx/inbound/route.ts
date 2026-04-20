@@ -34,7 +34,8 @@ async function markProcessed(messageId: string, phone: string): Promise<void> {
         const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
         await supabase.from('sms_conversations').insert({
             phone_number: phone,
-            role: 'system',
+            // Use 'assistant' for broad schema compatibility (older DBs may only allow user/assistant).
+            role: 'assistant',
             content: `[processed:${messageId}]`,
             telnyx_message_id: messageId,
         });

@@ -10,6 +10,7 @@ import { getCurrentTime } from '@/lib/time';
 import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
+import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 
 export async function processProduceProof(formData: FormData) {
     const file = formData.get('file') as File;
@@ -34,12 +35,12 @@ export async function processProduceProof(formData: FormData) {
     try {
         // 1. Verify Order matches
         let table: 'orders' | 'upcoming_orders' = 'orders';
-        let foundOrder: { id: string } | null = null;
+        let foundOrder: { id: string; client_id: string } | null = null;
 
         // Try finding in orders
         const { data: orderData } = await supabaseAdmin
             .from('orders')
-            .select('id')
+            .select('id, client_id')
             .eq('order_number', orderNumber)
             .maybeSingle();
 
@@ -51,7 +52,7 @@ export async function processProduceProof(formData: FormData) {
             if (uuidRegex.test(orderNumber)) {
                 const { data: orderById } = await supabaseAdmin
                     .from('orders')
-                    .select('id')
+                    .select('id, client_id')
                     .eq('id', orderNumber)
                     .maybeSingle();
                 foundOrder = orderById;
@@ -64,7 +65,7 @@ export async function processProduceProof(formData: FormData) {
 
             const { data: upcomingOrder } = await supabaseAdmin
                 .from('upcoming_orders')
-                .select('id')
+                .select('id, client_id')
                 .eq('order_number', orderNumber)
                 .maybeSingle();
 
@@ -76,7 +77,7 @@ export async function processProduceProof(formData: FormData) {
                 if (uuidRegex.test(orderNumber)) {
                     const { data: upcomingById } = await supabaseAdmin
                         .from('upcoming_orders')
-                        .select('id')
+                        .select('id, client_id')
                         .eq('id', orderNumber)
                         .maybeSingle();
                     foundOrder = upcomingById;
@@ -121,6 +122,7 @@ export async function processProduceProof(formData: FormData) {
                 return { success: false, error: result.error || 'Failed to process order' };
             }
             revalidatePath('/admin');
+            sendDeliveryNotificationIfEnabled(supabaseAdmin, foundOrder.client_id).catch(() => {});
             return { success: true, url: publicUrl };
         }
 
@@ -199,6 +201,9 @@ export async function processProduceProof(formData: FormData) {
         }
 
         revalidatePath('/admin'); // Revalidate admin views
+
+        const smsClientId = orderDetails?.client_id ?? foundOrder.client_id;
+        sendDeliveryNotificationIfEnabled(supabaseAdmin, smsClientId).catch(() => {});
 
         return { success: true, url: publicUrl };
     } catch (error: any) {
@@ -397,6 +402,8 @@ export async function createProduceOrderWithProof(clientId: string, deliveryProo
         }
 
         revalidatePath('/admin');
+
+        sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
 
         return {
             success: true,

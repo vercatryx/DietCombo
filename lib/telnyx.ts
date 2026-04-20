@@ -91,7 +91,7 @@ export async function sendSms(
       body: JSON.stringify({ from: fromNumber, to: e164, text }),
     });
 
-    const data = await res.json().catch(() => ({}));
+    const data: any = await res.json().catch(() => ({}));
 
     if (!res.ok) {
       const errorDetail = data?.errors?.[0]?.detail || 'unknown';

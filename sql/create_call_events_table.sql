@@ -4,10 +4,10 @@ CREATE TABLE IF NOT EXISTS call_events (
     client_id VARCHAR(36),
     direction VARCHAR(20) NOT NULL DEFAULT 'inbound' CHECK (direction IN ('inbound', 'outbound')),
     provider VARCHAR(30) NOT NULL DEFAULT 'telnyx',
-    telnyx_event_id VARCHAR(100),
+    telnyx_event_id VARCHAR(120),
     telnyx_call_control_id VARCHAR(100),
-    event_type VARCHAR(100) NOT NULL,
-    status VARCHAR(40),
+    event_type VARCHAR(80) NOT NULL,
+    status VARCHAR(80),
     started_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ,
     duration_seconds INTEGER,
@@ -17,14 +17,16 @@ CREATE TABLE IF NOT EXISTS call_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Used for webhook dedup; Telnyx retries can deliver the same event id.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_call_events_telnyx_event_id
+    ON call_events (telnyx_event_id)
+    WHERE telnyx_event_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_call_events_call_control_id
+    ON call_events (telnyx_call_control_id);
+
 CREATE INDEX IF NOT EXISTS idx_call_events_phone_created
     ON call_events (phone_number, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_call_events_client_created
     ON call_events (client_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_call_events_telnyx_call_control_id
-    ON call_events (telnyx_call_control_id) WHERE telnyx_call_control_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_call_events_telnyx_event_id
-    ON call_events (telnyx_event_id) WHERE telnyx_event_id IS NOT NULL;
