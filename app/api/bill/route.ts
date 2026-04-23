@@ -19,7 +19,6 @@ import { createClient } from '@supabase/supabase-js';
 import { getSupabaseServiceOrAnonKey } from '@/lib/supabase-env';
 
 const AMOUNT_PER_PERSON = 336;
-const AMOUNT_PER_PERSON_PRODUCE = 146;
 
 /** Orders with this status are excluded from the order list (already billed). */
 const BILLING_SUCCESSFUL = 'billing_successful';
@@ -271,13 +270,7 @@ export async function GET(request: NextRequest) {
             const parent = parentMap[parentId] || {};
             const deps = dependentsByParent[pid] || [];
             const totalPeople = 1 + deps.length;
-            const isProduce = (parent.service_type || '')
-                .split(',')
-                .map((s: string) => s.trim().toLowerCase())
-                .includes('produce');
-            const amount = isProduce
-                ? AMOUNT_PER_PERSON_PRODUCE * totalPeople
-                : AMOUNT_PER_PERSON * totalPeople;
+            const amount = AMOUNT_PER_PERSON * totalPeople;
 
             let orderNumbers = orderNumbersByHousehold[pid] ?? [];
             let proofURLs = proofURLsByHousehold[pid] ?? [];
