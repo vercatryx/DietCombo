@@ -5,6 +5,7 @@ import { logout } from '@/lib/auth-actions';
 import { LogOut } from 'lucide-react';
 import type { Metadata } from 'next';
 import { getSession } from '@/lib/session';
+import { isProduceServiceType } from '@/lib/isProduceServiceType';
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -31,8 +32,7 @@ export default async function AdminClientPortalPage({ params }: Props) {
 
   const { client, householdPeople, statuses, navigators, vendors, menuItems, boxTypes, categories, activeOrder, previousOrders, mealPlanData } = payload;
 
-  // Produce clients cannot use the client portal (e.g. admin opened their URL)
-  if (client.serviceType === 'Produce') {
+  if (isProduceServiceType(client.serviceType) && householdPeople.length === 0) {
     return (
       <div style={{ padding: '20px', maxWidth: '480px', margin: '2rem auto', textAlign: 'center' }}>
         <div style={{
@@ -73,11 +73,13 @@ export default async function AdminClientPortalPage({ params }: Props) {
     );
   }
 
-  // For Food clients, portal uses only day-based meal plan (clients.meal_planner_data). Do not pass
-  // upcoming_order so we never read or write it for the client's order.
-  const upcomingOrder = client.serviceType === 'Food' ? null : (client.activeOrder ?? null);
+  const portalDayMealPlanHousehold =
+    client.serviceType === 'Food' ||
+    (isProduceServiceType(client.serviceType) && householdPeople.length > 0);
 
-  if (client.serviceType === 'Food' && Array.isArray(mealPlanData)) {
+  const upcomingOrder = portalDayMealPlanHousehold ? null : (client.activeOrder ?? null);
+
+  if (portalDayMealPlanHousehold && Array.isArray(mealPlanData)) {
     console.log('[MealPlan Step 0] client-portal page: mealPlanData (initialMealPlanOrders) length=', mealPlanData.length, 'first order items=', mealPlanData[0]?.items?.length ?? 0, 'first order item ids sample=', mealPlanData[0]?.items?.slice(0, 2).map((i: any) => i?.id) ?? []);
   }
 

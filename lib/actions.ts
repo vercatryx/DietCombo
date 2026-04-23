@@ -23,6 +23,8 @@ import { getClientSubmissions } from './form-actions';
 import { composeUniteUsUrl } from './utils';
 import { toStoredUpcomingOrder, fromStoredUpcomingOrder } from './upcoming-order-schema';
 import { prepareMealPlannerDataForUpdate, mealPlannerDateOnly, mealPlannerCutoffDate, type MealPlannerOrderResult } from './meal-planner-utils';
+import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
+import { isProduceServiceType } from './isProduceServiceType';
 
 export type { MealPlannerOrderResult } from './meal-planner-utils';
 
@@ -9454,19 +9456,23 @@ export async function getClientPortalPageData(clientId: string, opts?: { include
         ]);
 
         const refData: OrderReferenceData = { menuItems, vendors, boxTypes };
-        // Only count Food clients for meal allowance; exclude Produce and other non-Food
+        // Food + Meal household members for meal plan scaling; exclude Produce primary and other service types
         const allHousehold = parent ? [parent, ...dependants] : [client, ...dependants];
-        const householdPeople = allHousehold.filter((p) => p?.serviceType === 'Food');
+        const householdPeople = allHousehold.filter((p) => p && isFoodOrMealHouseholdMember(p.serviceType));
 
         // 2) Client-specific data reusing reference data (no duplicate menu/vendor/box fetches)
         // Food: load current month only for fast calendar (getMealPlanForMonth); other months load on demand in SavedMealPlanMonth
         const now = new Date();
         const currentYear = now.getFullYear();
         const currentMonth = now.getMonth() + 1;
+        const loadHouseholdMealPlan =
+            client.serviceType === 'Food' ||
+            (isProduceServiceType(client.serviceType) && householdPeople.length > 0);
+
         const [activeOrder, previousOrders, mealPlanData] = await Promise.all([
             getActiveOrderForClient(clientId, refData),
             getOrderHistory(clientId, undefined, refData),
-            client.serviceType === 'Food'
+            loadHouseholdMealPlan
                 ? getMealPlanForMonth(
                     clientId,
                     currentYear,

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diet Fantasy Billing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header class="app-header">
+            <div class="brand">
+                <h1 class="brand-title">Diet Fantasy Billing</h1>
+                <p class="brand-tagline">Load your client list, then run billing. Activity and progress appear below.</p>
+            </div>
+            <button type="button" id="connection-status" class="badge-status" aria-live="polite" disabled
+                title="When status is Connected, triple-click here to show or hide advanced technical settings.">
+                Connecting…
+            </button>
+        </header>
+
+        <section class="settings-bar settings-bar--hidden" id="settings-bar" aria-label="Advanced environment settings">
+            <div class="settings-bar__inner">
+                <span class="settings-bar__label">Advanced</span>
+                <div class="settings-group">
+                    <label for="setting-concurrent-browsers">Browser slots</label>
+                    <input type="number" id="setting-concurrent-browsers" min="1" max="50" step="1"
+                        title="Saved with Save settings" />
+                </div>
+                <button type="button" id="btn-show-browser" class="btn btn-outline btn-toggle"
+                    title="Visible browser window">Show browser: Off</button>
+                <button type="button" id="btn-save-settings" class="btn btn-outline">Save settings</button>
+                <button type="button" id="btn-open-source-files" class="btn btn-outline">Open source files</button>
+            </div>
+        </section>
+
+        <section class="slots-section" aria-label="Browser activity">
+            <h2 class="section-heading">Automation slots</h2>
+            <div id="slots-strip" class="slots-strip" aria-label="Active browser slots"></div>
+        </section>
+
+        <section class="toolbar" aria-label="Actions">
+            <div class="toolbar__filters">
+                <div class="field-group">
+                    <label for="serverSelect">Account</label>
+                    <select id="serverSelect" class="input-select"
+                        title="Which Diet Fantasy site to use">
+                        <option value="main">Diet Fantasy (Main)</option>
+                        <option value="brooklyn">Brooklyn</option>
+                    </select>
+                </div>
+                <div class="field-group">
+                    <label for="bill-date">Billing week starts</label>
+                    <input type="date" id="bill-date" class="input-date" title="First day for the billing list" />
+                </div>
+            </div>
+            <div class="toolbar__actions">
+                <button type="button" id="btn-download-bill" class="btn btn-secondary" onclick="downloadAllClients()">
+                    Download client list
+                </button>
+                <button type="button" id="btn-run-queue" class="btn btn-primary" onclick="runCurrentQueue()">
+                    Run billing
+                </button>
+                <button type="button" id="btn-export-excel" class="btn btn-outline">Export to Excel</button>
+            </div>
+            <div class="stats" role="status">
+                <span class="stat-pill"><span class="stat-pill__label">Total</span> <b id="stat-total">0</b></span>
+                <span class="stat-pill stat-pill--pending"><span class="stat-pill__label">Waiting</span> <b id="stat-pending">0</b></span>
+                <span class="stat-pill stat-pill--ok"><span class="stat-pill__label">Done</span> <b id="stat-success">0</b></span>
+                <span class="stat-pill stat-pill--bad"><span class="stat-pill__label">Failed</span> <b id="stat-failed">0</b></span>
+            </div>
+        </section>
+
+        <div class="main-grid">
+            <section class="queue-panel">
+                <div class="queue-panel__header">
+                    <h2 class="section-heading">Client queue</h2>
+                    <div class="field-group queue-status-filter">
+                        <label for="queue-status-filter">Show status</label>
+                        <select id="queue-status-filter" class="input-select input-select--narrow"
+                            title="Filter rows by billing status">
+                            <option value="all">All statuses</option>
+                            <option value="pending">Waiting</option>
+                            <option value="processing">In progress</option>
+                            <option value="success">Done</option>
+                            <option value="warning">Submitted (unverified)</option>
+                            <option value="skipped">Skipped</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-check" title="Select rows to run only these clients">
+                                    <input type="checkbox" id="queue-select-all" title="Select all">
+                                </th>
+                                <th onclick="sortQueue('id')">#</th>
+                                <th onclick="sortQueue('name')">Client</th>
+                                <th onclick="sortQueue('start')">Dates</th>
+                                <th onclick="sortQueue('status')">Status</th>
+                                <th onclick="sortQueue('message')">Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queue-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="log-panel">
+                <h2 class="section-heading">Activity log</h2>
+                <div id="terminal" class="terminal">
+                    <div class="line dimmed">Waiting for activity…</div>
+                </div>
+            </section>
+        </div>
+    </div>
+    <script src="client.js"></script>
+</body>
+
+</html>

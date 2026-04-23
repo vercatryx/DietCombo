@@ -143,6 +143,55 @@
     gap: 0.5rem;
 }
 
+.accountChoiceList {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: 100%;
+}
+
+.accountChoiceBtn {
+    width: 100%;
+    text-align: left;
+    padding: 1rem 1.25rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.accountChoiceBtn:hover:not(:disabled) {
+    border-color: var(--color-primary);
+    background: var(--bg-surface-hover);
+}
+
+.accountChoiceBtn:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+.accountChoiceTitle {
+    font-weight: 700;
+    font-size: 1.05rem;
+    display: block;
+}
+
+.accountChoiceSubtitle {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+    display: block;
+}
+
+.chooseHint {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.45;
+    margin-bottom: 0.5rem;
+}
+
 .userInfo {
     margin-bottom: 1.5rem;
     padding: 0.75rem 1rem;

@@ -6,6 +6,7 @@ import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, Item
 import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, saveClientFoodOrder, saveClientBoxOrder, saveClientMealPlannerData, isFoodOrderSameAsDefault } from '@/lib/actions';
 import { getCachedDefaultOrderTemplate, getDefaultOrderTemplateCachedSync } from '@/lib/default-order-template-cache';
 import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
+import { isProduceServiceType } from '@/lib/isProduceServiceType';
 import { fromStoredUpcomingOrder } from '@/lib/upcoming-order-schema';
 import { Package, Truck, User, Loader2, Info, Plus, Calendar, AlertTriangle, Check, Trash2 } from 'lucide-react';
 import styles from './ClientProfile.module.css';
@@ -225,7 +226,10 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 }
             } else {
                 source = 'default';
-                configToSet = client.serviceType === 'Food'
+                const useFoodShellForPortal =
+                    client.serviceType === 'Food' ||
+                    (isProduceServiceType(client.serviceType) && (householdPeople?.length ?? 0) > 0);
+                configToSet = useFoodShellForPortal
                     ? { serviceType: 'Food', vendorSelections: [{ vendorId: '', items: {} }] }
                     : { serviceType: client.serviceType };
             }
@@ -309,7 +313,10 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             lastClientIdForDefaultRef.current = client.id;
             defaultTemplateAppliedRef.current = false;
         }
-        const shouldApplyDefaultTemplate = useOnlyClientUpcomingOrder && client.serviceType === 'Food' && !defaultTemplateAppliedRef.current &&
+        const useFoodPortalOrderShell =
+            client.serviceType === 'Food' ||
+            (isProduceServiceType(client.serviceType) && (householdPeople?.length ?? 0) > 0);
+        const shouldApplyDefaultTemplate = useOnlyClientUpcomingOrder && useFoodPortalOrderShell && !defaultTemplateAppliedRef.current &&
             (!sourceOrder || !hasOrderDetailsInOrder(sourceOrder));
 
         const defaultVendorId = (vendors?.length && (vendors.find((v: any) => v.isDefault && (v.serviceTypes || []).includes('Food'))?.id || vendors.find((v: any) => (v.serviceTypes || []).includes('Food'))?.id || vendors[0]?.id)) || '';
@@ -376,7 +383,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         }
 
         // Don't overwrite with empty when: we've already applied the default template, OR we're about to apply it (so client never sees zero when they have no upcoming order)
-        const skipOverwriteWithEmpty = useOnlyClientUpcomingOrder && client.serviceType === 'Food' && (
+        const skipOverwriteWithEmpty = useOnlyClientUpcomingOrder && useFoodPortalOrderShell && (
             (defaultTemplateAppliedRef.current && !hasOrderDetailsInOrder(configToSet)) ||
             shouldApplyDefaultTemplate
         );
@@ -396,6 +403,15 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         ) : null;
         lastUpcomingOrderIdRef.current = currentUpcomingOrderId;
     }, [upcomingOrder, activeOrder, client, vendors, householdPeople]);
+
+    /** Food primary, or Produce household head managing Food/Meal dependants — same day-based meal plan portal as Food. */
+    const portalPrimaryHouseholdMealPlan = useMemo(
+        () =>
+            orderAndMealPlanOnly &&
+            (client.serviceType === 'Food' ||
+                (isProduceServiceType(client.serviceType) && (householdPeople?.length ?? 0) > 0)),
+        [orderAndMealPlanOnly, client.serviceType, householdPeople?.length]
+    );
 
     // Box Logic - Load quotas if boxTypeId is set (supports both legacy and new format)
     useEffect(() => {
@@ -423,7 +439,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         const hasFood = Array.isArray(types) ? types.some((t: string) => String(t).toLowerCase() === 'food') : false;
         return hasFood && active;
     }), [vendors]);
-    const singleVendorMode = Boolean(orderAndMealPlanOnly && client.serviceType === 'Food');
+    const singleVendorMode = Boolean(portalPrimaryHouseholdMealPlan);
     const singleVendor = singleVendorMode ? (foodVendors[0] ?? vendors[0] ?? null) : null;
 
     const singleVendorInitDoneRef = useRef(false);
@@ -515,7 +531,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
         const validationErrors: string[] = [];
         if (!adminMode) {
 
-        if (serviceType === 'Food') {
+        if (portalPrimaryHouseholdMealPlan || (!orderAndMealPlanOnly && serviceType === 'Food')) {
             // Check if order has items after cleaning
             const hasItemsInVendorSelections = orderConfig.vendorSelections?.some((s: any) => {
                 if (!s.vendorId) return false;
@@ -768,7 +784,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             const cleanedOrderConfig = { ...orderConfig };
 
 
-            if (serviceType === 'Food') {
+            if (portalPrimaryHouseholdMealPlan || serviceType === 'Food') {
                 if (cleanedOrderConfig.deliveryDayOrders) {
                     // Clean multi-day format (already in deliveryDayOrders)
                     for (const day of Object.keys(cleanedOrderConfig.deliveryDayOrders)) {
@@ -1799,7 +1815,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
     const hasUnsavedChanges = configChanged || mealPlanEditedDates.length > 0;
 
     // Edited days whose total !== expected (only check dates the user edited, not defaults). Used for mismatch bar message and to block save.
-    const mealPlanMismatchedEditedDates = orderAndMealPlanOnly && client.serviceType === 'Food' && mealPlanEditedDates.length > 0
+    const mealPlanMismatchedEditedDates = portalPrimaryHouseholdMealPlan && mealPlanEditedDates.length > 0
         ? (() => {
             const householdSize = Math.max(1, householdPeople?.length ?? 1);
             const editedSet = new Set(mealPlanEditedDates.map((d) => String(d).slice(0, 10)));
@@ -1915,7 +1931,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                         <div>
                             <label className="label">Approved Amount</label>
                             <div className="input" style={{ background: 'var(--bg-app)', opacity: 0.8 }}>
-                                {client.serviceType === 'Food'
+                                {portalPrimaryHouseholdMealPlan || client.serviceType === 'Food'
                                     ? `${client.approvedMealsPerWeek || 0} meals / week`
                                     : 'Standard Box Allocation'
                                 }
@@ -1925,8 +1941,8 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 </div>
                 )}
 
-                {/* Current Order Request - Editable (hidden in portal for Food; portal shows only day-based meal plan) */}
-                {!(orderAndMealPlanOnly && client.serviceType === 'Food') && (
+                {/* Current Order Request - Editable (hidden in portal for Food / Produce household meal plan) */}
+                {!portalPrimaryHouseholdMealPlan && (
                 <div className={styles.card} style={{ marginTop: orderAndMealPlanOnly ? 0 : '6rem' }}>
                     <div className={styles.sectionTitle} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1949,7 +1965,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                                     );
                                 }
 
-                                if (client.serviceType === 'Food') {
+                                if (portalPrimaryHouseholdMealPlan || client.serviceType === 'Food') {
                                     const uniqueVendorIds = new Set<string>();
 
                                     // Collect vendors from either format
@@ -1996,7 +2012,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                         </div>
                     </div>
 
-                    {client.serviceType === 'Food' && (
+                    {(portalPrimaryHouseholdMealPlan || client.serviceType === 'Food') && (
                         renderFoodOrderSection()
                     )}
 
@@ -2510,7 +2526,7 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 </div>
                 )}
 
-                {orderAndMealPlanOnly && client.serviceType === 'Food' && (() => {
+                {portalPrimaryHouseholdMealPlan && (() => {
                     const mealPlanHouseholdSize = Math.max(1, householdPeople?.length ?? 1);
                     const mealPlanTotal = mealPlanOrders.reduce((sum, o) => sum + (o.items ?? []).reduce((s: number, i: { value?: number | null; quantity?: number }) => s + ((i.value ?? 1) * Math.max(0, Number(i.quantity) ?? 0)), 0), 0);
                     const mealPlanExpected = mealPlanOrders.reduce((sum, o) => sum + (o.expectedTotalMeals ?? 0), 0) * mealPlanHouseholdSize;

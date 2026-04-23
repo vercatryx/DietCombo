@@ -8,42 +8,68 @@ import { randomUUID } from 'crypto';
 
 import { getSettings } from './actions';
 import { sendEmail } from './email';
+import { isProduceServiceType } from './isProduceServiceType';
+import { householdHasFoodOrMealPortalMember } from './meal-dependant-portal-login';
+import { signAccountPickToken, verifyAccountPickToken } from './login-account-pick-token';
+import { getAllClientNumbers, normalizePhone } from './phone-utils';
+import { sendSms } from './telnyx';
+
+export type LoginAccountChoice = {
+    type: 'admin' | 'vendor' | 'navigator' | 'client';
+    id: string;
+    title: string;
+    subtitle?: string;
+};
+
+type IdentityMatch = {
+    type: 'admin' | 'vendor' | 'navigator' | 'client';
+    id?: string;
+    isActive?: boolean;
+    serviceType?: string;
+};
 
 function generateOtp() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-export async function sendOtp(email: string) {
-    if (!email) return { success: false, message: 'Email is required.' };
+export async function sendOtp(identifier: string) {
+    const trimmed = identifier.trim();
+    if (!trimmed) return { success: false, message: 'Email or phone number is required.' };
 
     try {
-        const { exists, type } = await checkEmailIdentity(email);
-        if (!exists) {
-            return { success: false, message: 'No account found with that email.' };
+        const idn = await checkLoginIdentity(trimmed);
+        if (!idn.exists || !idn.otpStorageKey) {
+            return { success: false, message: 'No account found with that email or phone number.' };
         }
 
-        // Generate Code
         const code = generateOtp();
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
 
-        // Store in DB (delete old codes first)
-        // Normalize email for storage to ensure consistent matching
-        const normalizedEmail = normalizeEmail(email);
+        const otpKey = idn.otpStorageKey;
 
-        // Delete old codes
-        await supabase.from('passwordless_codes').delete().eq('email', normalizedEmail);
-        
-        // Insert new code
+        await supabase.from('passwordless_codes').delete().eq('email', otpKey);
+
         const codeId = randomUUID();
         const { error: insertError } = await supabase
             .from('passwordless_codes')
-            .insert([{ id: codeId, email: normalizedEmail, code, expires_at: expiresAt }]);
+            .insert([{ id: codeId, email: otpKey, code, expires_at: expiresAt }]);
         if (insertError) throw insertError;
 
-        // Send Email (using same pattern as nutritionist screening form)
-        // Use original email for sending (not normalized)
+        if (idn.otpChannel === 'sms') {
+            const e164 = otpKey.startsWith('sms:') ? otpKey.slice(4) : otpKey;
+            const smsResult = await sendSms(e164, `Your Diet Fantasy login code: ${code}`, {
+                messageType: 'passwordless_login',
+            });
+            if (!smsResult.success) {
+                console.error('[sendOtp] SMS failed:', smsResult.error);
+                await supabase.from('passwordless_codes').delete().eq('id', codeId);
+                return { success: false, message: smsResult.error || 'Failed to send text message.' };
+            }
+            return { success: true, message: 'Code sent to your phone.' };
+        }
+
         const emailResult = await sendEmail({
-            to: email,
+            to: trimmed,
             subject: 'Your Login Code',
             html: `
                 <div style="font-family: sans-serif; padding: 20px;">
@@ -54,33 +80,36 @@ export async function sendOtp(email: string) {
                     </div>
                     <p>This code will expire in 10 minutes.</p>
                 </div>
-            `
+            `,
         });
 
         if (!emailResult.success) {
             console.error('Error sending passwordless login email:', emailResult.error);
+            await supabase.from('passwordless_codes').delete().eq('id', codeId);
             return { success: false, message: emailResult.error || 'Failed to send email.' };
         }
 
         return { success: true, message: 'Code sent to your email.' };
-
     } catch (error) {
         console.error('Send OTP Error:', error);
         return { success: false, message: 'An unexpected error occurred.' };
     }
 }
 
-export async function verifyOtp(email: string, code: string) {
-    if (!email || !code) return { success: false, message: 'Email and code are required.' };
+export async function verifyOtp(identifier: string, code: string) {
+    const trimmed = identifier.trim();
+    if (!trimmed || !code) return { success: false, message: 'Login and code are required.' };
 
     try {
-        // Normalize email for lookup (consistent with sendOtp)
-        const normalizedEmail = normalizeEmail(email);
+        const otpKey = toOtpStorageKey(trimmed);
+        if (!otpKey) {
+            return { success: false, message: 'Enter a valid email or phone number.' };
+        }
 
         const { data: record, error: fetchError } = await supabase
             .from('passwordless_codes')
             .select('*')
-            .eq('email', normalizedEmail)
+            .eq('email', otpKey)
             .eq('code', code)
             .single();
 
@@ -95,52 +124,75 @@ export async function verifyOtp(email: string, code: string) {
         // Code valid! Delete it.
         await supabase.from('passwordless_codes').delete().eq('id', record.id);
 
-        // Perform Login (Create Session)
-        const { exists, type, id, produceNotAllowed } = await checkEmailIdentity(email);
-
-        if (!exists) {
+        const { matches, normalizedInput } = await collectIdentityMatches(trimmed);
+        if (matches.length === 0) {
             return { success: false, message: 'User not found.' };
         }
 
-        if (type === 'client' && produceNotAllowed) {
-            return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
+        if (matches.length > 1) {
+            const adminMatch = matches.find((m) => m.type === 'admin');
+            if (adminMatch) {
+                try {
+                    await completeLoginFromMatch(adminMatch, trimmed);
+                } catch (e) {
+                    if (e instanceof Error && e.message === 'NEXT_REDIRECT') throw e;
+                    console.error('Verify OTP (admin):', e);
+                    return { success: false, message: 'An error occurred during verification.' };
+                }
+                return { success: false, message: 'Could not resolve user session.' };
+            }
         }
 
-        if (type === 'admin') {
-            // Check if this is the env-based super admin (no id means env admin)
-            const envUser = process.env.ADMIN_USERNAME;
-            const trimmedEmail = email.trim(); // Use trimmed email to match checkEmailIdentity logic
-            if (!id && envUser && trimmedEmail === envUser) {
-                await createSession('super-admin', 'Admin', 'super-admin');
-                redirect('/');
-            } else if (id) {
-                const { data: admin } = await supabase.from('admins').select('name, role').eq('id', id).single();
-                const role = (admin?.role && admin.role !== 'admin') ? admin.role : 'admin';
-                await createSession(id, admin?.name || 'Admin', role);
-                redirect(role === 'brooklyn_admin' ? '/clients' : '/');
-            }
-        } else if (type === 'vendor' && id) {
-            const { data: vendor } = await supabase.from('vendors').select('name').eq('id', id).single();
-            await createSession(id, vendor?.name || 'Vendor', 'vendor');
-            redirect('/vendor');
-        } else if (type === 'navigator' && id) {
-            const { data: nav } = await supabase.from('navigators').select('name').eq('id', id).single();
-            await createSession(id, nav?.name || 'Navigator', 'navigator');
-            redirect('/clients');
-        } else if (type === 'client' && id) {
-            const { data: clientRow } = await supabase.from('clients').select('service_type, full_name').eq('id', id).single();
-            if (clientRow?.service_type === 'Produce') {
-                return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
-            }
-            await createSession(id, clientRow?.full_name || 'Client', 'client');
-            redirect(`/client-portal/${id}`);
+        const eligible = await buildEligibleLoginChoices(matches);
+        if (eligible.length === 0) {
+            return { success: false, message: 'No eligible account found for this email.' };
         }
 
-        return { success: false, message: 'Could not resolve user session.' };
+        if (eligible.length === 1) {
+            const only = eligible[0]!;
+            const m = matches.find((x) => x.id === only.id && x.type === only.type);
+            if (!m?.id) {
+                return { success: false, message: 'Could not resolve user session.' };
+            }
+            try {
+                await completeLoginFromMatch(m, trimmed);
+            } catch (e) {
+                if (e instanceof Error && e.message === 'NEXT_REDIRECT') throw e;
+                if (e instanceof Error && e.message === 'PRODUCE_PORTAL_BLOCKED') {
+                    return {
+                        success: false,
+                        message: 'Produce account holders cannot sign in here. Please contact support.',
+                    };
+                }
+                console.error('Verify OTP:', e);
+                return { success: false, message: 'An error occurred during verification.' };
+            }
+            return { success: false, message: 'Could not resolve user session.' };
+        }
+
+        const keys = eligible.map((c) => choiceKey(c.type, c.id));
+        const pickToken = signAccountPickToken(normalizedInput, keys);
+        if (!pickToken) {
+            return {
+                success: false,
+                message:
+                    'Shared-email login is not configured (set LOGIN_ACCOUNT_PICK_SECRET or ensure a Supabase server secret is available).',
+            };
+        }
+
+        return {
+            success: true,
+            needsAccountChoice: true as const,
+            accountChoices: eligible,
+            pickToken,
+        };
 
     } catch (error) {
         if (error instanceof Error && error.message === 'NEXT_REDIRECT') {
             throw error;
+        }
+        if (error instanceof Error && error.message === 'PRODUCE_PORTAL_BLOCKED') {
+            return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
         }
         console.error('Verify OTP Error:', error);
         return { success: false, message: 'An error occurred during verification.' };
@@ -255,169 +307,452 @@ function normalizeEmail(email: string): string {
     return email.replace(/\s+/g, '').toLowerCase();
 }
 
-// Helper to check identity AND return global passwordless setting
-export async function checkEmailIdentity(identifier: string) {
-    if (!identifier) return { exists: false, type: null, enablePasswordless: false };
+/** DB lookup key for passwordless_codes.email (normalized email or `sms:+E164`). */
+function toOtpStorageKey(raw: string): string | null {
+    const t = raw.trim();
+    if (t.startsWith('sms:')) {
+        const inner = t.slice(4);
+        const e164 = normalizePhone(inner) ?? (inner.startsWith('+') ? inner : null);
+        return e164 ? `sms:${e164}` : null;
+    }
+    const e164 = normalizePhone(t);
+    if (e164 && !t.includes('@')) {
+        return `sms:${e164}`;
+    }
+    const e = normalizeEmail(t);
+    return e || null;
+}
 
-    // Check global settings
-    const settings = await getSettings();
-    const enablePasswordless = settings.enablePasswordlessLogin || false;
+async function collectClientMatchesByPhone(e164: string): Promise<IdentityMatch[]> {
+    const { data, error } = await supabase
+        .from('clients')
+        .select('id, service_type, phone_number, secondary_phone_number')
+        .or('phone_number.not.is.null,secondary_phone_number.not.is.null');
+    if (error) {
+        console.error('[collectClientMatchesByPhone]', error);
+        return [];
+    }
+    const seen = new Set<string>();
+    const matches: IdentityMatch[] = [];
+    for (const row of data || []) {
+        const r = row as {
+            id: string;
+            service_type?: string | null;
+            phone_number?: string | null;
+            secondary_phone_number?: string | null;
+        };
+        const nums = getAllClientNumbers({
+            phone_number: r.phone_number,
+            secondary_phone_number: r.secondary_phone_number,
+        });
+        for (const num of nums) {
+            if (normalizePhone(num) === e164) {
+                const id = String(r.id);
+                if (!seen.has(id)) {
+                    seen.add(id);
+                    matches.push({ type: 'client', id, serviceType: r.service_type ?? undefined });
+                }
+                break;
+            }
+        }
+    }
+    return matches;
+}
 
-    // Normalize input: remove all spaces and convert to lowercase
-    const normalizedInput = normalizeEmail(identifier);
-    const trimmedInput = identifier.trim().toLowerCase();
-
-    // Collect all matches to determine if there are multiple accounts
-    // Priority order: admin > vendor > navigator > client
-    const matches: Array<{ type: 'admin' | 'vendor' | 'navigator' | 'client', id?: string, isActive?: boolean, serviceType?: string }> = [];
-
-    // 1. Check Env Super Admin (match by username)
-    const envUser = process.env.ADMIN_USERNAME;
+async function collectIdentityMatches(identifier: string): Promise<{
+    normalizedInput: string;
+    originalTrimmed: string;
+    matches: IdentityMatch[];
+}> {
     const originalTrimmed = identifier.trim();
+
+    if (originalTrimmed.startsWith('sms:')) {
+        const inner = originalTrimmed.slice(4);
+        const e164 = normalizePhone(inner) ?? (inner.startsWith('+') ? inner : null);
+        if (!e164) {
+            return { normalizedInput: originalTrimmed, originalTrimmed, matches: [] };
+        }
+        const matches = await collectClientMatchesByPhone(e164);
+        return { normalizedInput: `sms:${e164}`, originalTrimmed, matches };
+    }
+
+    const phoneE164 = normalizePhone(originalTrimmed);
+    if (phoneE164 && !originalTrimmed.includes('@')) {
+        const matches = await collectClientMatchesByPhone(phoneE164);
+        return { normalizedInput: `sms:${phoneE164}`, originalTrimmed, matches };
+    }
+
+    const normalizedInput = normalizeEmail(identifier);
+    const matches: IdentityMatch[] = [];
+
+    const envUser = process.env.ADMIN_USERNAME;
     if (envUser && originalTrimmed === envUser) {
         matches.push({ type: 'admin' });
     }
 
-    // 2. Check Database Admins (by username - case sensitive)
-    const { data: admins, error: adminsError } = await supabase
-        .from('admins')
-        .select('id')
-        .eq('username', originalTrimmed);
-    
+    const { data: admins, error: adminsError } = await supabase.from('admins').select('id').eq('username', originalTrimmed);
     if (adminsError) {
-        console.error('[checkEmailIdentity] Error querying admins:', adminsError);
+        console.error('[collectIdentityMatches] Error querying admins:', adminsError);
     } else if (admins && admins.length > 0) {
-        matches.push(...admins.map(a => ({ type: 'admin' as const, id: a.id })));
+        matches.push(...admins.map((a) => ({ type: 'admin' as const, id: a.id })));
     }
 
-    // 3. Check Vendors (by Email) - fetch all and normalize for comparison
-    // This ensures we match emails regardless of spaces or case
     const { data: vendorsData, error: vendorsError } = await supabase
         .from('vendors')
         .select('id, email, is_active')
         .not('email', 'is', null);
-    
     if (vendorsError) {
-        console.error('[checkEmailIdentity] Error querying vendors:', vendorsError);
+        console.error('[collectIdentityMatches] Error querying vendors:', vendorsError);
     } else if (vendorsData && vendorsData.length > 0) {
-        // Normalize both input and database emails (remove all spaces, lowercase)
-        const exactMatches = vendorsData.filter(v => 
-            v.email && normalizeEmail(v.email) === normalizedInput
-        );
+        const exactMatches = vendorsData.filter((v) => v.email && normalizeEmail(v.email) === normalizedInput);
         if (exactMatches.length > 0) {
-            matches.push(...exactMatches.map(v => ({ 
-                type: 'vendor' as const, 
-                id: v.id, 
-                isActive: v.is_active 
-            })));
+            matches.push(
+                ...exactMatches.map((v) => ({
+                    type: 'vendor' as const,
+                    id: v.id,
+                    isActive: v.is_active,
+                }))
+            );
         }
     }
 
-    // 4. Check Navigators (by Email)
     const { data: navigatorsData, error: navigatorsError } = await supabase
         .from('navigators')
         .select('id, email')
         .not('email', 'is', null);
-    
     if (navigatorsError) {
-        console.error('[checkEmailIdentity] Error querying navigators:', navigatorsError);
+        console.error('[collectIdentityMatches] Error querying navigators:', navigatorsError);
     } else if (navigatorsData && navigatorsData.length > 0) {
-        const exactMatches = navigatorsData.filter(n => 
-            n.email && normalizeEmail(n.email) === normalizedInput
-        );
+        const exactMatches = navigatorsData.filter((n) => n.email && normalizeEmail(n.email) === normalizedInput);
         if (exactMatches.length > 0) {
-            matches.push(...exactMatches.map(n => ({ 
-                type: 'navigator' as const, 
-                id: n.id 
-            })));
+            matches.push(...exactMatches.map((n) => ({ type: 'navigator' as const, id: n.id })));
         }
     }
 
-    // 5. Check Clients (by Email) - include service_type to block Produce clients from signing in
     const { data: clientsData, error: clientsError } = await supabase
         .from('clients')
         .select('id, email, service_type')
         .not('email', 'is', null);
-    
     if (clientsError) {
-        console.error('[checkEmailIdentity] Error querying clients:', clientsError);
-        // Log detailed error info for debugging
-        console.error('[checkEmailIdentity] Client query error details:', {
-            message: clientsError.message,
-            code: clientsError.code,
-            details: clientsError.details,
-            hint: clientsError.hint
-        });
+        console.error('[collectIdentityMatches] Error querying clients:', clientsError);
     } else if (clientsData && clientsData.length > 0) {
-        const exactMatches = clientsData.filter(c => 
-            c.email && normalizeEmail(c.email) === normalizedInput
-        );
+        const exactMatches = clientsData.filter((c) => c.email && normalizeEmail(c.email) === normalizedInput);
         if (exactMatches.length > 0) {
-            matches.push(...exactMatches.map(c => ({ 
-                type: 'client' as const, 
-                id: c.id,
-                serviceType: (c as any).service_type
-            })));
+            matches.push(
+                ...exactMatches.map((c) => ({
+                    type: 'client' as const,
+                    id: c.id,
+                    serviceType: (c as { service_type?: string }).service_type,
+                }))
+            );
         }
     }
 
-    // If no matches found
-    if (matches.length === 0) {
-        return { exists: false, type: null };
+    return { normalizedInput, originalTrimmed, matches };
+}
+
+function choiceKey(type: string, id: string) {
+    return `${type}:${id}`;
+}
+
+/** Login targets with id only; filters inactive vendors and Produce-without-portal clients. */
+async function buildEligibleLoginChoices(matches: IdentityMatch[]): Promise<LoginAccountChoice[]> {
+    const withIds = matches.filter((m): m is IdentityMatch & { id: string } => Boolean(m.id));
+    const out: LoginAccountChoice[] = [];
+
+    const clientMatches = withIds.filter((m) => m.type === 'client');
+    const vendorMatches = withIds.filter((m) => m.type === 'vendor');
+    const navMatches = withIds.filter((m) => m.type === 'navigator');
+    const adminMatches = withIds.filter((m) => m.type === 'admin');
+
+    let clientRows: { id: string; full_name: string | null; service_type: string | null }[] = [];
+    if (clientMatches.length > 0) {
+        const ids = clientMatches.map((c) => c.id);
+        const { data } = await supabase.from('clients').select('id, full_name, service_type').in('id', ids);
+        clientRows = (data || []) as typeof clientRows;
+    }
+    const clientById = new Map(clientRows.map((r) => [r.id, r]));
+
+    for (const m of clientMatches) {
+        const row = clientById.get(m.id);
+        const st = row?.service_type ?? m.serviceType;
+        if (isProduceServiceType(st) && !(await householdHasFoodOrMealPortalMember(supabase, m.id))) {
+            continue;
+        }
+        const name = row?.full_name?.trim() || 'Client';
+        out.push({
+            type: 'client',
+            id: m.id,
+            title: name,
+            subtitle: st ? `Client · ${st}` : 'Client',
+        });
     }
 
-    // If multiple accounts found, prefer admin account
+    for (const m of vendorMatches) {
+        if (m.isActive === false) continue;
+        const { data: v } = await supabase.from('vendors').select('name').eq('id', m.id).maybeSingle();
+        out.push({
+            type: 'vendor',
+            id: m.id,
+            title: (v?.name || 'Vendor').trim() || 'Vendor',
+            subtitle: 'Vendor portal',
+        });
+    }
+
+    for (const m of navMatches) {
+        const { data: n } = await supabase.from('navigators').select('name').eq('id', m.id).maybeSingle();
+        out.push({
+            type: 'navigator',
+            id: m.id,
+            title: (n?.name || 'Navigator').trim() || 'Navigator',
+            subtitle: 'Navigator',
+        });
+    }
+
+    for (const m of adminMatches) {
+        const { data: a } = await supabase.from('admins').select('name, username').eq('id', m.id).maybeSingle();
+        out.push({
+            type: 'admin',
+            id: m.id,
+            title: (a?.name || a?.username || 'Admin').trim() || 'Admin',
+            subtitle: 'Admin',
+        });
+    }
+
+    out.sort((a, b) => {
+        const order = (t: string) =>
+            ({ client: 0, vendor: 1, navigator: 2, admin: 3 }[t] ?? 9);
+        const d = order(a.type) - order(b.type);
+        if (d !== 0) return d;
+        return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+    });
+
+    return out;
+}
+
+async function completeLoginFromMatch(match: IdentityMatch & { id?: string }, emailForEnvCheck: string) {
+    const envUser = process.env.ADMIN_USERNAME;
+    const trimmedEmail = emailForEnvCheck.trim();
+
+    if (match.type === 'admin') {
+        if (!match.id && envUser && trimmedEmail === envUser) {
+            await createSession('super-admin', 'Admin', 'super-admin');
+            redirect('/');
+        } else if (match.id) {
+            const { data: admin } = await supabase.from('admins').select('name, role').eq('id', match.id).single();
+            const role = admin?.role && admin.role !== 'admin' ? admin.role : 'admin';
+            await createSession(match.id, admin?.name || 'Admin', role);
+            redirect(role === 'brooklyn_admin' ? '/clients' : '/');
+        }
+        return;
+    }
+    if (match.type === 'vendor' && match.id) {
+        const { data: vendor } = await supabase.from('vendors').select('name').eq('id', match.id).single();
+        await createSession(match.id, vendor?.name || 'Vendor', 'vendor');
+        redirect('/vendor');
+    }
+    if (match.type === 'navigator' && match.id) {
+        const { data: nav } = await supabase.from('navigators').select('name').eq('id', match.id).single();
+        await createSession(match.id, nav?.name || 'Navigator', 'navigator');
+        redirect('/clients');
+    }
+    if (match.type === 'client' && match.id) {
+        const { data: clientRow } = await supabase
+            .from('clients')
+            .select('service_type, full_name')
+            .eq('id', match.id)
+            .single();
+        if (isProduceServiceType(clientRow?.service_type) && !(await householdHasFoodOrMealPortalMember(supabase, match.id))) {
+            throw new Error('PRODUCE_PORTAL_BLOCKED');
+        }
+        await createSession(match.id, clientRow?.full_name || 'Client', 'client');
+        redirect(`/client-portal/${match.id}`);
+    }
+}
+
+// Helper to check identity AND return global passwordless setting
+export async function checkEmailIdentity(identifier: string) {
+    if (!identifier) return { exists: false, type: null, enablePasswordless: false };
+
+    const settings = await getSettings();
+    const enablePasswordless = settings.enablePasswordlessLogin || false;
+
+    const { matches } = await collectIdentityMatches(identifier);
+
+    if (matches.length === 0) {
+        return { exists: false, type: null, enablePasswordless: false };
+    }
+
     if (matches.length > 1) {
-        const adminMatch = matches.find(m => m.type === 'admin');
+        const adminMatch = matches.find((m) => m.type === 'admin');
         if (adminMatch) {
-            // Prefer admin account when multiple accounts exist
-            return { 
-                exists: true, 
-                type: 'admin', 
+            return {
+                exists: true,
+                type: 'admin' as const,
                 id: adminMatch.id,
-                enablePasswordless: false 
+                enablePasswordless: false,
             };
         }
-        // If no admin but multiple accounts, return error
-        return { exists: false, type: null, enablePasswordless: false, multipleAccounts: true };
     }
 
-    // Single match found
-    const match = matches[0];
-    
-    if (match.type === 'admin') {
-        return { 
-            exists: true, 
-            type: 'admin', 
-            id: match.id,
-            enablePasswordless: false 
-        };
-    } else if (match.type === 'vendor') {
-        return { 
-            exists: true, 
-            type: 'vendor', 
-            id: match.id,
-            enablePasswordless: false 
-        };
-    } else if (match.type === 'navigator') {
-        return { 
-            exists: true, 
-            type: 'navigator', 
-            id: match.id,
-            enablePasswordless: false 
-        };
-    } else if (match.type === 'client') {
-        const produceNotAllowed = match.serviceType === 'Produce';
-        return { 
-            exists: true, 
-            type: 'client', 
-            id: match.id, 
+    const eligible = await buildEligibleLoginChoices(matches);
+    if (eligible.length === 0) {
+        return { exists: false, type: null, enablePasswordless: false };
+    }
+    if (eligible.length > 1) {
+        return {
+            exists: true,
+            needsAccountChoice: true as const,
+            accountChoices: eligible,
             enablePasswordless,
-            produceNotAllowed: produceNotAllowed || false
         };
     }
 
-    return { exists: false, type: null };
+    const only = eligible[0]!;
+    if (only.type === 'admin') {
+        return { exists: true, type: 'admin' as const, id: only.id, enablePasswordless: false };
+    }
+    if (only.type === 'vendor') {
+        return { exists: true, type: 'vendor' as const, id: only.id, enablePasswordless: false };
+    }
+    if (only.type === 'navigator') {
+        return { exists: true, type: 'navigator' as const, id: only.id, enablePasswordless: false };
+    }
+    const row = matches.find((m) => m.type === 'client' && m.id === only.id);
+    let produceNotAllowed = isProduceServiceType(row?.serviceType);
+    if (produceNotAllowed && only.id && (await householdHasFoodOrMealPortalMember(supabase, only.id))) {
+        produceNotAllowed = false;
+    }
+    return {
+        exists: true,
+        type: 'client' as const,
+        id: only.id,
+        enablePasswordless,
+        produceNotAllowed: produceNotAllowed || false,
+    };
+}
+
+async function checkPhoneLoginIdentity(e164: string) {
+    const settings = await getSettings();
+    const enablePasswordless = settings.enablePasswordlessLogin || false;
+    const matches = await collectClientMatchesByPhone(e164);
+    if (matches.length === 0) {
+        return {
+            exists: false as const,
+            type: null,
+            enablePasswordless: false,
+            otpStorageKey: undefined,
+            otpChannel: 'sms' as const,
+        };
+    }
+
+    const eligible = await buildEligibleLoginChoices(matches);
+    if (eligible.length === 0) {
+        return {
+            exists: false as const,
+            type: null,
+            enablePasswordless: false,
+            otpStorageKey: undefined,
+            otpChannel: 'sms' as const,
+        };
+    }
+
+    const otpStorageKey = `sms:${e164}`;
+    if (eligible.length > 1) {
+        return {
+            exists: true as const,
+            needsAccountChoice: true as const,
+            accountChoices: eligible,
+            enablePasswordless,
+            otpStorageKey,
+            otpChannel: 'sms' as const,
+        };
+    }
+
+    const only = eligible[0]!;
+    const row = matches.find((m) => m.type === 'client' && m.id === only.id);
+    let produceNotAllowed = isProduceServiceType(row?.serviceType);
+    if (produceNotAllowed && only.id && (await householdHasFoodOrMealPortalMember(supabase, only.id))) {
+        produceNotAllowed = false;
+    }
+    return {
+        exists: true as const,
+        type: 'client' as const,
+        id: only.id,
+        enablePasswordless,
+        produceNotAllowed: produceNotAllowed || false,
+        otpStorageKey,
+        otpChannel: 'sms' as const,
+    };
+}
+
+export type LoginIdentityResult = Awaited<ReturnType<typeof checkEmailIdentity>> & {
+    otpStorageKey?: string;
+    otpChannel?: 'sms' | 'email';
+};
+
+/** Resolves username / email / phone for passwordless OTP (email or SMS). */
+export async function checkLoginIdentity(identifier: string): Promise<LoginIdentityResult> {
+    const t = identifier.trim();
+    if (!t) {
+        return { exists: false, type: null, enablePasswordless: false, otpStorageKey: undefined, otpChannel: undefined };
+    }
+    const e164 = normalizePhone(t);
+    if (e164 && !t.includes('@')) {
+        return checkPhoneLoginIdentity(e164);
+    }
+    const r = await checkEmailIdentity(identifier);
+    if (!r.exists) {
+        return { ...r, otpStorageKey: undefined, otpChannel: undefined };
+    }
+    return {
+        ...r,
+        otpStorageKey: normalizeEmail(identifier) || undefined,
+        otpChannel: 'email',
+    };
+}
+
+export async function confirmLoginWithPick(pickToken: string, choice: { type: LoginAccountChoice['type']; id: string }) {
+    try {
+        const payload = verifyAccountPickToken(pickToken);
+        if (!payload) {
+            return { success: false, message: 'This link has expired. Please sign in again.' };
+        }
+        const key = choiceKey(choice.type, choice.id);
+        if (!payload.keys.includes(key)) {
+            return { success: false, message: 'Invalid account selection.' };
+        }
+
+        const emailNorm = payload.email;
+        const { matches } = await collectIdentityMatches(emailNorm);
+        const currentKeys = new Set(
+            matches.filter((m) => m.id).map((m) => choiceKey(m.type, m.id!))
+        );
+        if (!currentKeys.has(key)) {
+            return { success: false, message: 'That account is no longer available for this sign-in.' };
+        }
+
+        const match = matches.find((m) => m.id === choice.id && m.type === choice.type);
+        if (!match?.id) {
+            return { success: false, message: 'Account not found.' };
+        }
+
+        if (match.type === 'vendor' && match.isActive === false) {
+            return { success: false, message: 'That vendor account is inactive.' };
+        }
+
+        await completeLoginFromMatch(match, emailNorm);
+        return { success: false, message: 'Could not resolve user session.' };
+    } catch (error) {
+        if (error instanceof Error && error.message === 'NEXT_REDIRECT') {
+            throw error;
+        }
+        if (error instanceof Error && error.message === 'PRODUCE_PORTAL_BLOCKED') {
+            return { success: false, message: 'Produce account holders cannot sign in here. Please contact support.' };
+        }
+        console.error('confirmLoginWithPick:', error);
+        return { success: false, message: 'Something went wrong. Please try again.' };
+    }
 }
 
 
