@@ -146,24 +146,19 @@ export async function GET(request: NextRequest) {
             if (clientMap[id]) parentMap[id] = clientMap[id];
         });
 
-        // 3. Fetch dependents for these households (match on parent_client_id)
+        // 3. Fetch dependents for these households (match on parent_client_id).
+        // We do NOT filter dependents by unite_account — a dependent belongs to the same
+        // account as their parent. The parentIdSet check below is the correct filter.
         let dependents: any[] = [];
         try {
             dependents = await fetchAllRows<any>(
-                (from, to) => {
-                    let q = supabase
+                (from, to) =>
+                    supabase
                         .from('clients')
                         .select('id, full_name, dob, cin, parent_client_id, unite_account')
                         .not('parent_client_id', 'is', null)
                         .order('id', { ascending: true })
-                        .range(from, to);
-                    if (accountFilter === 'brooklyn') {
-                        q = q.eq('unite_account', 'Brooklyn');
-                    } else if (accountFilter === 'regular') {
-                        q = q.or('unite_account.eq.Regular,unite_account.is.null');
-                    }
-                    return q;
-                },
+                        .range(from, to),
                 1000
             );
         } catch (dependentsError: any) {
