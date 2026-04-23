@@ -53,6 +53,7 @@ export function ClientInfoShelf({
 
     const getInitialEditForm = useCallback((c: ClientProfile) => ({
         fullName: c.fullName,
+        dob: c.dob || '',
         statusId: c.statusId,
         navigatorId: c.navigatorId,
         phoneNumber: c.phoneNumber,
@@ -173,6 +174,7 @@ export function ClientInfoShelf({
                 client.id,
                 {
                     fullName: editForm.fullName,
+                    dob: editForm.dob || null,
                     statusId: editForm.statusId,
                     navigatorId: editForm.navigatorId,
                     phoneNumber: editForm.phoneNumber,
@@ -526,6 +528,21 @@ export function ClientInfoShelf({
                                         client.email?.trim() ? (
                                             <a href={`mailto:${client.email}`}>{client.email}</a>
                                         ) : '—'
+                                    )}
+                                </div>
+                            </div>
+                            <div className={styles.infoItem}>
+                                <div className={styles.label}>Date of Birth</div>
+                                <div className={styles.value}>
+                                    {isEditing ? (
+                                        <input
+                                            type="date"
+                                            className={styles.editInput}
+                                            value={editForm.dob ? editForm.dob.split('T')[0] : ''}
+                                            onChange={e => setEditForm({ ...editForm, dob: e.target.value })}
+                                        />
+                                    ) : (
+                                        client.dob ? new Date(client.dob).toLocaleDateString() : '—'
                                     )}
                                 </div>
                             </div>
