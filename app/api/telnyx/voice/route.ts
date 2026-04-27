@@ -229,7 +229,7 @@ export async function POST(request: Request) {
 
             await stopTranscription(callControlId, { commandId: `stop-${utteranceId}` }).catch(() => {});
 
-            const { replyText } = await runAssistantTurn({
+            const { replyText, suppressOutbound } = await runAssistantTurn({
               supabase,
               channel: 'voice',
               phone: state.phone,
@@ -239,6 +239,8 @@ export async function POST(request: Request) {
               restoreActiveClientFromTable: true,
               clientIdRestoreWhere: { call_control_id: callControlId, phone_number: state.phone },
             });
+
+            if (suppressOutbound) return;
 
             state.isSpeaking = true;
             const cmdBase = `${utteranceId}-${Date.now()}`;

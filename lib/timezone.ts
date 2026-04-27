@@ -173,3 +173,57 @@ export function formatDateTimeInAppTz(date: Date | string): string {
     minute: '2-digit',
   });
 }
+
+/**
+ * Inclusive UTC range for admin date filters: interpret `from` / `to` as calendar dates in
+ * APP_TIMEZONE (America/New_York), not as naive local strings or UTC midnight.
+ * Fixes SMS and other reports missing “today” or recent rows when the server/db uses UTC.
+ */
+export function appTzDateKeysToUtcIsoRangeInclusive(fromKey: string, toKey: string): { startIso: string; endIso: string } {
+  if (!DATE_ONLY_REGEX.test(fromKey) || !DATE_ONLY_REGEX.test(toKey)) {
+    throw new RangeError('from/to must be YYYY-MM-DD');
+  }
+  const start = easternWallClockToUtcInstant(fromKey, 0, 0, 0, 0);
+  const endDay = easternWallClockToUtcInstant(toKey, 23, 59, 59, 0);
+  const end = new Date(endDay.getTime() + 999);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+}
+
+/** Wall-clock time in APP_TIMEZONE → UTC instant (handles DST). */
+function easternWallClockToUtcInstant(dateKey: string, hh: number, mm: number, ss: number, ms: number): Date {
+  const [y, mo, d] = dateKey.split('-').map(Number);
+  let t = Date.UTC(y, mo - 1, d, 17, 0, 0, 0);
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const targetDay = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const wantSecs = hh * 3600 + mm * 60 + ss;
+  for (let iter = 0; iter < 160; iter++) {
+    const parts = formatter.formatToParts(new Date(t));
+    const getn = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((p) => p.type === type)?.value ?? NaN);
+    const py = getn('year');
+    const pm = getn('month');
+    const pd = getn('day');
+    const ph = getn('hour');
+    const pmi = getn('minute');
+    const ps = getn('second');
+    const curDay = `${py}-${String(pm).padStart(2, '0')}-${String(pd).padStart(2, '0')}`;
+    const curSecs = ph * 3600 + pmi * 60 + ps;
+    if (curDay === targetDay && curSecs === wantSecs) {
+      return new Date(t + ms);
+    }
+    const dayCmp = curDay.localeCompare(targetDay);
+    if (dayCmp < 0) t += 30 * 60 * 1000;
+    else if (dayCmp > 0) t -= 30 * 60 * 1000;
+    else t += (wantSecs - curSecs) * 1000;
+  }
+  return new Date(t + ms);
+}

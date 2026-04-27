@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
+import { appTzDateKeysToUtcIsoRangeInclusive } from '@/lib/timezone';
 
 /** PostgREST defaults to max ~1000 rows per response; paginate so totals include all SMS in range. */
 const PAGE = 1000;
@@ -16,8 +17,13 @@ export async function GET(req: NextRequest) {
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
 
-  const startISO = `${from}T00:00:00`;
-  const endISO = `${to}T23:59:59`;
+  let startISO: string;
+  let endISO: string;
+  try {
+    ({ startIso: startISO, endIso: endISO } = appTzDateKeysToUtcIsoRangeInclusive(from, to));
+  } catch {
+    return NextResponse.json({ error: 'Invalid from/to dates (use YYYY-MM-DD)' }, { status: 400 });
+  }
 
   const rows: Array<{
     client_id: string | null;

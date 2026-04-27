@@ -137,6 +137,19 @@
   border-bottom-left-radius: 0.2rem;
 }
 
+/* URLs in bubbles — match iOS Messages link appearance */
+.linkInSystemBubble {
+  color: #007aff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkInUserBubble {
+  color: rgba(255, 255, 255, 0.98);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .typingCursor {
   display: inline-block;
   width: 0.1em;

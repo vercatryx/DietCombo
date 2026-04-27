@@ -2,6 +2,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getTodayInAppTz, APP_TIMEZONE } from './timezone';
 import { mealPlannerDateOnly, mealPlannerCutoffDate } from './meal-planner-utils';
+import {
+  countUnifiedUserBotMessagesToday,
+  getSmsDailyQuotaExceededMessage,
+  SMS_BOT_DAILY_USER_MESSAGE_LIMIT,
+} from './sms-daily-quota';
+import { detectInboundAutomatedPingPongReply } from './sms-auto-reply-detection';
+import { blockInboundSmsSender } from './sms-inbound-blocks';
+import { normalizePhone } from './phone-utils';
 
 const CONVERSATION_TTL_HOURS = 2;
 const MAX_HISTORY_MESSAGES = 20;
@@ -513,6 +521,8 @@ export async function runAssistantTurn(opts: {
   replyText: string;
   activeClientId: string | null;
   clientName: string | null;
+  /** When true, callers must not send SMS or speak — user is over daily quota. */
+  suppressOutbound?: boolean;
 }> {
   const FALLBACK_MSG = 'Sorry, we hit a temporary issue. Please try again or call (845) 478-6605 for help. — The Diet Fantasy';
 
@@ -520,6 +530,18 @@ export async function runAssistantTurn(opts: {
 
   const clients = await identifyClientByPhone(supabase, phone);
   if (clients.length === 0) {
+    const pingPongAuto = await detectInboundAutomatedPingPongReply(messageText);
+    const e164Unknown = normalizePhone(phone);
+    if (pingPongAuto && e164Unknown) {
+      await blockInboundSmsSender(supabase, e164Unknown, 'inbound_automated_reply_detected');
+      console.log('[Bot] Blocked outbound SMS bot for non-client number (automated/bounce inbound):', e164Unknown);
+      return {
+        replyText: '',
+        activeClientId: null,
+        clientName: null,
+        suppressOutbound: true,
+      };
+    }
     return {
       replyText: 'Thank you for your message. This number is not able to receive replies. For any questions or support, please call us at (845) 478-6605. — The Diet Fantasy',
       activeClientId: null,
@@ -550,6 +572,41 @@ export async function runAssistantTurn(opts: {
   }
 
   let activeClientId = client.id as string;
+
+  const priorToday = await countUnifiedUserBotMessagesToday(supabase, phone);
+  if (priorToday > SMS_BOT_DAILY_USER_MESSAGE_LIMIT) {
+    return {
+      replyText: '',
+      activeClientId,
+      clientName: client?.full_name ?? null,
+      suppressOutbound: true,
+    };
+  }
+
+  if (priorToday === SMS_BOT_DAILY_USER_MESSAGE_LIMIT) {
+    const quotaMsg = getSmsDailyQuotaExceededMessage();
+    await pruneOldConversationMessages(supabase, conversationTable, where);
+    await saveConversationMessage(supabase, conversationTable, {
+      ...(conversationTable === 'call_conversations' ? { call_control_id: where.call_control_id } : {}),
+      phone_number: phone,
+      client_id: activeClientId,
+      role: 'user',
+      content: messageText,
+    });
+    await saveConversationMessage(supabase, conversationTable, {
+      ...(conversationTable === 'call_conversations' ? { call_control_id: where.call_control_id } : {}),
+      phone_number: phone,
+      client_id: activeClientId,
+      role: 'assistant',
+      content: quotaMsg,
+    });
+    return {
+      replyText: quotaMsg,
+      activeClientId,
+      clientName: client?.full_name ?? null,
+      suppressOutbound: false,
+    };
+  }
 
   await pruneOldConversationMessages(supabase, conversationTable, where);
   await saveConversationMessage(supabase, conversationTable, {

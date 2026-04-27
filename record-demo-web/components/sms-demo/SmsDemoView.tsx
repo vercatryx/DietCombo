@@ -56,6 +56,28 @@ function nextMessageId() {
   return `sms-${idCounter}`;
 }
 
+/** Split message text so https URLs render as styled links (iOS-style blue in gray bubbles). */
+function MessageText({ text, variant }: { text: string; variant: 'user' | 'system' }) {
+  const parts = text.split(/(https?:\/\/\S+)/);
+  return (
+    <>
+      {parts.map((part, i) =>
+        /^https?:\/\//.test(part) ? (
+          <a
+            key={i}
+            href={part}
+            className={variant === 'user' ? styles.linkInUserBubble : styles.linkInSystemBubble}
+          >
+            {part}
+          </a>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 function SmsKeyboard() {
   const r1 = 'QWERTYUIOP'.split('');
   const r2 = 'ASDFGHJKL'.split('');
@@ -198,7 +220,7 @@ export function SmsDemoView() {
                 return (
                   <div key={row.id} className={`${styles.bubbleRow} ${styles.user}`}>
                     <div className={`${styles.bubble} ${styles.user}`}>
-                      {row.text}
+                      <MessageText text={row.text} variant="user" />
                       {row.typing ? <span className={styles.typingCursor} /> : null}
                     </div>
                   </div>
@@ -207,7 +229,9 @@ export function SmsDemoView() {
               return (
                 <div key={row.id} className={`${styles.bubbleRow} ${styles.system}`}>
                   {row.showSender ? <div className={styles.senderTag}>{BRAND}</div> : null}
-                  <div className={`${styles.bubble} ${styles.system}`}>{row.text}</div>
+                  <div className={`${styles.bubble} ${styles.system}`}>
+                    <MessageText text={row.text} variant="system" />
+                  </div>
                 </div>
               );
             })}
