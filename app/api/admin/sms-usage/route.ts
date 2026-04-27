@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 
+/** PostgREST defaults to max ~1000 rows per response; paginate so totals include all SMS in range. */
+const PAGE = 1000;
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const from = searchParams.get('from');
@@ -13,17 +16,41 @@ export async function GET(req: NextRequest) {
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
 
-  const { data, error } = await supabase
-    .from('sms_outbound_log')
-    .select('client_id, client_name, phone_to, message_type, success, created_at')
-    .gte('created_at', `${from}T00:00:00`)
-    .lte('created_at', `${to}T23:59:59`)
-    .order('created_at', { ascending: false });
+  const startISO = `${from}T00:00:00`;
+  const endISO = `${to}T23:59:59`;
 
-  if (error) {
-    console.error('[SMS Usage] Query error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  const rows: Array<{
+    client_id: string | null;
+    client_name: string | null;
+    phone_to: string;
+    message_type: string | null;
+    success: boolean | null;
+    created_at: string;
+  }> = [];
+
+  let offset = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('sms_outbound_log')
+      .select('client_id, client_name, phone_to, message_type, success, created_at')
+      .gte('created_at', startISO)
+      .lte('created_at', endISO)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + PAGE - 1);
+
+    if (error) {
+      console.error('[SMS Usage] Query error:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    const chunk = data || [];
+    rows.push(...chunk);
+    if (chunk.length < PAGE) break;
+    offset += PAGE;
   }
+
+  const data = rows;
 
   const byClient: Record<string, {
     clientId: string | null;
