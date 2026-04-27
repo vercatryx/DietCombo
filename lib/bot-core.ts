@@ -8,7 +8,11 @@ import {
   SMS_BOT_DAILY_USER_MESSAGE_LIMIT,
 } from './sms-daily-quota';
 import { detectInboundAutomatedPingPongReply } from './sms-auto-reply-detection';
-import { blockInboundSmsSender } from './sms-inbound-blocks';
+import {
+  blockInboundSmsSender,
+  countNonClientBotRepliesLast24h,
+  getUnknownCannedReplyCap24h,
+} from './sms-inbound-blocks';
 import { normalizePhone } from './phone-utils';
 
 const CONVERSATION_TTL_HOURS = 2;
@@ -530,8 +534,28 @@ export async function runAssistantTurn(opts: {
 
   const clients = await identifyClientByPhone(supabase, phone);
   if (clients.length === 0) {
-    const pingPongAuto = await detectInboundAutomatedPingPongReply(messageText);
     const e164Unknown = normalizePhone(phone);
+    if (opts.channel === 'sms' && e164Unknown) {
+      const cap = getUnknownCannedReplyCap24h();
+      if (cap > 0) {
+        const sentCanned = await countNonClientBotRepliesLast24h(supabase, e164Unknown);
+        if (sentCanned >= cap) {
+          console.log(
+            '[Bot] Unknown number: 24h non-client bot_reply cap; suppressing:',
+            e164Unknown,
+            { sentCanned, cap },
+          );
+          await blockInboundSmsSender(supabase, e164Unknown, 'unknown_24h_canned_cap');
+          return {
+            replyText: '',
+            activeClientId: null,
+            clientName: null,
+            suppressOutbound: true,
+          };
+        }
+      }
+    }
+    const pingPongAuto = await detectInboundAutomatedPingPongReply(messageText);
     if (pingPongAuto && e164Unknown) {
       await blockInboundSmsSender(supabase, e164Unknown, 'inbound_automated_reply_detected');
       console.log('[Bot] Blocked outbound SMS bot for non-client number (automated/bounce inbound):', e164Unknown);
