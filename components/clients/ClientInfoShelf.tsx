@@ -1129,21 +1129,35 @@ export function ClientInfoShelf({
                                                 {sub.status === 'pending' && <Clock size={16} color="#f59e0b" />}
                                                 <span className={styles.subDate}>{new Date(sub.created_at).toLocaleDateString()}</span>
                                             </div>
-                                            {sub.status === 'accepted' && sub.pdf_url && (
-                                                <button
-                                                    className={styles.downloadBtn}
-                                                    onClick={() => {
-                                                        const r2Domain = process.env.NEXT_PUBLIC_R2_DOMAIN;
-                                                        if (!r2Domain) return;
-                                                        const url = r2Domain.startsWith('http')
-                                                            ? `${r2Domain}/${sub.pdf_url}`
-                                                            : `https://${r2Domain}/${sub.pdf_url}`;
-                                                        window.open(url, '_blank');
-                                                    }}
-                                                >
-                                                    <Download size={14} /> PDF
-                                                </button>
-                                            )}
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                {(sub.status === 'pending' || sub.status === 'accepted') && sub.token && (
+                                                    <a
+                                                        href={`/verify-order/${sub.token}`}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className={styles.downloadBtn}
+                                                        title={sub.status === 'pending' ? 'Open approval page (same link sent to nutritionist)' : 'Open approval page'}
+                                                        style={{ textDecoration: 'none' }}
+                                                    >
+                                                        <ExternalLink size={14} /> Open
+                                                    </a>
+                                                )}
+                                                {sub.status === 'accepted' && sub.pdf_url && (
+                                                    <button
+                                                        className={styles.downloadBtn}
+                                                        onClick={() => {
+                                                            const r2Domain = process.env.NEXT_PUBLIC_R2_DOMAIN;
+                                                            if (!r2Domain) return;
+                                                            const url = r2Domain.startsWith('http')
+                                                                ? `${r2Domain}/${sub.pdf_url}`
+                                                                : `https://${r2Domain}/${sub.pdf_url}`;
+                                                            window.open(url, '_blank');
+                                                        }}
+                                                    >
+                                                        <Download size={14} /> PDF
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 ))

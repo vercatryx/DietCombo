@@ -87,16 +87,17 @@ export default function SubmissionsList({ submissions }: SubmissionsListProps) {
                         </div>
 
                         <div style={{ display: 'flex', gap: '8px' }}>
-                            {submission.status === 'pending' && (
+                            {(submission.status === 'pending' || submission.status === 'accepted') && submission.token && (
                                 <a
                                     href={`/verify-order/${submission.token}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="btn btn-secondary"
                                     style={{ fontSize: '14px', padding: '6px 12px' }}
+                                    title={submission.status === 'pending' ? 'Open approval page (same link sent to nutritionist)' : 'Open approval page'}
                                 >
                                     <ExternalLink size={14} />
-                                    Review
+                                    {submission.status === 'pending' ? 'Review' : 'Open'}
                                 </a>
                             )}
 
