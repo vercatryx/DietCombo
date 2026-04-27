@@ -225,7 +225,7 @@ export async function getClientForProduce(clientId: string) {
     try {
         const { data: client, error: clientError } = await supabaseAdmin
             .from('clients')
-            .select('id, full_name, address, sign_token')
+            .select('id, full_name, address, phone_number, sign_token')
             .eq('id', clientId)
             .single();
 
@@ -243,6 +243,7 @@ export async function getClientForProduce(clientId: string) {
                 id: client.id,
                 full_name: client.full_name,
                 address: client.address || 'Unknown Address',
+                phoneNumber: client.phone_number?.trim() || null,
                 deliveryDateLabel,
                 clientSignToken: client.sign_token || null
             }

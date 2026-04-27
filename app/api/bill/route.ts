@@ -6,6 +6,7 @@
  * - Order list: only orders NOT already marked billing_successful.
  * - Proof URLs: from ALL orders for the household, the 2 most recent that have proof_of_delivery_url
  *   (or 1 if only one); if none, uses sign_token signature PDF.
+ * - Unite Us `url`: parent client's case_id_external / client_id_external only (not copied from orders).
  *
  * GET /api/bill
  * Query params:
@@ -187,7 +188,7 @@ export async function GET(request: NextRequest) {
         );
 
         // 5. Fetch orders (parent + dependants) for these clients; batch .in() to avoid URL/param limits
-        const COLS = 'id, order_number, case_id, actual_delivery_date, scheduled_delivery_date, proof_of_delivery_url, client_id, status';
+        const COLS = 'id, order_number, actual_delivery_date, scheduled_delivery_date, proof_of_delivery_url, client_id, status';
         let ordersList: any[] = [];
         if (allClientIdsArray.length > 0) {
             const BATCH = 80;
@@ -255,18 +256,9 @@ export async function GET(request: NextRequest) {
             proofURLsByHousehold[householdId] = urls;
         }
 
-        const bestOrderByHousehold: Record<string, any> = {};
-        for (const householdId of Object.keys(ordersByHousehold)) {
-            const list = ordersByHousehold[householdId];
-            const withCase = list.find((o: any) => o.case_id);
-            const withProof = list.find((o: any) => o.proof_of_delivery_url);
-            bestOrderByHousehold[householdId] = withCase ?? withProof ?? list[0];
-        }
-
         // 6. One entry per household (parent). Orders include parent + dependants. Amount by parent service_type: Produce => 146/person, else 336/person
         const result = billableClientIds.map((parentId) => {
             const pid = parentId;
-            const bestOrder = bestOrderByHousehold[parentId];
             const parent = parentMap[parentId] || {};
             const deps = dependentsByParent[pid] || [];
             const totalPeople = 1 + deps.length;
@@ -281,10 +273,11 @@ export async function GET(request: NextRequest) {
                 ];
             }
 
-            let url = buildUniteUsUrl(bestOrder?.case_id, pid);
-            if (!url && parent.case_id_external) {
+            const contactId = parent.client_id_external || pid;
+            let url = '';
+            if (parent.case_id_external) {
                 const raw = String(parent.case_id_external).trim();
-                url = raw.startsWith('http') ? raw : buildUniteUsUrl(raw, parent.client_id_external || pid);
+                url = raw.startsWith('http') ? raw : buildUniteUsUrl(raw, contactId);
             }
 
             return {

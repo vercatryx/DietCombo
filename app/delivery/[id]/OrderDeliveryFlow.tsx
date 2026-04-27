@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
-import { Camera, CheckCircle, Upload, AlertCircle, MapPin, X, PenTool, ExternalLink } from 'lucide-react';
+import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, PenTool, ExternalLink } from 'lucide-react';
 import '../delivery.css';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,6 +14,7 @@ interface OrderDetails {
     orderNumber: string;
     clientName: string;
     address: string;
+    clientPhone?: string | null;
     deliveryDate: string;
     alreadyDelivered: boolean;
     clientSignToken?: string | null;
@@ -144,6 +145,26 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
 
                     <div className="info-row">
                         <div className="info-label">
+                            <Phone size={20} />
+                        </div>
+                        <div>
+                            <p className="info-label">Phone</p>
+                            <p className="info-value">
+                                {order.clientPhone ? (
+                                    <a href={`tel:${order.clientPhone.replace(/\s/g, '')}`} style={{ color: 'inherit', textDecoration: 'underline' }}>
+                                        {order.clientPhone}
+                                    </a>
+                                ) : (
+                                    '—'
+                                )}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="divider" />
+
+                    <div className="info-row">
+                        <div className="info-label">
                             <MapPin size={20} />
                         </div>
                         <div>
@@ -213,6 +234,37 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                             <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-white"></div>
                             <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-white"></div>
                         </div>
+                    </div>
+
+                    <div
+                        style={{
+                            position: 'absolute',
+                            top: 'max(12px, env(safe-area-inset-top))',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            maxWidth: 'min(92vw, 420px)',
+                            padding: '10px 14px',
+                            borderRadius: '12px',
+                            background: 'rgba(0,0,0,0.72)',
+                            color: '#f8fafc',
+                            fontSize: '0.875rem',
+                            textAlign: 'center',
+                            lineHeight: 1.35,
+                            zIndex: 5,
+                            pointerEvents: 'none'
+                        }}
+                    >
+                        <div style={{ fontWeight: 600 }}>{order.clientName}</div>
+                        {order.clientPhone ? (
+                            <a
+                                href={`tel:${order.clientPhone.replace(/\s/g, '')}`}
+                                style={{ color: '#93c5fd', textDecoration: 'underline', pointerEvents: 'auto', display: 'inline-block', marginTop: '4px' }}
+                            >
+                                {order.clientPhone}
+                            </a>
+                        ) : (
+                            <div style={{ opacity: 0.75, marginTop: '4px' }}>No phone on file</div>
+                        )}
                     </div>
 
                     <button

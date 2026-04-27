@@ -49,8 +49,8 @@
                 <div class="field-group">
                     <label for="serverSelect">Account</label>
                     <select id="serverSelect" class="input-select"
-                        title="Which Diet Fantasy site to use">
-                        <option value="main">Diet Fantasy (Main)</option>
+                        title="Which Demo Company site to use">
+                        <option value="main">Demo Company (Main)</option>
                         <option value="brooklyn">Brooklyn</option>
                     </select>
                 </div>
@@ -62,6 +62,10 @@
             <div class="toolbar__actions">
                 <button type="button" id="btn-download-bill" class="btn btn-secondary" onclick="downloadAllClients()">
                     Download client list
+                </button>
+                <button type="button" id="btn-load-saved-queue" class="btn btn-outline" onclick="loadSavedQueueFromDisk()"
+                    title="Load the last downloaded list from disk without calling the API">
+                    Load saved list
                 </button>
                 <button type="button" id="btn-run-queue" class="btn btn-primary" onclick="runCurrentQueue()">
                     Run billing

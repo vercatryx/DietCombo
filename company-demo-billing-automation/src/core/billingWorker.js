@@ -1,5 +1,12 @@
 const { performLoginSequence } = require('./auth');
-const { anonymizePatientUi, isPatientUiAnonymizeEnabled } = require('./patientUiAnonymizer');
+const {
+    anonymizePatientUiAfterSettling,
+    anonymizePatientUiBrief,
+    isPatientUiAnonymizeEnabled,
+    maybeInstallDemoDomGuard,
+    stripUniteDemoNavFromPage
+} = require('./patientUiAnonymizer');
+const { limitAndSanitizeQueue } = require('../demoQueueSanitizer');
 const axios = require('axios');
 const { executeBillingOnPage } = require('./billingActions');
 const { getPage, restartBrowser } = require('./browser');
@@ -337,7 +344,7 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
     if (!initialRequests || initialRequests.length === 0) {
         try {
             if (source === 'api') {
-                requests = await fetchRequestsFromApi(apiConfig);
+                requests = limitAndSanitizeQueue(await fetchRequestsFromApi(apiConfig));
                 if (!requests || requests.length === 0) {
                     emitEvent('log', { message: 'No pending requests found from API.' });
                     return;
@@ -361,6 +368,10 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
     const toProcess = options.requestSlice || requests;
     const slotLabel = options.slotLabel || '';
     const slotIndex = options.slotIndex ?? 0;
+
+    if (options.requestSlice == null) {
+        emitEvent('queue', fullRequests);
+    }
 
     const emitSlotStatus = (stage, clientName = '') => {
         emitEvent('slotStatus', { slotIndex, slotLabel, clientName, stage });
@@ -476,11 +487,20 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     emitSlotStatus(`Open client URL ${attemptLabel}`, req.name);
                     emitEvent('log', { message: `Navigating to ${req.url} ${attemptLabel}...` });
                     await page.goto(req.url, { waitUntil: 'networkidle', timeout: 60000 });
-                    await sleep(3000);
+                    if (isPatientUiAnonymizeEnabled()) {
+                        await stripUniteDemoNavFromPage(page).catch(() => {});
+                    }
+                    // Demo: start anonymize passes ASAP; non-demo keeps a pause for layout/network.
+                    if (isPatientUiAnonymizeEnabled()) {
+                        await sleep(Math.max(0, parseInt(process.env.DEMO_NAV_SETTLE_MS || '320', 10) || 320));
+                    } else {
+                        await sleep(3000);
+                    }
 
                     if (isPatientUiAnonymizeEnabled()) {
                         emitSlotStatus('Anonymize patient UI (demo)', req.name);
-                        await anonymizePatientUi(page, emitEvent, slotLabel);
+                        await anonymizePatientUiAfterSettling(page, emitEvent, slotLabel);
+                        await maybeInstallDemoDomGuard(page, emitEvent, slotLabel);
                     }
 
                     emitSlotStatus('Read auth table & limits', req.name);
@@ -572,6 +592,11 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                     emitSlotStatus('Fill billing form & submit', req.name);
                     const result = await executeBillingOnPage(page, req);
 
+                    if (isPatientUiAnonymizeEnabled()) {
+                        emitSlotStatus('Anonymize patient UI (post billing UI)', req.name);
+                        await anonymizePatientUiBrief(page, emitEvent, slotLabel);
+                    }
+
                     // --- Handle Result ---
                     if (result.ok) {
                         if (result.demoSkippedSubmit) {
@@ -580,6 +605,15 @@ async function billingWorker(initialRequests, emitEvent, source = 'file', apiCon
                             emitSlotStatus('Demo (no submit)', req.name);
                             emitEvent('log', { message: `${slotLabel ? `[${slotLabel}] ` : ''}Demo mode: form filled; billing Post not clicked.`, type: 'info' });
                             resultSourceStatus = 'demo_no_submit';
+                            const demoPauseMs = Math.max(0, parseInt(process.env.DEMO_PAUSE_MS || '6000', 10) || 6000);
+                            if (demoPauseMs > 0) {
+                                emitSlotStatus(`Demo hold ${demoPauseMs / 1000}s`, req.name);
+                                emitEvent('log', {
+                                    message: `${slotLabel ? `[${slotLabel}] ` : ''}Demo: holding ${demoPauseMs / 1000}s on this client before the next…`,
+                                    type: 'info'
+                                });
+                                await sleep(demoPauseMs);
+                            }
                         } else if (result.verified) {
                             req.status = 'success';
                             req.message = `Billed: $${result.amount || req.amount}`;

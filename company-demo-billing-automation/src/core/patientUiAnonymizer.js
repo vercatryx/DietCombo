@@ -9,6 +9,7 @@
 const path = require('path');
 const dotenvPath = process.env.DOTENV_PATH || path.join(__dirname, '..', '..', '.env');
 require('dotenv').config({ path: dotenvPath });
+const { DEMO_PROFILES } = require('../demoPersonas');
 
 /**
  * @typedef {{
@@ -19,25 +20,6 @@ require('dotenv').config({ path: dotenvPath });
  * }} DemoProfilePayload
  */
 
-/** Obvious parody / demo personas — not real patient records */
-const DEMO_PROFILES = /** @type {const} */ ([
-    { name: 'DEMO — Winston Churchill', phoneDisplay: '(555) 010-2001', telHref: 'tel:+15550102001', phoneDigits10: '5550102001', phoneDigits11: '15550102001', street: '10 Downing Demo Rd', cityLine: 'Westminster-ish, ZZ 00001', county: 'Blitz Spirit Demo County', dobLine: '11/30/1874 (Age: fake demo)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Married to paperwork (demo)', gender: 'Demo character', lang1: 'Spoken: Churchillian bluster (fake)', lang2: 'Written: Typewriter noise (fake)' },
-    { name: 'DEMO — Abraham Lincoln', phoneDisplay: '(555) 010-2002', telHref: 'tel:+15550102002', phoneDigits10: '5550102002', phoneDigits11: '15550102002', street: '1600 Log Cabin Demo Ave', cityLine: 'Springfield-demo, IL 00002', county: 'Top Hat Demo County', dobLine: '2/12/1809 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Single (satire)', gender: 'Demo character', lang1: 'Spoken: Gettysburg emoji voice (fake)', lang2: 'Written: Tall tales (fake)' },
-    { name: 'DEMO — George Washington', phoneDisplay: '(555) 010-2003', telHref: 'tel:+15550102003', phoneDigits10: '5550102003', phoneDigits11: '15550102003', street: '1 Cherry Tree Demo Ln', cityLine: 'Mount Vernon-demo, VA 00003', county: 'Delaware Crossing Demo Co.', dobLine: '2/22/1732 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Married to Martha (demo)', gender: 'Demo character', lang1: 'Spoken: Wooden teeth ASMR (fake)', lang2: 'Written: Ref cannot tell a lie (fake)' },
-    { name: 'DEMO — Eleanor Roosevelt', phoneDisplay: '(555) 010-2004', telHref: 'tel:+15550102004', phoneDigits10: '5550102004', phoneDigits11: '15550102004', street: 'Hyde Park Demo Cottage', cityLine: 'Hudson Valley-demo, NY 00004', county: 'Universal Declaration Demo Co.', dobLine: '10/11/1884 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Widowed (satire)', gender: 'Demo character', lang1: 'Spoken: Fireside podcast (fake)', lang2: 'Written: Human rights erasers (fake)' },
-    { name: 'DEMO — Frida Kahlo', phoneDisplay: '(555) 010-2005', telHref: 'tel:+15550102005', phoneDigits10: '5550102005', phoneDigits11: '15550102005', street: 'La Casa Azul Demo', cityLine: 'Coyoacán-demo, MX 00005', county: 'Surrealist Demo County', dobLine: '7/6/1907 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Complicated (demo)', gender: 'Demo character', lang1: 'Spoken: Monobrow manifesto (fake)', lang2: 'Written: Brush strokes only (fake)' },
-    { name: 'DEMO — Albert Einstein', phoneDisplay: '(555) 010-2006', telHref: 'tel:+15550102006', phoneDigits10: '5550102006', phoneDigits11: '15550102006', street: '76 Princeton Demo Hall', cityLine: 'Spacetime-demo, NJ 00006', county: 'Relativity Demo Borough', dobLine: '3/14/1879 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Thought experiment (demo)', gender: 'Demo character', lang1: 'Spoken: Tongue-out equations (fake)', lang2: 'Written: E = mc demo (fake)' },
-    { name: 'DEMO — Cleopatra VII', phoneDisplay: '(555) 010-2007', telHref: 'tel:+15550102007', phoneDigits10: '5550102007', phoneDigits11: '15550102007', street: '1 Nile Barge Demo Dock', cityLine: 'Alexandria-demo, EG 00007', county: 'Asp Demo County', dobLine: '69 BCE (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'It’s complicated (demo)', gender: 'Demo character', lang1: 'Spoken: Hieroglyph karaoke (fake)', lang2: 'Written: Papyrus memes (fake)' },
-    { name: 'DEMO — Leonardo da Vinci', phoneDisplay: '(555) 010-2008', telHref: 'tel:+15550102008', phoneDigits10: '5550102008', phoneDigits11: '15550102008', street: 'Via Vinci Demo Studio', cityLine: 'Florence-demo, IT 00008', county: 'Helicopter Sketch Demo Co.', dobLine: '4/15/1452 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Busy inventing (demo)', gender: 'Demo character', lang1: 'Spoken: Mirror writing (fake)', lang2: 'Written: Backwards Italian (fake)' },
-    { name: 'DEMO — Franklin D. Roosevelt', phoneDisplay: '(555) 010-2009', telHref: 'tel:+15550102009', phoneDigits10: '5550102009', phoneDigits11: '15550102009', street: 'Hyde Park Demo Wheelchair Ramp', cityLine: 'Warm Springs-demo, GA 00009', county: 'New Deal Demo County', dobLine: '1/30/1882 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Eleanor not included (demo)', gender: 'Demo character', lang1: 'Spoken: Fireside chalkboard (fake)', lang2: 'Written: Nothing to fear but demos (fake)' },
-    { name: 'DEMO — Nelson Mandela', phoneDisplay: '(555) 010-2010', telHref: 'tel:+15550102010', phoneDigits10: '5550102010', phoneDigits11: '15550102010', street: 'Vilakazi St Demo House', cityLine: 'Soweto-demo, ZA 00010', county: 'Madiba Demo Municipality', dobLine: '7/18/1918 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Free at last (demo)', gender: 'Demo character', lang1: 'Spoken: Invictus outtakes (fake)', lang2: 'Written: Rainbow nation Lorem (fake)' },
-    { name: 'DEMO — Marie Curie', phoneDisplay: '(555) 010-2011', telHref: 'tel:+15550102011', phoneDigits10: '5550102011', phoneDigits11: '15550102011', street: 'Radium Alley Demo Lab', cityLine: 'Paris-demo, FR 00011', county: 'Radioactive Demo County', dobLine: '11/7/1867 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Married to science (demo)', gender: 'Demo character', lang1: 'Spoken: Glow-in-the-dark French (fake)', lang2: 'Written: Nobel receipt (fake)' },
-    { name: 'DEMO — Ada Lovelace', phoneDisplay: '(555) 010-2012', telHref: 'tel:+15550102012', phoneDigits10: '5550102012', phoneDigits11: '15550102012', street: 'Analytical Engine Demo Loft', cityLine: 'London-demo, UK 00012', county: 'First Programmer Demo Co.', dobLine: '12/10/1815 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Married to loops (demo)', gender: 'Demo character', lang1: 'Spoken: Punch card poetry (fake)', lang2: 'Written: while(true) joke (fake)' },
-    { name: 'DEMO — Charles Darwin', phoneDisplay: '(555) 010-2013', telHref: 'tel:+15550102013', phoneDigits10: '5550102013', phoneDigits11: '15550102013', street: 'Down House Demo Beetle Shed', cityLine: 'Kent-demo, UK 00013', county: 'Natural Selection Demo Co.', dobLine: '2/12/1809 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Finches everywhere (demo)', gender: 'Demo character', lang1: 'Spoken: Finch accent (fake)', lang2: 'Written: Origin of Demos (fake)' },
-    { name: 'DEMO — Joan of Arc', phoneDisplay: '(555) 010-2014', telHref: 'tel:+15550102014', phoneDigits10: '5550102014', phoneDigits11: '15550102014', street: 'Orléans Demo Bastion', cityLine: 'Domrémy-demo, FR 00014', county: 'Hundred Years Demo County', dobLine: '1/6/1412 (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Canonized satire (demo)', gender: 'Demo character', lang1: 'Spoken: Voices in UI tests (fake)', lang2: 'Written: Trial transcript redacted (fake)' },
-    { name: 'DEMO — Julius Caesar', phoneDisplay: '(555) 010-2015', telHref: 'tel:+15550102015', phoneDigits10: '5550102015', phoneDigits11: '15550102015', street: 'Rubicon Creek Demo Ford', cityLine: 'Rome-demo, IT 00015', county: 'Et tu Demo County', dobLine: '7/12/100 BC (Age: demo only)', race: 'Demo: not a patient', ethnicity: 'Demo: parody only', marital: 'Brutus was busy (demo)', gender: 'Demo character', lang1: 'Spoken: Veni vidi demo (fake)', lang2: 'Written: Ides of March spreadsheet (fake)' }
-]);
-
 function profileIndexForUrl(url) {
     const s = String(url || '');
     let h = 2166136261;
@@ -47,8 +29,140 @@ function profileIndexForUrl(url) {
     return Math.abs(h) % DEMO_PROFILES.length;
 }
 
-function isEnabled() {
-    return /^(1|true|yes|on)$/i.test(String(process.env.DEMO_ANONYMIZE_PATIENT_UI || '').trim());
+/** Env tri-state: unset | true | false */
+function envTriState(key) {
+    const raw = process.env[key];
+    if (raw == null || String(raw).trim() === '') return null;
+    const s = String(raw).trim();
+    if (/^(0|false|no|off)$/i.test(s)) return false;
+    if (/^(1|true|yes|on)$/i.test(s)) return true;
+    return null;
+}
+
+/**
+ * Off unless explicitly enabled, or inherited from DEMO_SAFE_QUEUE when DEMO_ANONYMIZE_PATIENT_UI is unset.
+ */
+function patientUiAnonymizationEnabled() {
+    const explicit = envTriState('DEMO_ANONYMIZE_PATIENT_UI');
+    const safeQueue = envTriState('DEMO_SAFE_QUEUE');
+    if (explicit === true) return true;
+    if (explicit === false) return false;
+    return safeQueue === true;
+}
+
+/** When unset: on only if DEMO_SAFE_QUEUE is on (recording mode). */
+function demoDomMutationGuardEnabled() {
+    const raw = process.env.DEMO_ANONYMIZE_DOM_GUARD;
+    if (raw != null && String(raw).trim() !== '') {
+        return /^(1|true|yes|on)$/i.test(String(raw).trim());
+    }
+    return envTriState('DEMO_SAFE_QUEUE') === true;
+}
+
+function parseDelaySchedule(envKey, fallbackCsv) {
+    const raw = process.env[envKey];
+    const csv = (raw != null && String(raw).trim() !== '') ? String(raw).trim() : fallbackCsv;
+    const parts = csv.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n >= 0);
+    return parts.length ? parts : [0, 1200, 3200];
+}
+
+/**
+ * Remove Unite left-nav / header chrome (home logo link, Exports). Safe to call before DOM is ready and on every pass.
+ */
+async function stripUniteDemoNavFromPage(page) {
+    if (!patientUiAnonymizationEnabled()) return;
+    await page.evaluate(() => {
+        try {
+            document.getElementById('nav-home')?.remove();
+            document.getElementById('nav-exports')?.remove();
+            document.querySelector('a#nav-home')?.remove();
+            document.querySelector('li#nav-exports')?.remove();
+            document.querySelectorAll('a.home-link[aria-label="Unite Us home"]').forEach((n) => n.remove());
+        } catch (e) { /* ignore */ }
+    });
+}
+
+/** Rapid passes early (ms from navigation), then slower tail — minimizes visible PHI during React hydrate. */
+const DEFAULT_SETTLE_MS =
+    '0,18,35,55,78,105,135,170,210,255,305,365,435,520,620,740,880,1050,1250,1500,1800,2150,2550,3050,3700,4500,5500';
+
+/** After billing UI: tight bursts so form-driven updates do not linger. */
+const DEFAULT_POST_MS = '0,18,40,68,100,140,190,250,325,420,540,690,880,1150,1500';
+
+/**
+ * Several passes while React/Unite finishes hydrating (single pass often gets overwritten).
+ */
+async function anonymizePatientUiAfterSettling(page, emitEvent, slotLabel = '') {
+    if (!patientUiAnonymizationEnabled()) return;
+    const schedule = parseDelaySchedule('DEMO_ANONYMIZE_SETTLE_MS', DEFAULT_SETTLE_MS);
+    for (let i = 0; i < schedule.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, schedule[i] - schedule[i - 1]));
+        await stripUniteDemoNavFromPage(page).catch(() => {});
+        await anonymizePatientUi(page, i === 0 ? emitEvent : null, slotLabel);
+    }
+}
+
+/** After billing shelf / form interactions (DOM churn). */
+async function anonymizePatientUiBrief(page, emitEvent, slotLabel = '') {
+    if (!patientUiAnonymizationEnabled()) return;
+    const schedule = parseDelaySchedule('DEMO_ANONYMIZE_POST_MS', DEFAULT_POST_MS);
+    for (let i = 0; i < schedule.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, schedule[i] - schedule[i - 1]));
+        await stripUniteDemoNavFromPage(page).catch(() => {});
+        await anonymizePatientUi(page, i === 0 ? emitEvent : null, slotLabel);
+    }
+}
+
+const demoExposeInstalled = new WeakMap();
+const demoPingThrottle = new WeakMap();
+
+/**
+ * Re-run anonymization when the SPA mutates the tree (optional; recommended with DEMO_SAFE_QUEUE).
+ */
+async function maybeInstallDemoDomGuard(page, emitEvent, slotLabel = '') {
+    if (!patientUiAnonymizationEnabled() || !demoDomMutationGuardEnabled()) return;
+
+    const throttleMs = Math.max(50, parseInt(process.env.DEMO_ANONYMIZE_GUARD_THROTTLE_MS || '180', 10) || 180);
+
+    if (!demoExposeInstalled.has(page)) {
+        demoExposeInstalled.set(page, true);
+        await page.exposeFunction('__demoPatientUiPing', async () => {
+            const last = demoPingThrottle.get(page) || 0;
+            const now = Date.now();
+            if (now - last < throttleMs) return;
+            demoPingThrottle.set(page, now);
+            await stripUniteDemoNavFromPage(page).catch(() => {});
+            await anonymizePatientUi(page, null, slotLabel);
+        });
+    }
+
+    const debounceMs = Math.max(0, parseInt(process.env.DEMO_ANONYMIZE_GUARD_DEBOUNCE_MS || '60', 10) || 60);
+
+    await page.evaluate((debounce) => {
+        if (window.__demoPatientUiMo) {
+            try {
+                window.__demoPatientUiMo.disconnect();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+        let t = 0;
+        const debounced = () => {
+            clearTimeout(t);
+            t = setTimeout(() => {
+                if (window.__demoPatientUiPing) window.__demoPatientUiPing().catch(() => {});
+            }, debounce);
+        };
+        window.__demoPatientUiMo = new MutationObserver(debounced);
+        window.__demoPatientUiMo.observe(document.documentElement, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+            attributes: true,
+            attributeFilter: ['href', 'title', 'aria-label', 'value']
+        });
+        debounced();
+    }, debounceMs);
 }
 
 /**
@@ -57,7 +171,7 @@ function isEnabled() {
  * @param {string} slotLabel
  */
 async function anonymizePatientUi(page, emitEvent, slotLabel = '') {
-    if (!isEnabled()) return { applied: false, reason: 'disabled' };
+    if (!patientUiAnonymizationEnabled()) return { applied: false, reason: 'disabled' };
 
     const prefix = slotLabel ? `[${slotLabel}] ` : '';
     const profileIdx = profileIndexForUrl(page.url());
@@ -74,11 +188,20 @@ async function anonymizePatientUi(page, emitEvent, slotLabel = '') {
     demoPayload.sendingCellHtml = `${demoPayload.sendingDisplayName}<div><div>Email: ${demoPayload.sendingEmail}</div></div>`;
 
     try {
+        await stripUniteDemoNavFromPage(page).catch(() => {});
         await page.waitForSelector(
             '.contact-column__name, .contact-column, #basic-table-sending-user-value, .right-nav__user-name',
-            { timeout: 15000 }
+            { timeout: Math.min(15000, Math.max(200, parseInt(process.env.DEMO_ANONYMIZE_WAIT_MS || '700', 10) || 700)) }
         ).catch(() => {});
         const summary = await page.evaluate((demoProfile) => {
+            try {
+                document.getElementById('nav-home')?.remove();
+                document.getElementById('nav-exports')?.remove();
+                document.querySelector('a#nav-home')?.remove();
+                document.querySelector('li#nav-exports')?.remove();
+                document.querySelectorAll('a.home-link[aria-label="Unite Us home"]').forEach((n) => n.remove());
+            } catch (e) { /* ignore */ }
+
             const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
             const digits = (s) => String(s || '').replace(/\D+/g, '');
 
@@ -99,9 +222,34 @@ async function anonymizePatientUi(page, emitEvent, slotLabel = '') {
             const sendCell = document.querySelector('#basic-table-sending-user-value');
             const navEl = document.querySelector('.right-nav__user-name');
 
-            const nameEl =
-                document.querySelector('.contact-column .contact-column__name') ||
-                document.querySelector('h3.contact-column__name');
+            function resolvePatientNameEl() {
+                const selectors = [
+                    '.contact-column .contact-column__name',
+                    'h3.contact-column__name',
+                    '.contact-column__name',
+                    '[data-test-element="patient_profile_name"]',
+                    '[data-test-element*="participant_name" i]',
+                    '[data-test-element*="contact_name" i]'
+                ];
+                for (const sel of selectors) {
+                    try {
+                        const el = document.querySelector(sel);
+                        const t = norm(el?.textContent || '');
+                        if (el && t.length >= 3) return /** @type {HTMLElement} */ (el);
+                    } catch (e) {
+                        /* invalid selector in older browsers */
+                    }
+                }
+                const contactCol = document.querySelector('.contact-column');
+                if (contactCol) {
+                    const h = contactCol.querySelector('h1, h2, h3, [role="heading"]');
+                    const t = norm(h?.textContent || '');
+                    if (h && t.length >= 3 && !/^contacts?$/i.test(t)) return /** @type {HTMLElement} */ (h);
+                }
+                return null;
+            }
+
+            const nameEl = resolvePatientNameEl();
             const extractedName = norm(nameEl?.textContent);
 
             const phoneSpan = document.querySelector("[data-test-element='phone-numbers_number_0']") ||
@@ -241,53 +389,66 @@ async function anonymizePatientUi(page, emitEvent, slotLabel = '') {
 
             const skipTags = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
             let textNodes = 0;
-            const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-            let node;
-            while ((node = walk.nextNode())) {
-                const parent = node.parentElement;
-                if (!parent || skipTags.has(parent.tagName)) continue;
-                let cur = node.nodeValue;
-                if (!cur || !cur.trim()) continue;
-                let next = cur;
-                for (const { from, to } of uniq) {
-                    if (from.length >= 2 && next.includes(from)) next = next.split(from).join(to);
-                }
-                if (next !== cur) {
-                    node.nodeValue = next;
-                    textNodes++;
-                }
+
+            /** Tree + open shadow roots (Unite components often hide text in shadow DOM). */
+            function walkShadowRoots(root, visitor) {
+                visitor(root);
+                root.querySelectorAll('*').forEach((el) => {
+                    if (el.shadowRoot) walkShadowRoots(el.shadowRoot, visitor);
+                });
             }
 
-            let attrs = 0;
-            document.querySelectorAll('[href]').forEach((el) => {
-                const h = el.getAttribute('href');
-                if (!h) return;
-                let nh = h;
-                if (h.startsWith('tel:')) {
-                    nh = DUMMY_TEL;
-                } else {
+            walkShadowRoots(document.body, (subRoot) => {
+                const tw = document.createTreeWalker(subRoot, NodeFilter.SHOW_TEXT, null);
+                let node;
+                while ((node = tw.nextNode())) {
+                    const parent = node.parentElement;
+                    if (!parent || skipTags.has(parent.tagName)) continue;
+                    let cur = node.nodeValue;
+                    if (!cur || !cur.trim()) continue;
+                    let next = cur;
                     for (const { from, to } of uniq) {
-                        if (from.length >= 2 && nh.includes(from)) nh = nh.split(from).join(to);
+                        if (from.length >= 2 && next.includes(from)) next = next.split(from).join(to);
                     }
-                }
-                if (nh !== h) {
-                    el.setAttribute('href', nh);
-                    attrs++;
+                    if (next !== cur) {
+                        node.nodeValue = next;
+                        textNodes++;
+                    }
                 }
             });
 
-            document.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([type="checkbox"]):not([type="radio"]), textarea').forEach((el) => {
-                let v = el.value;
-                if (!v || !v.trim()) return;
-                let nv = v;
-                for (const { from, to } of uniq) {
-                    if (from.length >= 2 && nv.includes(from)) nv = nv.split(from).join(to);
-                }
-                if (extractedName.length >= 3 && nv.includes(extractedName)) nv = nv.split(extractedName).join(DUMMY_NAME);
-                if (nv !== v) {
-                    el.value = nv;
-                    attrs++;
-                }
+            let attrs = 0;
+            walkShadowRoots(document.body, (subRoot) => {
+                subRoot.querySelectorAll('[href]').forEach((el) => {
+                    const h = el.getAttribute('href');
+                    if (!h) return;
+                    let nh = h;
+                    if (h.startsWith('tel:')) {
+                        nh = DUMMY_TEL;
+                    } else {
+                        for (const { from, to } of uniq) {
+                            if (from.length >= 2 && nh.includes(from)) nh = nh.split(from).join(to);
+                        }
+                    }
+                    if (nh !== h) {
+                        el.setAttribute('href', nh);
+                        attrs++;
+                    }
+                });
+
+                subRoot.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([type="checkbox"]):not([type="radio"]), textarea').forEach((el) => {
+                    let v = el.value;
+                    if (!v || !v.trim()) return;
+                    let nv = v;
+                    for (const { from, to } of uniq) {
+                        if (from.length >= 2 && nv.includes(from)) nv = nv.split(from).join(to);
+                    }
+                    if (extractedName.length >= 3 && nv.includes(extractedName)) nv = nv.split(extractedName).join(DUMMY_NAME);
+                    if (nv !== v) {
+                        el.value = nv;
+                        attrs++;
+                    }
+                });
             });
 
             return {
@@ -300,22 +461,24 @@ async function anonymizePatientUi(page, emitEvent, slotLabel = '') {
 
         if (emitEvent) {
             emitEvent('log', {
-                message: `${prefix}[Demo] Patient UI anonymized — profile ${profileIdx + 1}/15: ${profile.name} (${summary.globalPatterns} patterns, ${summary.textNodes} text nodes).`,
+                message: `${prefix}[Demo] Patient UI anonymized — profile ${profileIdx + 1}/${DEMO_PROFILES.length}: ${profile.name} (${summary.globalPatterns} patterns, ${summary.textNodes} text nodes).`,
                 type: 'info'
             });
         }
         return { applied: true, profileIndex: profileIdx, profileName: profile.name, ...summary };
     } catch (err) {
-        if (emitEvent) {
-            emitEvent('log', { message: `${prefix}[Demo] Patient anonymize error: ${err.message}`, type: 'warning' });
-        }
+        /* Bursts run often; failures are expected until DOM is ready — do not spam the activity log. */
         return { applied: false, error: err.message };
     }
 }
 
 module.exports = {
     anonymizePatientUi,
-    isPatientUiAnonymizeEnabled: isEnabled,
+    anonymizePatientUiAfterSettling,
+    anonymizePatientUiBrief,
+    maybeInstallDemoDomGuard,
+    stripUniteDemoNavFromPage,
+    isPatientUiAnonymizeEnabled: patientUiAnonymizationEnabled,
     DEMO_PROFILES,
     profileIndexForUrl
 };

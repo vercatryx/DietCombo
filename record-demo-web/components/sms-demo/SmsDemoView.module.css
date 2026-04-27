@@ -1,0 +1,234 @@
+.wrap {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #e8e8ed;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  pointer-events: none;
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+/**
+ * Fixed phone chassis — size does not change as messages are added (content scrolls inside).
+ */
+.phone {
+  width: 360px;
+  height: 720px;
+  flex: 0 0 auto;
+  background: #fff;
+  border-radius: 2.5rem;
+  padding: 0.65rem;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.12),
+    0 20px 40px -8px rgba(0, 0, 0, 0.18);
+  box-sizing: border-box;
+}
+
+.screen {
+  background: #fff;
+  border-radius: 2rem;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+}
+
+.statusBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.1rem 0.3rem;
+  font-size: 0.75rem;
+  color: #1c1c1e;
+  font-weight: 600;
+}
+
+.appHeader {
+  flex-shrink: 0;
+  text-align: center;
+  padding: 0.1rem 1rem 0.5rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.appHeaderLabel {
+  font-size: 0.7rem;
+  color: #6d6d70;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.1rem;
+}
+
+.appHeaderTitle {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1c1c1e;
+}
+
+.messageArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0.65rem 0.8rem 0.5rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  background: #f2f2f7;
+}
+
+.messageArea::-webkit-scrollbar {
+  display: none;
+}
+
+.bubbleRow {
+  display: flex;
+  width: 100%;
+}
+
+.bubbleRow.user {
+  justify-content: flex-end;
+}
+
+.bubbleRow.system {
+  justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+}
+
+.senderTag {
+  font-size: 0.65rem;
+  color: #6d6d70;
+  padding-left: 0.35rem;
+  max-width: 80%;
+}
+
+.bubble {
+  max-width: 88%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 1.05rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bubble.user {
+  background: #0a84ff;
+  color: #fff;
+  border-bottom-right-radius: 0.2rem;
+}
+
+.bubble.system {
+  background: #e5e5ea;
+  color: #1c1c1e;
+  border-bottom-left-radius: 0.2rem;
+}
+
+.typingCursor {
+  display: inline-block;
+  width: 0.1em;
+  height: 1.1em;
+  margin-left: 1px;
+  background: rgba(255, 255, 255, 0.7);
+  animation: pulse 0.8s step-end infinite;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+}
+
+.bubble.system .typingCursor {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* iOS light keyboard (decorative) */
+.keyboard {
+  flex: 0 0 auto;
+  width: 100%;
+  background: #d1d1d6;
+  padding: 0.4rem 0.35rem 0.5rem;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+}
+
+.keyRow {
+  display: flex;
+  justify-content: center;
+  gap: 0.2rem;
+  margin-bottom: 0.3rem;
+}
+
+.keyRowOffset {
+  padding: 0 0.4rem;
+}
+
+.key {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #1c1c1e;
+  background: #fcfcfe;
+  border-radius: 0.3rem;
+  box-shadow:
+    0 0.5px 0 #8e8e93,
+    0 1px 0 rgba(255, 255, 255, 0.9);
+  letter-spacing: 0.02em;
+  border: 0.3px solid rgba(0, 0, 0, 0.1);
+}
+
+.keyWider {
+  flex: 1.35;
+}
+
+.keySpace {
+  flex: 5;
+  font-size: 0.65rem;
+  color: #6d6d70;
+  letter-spacing: 0.04em;
+}
+
+.keyAction {
+  flex: 1.2;
+  font-size: 0.62rem;
+  color: #4a4a4a;
+  background: #b8b8bd;
+  box-shadow:
+    0 0.5px 0 #5c5c5c,
+    0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.keyBlue {
+  background: #0a6ecc;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  flex: 1.1;
+  border: none;
+  box-shadow: 0 0.5px 0 #054a8a;
+}

@@ -1,2 +1,5 @@
 # Playwright browsers (installed by npm run install-browsers before pack)
 playwright-browsers/
+
+# Cached billing queue (first N clients after download)
+demo_queue_cache.json

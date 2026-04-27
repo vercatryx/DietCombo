@@ -41,15 +41,11 @@ function getTileGridDimensions(slotCount) {
 }
 
 /**
- * Chromium flags to place each window in a grid so parallel headed slots stay visible.
- * Uses TILE_SCREEN_WIDTH / TILE_SCREEN_HEIGHT (default 1920×1080), TILE_GUTTER, TILE_ORIGIN_*.
- * Set TILE_WINDOWS=false to disable.
+ * Pixel geometry for one headed tile (--window-size matches cellW×cellH).
  */
-function tileWindowLaunchArgs(slotIndex, totalSlots) {
+function computeTileMetrics(slotIndex, totalSlots) {
     const headless = process.env.HEADLESS === 'true';
-    if (headless || totalSlots <= 1 || !parseBoolEnv(process.env.TILE_WINDOWS, true)) {
-        return [];
-    }
+    if (headless || totalSlots <= 1 || !parseBoolEnv(process.env.TILE_WINDOWS, true)) return null;
 
     const screenW = Math.max(400, parseInt(process.env.TILE_SCREEN_WIDTH || '1920', 10) || 1920);
     const screenH = Math.max(300, parseInt(process.env.TILE_SCREEN_HEIGHT || '1080', 10) || 1080);
@@ -67,9 +63,17 @@ function tileWindowLaunchArgs(slotIndex, totalSlots) {
     const cellH = Math.max(240, Math.floor(innerH / rows));
     const x = originX + gutter + col * (cellW + gutter);
     const y = originY + gutter + row * (cellH + gutter);
+    return { cellW, cellH, x, y, cols, rows };
+}
 
-    console.log(`[Browser] Tile slot ${slotIndex}/${totalSlots} → ${cellW}×${cellH} @ (${x},${y}) [grid ${cols}×${rows}]`);
-    return [`--window-size=${cellW},${cellH}`, `--window-position=${x},${y}`];
+/**
+ * Chromium flags to place each window in a grid so parallel headed slots stay visible.
+ */
+function tileWindowLaunchArgs(slotIndex, totalSlots) {
+    const m = computeTileMetrics(slotIndex, totalSlots);
+    if (!m) return [];
+    console.log(`[Browser] Tile slot ${slotIndex}/${totalSlots} → ${m.cellW}×${m.cellH} @ (${m.x},${m.y}) [grid ${m.cols}×${m.rows}]`);
+    return [`--window-size=${m.cellW},${m.cellH}`, `--window-position=${m.x},${m.y}`];
 }
 
 /** Shared launch options for Chromium (singleton and multi-instance). */
@@ -81,9 +85,7 @@ const launchOptions = (extraArgs = []) => ({
 const defaultViewport = { width: 1280, height: 800 };
 
 /**
- * Layout viewport for headed tiled slots: each page lays out at this size (CSS / responsive)
- * while the OS window stays small. Pan with scrollbars inside the tile.
- * Defaults to TILE_SCREEN_* (or 1920×1080). Raise TILE_LAYOUT_VIEWPORT_* for ultra-wide layouts.
+ * Target “desktop” layout size for headed tiled mode (CDP emulation). TILE_LAYOUT_* override defaults.
  */
 function getTiledLayoutViewportSize() {
     const defW = Math.max(400, parseInt(process.env.TILE_SCREEN_WIDTH || '1920', 10) || 1920);
@@ -93,12 +95,78 @@ function getTiledLayoutViewportSize() {
     return { width: Math.max(800, w), height: Math.max(600, h) };
 }
 
+/**
+ * Headed tiles: emulate full-desktop layout metrics so responsive sites behave like a large monitor,
+ * while keeping the OS window at the tiled --window-size. Uses CDP dontSetVisibleSize so Chromium
+ * does not expand the browser chrome to match the layout width/height.
+ */
+async function applyTiledLayoutCdpIfNeeded(page, tiledHeaded) {
+    if (!tiledHeaded || process.env.HEADLESS === 'true') return;
+    if (!parseBoolEnv(process.env.TILE_CDP_FULL_LAYOUT, true)) return;
+
+    const layout = getTiledLayoutViewportSize();
+    try {
+        const session = await page.context().newCDPSession(page);
+        await session.send('Emulation.setDeviceMetricsOverride', {
+            width: layout.width,
+            height: layout.height,
+            deviceScaleFactor: 1,
+            mobile: false,
+            screenWidth: layout.width,
+            screenHeight: layout.height,
+            dontSetVisibleSize: true
+        });
+        console.log(`[Browser] CDP desktop layout ${layout.width}×${layout.height} (tile window unchanged)`);
+    } catch (e) {
+        console.warn('[Browser] CDP setDeviceMetricsOverride:', e.message);
+    }
+}
+
+/**
+ * After CDP lays out a “full monitor”, scale the whole document down so it fits in the physical tile
+ * (miniature giant-desktop effect). Uses tile metrics + TILE_CHROME_UI_HEIGHT for usable content area.
+ */
+async function applyTiledMiniatureScale(page, tileMetrics) {
+    if (!tileMetrics || process.env.HEADLESS === 'true') return;
+    if (!parseBoolEnv(process.env.TILE_SHRINK_FULL_LAYOUT_TO_TILE, true)) return;
+
+    const layout = getTiledLayoutViewportSize();
+    const lw = layout.width;
+    const lh = layout.height;
+    const chromeH = Math.max(0, parseInt(process.env.TILE_CHROME_UI_HEIGHT || '88', 10) || 88);
+    const tw = Math.max(80, tileMetrics.cellW);
+    const th = Math.max(80, tileMetrics.cellH - chromeH);
+    const scale = Math.min(tw / lw, th / lh);
+
+    try {
+        await page.evaluate(({ lw, lh, s }) => {
+            const html = document.documentElement;
+            html.style.transformOrigin = 'top left';
+            html.style.width = `${lw}px`;
+            html.style.minHeight = `${lh}px`;
+            html.style.transform = `scale(${s})`;
+            html.style.overflow = 'hidden';
+            const b = document.body;
+            if (b) {
+                b.style.margin = '0';
+                b.style.transformOrigin = 'top left';
+            }
+        }, { lw, lh, s: scale });
+        console.log(`[Browser] Miniature fit: scale=${(scale * 100).toFixed(1)}% (${lw}×${lh} → ~${Math.round(lw * scale)}×${Math.round(lh * scale)} in tile)`);
+    } catch (e) {
+        console.warn('[Browser] Miniature scale:', e.message);
+    }
+}
+
 const contextOptions = (opts = {}) => {
-    const layout = opts.useTiledWindow ? getTiledLayoutViewportSize() : null;
+    let viewport = defaultViewport;
+    if (opts.useTiledWindow) {
+        // Always null here; large layout comes from CDP (above) so Playwright does not resize OS windows.
+        viewport = null;
+    }
     return {
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        viewport: layout || defaultViewport,
-        ...(layout ? { screen: { width: layout.width, height: layout.height } } : {}),
+        viewport,
         permissions: [],
         geolocation: undefined,
         locale: 'en-US',
@@ -164,7 +232,13 @@ const instances = new Map();
  */
 async function launchBrowserInstance(slotId, tileOpts = {}) {
     const totalSlots = tileOpts.totalSlots != null ? tileOpts.totalSlots : 1;
-    const tileArgs = tileWindowLaunchArgs(slotId, totalSlots);
+    const tileMetrics = computeTileMetrics(slotId, totalSlots);
+    const tileArgs = tileMetrics
+        ? [`--window-size=${tileMetrics.cellW},${tileMetrics.cellH}`, `--window-position=${tileMetrics.x},${tileMetrics.y}`]
+        : [];
+    if (tileMetrics) {
+        console.log(`[Browser] Tile slot ${slotId}/${totalSlots} → ${tileMetrics.cellW}×${tileMetrics.cellH} @ (${tileMetrics.x},${tileMetrics.y}) [grid ${tileMetrics.cols}×${tileMetrics.rows}]`);
+    }
     const useTiledWindow = tileArgs.length > 0;
 
     console.log(`[Browser] Launching instance for slot ${slotId}...`);
@@ -174,6 +248,14 @@ async function launchBrowserInstance(slotId, tileOpts = {}) {
     await ctx.clearPermissions();
     const p = await ctx.newPage();
     await setupPageRoutes(p);
+    await applyTiledLayoutCdpIfNeeded(p, useTiledWindow);
+    await applyTiledMiniatureScale(p, tileMetrics);
+    if (useTiledWindow) {
+        p.on('load', async () => {
+            await applyTiledLayoutCdpIfNeeded(p, true).catch(() => {});
+            await applyTiledMiniatureScale(p, tileMetrics).catch(() => {});
+        });
+    }
     p.on('console', msg => {
         if (msg.type() === 'log') console.log(`[Browser:${slotId}] ${msg.text()}`);
         if (msg.type() === 'warn') console.warn(`[Browser:${slotId}] ${msg.text()}`);
@@ -253,5 +335,6 @@ module.exports = {
     restartBrowser,
     getContext: () => context,
     launchBrowserInstance,
-    closeAllBrowserInstances
+    closeAllBrowserInstances,
+    computeTileMetrics
 };

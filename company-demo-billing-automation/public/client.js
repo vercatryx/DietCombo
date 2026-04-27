@@ -393,10 +393,32 @@ function downloadAllClients() {
                 log(`Fetch Error: ${d.error}`, 'error');
             } else {
                 log(d.message || `Loaded ${d.count} ${label} clients.`, 'success');
+                if (d.savedToCache) {
+                    const cap = d.cacheLimit != null ? ` (max ${d.cacheLimit} stored on disk)` : '';
+                    log(`Saved locally for next time${cap}. Restarts load this list automatically.`, 'info');
+                }
             }
         })
         .catch(e => {
             log(`Fetch Failed: ${e.message}`, 'error');
+        });
+}
+
+function loadSavedQueueFromDisk() {
+    log('Loading saved client list from disk…', 'info');
+    fetch('/api/load-queue-cache', { method: 'POST' })
+        .then(async (r) => {
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) {
+                throw new Error(d.error || `HTTP ${r.status}`);
+            }
+            return d;
+        })
+        .then((d) => {
+            log(d.message || `Loaded ${d.count} saved client(s).`, 'success');
+        })
+        .catch((e) => {
+            log(`Load saved list failed: ${e.message}`, 'error');
         });
 }
 

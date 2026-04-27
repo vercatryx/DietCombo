@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diet Fantasy — Video storyboard (dummy data)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        :root {
+            --bg: #0f1419;
+            --panel: #1a2332;
+            --border: #2d3a4d;
+            --text: #e8eef6;
+            --muted: #8fa3b8;
+            --accent: #4f9eff;
+            --success: #3ecf8e;
+            --warn: #f5a623;
+            --danger: #f56565;
+            --radius: 10px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            font-family: Inter, system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            overflow: hidden;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        header.story-head {
+            flex-shrink: 0;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: linear-gradient(180deg, #161d28 0%, var(--bg) 100%);
+        }
+
+        header.story-head h1 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--muted);
+        }
+
+        header.story-head span.badge {
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--muted);
+        }
+
+        main.stage-wrap {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+            padding: 16px 24px 24px;
+        }
+
+        .stage {
+            width: min(1180px, 100%);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--panel);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+            overflow: hidden;
+            display: none;
+            flex-direction: column;
+            animation: fadeIn 0.45s ease-out;
+        }
+
+        .stage.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .stage-head {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stage-head h2 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .stage-head p {
+            margin: 6px 0 0;
+            font-size: 13px;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .stage-body {
+            flex: 1;
+            min-height: 0;
+            padding: 16px 20px 20px;
+            overflow: auto;
+        }
+
+        footer.controls {
+            flex-shrink: 0;
+            padding: 12px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: #141b24;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        footer.controls .dots {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        footer.controls .dots button {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            border: none;
+            padding: 0;
+            background: #39465a;
+            cursor: pointer;
+        }
+
+        footer.controls .dots button.on {
+            background: var(--accent);
+            box-shadow: 0 0 10px rgba(79, 158, 255, 0.5);
+        }
+
+        footer.controls .navbtn {
+            display: flex;
+            gap: 8px;
+        }
+
+        footer.controls button.big {
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #243044;
+            color: var(--text);
+            cursor: pointer;
+        }
+
+        footer.controls button.big.primary {
+            background: var(--accent);
+            border-color: #3570c9;
+            color: #061018;
+        }
+
+        footer.controls button.big:hover {
+            filter: brightness(1.06);
+        }
+
+        /* Tables */
+        table.fake {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        table.fake th,
+        table.fake td {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        table.fake th {
+            color: var(--muted);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        table.fake tr.row-enter {
+            animation: rowIn 0.5s ease forwards;
+            opacity: 0;
+        }
+
+        table.fake tr.row-enter:nth-child(1) {
+            animation-delay: 0.05s;
+        }
+
+        table.fake tr.row-enter:nth-child(2) {
+            animation-delay: 0.15s;
+        }
+
+        table.fake tr.row-enter:nth-child(3) {
+            animation-delay: 0.25s;
+        }
+
+        table.fake tr.row-enter:nth-child(4) {
+            animation-delay: 0.35s;
+        }
+
+        table.fake tr.row-enter:nth-child(5) {
+            animation-delay: 0.45s;
+        }
+
+        table.fake tr.row-enter:nth-child(6) {
+            animation-delay: 0.55s;
+        }
+
+        @keyframes rowIn {
+            to {
+                opacity: 1;
+            }
+        }
+
+        .pill {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-weight: 600;
+        }
+
+        .pill.ok {
+            background: rgba(62, 207, 142, 0.15);
+            color: var(--success);
+        }
+
+        .pill.warn {
+            background: rgba(245, 166, 35, 0.15);
+            color: var(--warn);
+        }
+
+        /* Form mock */
+        .field {
+            margin-bottom: 14px;
+            max-width: 420px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+
+        .field input {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #111820;
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        /* Map mock */
+        .map-frame {
+            position: relative;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: linear-gradient(165deg, #1e2a3f 0%, #0f1824 60%);
+            min-height: 320px;
+            overflow: hidden;
+        }
+
+        .map-inner {
+            position: absolute;
+            inset: 0;
+            opacity: 0.9;
+            background-image: radial-gradient(circle at 40% 35%, rgba(79, 158, 255, 0.09) 0%, transparent 45%), radial-gradient(circle at 70% 65%, rgba(62, 207, 142, 0.07) 0%, transparent 40%);
+        }
+
+        .route-line {
+            position: absolute;
+            inset: 18% 22% 28% 14%;
+            border: 2px dashed rgba(79, 158, 255, 0.35);
+            border-radius: 40% 55% 45% 60% / 55% 40% 55% 45%;
+            animation: pulseRoute 4s ease-in-out infinite;
+        }
+
+        @keyframes pulseRoute {
+
+            0%,
+            100% {
+                opacity: 0.45;
+            }
+
+            50% {
+                opacity: 0.85;
+            }
+        }
+
+        .pin {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 2px solid #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+            animation: pinPop 2.4s ease infinite;
+        }
+
+        .pin:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        .pin:nth-child(4) {
+            animation-delay: 0.8s;
+        }
+
+        .pin:nth-child(5) {
+            animation-delay: 1.2s;
+        }
+
+        .pin:nth-child(6) {
+            animation-delay: 1.6s;
+        }
+
+        @keyframes pinPop {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.15);
+            }
+        }
+
+        .pin.a {
+            top: 32%;
+            left: 38%;
+        }
+
+        .pin.b {
+            top: 48%;
+            left: 52%;
+        }
+
+        .pin.c {
+            top: 58%;
+            left: 34%;
+        }
+
+        .pin.d {
+            top: 42%;
+            left: 68%;
+        }
+
+        .map-legend {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            right: 12px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 11px;
+            color: var(--muted);
+            background: rgba(15, 20, 25, 0.75);
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        /* Vendor cards */
+        .grid2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 14px;
+        }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px;
+            background: #141c27;
+        }
+
+        .card h3 {
+            margin: 0 0 8px;
+            font-size: 14px;
+        }
+
+        .card p {
+            margin: 0;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        /* Roles */
+        .role-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        @media (max-width: 760px) {
+            .role-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        ul.mini {
+            margin: 10px 0 0;
+            padding-left: 18px;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.55;
+        }
+
+        /* Billing split */
+        .split {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 14px;
+            min-height: 280px;
+        }
+
+        @media (max-width: 900px) {
+            .split {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .logbox {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: #0c1016;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            padding: 10px;
+            overflow: auto;
+            max-height: 260px;
+            line-height: 1.55;
+            color: #c8d4e4;
+        }
+
+        .logbox .dim {
+            color: #6b7c90;
+        }
+
+        .logbox .ok {
+            color: var(--success);
+        }
+
+        /* Assistant */
+        .chat {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: #141c27;
+            display: flex;
+            flex-direction: column;
+            min-height: 280px;
+        }
+
+        .chat-msgs {
+            flex: 1;
+            padding: 12px;
+            overflow: auto;
+            font-size: 13px;
+        }
+
+        .bubble {
+            max-width: 92%;
+            margin-bottom: 10px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            line-height: 1.45;
+        }
+
+        .bubble.user {
+            margin-left: auto;
+            background: #243552;
+            border: 1px solid #334868;
+        }
+
+        .bubble.bot {
+            background: #111820;
+            border: 1px solid var(--border);
+            color: var(--muted);
+        }
+
+        .bubble.bot strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .typing {
+            display: inline-block;
+            overflow: hidden;
+            white-space: nowrap;
+            border-right: 2px solid var(--accent);
+            animation: caret 0.8s step-end infinite;
+            max-width: 100%;
+        }
+
+        @keyframes caret {
+
+            50% {
+                border-color: transparent;
+            }
+        }
+
+        .intro-big {
+            font-size: 15px;
+            line-height: 1.65;
+            color: var(--muted);
+            max-width: 720px;
+        }
+
+        .intro-big strong {
+            color: var(--text);
+        }
+    </style>
+</head>
+
+<body>
+    <header class="story-head">
+        <h1>Video storyboard · static dummy data · no API calls</h1>
+        <span class="badge">Record fullscreen · Arrow keys / buttons to advance</span>
+    </header>
+
+    <main class="stage-wrap" id="stageMount"></main>
+
+    <footer class="controls">
+        <div class="dots" id="dots"></div>
+        <div class="navbtn">
+            <button type="button" class="big" id="btnPrev">← Prev</button>
+            <button type="button" class="big primary" id="btnNext">Next →</button>
+        </div>
+        <div>Space = next · Home = first</div>
+    </footer>
+
+    <script>
+        const CLIENTS = [
+            { name: 'DEMO — Winston Churchill', svc: 'Produce', region: 'West', status: 'Active' },
+            { name: 'DEMO — Marie Curie', svc: 'MTM', region: 'North', status: 'Active' },
+            { name: 'DEMO — Nelson Mandela', svc: 'Produce', region: 'East', status: 'Review' },
+            { name: 'DEMO — Ada Lovelace', svc: 'MTM', region: 'South', status: 'Active' },
+            { name: 'DEMO — Frida Kahlo', svc: 'Produce', region: 'West', status: 'Active' },
+            { name: 'DEMO — Albert Einstein', svc: 'MTM', region: 'Central', status: 'Hold' }
+        ];
+
+        const stages = [
+            {
+                id: 'intro',
+                title: 'Why this demo exists',
+                subtitle: 'Same workflows as production — fictional people and places only.',
+                html: `
+          <p class="intro-big">
+            <strong>Prospective partners want to see how we operate.</strong> Most of what we do touches confidential information,
+            so we can’t tour real accounts on camera. This walkthrough uses <strong>dummy data only</strong> — same structure, zero real clients.
+          </p>
+          <p class="intro-big" style="margin-top:14px;">
+            Press <strong>Next</strong> to move through the story. Everything loads instantly because nothing here hits your live databases.
+          </p>`
+            },
+            {
+                id: 'dashboard',
+                title: 'Unified client dashboard',
+                subtitle: 'One place for teams to see status, service line, and region — without hunting across systems.',
+                html: `
+          <table class="fake">
+            <thead><tr><th>Client</th><th>Service</th><th>Region</th><th>Status</th></tr></thead>
+            <tbody id="dashRows"></tbody>
+          </table>`
+            },
+            {
+                id: 'profile',
+                title: 'Client self-service',
+                subtitle: 'Clients can update contact details — email is a common fix that prevents downstream confusion.',
+                html: `
+          <div class="field">
+            <label for="em">Contact email</label>
+            <input id="em" type="email" readonly value="patients.example@demo.invalid" />
+          </div>
+          <p style="font-size:12px;color:var(--muted);max-width:520px;line-height:1.5;">
+            In production this saves to your profile; here it’s static text so the shot stays crisp and safe.
+          </p>`
+            },
+            {
+                id: 'map',
+                title: 'Clients on a map · route planning',
+                subtitle: 'Geography drives sequencing — efficiency, timing, and what’s feasible for drivers today.',
+                html: `
+          <div class="map-frame">
+            <div class="map-inner"></div>
+            <div class="route-line"></div>
+            <div class="pin a"></div><div class="pin b"></div><div class="pin c"></div><div class="pin d"></div>
+            <div class="map-legend">
+              <span>Stops sequenced for today’s run</span>
+              <span>·</span>
+              <span>Dummy coordinates — not real addresses</span>
+            </div>
+          </div>`
+            },
+            {
+                id: 'vendor',
+                title: 'Vendor delivery & proof',
+                subtitle: 'When we’re not the truck, we still close the loop with the vendor’s workflow and bring proof back.',
+                html: `
+          <div class="grid2">
+            <div class="card">
+              <h3>Send route pack to vendor</h3>
+              <p>List + constraints export to the partner app (simulated). No real vendor credentials in this demo.</p>
+            </div>
+            <div class="card">
+              <h3>Proof of delivery returned</h3>
+              <p>Signature / photo / timestamp ingested back into our record so billing and care stories match.</p>
+            </div>
+          </div>`
+            },
+            {
+                id: 'roles',
+                title: 'Role-based access',
+                subtitle: 'Least privilege — see what your job requires, not the whole operation.',
+                html: `
+          <div class="role-row">
+            <div class="card">
+              <h3>Coordinator</h3>
+              <ul class="mini">
+                <li>Full client roster (assigned territory)</li>
+                <li>Edit care notes & delivery windows</li>
+                <li>No finance admin tools</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Billing specialist</h3>
+              <ul class="mini">
+                <li>Billing cases & authorization windows</li>
+                <li>Submit portal invoices (with guardrails)</li>
+                <li>No unrelated PHI views</li>
+              </ul>
+            </div>
+          </div>`
+            },
+            {
+                id: 'billing',
+                title: 'Portal billing run (automation)',
+                subtitle: 'Queue + activity — styled like the operator console, with safe log lines.',
+                html: `
+          <div class="split">
+            <div>
+              <table class="fake">
+                <thead><tr><th>Client</th><th>Week</th><th>Queue</th></tr></thead>
+                <tbody>
+                  <tr><td>${CLIENTS[0].name}</td><td>Apr 20–26</td><td><span class="pill ok">Ready</span></td></tr>
+                  <tr><td>${CLIENTS[1].name}</td><td>Apr 20–26</td><td><span class="pill warn">Needs doc</span></td></tr>
+                  <tr><td>${CLIENTS[2].name}</td><td>Apr 20–26</td><td><span class="pill ok">Ready</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="logbox" id="billLog">
+              <span class="dim">[Demo] Initializing billing cycle…</span><br/>
+              <span class="dim">[Demo] API: (Diet Fantasy app API)</span><br/>
+              <span class="ok">[Demo] Patient UI anonymized — synthetic profile applied.</span><br/>
+              <span class="dim">[Demo] Queue: 3 clients · dummy URLs hidden in logs</span>
+            </div>
+          </div>`
+            },
+            {
+                id: 'assistant',
+                title: 'Ask the operations assistant',
+                subtitle: 'Plain-language requests route to real tools — run billing, check rejections, pull status.',
+                html: `
+          <div class="chat">
+            <div class="chat-msgs" id="chatMsgs">
+              <div class="bubble user">Run billing for this week.</div>
+              <div class="bubble bot" id="botReply"><span class="typing" id="botTyping"></span></div>
+            </div>
+          </div>
+          <p style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.5;">
+            Shown as a storyboard animation — not connected to production. In your deployment, the same actions are exposed as explicit tools with audit trails.
+          </p>`
+            },
+            {
+                id: 'outro',
+                title: 'Closing',
+                subtitle: 'Confidentiality first — capability second.',
+                html: `
+          <p class="intro-big">
+            This page exists so you can record a <strong>smooth, instant-loading</strong> walkthrough without touching live datasets.
+            When you’re ready to evaluate with real constraints, we’ll talk routing, vendors, permissions, and billing — on your terms.
+          </p>`
+            }
+        ];
+
+        let idx = 0;
+        const mount = document.getElementById('stageMount');
+        const dots = document.getElementById('dots');
+
+        function renderDots() {
+            dots.innerHTML = '';
+            stages.forEach((s, i) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.title = s.title;
+                b.className = i === idx ? 'on' : '';
+                b.addEventListener('click', () => { idx = i; render(); });
+                dots.appendChild(b);
+            });
+        }
+
+        function render() {
+            const s = stages[idx];
+            mount.innerHTML = `
+        <section class="stage active" aria-label="${s.title}">
+          <div class="stage-head">
+            <h2>${s.title}</h2>
+            <p>${s.subtitle}</p>
+          </div>
+          <div class="stage-body">${s.html}</div>
+        </section>`;
+            renderDots();
+
+            if (s.id === 'dashboard') {
+                const tb = document.getElementById('dashRows');
+                CLIENTS.forEach((c, i) => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'row-enter';
+                    const st = c.status === 'Active' ? '<span class="pill ok">Active</span>'
+                        : c.status === 'Review' ? '<span class="pill warn">Review</span>'
+                            : c.status === 'Hold' ? '<span class="pill warn">Hold</span>'
+                                : '<span class="pill ok">—</span>';
+                    tr.innerHTML = `<td>${c.name}</td><td>${c.svc}</td><td>${c.region}</td><td>${st}</td>`;
+                    tb.appendChild(tr);
+                });
+            }
+
+            if (s.id === 'assistant') {
+                const el = document.getElementById('botTyping');
+                const full = 'Queued billing run for the week · 3 clients · logs sanitized · proof hooks ready.';
+                el.textContent = '';
+                let n = 0;
+                const tid = setInterval(() => {
+                    n++;
+                    el.textContent = full.slice(0, n);
+                    if (n >= full.length) clearInterval(tid);
+                }, 22);
+            }
+        }
+
+        document.getElementById('btnPrev').addEventListener('click', () => {
+            idx = Math.max(0, idx - 1);
+            render();
+        });
+        document.getElementById('btnNext').addEventListener('click', () => {
+            idx = Math.min(stages.length - 1, idx + 1);
+            render();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+                e.preventDefault();
+                idx = Math.min(stages.length - 1, idx + 1);
+                render();
+            }
+            if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+                e.preventDefault();
+                idx = Math.max(0, idx - 1);
+                render();
+            }
+            if (e.key === 'Home') {
+                idx = 0;
+                render();
+            }
+        });
+
+        render();
+    </script>
+</body>
+
+</html>

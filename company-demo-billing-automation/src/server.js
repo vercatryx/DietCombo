@@ -6,6 +6,15 @@ const XLSX = require('xlsx');
 const { launchBrowser, launchBrowserInstance, closeAllBrowserInstances } = require('./core/browser');
 const { billingWorker, fetchRequestsFromApi } = require('./core/billingWorker');
 const envSettings = require('./envSettings');
+const { limitAndSanitizeQueue, sanitizeBillingRequestsInPlace, isDemoSafeQueueEnabled } = require('./demoQueueSanitizer');
+const {
+    saveQueueToCache,
+    loadQueueFromCache,
+    clearQueueCacheFile,
+    getQueueCacheInfo,
+    getCacheSaveLimit
+} = require('./queueCache');
+const { redactSensitiveInLogMessage } = require('./automationLogSanitize');
 
 // Settings UI persists CONCURRENT_BROWSERS / HEADLESS to the same .env as DOTENV_PATH (see electron-main).
 
@@ -60,9 +69,17 @@ function eventsHandler(req, res) {
     });
 }
 
+function sanitizeBroadcastData(type, data) {
+    if (!data || typeof data !== 'object') return data;
+    if (type !== 'log' && type !== 'error') return data;
+    if (typeof data.message !== 'string') return data;
+    return { ...data, message: redactSensitiveInLogMessage(data.message) };
+}
+
 function broadcast(type, data) {
+    const out = sanitizeBroadcastData(type, data);
     clients.forEach(client => {
-        client.res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+        client.res.write(`event: ${type}\ndata: ${JSON.stringify(out)}\n\n`);
     });
 }
 
@@ -71,6 +88,14 @@ app.get('/events', eventsHandler);
 // State
 let isRunning = false;
 let currentRequests = null;
+
+(() => {
+    const loaded = loadQueueFromCache();
+    if (loaded && loaded.length > 0) {
+        currentRequests = loaded;
+        console.log('[Server] Restored client queue from disk cache.');
+    }
+})();
 
 // --- Settings (.env), open folder, Excel export ---
 app.get('/api/settings', (req, res) => {
@@ -103,6 +128,49 @@ app.post('/api/settings', (req, res) => {
         if (hasHeadless) updates.headless = body.headless;
         const saved = envSettings.writeSettings(updates);
         res.json({ ...saved, isRunning });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/queue-cache-info', (req, res) => {
+    try {
+        res.json(getQueueCacheInfo());
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/** Reload queue from disk without restarting the server. */
+app.post('/api/load-queue-cache', (req, res) => {
+    if (isRunning) {
+        return res.status(409).json({ error: 'Automation is running; wait until it finishes.' });
+    }
+    const loaded = loadQueueFromCache();
+    if (!loaded || loaded.length === 0) {
+        return res.status(404).json({ error: 'No saved queue file. Download the client list first.' });
+    }
+    currentRequests = loaded;
+    broadcast('queue', currentRequests);
+    broadcast('log', {
+        message: `Loaded ${loaded.length} saved client(s) from disk (max ${getCacheSaveLimit()}).`,
+        type: 'success'
+    });
+    res.json({
+        success: true,
+        count: loaded.length,
+        message: `Loaded ${loaded.length} saved client(s).`
+    });
+});
+
+/** Remove cached queue file (does not clear in-memory queue unless you reload). */
+app.post('/api/clear-queue-cache', (req, res) => {
+    if (isRunning) {
+        return res.status(409).json({ error: 'Automation is running; wait until it finishes.' });
+    }
+    try {
+        clearQueueCacheFile();
+        res.json({ success: true, message: 'Saved queue file deleted.' });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -152,7 +220,8 @@ app.post('/fetch-requests', async (req, res) => {
 
     try {
         console.log('[Server] Fetching requests from API (Preview Mode)...');
-        const requests = await fetchRequestsFromApi(apiConfig);
+        let requests = await fetchRequestsFromApi(apiConfig);
+        requests = limitAndSanitizeQueue(requests);
 
         if (!requests || requests.length === 0) {
             return res.json({ success: true, count: 0, message: 'No pending requests found.' });
@@ -166,8 +235,14 @@ app.post('/fetch-requests', async (req, res) => {
         });
         currentRequests = requests;
         broadcast('queue', currentRequests);
+        saveQueueToCache(currentRequests);
 
-        res.json({ success: true, count: requests.length, message: `Loaded ${requests.length} requests.` });
+        res.json({
+            success: true,
+            count: requests.length,
+            message: `Loaded ${requests.length} requests.`,
+            savedToCache: true
+        });
     } catch (e) {
         console.error('[Server] Fetch Preview Error:', e);
         res.status(500).json({ error: e.message });
@@ -194,7 +269,7 @@ app.post('/fetch-all-clients', async (req, res) => {
         if (!Array.isArray(data)) {
             return res.status(500).json({ error: 'Expected array from /api/bill' });
         }
-        const requests = data.map((r, i) => ({
+        let requests = data.map((r, i) => ({
             id: `bill-${i + 1}`,
             clientId: r.clientId || null,
             name: r.name,
@@ -209,9 +284,19 @@ app.post('/fetch-all-clients', async (req, res) => {
             status: 'pending',
             message: ''
         }));
+        requests = limitAndSanitizeQueue(requests);
         currentRequests = requests;
         broadcast('queue', currentRequests);
-        res.json({ success: true, count: requests.length, message: `Loaded ${requests.length} clients from /api/bill.` });
+        saveQueueToCache(currentRequests);
+
+        const cap = getCacheSaveLimit();
+        res.json({
+            success: true,
+            count: requests.length,
+            message: `Loaded ${requests.length} clients from /api/bill.`,
+            savedToCache: true,
+            cacheLimit: cap
+        });
     } catch (e) {
         console.error('[Server] Fetch /api/bill Error:', e.message);
         res.status(500).json({ error: e.response ? `${e.response.status}: ${JSON.stringify(e.response.data)}` : e.message });
@@ -247,6 +332,7 @@ app.post('/process-billing', async (req, res) => {
 
             // Initialize status for UI
             requests.forEach(r => { r.status = 'pending'; r.message = ''; });
+            requests = limitAndSanitizeQueue(requests);
             currentRequests = requests;
             broadcast('queue', currentRequests);
         } else if (source === 'queue') {
@@ -254,6 +340,9 @@ app.post('/process-billing', async (req, res) => {
             let queueList = Array.isArray(currentRequests) ? currentRequests : [];
             if (queueList.length === 0) {
                 return res.status(400).json({ error: 'Queue is empty. Use "Download from /api/bill" or "Download from Cloud" first.' });
+            }
+            if (isDemoSafeQueueEnabled()) {
+                sanitizeBillingRequestsInPlace(queueList);
             }
             // Optional: run only selected clients
             const { selectedIndices, selectedIds } = req.body || {};
@@ -306,7 +395,7 @@ app.post('/process-billing', async (req, res) => {
                 broadcast('log', { message: `Starting ${concurrency} browsers in parallel (different clients per slot)...`, type: 'info' });
                 let requests = workerRequests;
                 if (source === 'api') {
-                    requests = await fetchRequestsFromApi(apiConfig);
+                    requests = limitAndSanitizeQueue(await fetchRequestsFromApi(apiConfig));
                     if (!requests || requests.length === 0) {
                         broadcast('log', { message: 'No pending requests from API.', type: 'warning' });
                         isRunning = false;

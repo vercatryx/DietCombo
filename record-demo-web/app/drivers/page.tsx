@@ -1,0 +1,232 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { fetchDrivers, fetchStops, fetchDriversPageData } from "@/lib/api";
+import { Truck, RefreshCw } from "lucide-react";
+import SearchStops from "@/components/drivers/SearchStops";
+import DriversGrid from "@/components/drivers/DriversGrid";
+import { DateFilter } from "@/components/routes/DateFilter";
+import { getTodayInAppTz } from "@/lib/timezone";
+
+export default function DriversHome() {
+    const [drivers, setDrivers] = useState<any[]>([]);
+    const [allStops, setAllStops] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [error, setError] = useState(false);
+    const [selectedDate, setSelectedDate] = useState<string>(() => {
+        return getTodayInAppTz();
+    });
+    // Use route API (driver_route_order) when date is set: one request, ordered routes.
+    // Otherwise fall back to mobile routes + stops. Cleanup runs in background then refetch.
+    const loadData = async (showRefreshSpinner = false) => {
+        if (showRefreshSpinner) setRefreshing(true);
+        else setLoading(true);
+        setError(false);
+        const dateParam = selectedDate || null;
+        const dateForCleanup = dateParam;
+
+        try {
+            if (dateParam) {
+                const dateNorm = dateParam.split('T')[0].split(' ')[0];
+                const pageData = await fetchDriversPageData(dateNorm);
+                if (pageData && pageData.drivers.length > 0) {
+                    setDrivers(pageData.drivers);
+                    setAllStops(pageData.allStops);
+                } else {
+                    const [d, s] = await Promise.all([
+                        fetchDrivers(dateNorm as any),
+                        fetchStops(dateNorm as any),
+                    ]);
+                    setDrivers(Array.isArray(d) ? d : []);
+                    setAllStops(Array.isArray(s) ? s : []);
+                }
+            } else {
+                const driversData = await fetchDrivers(null);
+                setDrivers(driversData);
+                const stopsData = await fetchStops(null);
+                setAllStops(stopsData);
+            }
+            setLoading(false);
+            setRefreshing(false);
+
+            // Cleanup in background (creates missing stops), then refetch same source
+            let cleanupUrl = "/api/route/cleanup?day=all";
+            if (dateForCleanup) cleanupUrl += `&delivery_date=${encodeURIComponent(dateForCleanup)}`;
+            fetch(cleanupUrl, { method: "POST", headers: { "Content-Type": "application/json" } })
+                .catch(() => {})
+                .then(async () => {
+                    if (dateParam) {
+                        const dateNorm = dateParam.split('T')[0].split(' ')[0];
+                        const pageData = await fetchDriversPageData(dateNorm);
+                        if (pageData && pageData.drivers.length > 0) {
+                            setDrivers(pageData.drivers);
+                            setAllStops(pageData.allStops);
+                        } else {
+                            const [d, s] = await Promise.all([
+                                fetchDrivers(dateNorm as any),
+                                fetchStops(dateNorm as any),
+                            ]);
+                            setDrivers(Array.isArray(d) ? d : []);
+                            setAllStops(Array.isArray(s) ? s : []);
+                        }
+                    } else {
+                        const [d, s] = await Promise.all([
+                            fetchDrivers(null),
+                            fetchStops(null),
+                        ]);
+                        setDrivers(d);
+                        setAllStops(s);
+                    }
+                });
+        } catch (err) {
+            console.error("Failed to load data:", err);
+            setError(true);
+            setLoading(false);
+            setRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        loadData();
+    }, [selectedDate]);
+
+    if (error) {
+        return (
+            <div style={{ minHeight: "60vh", display: "grid", placeItems: "center", textAlign: "center" }}>
+                <div>
+                    <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>Connection Error</h1>
+                    <p style={{ marginTop: 8, color: "#6b7280" }}>Failed to load routes.</p>
+                    <button
+                        onClick={() => loadData()}
+                        style={{
+                            marginTop: 16,
+                            padding: "8px 16px",
+                            background: "#3665F3",
+                            color: "white",
+                            border: "none",
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            fontWeight: 600
+                        }}
+                    >
+                        Try Again
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (loading) {
+        return (
+            <div style={{ minHeight: "60vh", display: "grid", placeItems: "center" }}>
+                <div style={{ textAlign: "center" }}>
+                    <div style={{
+                        width: 40,
+                        height: 40,
+                        border: "3px solid #e5e7eb",
+                        borderTopColor: "#3665F3",
+                        borderRadius: "50%",
+                        animation: "spin 0.8s linear infinite",
+                        margin: "0 auto"
+                    }} />
+                    <p style={{ marginTop: 12, color: "#6b7280" }}>Loading routes...</p>
+                </div>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+        );
+    }
+
+    return (
+        <div className="container">
+            <div className="card">
+                <div className="card-content">
+                    <header className="hdr">
+                        <div className="hdr-badge"><Truck /></div>
+                        <div style={{ flex: 1 }}>
+                            <h1 className="h1">Delivery Routes</h1>
+                            <p className="sub">Select your route to begin deliveries</p>
+                        </div>
+                        <button
+                            onClick={() => loadData(true)}
+                            disabled={refreshing}
+                            style={{
+                                padding: "10px 16px",
+                                background: refreshing ? "#e5e7eb" : "#3665F3",
+                                color: refreshing ? "#6b7280" : "white",
+                                border: "none",
+                                borderRadius: 10,
+                                cursor: refreshing ? "not-allowed" : "pointer",
+                                fontWeight: 600,
+                                fontSize: 14,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                                transition: "all 0.2s"
+                            }}
+                            title="Refresh routes data"
+                        >
+                            <RefreshCw
+                                size={16}
+                                style={{
+                                    animation: refreshing ? "spin 0.8s linear infinite" : "none"
+                                }}
+                            />
+                            Refresh
+                        </button>
+                    </header>
+
+                    <DateFilter
+                        selectedDate={selectedDate}
+                        onDateChange={setSelectedDate}
+                        onClear={() => setSelectedDate('')}
+                        datesSource="orders"
+                    />
+
+                    <div className="search-wrap">
+                        <SearchStops allStops={allStops} drivers={drivers} themeColor="#3665F3" />
+                    </div>
+
+                    {/* Route cards + proof progress */}
+                    <DriversGrid drivers={drivers} allStops={allStops} selectedDate={selectedDate} />
+                </div>
+            </div>
+
+            <style
+                dangerouslySetInnerHTML={{
+                    __html: `
+:root{
+  --bg:#eef2f7; --border:#e5e7eb; --muted:#6b7280; --radius:14px;
+  --shadow:0 8px 22px rgba(16,24,40,.06), 0 2px 8px rgba(16,24,40,.04);
+  --proofbar:#0ea5e9;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:#111;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial}
+.container{width:100%;max-width:1200px;margin:0 auto;padding:20px}
+.card{position:relative;border:1px solid var(--border);background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.card-content{padding:18px 20px}
+.color-rail{position:absolute;left:0;top:0;bottom:0;width:6px;border-top-left-radius:var(--radius);border-bottom-left-radius:var(--radius)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.flex{display:flex;align-items:center;gap:8px}
+.grid{display:grid;gap:20px}
+.h1{font-size:28px;font-weight:800;margin:0}
+.sub{margin:.25rem 0 0;color:var(--muted)}
+.bold{font-weight:800}
+.muted{color:var(--muted)}
+.hdr{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.hdr-badge{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:#e7eefc;color:#2748d8;
+  box-shadow:inset 0 0 0 1px rgba(39,72,216,.12)}
+.progress{width:100%;height:10px;border-radius:999px;background:#f1f5f9;overflow:hidden}
+.progress>span{display:block;height:100%;border-radius:999px;transition:width .25s ease}
+.progress.proof{height:8px;background:#eef6fb}
+.progress.proof>span{background:var(--proofbar)}
+.search-wrap{margin-bottom:16px}
+@keyframes spin { to { transform: rotate(360deg); } }
+        `,
+                }}
+            />
+        </div>
+    );
+}
+

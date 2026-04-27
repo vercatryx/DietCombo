@@ -125,7 +125,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
     // Fetch Client Name/Address and signature token
     const { data: client } = await supabaseAdmin
         .from('clients')
-        .select('full_name, address, sign_token')
+        .select('full_name, address, phone_number, sign_token')
         .eq('id', order.client_id)
         .single();
 
@@ -134,6 +134,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
         orderNumber: order.order_number,
         clientName: client?.full_name || 'Unknown Client',
         address: client?.address || 'Unknown Address',
+        clientPhone: client?.phone_number?.trim() || null,
         deliveryDate: order.scheduled_delivery_date,
         alreadyDelivered: !!(order.proof_of_delivery_url || (order as any).delivery_proof_url),
         clientSignToken: client?.sign_token || null
