@@ -82,63 +82,68 @@ export async function stampTimestampOnImageBuffer(
   mimeType: string,
   uploadTime: Date = new Date()
 ): Promise<StampTimestampResult> {
-  const exifDate = await readExifTimestamp(input);
-  const stampDate = exifDate ?? uploadTime;
-  const source: StampTimestampResult['source'] = exifDate ? 'exif' : 'upload_time';
-  const stampedAtIso = stampDate.toISOString();
+  try {
+    const exifDate = await readExifTimestamp(input);
+    const stampDate = exifDate ?? uploadTime;
+    const source: StampTimestampResult['source'] = exifDate ? 'exif' : 'upload_time';
+    const stampedAtIso = stampDate.toISOString();
 
-  const image = sharp(input, { failOn: 'none' }).rotate(); // honor orientation if present
-  const meta = await image.metadata();
-  const width = meta.width ?? 0;
-  const height = meta.height ?? 0;
-  if (!width || !height) {
-    return { buffer: input, stampedAtIso, source };
+    const image = sharp(input, { failOn: 'none' }).rotate(); // honor orientation if present
+    const meta = await image.metadata();
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
+    if (!width || !height) {
+      return { buffer: input, stampedAtIso, source };
+    }
+
+    const minDim = Math.min(width, height);
+    const fontSize = Math.max(14, Math.min(34, Math.round(minDim * 0.035)));
+    const pad = Math.max(10, Math.round(fontSize * 0.75));
+    const boxH = Math.round(fontSize * 1.7);
+
+    const text = escapeXml(formatTimestampForStamp(stampDate));
+
+    // Render an overlay across the whole image so we can position precisely.
+    // Bottom-right "pill" with right-aligned text.
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+        <style>
+          .ts { font: 600 ${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; fill: rgba(255,255,255,0.95); }
+        </style>
+        <g>
+          <rect
+            x="${pad}"
+            y="${height - boxH - pad}"
+            width="${width - pad * 2}"
+            height="${boxH}"
+            rx="${Math.round(fontSize * 0.6)}"
+            ry="${Math.round(fontSize * 0.6)}"
+            fill="rgba(0,0,0,0.55)"
+          />
+          <text
+            class="ts"
+            x="${width - pad}"
+            y="${height - pad - Math.round(boxH / 2)}"
+            text-anchor="end"
+            dominant-baseline="middle"
+          >${text}</text>
+        </g>
+      </svg>
+    `;
+
+    const composited = image.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]);
+
+    // Preserve output format for storage.
+    const lower = (mimeType || '').toLowerCase();
+    if (lower.includes('png')) {
+      return { buffer: await composited.png().toBuffer(), stampedAtIso, source };
+    }
+
+    // default to JPEG
+    return { buffer: await composited.jpeg({ quality: 92 }).toBuffer(), stampedAtIso, source };
+  } catch (e) {
+    // Never fail the upload path due to stamping.
+    return { buffer: input, stampedAtIso: uploadTime.toISOString(), source: 'upload_time' };
   }
-
-  const minDim = Math.min(width, height);
-  const fontSize = Math.max(14, Math.min(34, Math.round(minDim * 0.035)));
-  const pad = Math.max(10, Math.round(fontSize * 0.75));
-  const boxH = Math.round(fontSize * 1.7);
-
-  const text = escapeXml(formatTimestampForStamp(stampDate));
-
-  // Render an overlay across the whole image so we can position precisely.
-  // Bottom-right "pill" with right-aligned text.
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-      <style>
-        .ts { font: 600 ${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; fill: rgba(255,255,255,0.95); }
-      </style>
-      <g>
-        <rect
-          x="${pad}"
-          y="${height - boxH - pad}"
-          width="${width - pad * 2}"
-          height="${boxH}"
-          rx="${Math.round(fontSize * 0.6)}"
-          ry="${Math.round(fontSize * 0.6)}"
-          fill="rgba(0,0,0,0.55)"
-        />
-        <text
-          class="ts"
-          x="${width - pad}"
-          y="${height - pad - Math.round(boxH / 2)}"
-          text-anchor="end"
-          dominant-baseline="middle"
-        >${text}</text>
-      </g>
-    </svg>
-  `;
-
-  const composited = image.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]);
-
-  // Preserve output format for storage.
-  const lower = (mimeType || '').toLowerCase();
-  if (lower.includes('png')) {
-    return { buffer: await composited.png().toBuffer(), stampedAtIso, source };
-  }
-
-  // default to JPEG
-  return { buffer: await composited.jpeg({ quality: 92 }).toBuffer(), stampedAtIso, source };
 }
 
