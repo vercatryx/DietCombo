@@ -14,8 +14,9 @@ export type StampTimestampOptions = {
 };
 
 function buildTimestampText({ locale, timeZone }: { locale?: string; timeZone?: string }) {
-  const resolvedLocale =
-    locale ?? (typeof navigator !== 'undefined' ? navigator.language : 'en-US');
+  // Always use English month abbreviations for the stamp (e.g. "Apr"), even if the device
+  // UI language is Spanish (which would otherwise render "abr").
+  const resolvedLocale = locale ?? 'en-US';
 
   // Important: if `timeZone` is omitted, the browser uses the user's local timezone.
   // Avoid `dateStyle` / `timeStyle` here because some Safari builds throw

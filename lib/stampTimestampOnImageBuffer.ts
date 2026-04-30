@@ -10,10 +10,14 @@ export type StampTimestampResult = {
 
 function formatTimestampForStamp(date: Date): string {
   // Project-wide convention is Eastern time for display.
+  // Avoid `dateStyle` / `timeStyle` for broader runtime compatibility.
   return new Intl.DateTimeFormat('en-US', {
     timeZone: APP_TIMEZONE,
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
     timeZoneName: 'short',
   }).format(date);
 }
