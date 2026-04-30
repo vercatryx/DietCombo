@@ -22,7 +22,7 @@ import { deleteFile } from '../lib/storage';
 import { getSupabaseDbApiKey } from '../lib/supabase-env';
 
 const R2_PUBLIC_BASE = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
-const R2_DELIVERY_BUCKET = process.env.R2_DELIVERY_BUCKET_NAME;
+const R2_DELIVERY_BUCKET = process.env.R2_DELIVERY_BUCKET_NAME || process.env.R2_BUCKET_NAME;
 
 function usageAndExit(msg?: string): never {
   if (msg) console.error(msg);

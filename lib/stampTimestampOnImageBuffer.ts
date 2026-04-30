@@ -107,9 +107,6 @@ export async function stampTimestampOnImageBuffer(
     // Bottom-right "pill" with right-aligned text.
     const svg = `
       <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-        <style>
-          .ts { font: 600 ${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; fill: rgba(255,255,255,0.95); }
-        </style>
         <g>
           <rect
             x="${pad}"
@@ -121,12 +118,14 @@ export async function stampTimestampOnImageBuffer(
             fill="rgba(0,0,0,0.55)"
           />
           <text
-            class="ts"
+            font-family="sans-serif"
+            font-size="${fontSize}"
+            font-weight="600"
+            fill="rgba(255,255,255,0.95)"
             x="${width - pad}"
             y="${height - pad - Math.round(boxH / 2)}"
             text-anchor="end"
-            dominant-baseline="middle"
-          >${text}</text>
+          ><tspan dy="0.35em">${text}</tspan></text>
         </g>
       </svg>
     `;

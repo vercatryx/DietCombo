@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
-import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, PenTool, ExternalLink } from 'lucide-react';
+import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ImageIcon, ExternalLink } from 'lucide-react';
 import '../delivery.css';
 import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
 
@@ -28,6 +28,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
     const [imageSrc, setImageSrc] = useState<string | null>(null);
+    const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
@@ -86,6 +87,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         if (!imageSrc) return;
 
         setStep('UPLOADING');
+        setError('');
 
         // Convert base64 to blob
         const res = await fetch(imageSrc);
@@ -107,6 +109,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
             console.log('[Client Debug] processDeliveryProof result:', result);
 
             if (result.success) {
+                setUploadedProofUrl((result as any)?.url ?? null);
                 setStep('SUCCESS');
             } else {
                 console.error('[Client Debug] Server returned error:', result.error);
@@ -355,15 +358,9 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 <div className="divider" style={{ marginTop: '1rem' }} />
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    <button
-                        onClick={() => setStep('CAPTURE')}
-                        style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 500 }}
-                    >
-                        Update Proof (Re-take Photo)
-                    </button>
-                    {order.clientSignToken && (
+                    {uploadedProofUrl && (
                         <a
-                            href={`/sign/${order.clientSignToken}/view`}
+                            href={uploadedProofUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{
@@ -372,20 +369,26 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                                 justifyContent: 'center',
                                 gap: '0.5rem',
                                 padding: '0.75rem',
-                                background: 'rgba(59, 130, 246, 0.1)',
-                                border: '1px solid rgba(59, 130, 246, 0.3)',
+                                background: 'rgba(34, 197, 94, 0.1)',
+                                border: '1px solid rgba(34, 197, 94, 0.3)',
                                 borderRadius: '0.5rem',
-                                color: '#60a5fa',
+                                color: '#4ade80',
                                 textDecoration: 'none',
                                 fontWeight: 500,
                                 fontSize: '0.875rem'
                             }}
                         >
-                            <PenTool size={16} />
-                            View Signature Report
+                            <ImageIcon size={16} />
+                            View uploaded image
                             <ExternalLink size={14} />
                         </a>
                     )}
+                    <button
+                        onClick={() => setStep('CAPTURE')}
+                        style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 500 }}
+                    >
+                        Retake photo
+                    </button>
                     <p className="text-subtitle">You can close this window now.</p>
                 </div>
             </div>
