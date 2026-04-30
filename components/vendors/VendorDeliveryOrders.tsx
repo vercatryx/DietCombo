@@ -10,7 +10,7 @@ import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from
 import { ArrowLeft, Calendar, Package, Clock, ShoppingCart, Upload, ChevronDown, ChevronUp, Save, X, CheckCircle, AlertCircle, Download, XCircle, FileText, Loader2 } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
-import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
+import { getEditedClientIdsIncludingDependents, sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { toDateStringInAppTz } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
@@ -448,11 +448,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             const full = formatFullAddress({ address: c.address, apt: c.apt, city: c.city, state: c.state, zip: c.zip });
             return full || c.address || '-';
         };
-        const editedClientIds = new Set(
-            clientsForExport
-                .filter(c => c.mealPlannerData?.some(d => d.scheduledDeliveryDate === deliveryDate))
-                .map(c => c.id)
-        );
+        const editedClientIds = getEditedClientIdsIncludingDependents(clientsForExport, deliveryDate);
         const isEdited = (order: { client_id: string }) => editedClientIds.has(order.client_id);
         const isComplex = (order: { client_id: string }) => !!(clientById.get(order.client_id)?.complex);
         const ordersEdited = ordersForLabels.filter(o => isEdited(o));

@@ -18,14 +18,25 @@ function buildTimestampText({ locale, timeZone }: { locale?: string; timeZone?: 
     locale ?? (typeof navigator !== 'undefined' ? navigator.language : 'en-US');
 
   // Important: if `timeZone` is omitted, the browser uses the user's local timezone.
-  const fmt = new Intl.DateTimeFormat(resolvedLocale, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+  // Avoid `dateStyle` / `timeStyle` here because some Safari builds throw
+  // `TypeError: Invalid option : option` even though it's valid per spec.
+  const baseOptions: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
     ...(timeZone ? { timeZone } : {}),
-    timeZoneName: 'short',
-  });
+  };
 
-  return fmt.format(new Date());
+  try {
+    return new Intl.DateTimeFormat(resolvedLocale, {
+      ...baseOptions,
+      timeZoneName: 'short',
+    }).format(new Date());
+  } catch {
+    return new Intl.DateTimeFormat(resolvedLocale, baseOptions).format(new Date());
+  }
 }
 
 async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
@@ -59,53 +70,60 @@ export async function stampTimestampOnImageDataUrl(
   imageDataUrl: string,
   options: StampTimestampOptions = {}
 ): Promise<string> {
-  if (typeof document === 'undefined') return imageDataUrl;
+  try {
+    if (typeof document === 'undefined') return imageDataUrl;
 
-  const mimeType = getMimeTypeFromDataUrl(imageDataUrl);
-  const img = await loadImage(imageDataUrl);
+    const mimeType = getMimeTypeFromDataUrl(imageDataUrl);
+    const img = await loadImage(imageDataUrl);
 
-  const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth || img.width;
-  canvas.height = img.naturalHeight || img.height;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return imageDataUrl;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return imageDataUrl;
 
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-  const text =
-    options.text ?? buildTimestampText({ locale: options.locale, timeZone: options.timeZone });
+    const text =
+      options.text ?? buildTimestampText({ locale: options.locale, timeZone: options.timeZone });
 
-  // Scale stamp styling based on image size.
-  const minDim = Math.min(canvas.width, canvas.height);
-  const fontSize = Math.max(14, Math.min(34, Math.round(minDim * 0.035)));
-  const pad = Math.max(10, Math.round(fontSize * 0.75));
-  const radius = Math.max(8, Math.round(fontSize * 0.5));
+    // Scale stamp styling based on image size.
+    const minDim = Math.min(canvas.width, canvas.height);
+    const fontSize = Math.max(14, Math.min(34, Math.round(minDim * 0.035)));
+    const pad = Math.max(10, Math.round(fontSize * 0.75));
+    const radius = Math.max(8, Math.round(fontSize * 0.5));
 
-  ctx.font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial`;
-  ctx.textBaseline = 'middle';
+    ctx.font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial`;
+    ctx.textBaseline = 'middle';
 
-  const metrics = ctx.measureText(text);
-  const textW = Math.ceil(metrics.width);
-  const boxW = textW + pad * 2;
-  const boxH = Math.ceil(fontSize * 1.6);
+    const metrics = ctx.measureText(text);
+    const textW = Math.ceil(metrics.width);
+    const boxW = textW + pad * 2;
+    const boxH = Math.ceil(fontSize * 1.6);
 
-  const x = canvas.width - boxW - pad;
-  const y = canvas.height - boxH - pad;
+    const x = canvas.width - boxW - pad;
+    const y = canvas.height - boxH - pad;
 
-  // Background pill.
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-  roundRect(ctx, x, y, boxW, boxH, radius);
-  ctx.fill();
+    // Background pill.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    roundRect(ctx, x, y, boxW, boxH, radius);
+    ctx.fill();
 
-  // Text
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-  ctx.fillText(text, x + pad, y + boxH / 2);
+    // Text
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.fillText(text, x + pad, y + boxH / 2);
 
-  // Keep output format stable: JPEG stays JPEG, PNG stays PNG.
-  // `toDataURL` quality only applies to image/jpeg and image/webp.
-  const quality = mimeType === 'image/jpeg' ? 0.92 : undefined;
-  return typeof quality === 'number' ? canvas.toDataURL(mimeType, quality) : canvas.toDataURL(mimeType);
+    // Keep output format stable: JPEG stays JPEG, PNG stays PNG.
+    // `toDataURL` quality only applies to image/jpeg and image/webp.
+    const quality = mimeType === 'image/jpeg' ? 0.92 : undefined;
+    return typeof quality === 'number'
+      ? canvas.toDataURL(mimeType, quality)
+      : canvas.toDataURL(mimeType);
+  } catch (e) {
+    console.warn('[proof stamp] Client-side timestamp stamping failed; using original image.', e);
+    return imageDataUrl;
+  }
 }
 
 function roundRect(

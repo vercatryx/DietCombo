@@ -23,7 +23,7 @@ import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User,
 import * as XLSX from 'xlsx';
 import { generateLabelsPDF, generateLabelsPDFTwoPerCustomer, generateTablePDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
-import { sortOrdersByDriver } from '@/lib/vendor-export-utils';
+import { getEditedClientIdsIncludingDependents, sortOrdersByDriver } from '@/lib/vendor-export-utils';
 import { logout } from '@/lib/auth-actions';
 import { getTodayInAppTz, toDateStringInAppTz, toCalendarDateKeyInAppTz } from '@/lib/timezone';
 import { getDefaultOrderTemplateCachedSync, getCachedDefaultOrderTemplate } from '@/lib/default-order-template-cache';
@@ -1069,11 +1069,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 ...(stopNumber != null && { stopNumber })
             };
         };
-        const editedClientIds = new Set(
-            clientsForExport
-                .filter(c => c.mealPlannerData?.some(d => d.scheduledDeliveryDate === dateKey))
-                .map(c => c.id)
-        );
+        const editedClientIds = getEditedClientIdsIncludingDependents(clientsForExport, dateKey);
         const isEdited = (order: any) => editedClientIds.has(order.client_id);
         const isComplex = (order: any) => !!(clientById.get(order.client_id)?.complex);
         const ordersEdited = ordersForLabels.filter((o: any) => isEdited(o));
@@ -1158,11 +1154,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     ...(stopNumber != null && { stopNumber })
                 };
             };
-            const editedClientIdsAlt = new Set(
-                clientsForExport
-                    .filter(c => c.mealPlannerData?.some(d => d.scheduledDeliveryDate === dateKey))
-                    .map(c => c.id)
-            );
+            const editedClientIdsAlt = getEditedClientIdsIncludingDependents(clientsForExport, dateKey);
             const isEditedAlt = (order: any) => editedClientIdsAlt.has(order.client_id);
             const isComplexAlt = (order: any) => !!(clientById.get(order.client_id)?.complex);
             const ordersEditedAlt = ordersForLabelsAlt.filter((o: any) => isEditedAlt(o));

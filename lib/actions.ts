@@ -5053,6 +5053,54 @@ export async function recordClientChange(clientId: string, summary: string, who?
     }
 }
 
+export type ClientChangeLogEntry = {
+    id: string;
+    clientId: string;
+    who: string;
+    summary: string;
+    timestamp: string;
+};
+
+/**
+ * Lightweight audit log reader for client changes.
+ * Note: This relies on `order_history` existing in the connected DB. If it doesn't,
+ * this returns an empty list (and logs the error) rather than breaking UI flows.
+ */
+export async function getClientChangeLog(clientId: string, limit: number = 50): Promise<{
+    entries: ClientChangeLogEntry[];
+    error?: string;
+}> {
+    if (!clientId) return { entries: [] };
+
+    try {
+        const { data, error } = await supabase
+            .from('order_history')
+            .select('id, client_id, who, summary, timestamp')
+            .eq('client_id', clientId)
+            .order('timestamp', { ascending: false })
+            .limit(Math.max(1, Math.min(200, limit)));
+
+        if (error) {
+            // Common case if DB schema wasn't applied: relation "order_history" does not exist
+            console.warn('[getClientChangeLog] Failed to read order_history:', error);
+            return { entries: [], error: error.message || 'Failed to load change log' };
+        }
+
+        const entries: ClientChangeLogEntry[] = (data || []).map((row: any) => ({
+            id: row.id,
+            clientId: row.client_id,
+            who: row.who,
+            summary: row.summary,
+            timestamp: row.timestamp,
+        }));
+
+        return { entries };
+    } catch (e) {
+        console.warn('[getClientChangeLog] Unexpected error:', e);
+        return { entries: [], error: e instanceof Error ? e.message : 'Failed to load change log' };
+    }
+}
+
 /** Optional pre-fetched reference data to avoid duplicate round-trips when batching portal data */
 export type OrderReferenceData = { menuItems: MenuItem[]; vendors: Vendor[]; boxTypes: BoxType[] };
 

@@ -39,6 +39,32 @@ export async function GET(req: Request) {
         const normalizedDeliveryDate = deliveryDate ? deliveryDate.split('T')[0].split(' ')[0] : null;
         log(`[route/routes] GET delivery_date=${deliveryDate ?? 'none'} normalized=${normalizedDeliveryDate ?? 'null'} day=${day}`);
 
+        // Fast path (drivers pages): build routes + stops entirely in DB via RPC.
+        // This avoids multi-query JS hydration for every /drivers and /drivers/[id] load.
+        if (normalizedDeliveryDate && (light || excludeProduce)) {
+            const tRpc0 = Date.now();
+            const rpcRes = await supabase.rpc("get_routes_for_date", {
+                p_delivery_date: normalizedDeliveryDate,
+                p_day: day,
+                p_exclude_produce: excludeProduce,
+            });
+
+            if (!rpcRes.error && rpcRes.data) {
+                const payload = rpcRes.data as any;
+                const routes = Array.isArray(payload?.routes) ? payload.routes : [];
+                const unrouted = Array.isArray(payload?.unrouted) ? payload.unrouted : [];
+                const ms = Date.now() - tRpc0;
+                serverLog.push(`[route/routes] rpc=get_routes_for_date ok (${ms}ms) routes=${routes.length} unrouted=${unrouted.length}`);
+                return NextResponse.json(
+                    { routes, unrouted, usersWithoutStops: [], _serverLog: serverLog },
+                    { headers: { "Cache-Control": "no-store" } }
+                );
+            } else if (rpcRes.error) {
+                serverLog.push(`[route/routes] rpc=get_routes_for_date failed: ${rpcRes.error.message}`);
+                console.error("[route/routes] RPC get_routes_for_date failed:", rpcRes.error);
+            }
+        }
+
         // 1) Drivers filtered by day (if not "all")
         let driversQuery = supabase
             .from('drivers')

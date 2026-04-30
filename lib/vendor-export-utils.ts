@@ -113,3 +113,44 @@ export function sortOrdersByDriver(
 
     return { sortedOrders, driverColors, driverIdToNumber, driverIdToColor };
 }
+
+/**
+ * When a client has custom meal plan edits for a delivery date, vendor exports often need to treat
+ * their whole family group as "edited" so labels/exports stay together.
+ *
+ * Rules:
+ * - If a parent client is edited, include the parent and all dependents (clients where parentClientId === parent.id).
+ * - If a dependent client is edited, include the dependent, their parent, and their sibling dependents.
+ */
+export function getEditedClientIdsIncludingDependents(
+    clients: ClientProfile[],
+    deliveryDateKey: string
+): Set<string> {
+    const byId = new Map<string, ClientProfile>();
+    const dependentsByParent = new Map<string, string[]>();
+    for (const c of clients) {
+        byId.set(c.id, c);
+        if (c.parentClientId) {
+            const pid = String(c.parentClientId);
+            const arr = dependentsByParent.get(pid) ?? [];
+            arr.push(c.id);
+            dependentsByParent.set(pid, arr);
+        }
+    }
+
+    const edited = new Set<string>();
+    const editedSeedIds = clients
+        .filter((c) => c.mealPlannerData?.some((d) => d.scheduledDeliveryDate === deliveryDateKey))
+        .map((c) => c.id);
+
+    for (const seedId of editedSeedIds) {
+        const seed = byId.get(seedId);
+        const parentId = seed?.parentClientId ? String(seed.parentClientId) : seedId;
+        edited.add(parentId);
+        edited.add(seedId);
+        const deps = dependentsByParent.get(parentId) ?? [];
+        for (const depId of deps) edited.add(depId);
+    }
+
+    return edited;
+}

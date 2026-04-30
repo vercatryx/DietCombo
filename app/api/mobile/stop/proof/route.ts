@@ -86,8 +86,9 @@ export async function POST(req: Request) {
         const stamped = await stampTimestampOnImageBuffer(buffer, mimeType || "image/jpeg", new Date());
         buffer = stamped.buffer;
         // Note: we don't currently persist stampedAt/source for stops; the stamp itself is the record.
-    } catch {
+    } catch (e) {
         // If stamping fails for any reason, continue with original image.
+        console.warn("[mobile/stop/proof] Timestamp stamping failed; uploading original image:", e);
     }
 
     const ext = mimeType.includes("png") ? "png" : "jpg";

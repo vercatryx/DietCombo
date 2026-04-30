@@ -141,6 +141,10 @@ export async function stampTimestampOnImageBuffer(
     // default to JPEG
     return { buffer: await composited.jpeg({ quality: 92 }).toBuffer(), stampedAtIso, source };
   } catch (e) {
+    console.warn(
+      '[proof stamp] Server-side timestamp stamping failed; uploading original image.',
+      { mimeType, err: e }
+    );
     // Never fail the upload path due to stamping.
     return { buffer: input, stampedAtIso: uploadTime.toISOString(), source: 'upload_time' };
   }

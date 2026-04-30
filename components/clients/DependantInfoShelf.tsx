@@ -5,12 +5,13 @@ import Link from 'next/link';
 import { X, ExternalLink, Pencil, Trash2, Check, Loader2, MapPinned } from 'lucide-react';
 import { ClientProfile, ProduceVendor } from '@/lib/types';
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { updateClient, deleteClient } from '@/lib/actions';
+import { updateClient, deleteClient, recordClientChange, getClientChangeLog, type ClientChangeLogEntry } from '@/lib/actions';
 import { getAllClientNumbers, normalizePhone } from '@/lib/phone-utils';
 import { getProduceVendors } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { formatDateTimeInAppTz } from '@/lib/timezone';
+import { diffObjects, formatDiffSummary } from '@/lib/audit/clientDiff';
 import styles from './ClientInfoShelf.module.css';
 
 interface DependantInfoShelfProps {
@@ -61,6 +62,12 @@ export function DependantInfoShelf({
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
     const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
+    const editStartSnapshotRef = React.useRef<ReturnType<typeof getAuditSnapshotFromEditForm> | null>(null);
+
+    const [showChangeLog, setShowChangeLog] = useState(false);
+    const [changeLogLoading, setChangeLogLoading] = useState(false);
+    const [changeLogError, setChangeLogError] = useState<string | null>(null);
+    const [changeLogEntries, setChangeLogEntries] = useState<ClientChangeLogEntry[] | null>(null);
 
     const [geoBusy, setGeoBusy] = useState(false);
     const [geoErr, setGeoErr] = useState('');
@@ -68,6 +75,135 @@ export function DependantInfoShelf({
     useEffect(() => {
         if (!isEditing) setEditForm(getInitialEditForm(client));
     }, [client, isEditing, getInitialEditForm]);
+
+    function getAuditSnapshotFromClient(c: ClientProfile) {
+        const normNull = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? null : v);
+        const normStr = (v: unknown, fallback: string) => (typeof v === 'string' ? v : (v == null ? fallback : String(v)));
+        return {
+            fullName: normStr(c.fullName, ''),
+            dob: normNull(c.dob) as any,
+            cin: c.cin ?? null,
+            phoneNumber: normStr(c.phoneNumber, ''),
+            secondaryPhoneNumber: normNull(c.secondaryPhoneNumber) as any,
+            address: normStr(c.address, ''),
+            apt: normNull(c.apt) as any,
+            city: normNull(c.city) as any,
+            state: normNull(c.state) as any,
+            zip: normNull(c.zip) as any,
+            notes: normNull(c.dislikes) as any,
+            history: normNull(c.history) as any,
+            serviceType: c.serviceType ?? null,
+            produceVendorId: c.produceVendorId ?? null,
+            voucherAmount: normNull(c.voucherAmount) as any,
+            paused: c.paused ?? false,
+            complex: c.complex ?? false,
+            bill: c.bill ?? true,
+            delivery: c.delivery ?? true,
+            doNotText: c.doNotText ?? false,
+            doNotTextNumbers: c.doNotTextNumbers ?? {},
+        };
+    }
+
+    function getAuditSnapshotFromEditForm(f: typeof editForm) {
+        return {
+            fullName: f.fullName ?? '',
+            dob: f.dob?.trim() ? f.dob.trim() : null,
+            cin: f.cin === '' || f.cin === null || f.cin === undefined ? null : Number(f.cin),
+            phoneNumber: f.phoneNumber?.trim() ? f.phoneNumber.trim() : '',
+            secondaryPhoneNumber: f.secondaryPhoneNumber?.trim() ? f.secondaryPhoneNumber.trim() : null,
+            address: f.address ?? '',
+            apt: f.apt?.trim() ? f.apt.trim() : null,
+            city: f.city?.trim() ? f.city.trim() : null,
+            state: f.state?.trim() ? f.state.trim() : null,
+            zip: f.zip?.trim() ? f.zip.trim() : null,
+            notes: f.notes?.trim() ? f.notes.trim() : null,
+            history: f.history?.trim() ? f.history.trim() : null,
+            serviceType: f.serviceType ?? null,
+            produceVendorId: f.serviceType === 'Produce' ? (f.produceVendorId ?? null) : null,
+            voucherAmount: f.serviceType === 'Produce' ? (f.voucherAmount?.trim() ? f.voucherAmount.trim() : null) : null,
+            paused: f.paused ?? false,
+            complex: f.complex ?? false,
+            bill: f.bill ?? true,
+            delivery: f.delivery ?? true,
+            doNotText: f.doNotText ?? false,
+            doNotTextNumbers: f.doNotTextNumbers ?? {},
+        };
+    }
+
+    function formatAuditValue(v: unknown): string {
+        if (v == null) return '—';
+        if (typeof v === 'string') return `"${v}"`;
+        if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+        try {
+            return JSON.stringify(v);
+        } catch {
+            return String(v);
+        }
+    }
+
+    function formatAuditSummary(diffs: { path: string; before: unknown; after: unknown }[]): string {
+        const byPath = new Map(diffs.map(d => [d.path, d]));
+        const out: string[] = [];
+
+        const vendorName = (id: unknown) => {
+            if (id == null || (typeof id === 'string' && id.trim() === '')) return 'unassigned';
+            const pv = produceVendors.find(v => v.id === id);
+            return pv?.name || (typeof id === 'string' ? id : String(id));
+        };
+
+        const serviceTypeDiff = byPath.get('serviceType');
+        const produceVendorDiff = byPath.get('produceVendorId');
+
+        if (serviceTypeDiff && produceVendorDiff) {
+            const beforeType = serviceTypeDiff.before;
+            const afterType = serviceTypeDiff.after;
+            if (beforeType === 'Produce' && afterType === 'Food') {
+                out.push(`serviceType: "Produce (${vendorName(produceVendorDiff.before)})" → "Food"`);
+                byPath.delete('serviceType');
+                byPath.delete('produceVendorId');
+            } else if (beforeType === 'Food' && afterType === 'Produce') {
+                out.push(`serviceType: "Food" → "Produce (${vendorName(produceVendorDiff.after)})"`);
+                byPath.delete('serviceType');
+                byPath.delete('produceVendorId');
+            }
+        }
+
+        for (const [path, d] of Array.from(byPath.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+            if (path === 'produceVendorId') {
+                out.push(`produceVendor: "${vendorName(d.before)}" → "${vendorName(d.after)}"`);
+            } else {
+                out.push(`${path}: ${formatAuditValue(d.before)} → ${formatAuditValue(d.after)}`);
+            }
+        }
+
+        return out.join('\n');
+    }
+
+    const beginEdit = () => {
+        editStartSnapshotRef.current = getAuditSnapshotFromClient(client);
+        setIsEditing(true);
+    };
+
+    const toggleChangeLog = async () => {
+        const next = !showChangeLog;
+        setShowChangeLog(next);
+        if (!next) return;
+        if (changeLogLoading) return;
+        if (changeLogEntries != null) return;
+
+        setChangeLogLoading(true);
+        setChangeLogError(null);
+        try {
+            const res = await getClientChangeLog(client.id, 50);
+            setChangeLogEntries(res.entries || []);
+            setChangeLogError(res.error ?? null);
+        } catch (e) {
+            setChangeLogEntries([]);
+            setChangeLogError(e instanceof Error ? e.message : 'Failed to load change log');
+        } finally {
+            setChangeLogLoading(false);
+        }
+    };
 
     useEffect(() => {
         getProduceVendors().then(setProduceVendors);
@@ -104,6 +240,7 @@ export function DependantInfoShelf({
     const handleSave = async () => {
         setIsSaving(true);
         try {
+            const beforeSnapshot = editStartSnapshotRef.current ?? getAuditSnapshotFromClient(client);
             const updated = await updateClient(
                 client.id,
                 {
@@ -132,7 +269,23 @@ export function DependantInfoShelf({
                 },
                 { skipOrderSync: true }
             );
+
+            const afterSnapshot = getAuditSnapshotFromEditForm(editForm);
+            const diffs = diffObjects(beforeSnapshot, afterSnapshot, {
+                maxDepth: 6,
+                maxEntries: 200,
+                nullishEqual: true,
+                emptyStringEqualNullish: true,
+            });
+            if (diffs.length > 0) {
+                const summary = formatAuditSummary(diffs);
+                void recordClientChange(client.id, summary).catch((e) => {
+                    console.warn('[DependantInfoShelf] Failed to record client change:', e);
+                });
+            }
+
             setIsEditing(false);
+            editStartSnapshotRef.current = null;
             if (onClientUpdated) onClientUpdated(updated ?? undefined);
         } catch (error) {
             console.error('Failed to update dependent:', error);
@@ -204,13 +357,14 @@ export function DependantInfoShelf({
                                 <button className={styles.cancelBtn} onClick={() => {
                                     setIsEditing(false);
                                     setEditForm(getInitialEditForm(client));
+                                    editStartSnapshotRef.current = null;
                                 }}>
                                     <X size={18} />
                                 </button>
                             </>
                         ) : (
                             <>
-                                <button className={styles.editBtn} onClick={() => setIsEditing(true)}>
+                                <button className={styles.editBtn} onClick={beginEdit}>
                                     <Pencil size={18} />
                                 </button>
                                 {!brooklynOnly && (
@@ -610,6 +764,60 @@ export function DependantInfoShelf({
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    <div className={styles.section}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showChangeLog ? 12 : 0 }}>
+                            <h3 style={{ marginBottom: 0 }}>Changes</h3>
+                            <button
+                                type="button"
+                                onClick={toggleChangeLog}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    padding: 0,
+                                    color: 'var(--text-tertiary)',
+                                    fontSize: '0.85rem',
+                                    textDecoration: 'underline',
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                {showChangeLog ? 'Hide changes' : 'View changes'}
+                            </button>
+                        </div>
+
+                        {showChangeLog && (
+                            <>
+                                {changeLogLoading ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-tertiary)' }}>
+                                        <Loader2 className="animate-spin" size={16} />
+                                        Loading…
+                                    </div>
+                                ) : changeLogError ? (
+                                    <div style={{ color: 'var(--text-tertiary)', fontSize: '0.95rem' }}>
+                                        {changeLogError}
+                                    </div>
+                                ) : (changeLogEntries && changeLogEntries.length === 0) ? (
+                                    <div style={{ color: 'var(--text-tertiary)', fontSize: '0.95rem' }}>
+                                        No changes recorded yet.
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                        {(changeLogEntries || []).map((e) => (
+                                            <div key={e.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: 10, padding: 10 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
+                                                    <div>{e.who}</div>
+                                                    <div>{formatDateTimeInAppTz(e.timestamp)}</div>
+                                                </div>
+                                                <div style={{ marginTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                                    {e.summary}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
+                        )}
                     </div>
                 </div>
 
