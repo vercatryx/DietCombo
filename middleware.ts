@@ -49,6 +49,12 @@ export default async function middleware(request: NextRequest) {
     return redirectWithSb(new URL('/login', request.url));
   }
 
+  // API routes enforce their own auth (cookies, Bearer tokens, etc.). Do not apply
+  // session role redirects — they would 307 brooklyn_admin/client away from e.g. /api/extension/* when the browser sends a session cookie.
+  if (path.startsWith('/api/')) {
+    return supabaseRes;
+  }
+
   // Role-based redirects when user is logged in
   if (session?.userId) {
     // Brooklyn admin: only Client Dashboard (Brooklyn), Routes (Brooklyn), Meal Plan Edits (Brooklyn). No Orders, Billing, Admin.

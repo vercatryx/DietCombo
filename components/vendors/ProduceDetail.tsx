@@ -3,11 +3,18 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ClientProfile, MenuItem, BoxType, ProduceVendor } from '@/lib/types';
-import { getClients, getMenuItems, getBoxTypes, getProduceVendors } from '@/lib/cached-data';
+import { getMenuItems, getBoxTypes, getProduceVendors } from '@/lib/cached-data';
 import { Package, FileText, Search, User, AlertTriangle, PlusCircle, X, Download } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
-import { bulkCreateProduceOrdersForVendor, bulkUpdateProduceProofsForVendor } from '@/lib/actions';
+import {
+    bulkCreateProduceOrdersForVendor,
+    bulkUpdateProduceProofsForVendor,
+    getClientNamesByIds,
+    getClientsUnlimited,
+    getProduceClientsForVendorToken
+} from '@/lib/actions';
+import { isProduceServiceType } from '@/lib/isProduceServiceType';
 import * as XLSX from 'xlsx';
 import styles from './VendorDetail.module.css';
 
@@ -53,6 +60,8 @@ export function ProduceDetail() {
     const [proofUrlColumn, setProofUrlColumn] = useState<string>('');
     const [isProcessingExcel, setIsProcessingExcel] = useState(false);
     const [uploadResult, setUploadResult] = useState<{ updated: number; errors: string[] } | null>(null);
+    /** Parent / guardian names not present in allClients (token view loads a subset only). */
+    const [extraClientNames, setExtraClientNames] = useState<Record<string, string>>({});
 
     function getLastName(name: string): string {
         const trimmed = (name || '').trim();
@@ -68,9 +77,13 @@ export function ProduceDetail() {
 
     async function loadData() {
         setIsLoading(true);
+        setInvalidToken(false);
         try {
+            const tokenTrim = (token || '').trim();
             const [clientsData, menuItemsData, boxTypesData, pvData] = await Promise.all([
-                getClients(),
+                tokenTrim
+                    ? getProduceClientsForVendorToken(tokenTrim)
+                    : getClientsUnlimited(),
                 getMenuItems(),
                 getBoxTypes(),
                 getProduceVendors()
@@ -79,32 +92,59 @@ export function ProduceDetail() {
             setProduceVendors(pvData);
 
             let resolvedTokenVendor: ProduceVendor | null = null;
-            if (token) {
-                resolvedTokenVendor = pvData.find(pv => pv.token === token) || null;
+            if (tokenTrim) {
+                resolvedTokenVendor = pvData.find(pv => pv.token === tokenTrim) || null;
                 setTokenVendor(resolvedTokenVendor);
                 if (!resolvedTokenVendor) {
                     setInvalidToken(true);
+                    setProduceClients([]);
+                    setAllClients([]);
+                    setExtraClientNames({});
                     setIsLoading(false);
                     return;
                 }
+            } else {
+                setTokenVendor(null);
             }
 
-            const produceClientsList = clientsData
-                .filter(client => {
-                    if (client.serviceType !== 'Produce' || client.paused) return false;
-                    if (resolvedTokenVendor) {
-                        return client.produceVendorId === resolvedTokenVendor.id;
-                    }
-                    return true;
-                })
-                .sort((a, b) => {
+            let produceClientsList: ClientProfile[];
+            if (tokenTrim) {
+                produceClientsList = [...clientsData].sort((a, b) => {
                     const byLast = getLastName(a.fullName || '').localeCompare(getLastName(b.fullName || ''), undefined, { sensitivity: 'base' });
                     if (byLast !== 0) return byLast;
                     return (a.fullName || '').localeCompare(b.fullName || '', undefined, { sensitivity: 'base' });
                 });
+                setAllClients(produceClientsList);
+                const parentIds = [
+                    ...new Set(
+                        produceClientsList
+                            .map(c => c.parentClientId)
+                            .filter((id): id is string => !!id)
+                    )
+                ];
+                const missingParentIds = parentIds.filter(pid => !produceClientsList.some(c => c.id === pid));
+                if (missingParentIds.length > 0) {
+                    const names = await getClientNamesByIds(missingParentIds);
+                    setExtraClientNames(names);
+                } else {
+                    setExtraClientNames({});
+                }
+            } else {
+                produceClientsList = clientsData
+                    .filter(client => {
+                        if (!isProduceServiceType(client.serviceType) || client.paused) return false;
+                        return true;
+                    })
+                    .sort((a, b) => {
+                        const byLast = getLastName(a.fullName || '').localeCompare(getLastName(b.fullName || ''), undefined, { sensitivity: 'base' });
+                        if (byLast !== 0) return byLast;
+                        return (a.fullName || '').localeCompare(b.fullName || '', undefined, { sensitivity: 'base' });
+                    });
+                setAllClients(clientsData);
+                setExtraClientNames({});
+            }
 
             setProduceClients(produceClientsList);
-            setAllClients(clientsData);
             setMenuItems(menuItemsData);
             setBoxTypes(boxTypesData);
         } catch (error) {
@@ -116,7 +156,7 @@ export function ProduceDetail() {
 
     function getClientName(clientId: string) {
         const client = allClients.find(c => c.id === clientId);
-        return client?.fullName || 'Unknown Client';
+        return client?.fullName || extraClientNames[clientId] || 'Unknown Client';
     }
 
     function getClientAddress(clientId: string) {
@@ -145,7 +185,8 @@ export function ProduceDetail() {
 
     const filteredClients = produceClients.filter(client => {
         const parent = client.parentClientId ? allClients.find(c => c.id === client.parentClientId) : null;
-        const parentName = parent?.fullName?.toLowerCase() ?? '';
+        const parentName =
+            (parent?.fullName || (client.parentClientId ? extraClientNames[client.parentClientId] : '') || '').toLowerCase();
         const matchesSearch = client.fullName.toLowerCase().includes(search.toLowerCase()) ||
             (client.email && client.email.toLowerCase().includes(search.toLowerCase())) ||
             (client.phoneNumber && client.phoneNumber.includes(search)) ||

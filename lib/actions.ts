@@ -16,7 +16,7 @@ import {
     DAY_NAME_TO_NUMBER
 } from './order-dates';
 import { supabase, fetchAllRows, isConnectionError, getConnectionErrorHelp } from './supabase';
-import { getSupabaseDbApiKey } from './supabase-env';
+import { getSupabaseDbApiKey, getSupabaseServerSecretKey } from './supabase-env';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
@@ -4352,7 +4352,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         billings: data.billings ? JSON.stringify(data.billings) : null,
         visits: data.visits ? JSON.stringify(data.visits) : null,
         sign_token: data.signToken || null,
-        produce_vendor_id: (data.serviceType === 'Produce' && data.produceVendorId) ? data.produceVendorId : null,
+        produce_vendor_id: (isProduceServiceType(data.serviceType) && data.produceVendorId) ? data.produceVendorId : null,
         unite_account: data.uniteAccount ?? null
     };
 
@@ -4418,7 +4418,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         visits: payload.visits,
         sign_token: payload.sign_token,
         produce_vendor_id: payload.produce_vendor_id,
-        voucher_amount: data.serviceType === 'Produce' ? (data.voucherAmount?.trim() || null) : null
+        voucher_amount: isProduceServiceType(data.serviceType) ? (data.voucherAmount?.trim() || null) : null
     };
     
     const { data: res, error: insertError } = await supabase
@@ -4528,7 +4528,7 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         lat: payload.lat,
         lng: payload.lng,
         geocoded_at: payload.geocoded_at,
-        produce_vendor_id: (serviceType === 'Produce' && produceVendorId) ? produceVendorId : null,
+        produce_vendor_id: (isProduceServiceType(serviceType) && produceVendorId) ? produceVendorId : null,
         voucher_amount: null
     };
     const { data: res, error: insertError } = await supabase
@@ -12598,6 +12598,69 @@ export async function getProduceVendors(): Promise<ProduceVendor[]> {
     }
 }
 
+/**
+ * Clients for a produce vendor link (?token=). Uses service role when available so RLS cannot hide rows.
+ * Filters to service types that include Produce (e.g. "Food,Produce") and not paused.
+ */
+export async function getProduceClientsForVendorToken(vendorToken: string): Promise<ClientProfile[]> {
+    const trimmed = (vendorToken || '').trim();
+    if (!trimmed) return [];
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    // Prefer secret/service JWT; otherwise same key chain as getClientsUnlimited (may still bypass RLS if service role).
+    const adminKey = getSupabaseServerSecretKey() || getSupabaseDbApiKey();
+
+    if (adminKey) {
+        const admin = createClient(url, adminKey);
+        const { data: pv, error: pvErr } = await admin
+            .from('produce_vendors')
+            .select('id, is_active')
+            .eq('token', trimmed)
+            .maybeSingle();
+        if (pvErr || !pv || pv.is_active === false) return [];
+
+        const PAGE_SIZE = 1000;
+        const allRows: any[] = [];
+        let offset = 0;
+        for (;;) {
+            const { data, error } = await admin
+                .from('clients')
+                .select('*')
+                .eq('produce_vendor_id', pv.id)
+                .eq('paused', false)
+                .order('id', { ascending: true })
+                .range(offset, offset + PAGE_SIZE - 1);
+            if (error) {
+                console.error('[getProduceClientsForVendorToken] paginated fetch:', error);
+                break;
+            }
+            const chunk = data || [];
+            allRows.push(...chunk);
+            if (chunk.length < PAGE_SIZE) break;
+            offset += PAGE_SIZE;
+        }
+
+        return allRows
+            .map((c: any) => {
+                try {
+                    return mapClientFromDB(c);
+                } catch {
+                    return null;
+                }
+            })
+            .filter((c): c is ClientProfile => c != null)
+            .filter(c => isProduceServiceType(c.serviceType));
+    }
+
+    const pvList = await getProduceVendors();
+    const vendor = pvList.find(p => p.token === trimmed);
+    if (!vendor) return [];
+    const all = await getClientsUnlimited();
+    return all.filter(
+        c => isProduceServiceType(c.serviceType) && !c.paused && c.produceVendorId === vendor.id
+    );
+}
+
 export async function createProduceVendor(name: string): Promise<ProduceVendor> {
     const { data, error } = await supabase
         .from('produce_vendors')
@@ -12715,7 +12778,7 @@ export async function bulkCreateProduceOrdersForVendor(
         if (clientsErr) return { success: false, error: `Failed to load clients: ${clientsErr.message}` };
 
         const validClients = (clientRows || []).filter(
-            c => c.service_type === 'Produce' && !c.paused && c.produce_vendor_id === vendor.id
+            c => isProduceServiceType(c.service_type) && !c.paused && c.produce_vendor_id === vendor.id
         );
 
         if (validClients.length === 0) {
