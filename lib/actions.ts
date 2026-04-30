@@ -4328,6 +4328,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         approved_meals_per_week: data.approvedMealsPerWeek || 0,
         authorized_amount: data.authorizedAmount ?? null,
         expiration_date: data.expirationDate || null,
+        dob: data.dob?.trim() || null,
         // New fields from dietfantasy
         first_name: data.firstName || null,
         last_name: data.lastName || null,
@@ -4393,6 +4394,7 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         approved_meals_per_week: payload.approved_meals_per_week,
         authorized_amount: payload.authorized_amount,
         expiration_date: payload.expiration_date,
+        dob: payload.dob ?? null,
         upcoming_order: payload.upcoming_order || {},
         first_name: payload.first_name,
         last_name: payload.last_name,
@@ -4418,7 +4420,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         visits: payload.visits,
         sign_token: payload.sign_token,
         produce_vendor_id: payload.produce_vendor_id,
-        voucher_amount: isProduceServiceType(data.serviceType) ? (data.voucherAmount?.trim() || null) : null
+        voucher_amount: isProduceServiceType(data.serviceType) ? (data.voucherAmount?.trim() || null) : null,
+        unite_account: payload.unite_account ?? null
     };
     
     const { data: res, error: insertError } = await supabase
@@ -4446,6 +4449,90 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
     triggerSyncInBackground();
 
     return newClient;
+}
+
+/**
+ * Create placeholder dependent rows for a parent: names "1", "2", … with no address, phone, or other details filled in.
+ * Used by the Chrome extension bulk flow; staff completes profiles in the app.
+ */
+export async function addPlaceholderDependents(parentClientId: string, count: number): Promise<ClientProfile[]> {
+    if (!parentClientId || !count || count < 1) return [];
+
+    const parent = await getClient(parentClientId);
+    if (!parent) {
+        throw new Error('Parent client not found');
+    }
+    if (parent.parentClientId) {
+        throw new Error('Cannot attach dependents to a dependent');
+    }
+
+    const serviceType = parent.serviceType;
+    const created: ClientProfile[] = [];
+
+    for (let i = 1; i <= count; i++) {
+        const id = randomUUID();
+        const insertPayload: Record<string, unknown> = {
+            id,
+            full_name: String(i),
+            email: null,
+            address: null,
+            phone_number: null,
+            secondary_phone_number: null,
+            navigator_id: null,
+            end_date: null,
+            screening_took_place: false,
+            screening_signed: false,
+            notes: '',
+            status_id: null,
+            service_type: serviceType,
+            approved_meals_per_week: 0,
+            authorized_amount: null,
+            expiration_date: null,
+            upcoming_order: {},
+            parent_client_id: parentClientId,
+            dob: null,
+            cin: null,
+            apt: null,
+            city: null,
+            state: null,
+            zip: null,
+            county: null,
+            dislikes: null,
+            lat: null,
+            lng: null,
+            geocoded_at: null,
+            medicaid: false,
+            paused: false,
+            complex: false,
+            bill: true,
+            delivery: true,
+            client_id_external: null,
+            case_id_external: null,
+            unite_account: parent.uniteAccount ?? null,
+            produce_vendor_id: isProduceServiceType(serviceType) ? (parent.produceVendorId ?? null) : null,
+            voucher_amount: null,
+            billings: null,
+            visits: null,
+            sign_token: null
+        };
+
+        const { data: res, error: insertError } = await supabase
+            .from('clients')
+            .insert([insertPayload])
+            .select()
+            .single();
+
+        if (insertError || !res) {
+            throw new Error('Failed to create dependent: ' + (insertError?.message || 'no data returned'));
+        }
+        created.push(mapClientFromDB(res));
+    }
+
+    revalidatePath('/clients');
+    const { triggerSyncInBackground } = await import('./local-db');
+    triggerSyncInBackground();
+
+    return created;
 }
 
 export async function addDependent(name: string, parentClientId: string, dob?: string | null, cin?: number | null, serviceType: ServiceType = 'Food', produceVendorId?: string | null) {

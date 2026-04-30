@@ -132,6 +132,12 @@
                 </div>
 
                 <div class="form-group">
+                    <label for="dob">Date of birth</label>
+                    <input type="date" id="dob">
+                    <small class="field-hint">Optional. “Auto fill from page” reads the Unite DOB field when present.</small>
+                </div>
+
+                <div class="form-group">
                     <label for="notes">Notes</label>
                     <textarea id="notes" rows="4" placeholder="Notes, dietary restrictions, or other info"></textarea>
                 </div>
@@ -160,17 +166,17 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Service Type *</label>
-                    <div class="radio-group">
-                        <label class="radio-label">
-                            <input type="radio" name="service-type" value="Food" checked>
-                            <span>Food</span>
-                        </label>
-                        <label class="radio-label">
-                            <input type="radio" name="service-type" value="Produce">
-                            <span>Produce</span>
-                        </label>
-                    </div>
+                    <label for="service-type">Food or produce vendor *</label>
+                    <select id="service-type" required>
+                        <option value="">Loading…</option>
+                    </select>
+                    <small class="field-hint">Food, or a specific produce vendor from your organization.</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="dependents-count">Number of dependents</label>
+                    <input type="number" id="dependents-count" min="0" max="50" value="0" inputmode="numeric">
+                    <small class="field-hint">Creates placeholder clients named 1, 2, … with only a name (fill details in the app).</small>
                 </div>
 
                 <div class="form-group" id="auth-units-group" style="display: block;">

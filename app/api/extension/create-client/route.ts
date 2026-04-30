@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addClient } from '@/lib/actions';
+import { addClient, addPlaceholderDependents, getProduceVendors } from '@/lib/actions';
 import { ServiceType } from '@/lib/types';
 import { isValidUniteUsUrl } from '@/lib/utils';
 
@@ -98,7 +98,10 @@ export async function POST(request: NextRequest) {
             paused,
             complex,
             bill,
-            delivery
+            delivery,
+            dependentCount,
+            produceVendorId,
+            dob
         } = body;
 
         // Validate required fields
@@ -118,13 +121,32 @@ export async function POST(request: NextRequest) {
             }, { status: 400 });
         }
 
-        // Validate serviceType
-        const validServiceTypes = ['Food', 'Boxes', 'Meal', 'Equipment', 'Custom', 'Vendor', 'Produce'];
-        if (!validServiceTypes.includes(serviceType)) {
+        // Extension only sends Food or Produce (produce = specific vendor from /api/extension/produce-vendors)
+        if (serviceType !== 'Food' && serviceType !== 'Produce') {
             return NextResponse.json({
                 success: false,
-                error: `serviceType must be one of: ${validServiceTypes.join(', ')}`
+                error: 'serviceType must be "Food" or "Produce"'
             }, { status: 400 });
+        }
+
+        let resolvedProduceVendorId: string | null = null;
+        if (serviceType === 'Produce') {
+            const vid = typeof produceVendorId === 'string' ? produceVendorId.trim() : '';
+            if (!vid) {
+                return NextResponse.json({
+                    success: false,
+                    error: 'produceVendorId is required when service type is Produce'
+                }, { status: 400 });
+            }
+            const vendors = await getProduceVendors();
+            const match = vendors.find((v) => v.id === vid && v.isActive);
+            if (!match) {
+                return NextResponse.json({
+                    success: false,
+                    error: 'Invalid or inactive produce vendor'
+                }, { status: 400 });
+            }
+            resolvedProduceVendorId = vid;
         }
 
         // Validate case URL format
@@ -185,6 +207,7 @@ export async function POST(request: NextRequest) {
             approvedMealsPerWeek: approvedMealsPerWeek ? parseInt(approvedMealsPerWeek.toString(), 10) : 0,
             authorizedAmount: authorizedAmount !== undefined && authorizedAmount !== null ? parseFloat(authorizedAmount.toString()) : null,
             expirationDate: expirationDate?.trim() || null,
+            dob: typeof dob === 'string' && dob.trim() ? dob.trim().slice(0, 10) : null,
             latitude: finalLat,
             longitude: finalLng,
             lat: finalLat,
@@ -197,6 +220,7 @@ export async function POST(request: NextRequest) {
             delivery: delivery ?? true,
             uniteAccount: uniteAccount.trim(),
             caseIdExternal: caseId.trim(), // Store Unite Us link in case_id_external
+            produceVendorId: resolvedProduceVendorId,
             activeOrder: {
                 serviceType: serviceType as ServiceType,
                 caseId: caseId.trim()
@@ -205,8 +229,23 @@ export async function POST(request: NextRequest) {
 
         const newClient = await addClient(clientData);
 
+        let dependentsCreated = 0;
+        const rawCount = dependentCount !== undefined && dependentCount !== null ? Number(dependentCount) : 0;
+        const n = Number.isFinite(rawCount) ? Math.floor(rawCount) : 0;
+        if (n > 0) {
+            if (n > 50) {
+                return NextResponse.json({
+                    success: false,
+                    error: 'dependentCount cannot exceed 50'
+                }, { status: 400 });
+            }
+            await addPlaceholderDependents(newClient.id, n);
+            dependentsCreated = n;
+        }
+
         return NextResponse.json({
             success: true,
+            dependentsCreated,
             client: {
                 id: newClient.id,
                 fullName: newClient.fullName,

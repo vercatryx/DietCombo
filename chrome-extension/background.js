@@ -210,5 +210,42 @@ function extractContactData() {
         }
     }
 
+    function parseUsDateToIso(text) {
+        if (!text || typeof text !== 'string') return null;
+        const m = text.trim().match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (!m) return null;
+        const month = m[1].padStart(2, '0');
+        const day = m[2].padStart(2, '0');
+        const year = m[3];
+        return `${year}-${month}-${day}`;
+    }
+
+    // Date of Birth — Unite: <div id="dob" class="content"><p>12/5/1984 <em>(Age 41)</em></p></div>
+    const dobContainer = document.getElementById('dob');
+    if (dobContainer) {
+        const dobP = dobContainer.querySelector('p');
+        if (dobP) {
+            const iso = parseUsDateToIso(dobP.textContent || '');
+            if (iso) data.dob = iso;
+        }
+    }
+
+    // Backup: fixed XPath if #dob is not found or layout differs
+    if (!data.dob) {
+        try {
+            const xpath = '/html/body/div[2]/div[2]/main/div/section/div/div[2]/div/div[2]/div/div/div[1]/div[5]/div[1]';
+            const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+            const node = result.singleNodeValue;
+            if (node) {
+                const p = node.querySelector ? node.querySelector('p') : null;
+                const raw = p ? (p.textContent || '') : (node.textContent || '');
+                const iso = parseUsDateToIso(raw);
+                if (iso) data.dob = iso;
+            }
+        } catch (e) {
+            // ignore XPath errors
+        }
+    }
+
     return data;
 }

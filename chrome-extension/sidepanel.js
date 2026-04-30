@@ -133,7 +133,8 @@ async function validateAndInitialize() {
 
         await loadStatuses();
         await loadNavigators();
-        
+        await loadProduceVendorOptions();
+
         // Setup form validation after form is visible
         setupFormValidation();
         
@@ -197,10 +198,10 @@ function setupEventListeners() {
     // Auto fill button
     document.getElementById('auto-fill-btn').addEventListener('click', handleAutoFill);
 
-    // Show/hide auth units field based on service type
-    const serviceTypeRadios = document.querySelectorAll('input[name="service-type"]');
-    serviceTypeRadios.forEach(radio => {
-        radio.addEventListener('change', function() {
+    // Show/hide auth units field based on service type (Food only)
+    const serviceTypeSelect = document.getElementById('service-type');
+    if (serviceTypeSelect) {
+        serviceTypeSelect.addEventListener('change', function() {
             const authUnitsGroup = document.getElementById('auth-units-group');
             if (this.value === 'Food') {
                 authUnitsGroup.style.display = 'block';
@@ -208,34 +209,10 @@ function setupEventListeners() {
                 authUnitsGroup.style.display = 'none';
                 document.getElementById('auth-units').value = '';
             }
-            // Trigger validation update
-            if (typeof setupFormValidation === 'function') {
-                const validateForm = () => {
-                    const submitBtn = document.getElementById('submit-btn');
-                    const requiredFields = ['full-name', 'status', 'navigator', 'address', 'city', 'state', 'zip', 'phone', 'case-url', 'service-type'];
-                    let isValid = true;
-
-                    requiredFields.forEach(fieldId => {
-                        if (fieldId === 'service-type') {
-                            const serviceType = document.querySelector('input[name="service-type"]:checked');
-                            if (!serviceType) isValid = false;
-                        } else {
-                            const field = document.getElementById(fieldId);
-                            if (field && !field.value.trim()) isValid = false;
-                        }
-                    });
-
-                    const caseUrl = document.getElementById('case-url');
-                    if (caseUrl && caseUrl.value.trim() && !isValidCaseUrl(caseUrl.value.trim())) {
-                        isValid = false;
-                    }
-
-                    submitBtn.disabled = !isValid;
-                };
-                validateForm();
-            }
+            const form = document.getElementById('client-form');
+            if (form && form._validateForm) form._validateForm();
         });
-    });
+    }
 
     // Close modal when clicking outside
     document.getElementById('settings-modal').addEventListener('click', (e) => {
@@ -410,6 +387,68 @@ async function loadStatuses() {
     }
 }
 
+/** Fill service dropdown: Food + active produce vendors from API */
+async function loadProduceVendorOptions() {
+    const sel = document.getElementById('service-type');
+    if (!sel) return;
+
+    const { baseUrl, apiKey } = getConfig();
+    try {
+        const response = await fetch(`${baseUrl}/api/extension/produce-vendors`, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            throw new Error('Invalid response when loading produce vendors');
+        }
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to load produce vendors');
+        }
+
+        const vendors = data.produceVendors || [];
+        sel.innerHTML = '';
+
+        const foodOpt = document.createElement('option');
+        foodOpt.value = 'Food';
+        foodOpt.textContent = 'Food';
+        sel.appendChild(foodOpt);
+
+        vendors.forEach((v) => {
+            const o = document.createElement('option');
+            o.value = `produce:${v.id}`;
+            o.textContent = v.name;
+            sel.appendChild(o);
+        });
+
+        sel.value = 'Food';
+        const authUnitsGroup = document.getElementById('auth-units-group');
+        if (authUnitsGroup) authUnitsGroup.style.display = 'block';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (err) {
+        console.error('loadProduceVendorOptions:', err);
+        sel.innerHTML = '';
+        const foodOpt = document.createElement('option');
+        foodOpt.value = 'Food';
+        foodOpt.textContent = 'Food';
+        sel.appendChild(foodOpt);
+        sel.value = 'Food';
+        const authUnitsGroup = document.getElementById('auth-units-group');
+        if (authUnitsGroup) authUnitsGroup.style.display = 'block';
+        showStatus(
+            'form-status',
+            (err && err.message) || 'Could not load produce vendors. You can still add Food clients.',
+            'error'
+        );
+    }
+}
+
 // Load navigators from API
 async function loadNavigators() {
     const { baseUrl, apiKey } = getConfig();
@@ -482,8 +521,21 @@ async function handleSubmit(e) {
     submitBtn.textContent = 'Submitting...';
 
     try {
-        const serviceType = document.querySelector('input[name="service-type"]:checked').value;
+        const serviceRaw = document.getElementById('service-type').value;
+        let serviceType;
+        let produceVendorIdForApi = null;
+        if (serviceRaw === 'Food') {
+            serviceType = 'Food';
+        } else if (serviceRaw.startsWith('produce:')) {
+            serviceType = 'Produce';
+            produceVendorIdForApi = serviceRaw.slice('produce:'.length);
+        } else {
+            throw new Error('Select Food or a produce vendor');
+        }
+
         const authUnits = document.getElementById('auth-units').value.trim();
+        const depRaw = (document.getElementById('dependents-count') && document.getElementById('dependents-count').value) || '0';
+        const dependentCount = Math.min(50, Math.max(0, parseInt(String(depRaw).trim(), 10) || 0));
         
         // Get address components
         const streetAddress = document.getElementById('address').value.trim();
@@ -510,7 +562,10 @@ async function handleSubmit(e) {
         
         const authorizedAmountValue = document.getElementById('authorized-amount').value.trim();
         const expirationDateValue = document.getElementById('expiration-date').value.trim();
-        
+        const dobValue = document.getElementById('dob') && document.getElementById('dob').value
+            ? document.getElementById('dob').value.trim()
+            : '';
+
         const formData = {
             fullName: document.getElementById('full-name').value.trim(),
             statusId: document.getElementById('status').value,
@@ -531,6 +586,7 @@ async function handleSubmit(e) {
             approvedMealsPerWeek: serviceType === 'Food' && authUnits ? parseInt(authUnits, 10) : 0,
             authorizedAmount: authorizedAmountValue ? parseFloat(authorizedAmountValue) : null,
             expirationDate: expirationDateValue || null,
+            dob: dobValue || null,
             // Include geocoding coordinates if available
             latitude: window.geocodeLat || null,
             longitude: window.geocodeLng || null,
@@ -540,7 +596,9 @@ async function handleSubmit(e) {
             paused: document.getElementById('flag-paused').checked,
             complex: document.getElementById('flag-complex').checked,
             bill: document.getElementById('flag-bill').checked,
-            delivery: document.getElementById('flag-delivery').checked
+            delivery: document.getElementById('flag-delivery').checked,
+            dependentCount,
+            produceVendorId: produceVendorIdForApi
         };
 
         // Validate case URL format
@@ -587,7 +645,9 @@ async function handleSubmit(e) {
         }
 
         if (data.success) {
-            showStatus('form-status', `Client "${formData.fullName}" created successfully!`, 'success');
+            const depN = typeof data.dependentsCreated === 'number' ? data.dependentsCreated : 0;
+            const depMsg = depN > 0 ? ` and ${depN} placeholder dependent${depN === 1 ? '' : 's'}` : '';
+            showStatus('form-status', `Client "${formData.fullName}" created successfully${depMsg}!`, 'success');
             // Reset form
             document.getElementById('client-form').reset();
             // Clear geocode coordinates and reset geocode UI
@@ -619,7 +679,13 @@ async function handleSubmit(e) {
             // Reset Unite Account to default
             const uniteAccountSelect = document.getElementById('unite-account');
             if (uniteAccountSelect) uniteAccountSelect.value = 'Regular';
-            // Show auth units field when default is Food
+            // Reset service type + dependents; show auth units when Food
+            const serviceTypeEl = document.getElementById('service-type');
+            if (serviceTypeEl && serviceTypeEl.querySelector('option[value="Food"]')) {
+                serviceTypeEl.value = 'Food';
+            }
+            const depInput = document.getElementById('dependents-count');
+            if (depInput) depInput.value = '0';
             const authUnitsGroup = document.getElementById('auth-units-group');
             authUnitsGroup.style.display = 'block';
             // Reset flags to defaults (Paused off, Complex off, Bill on, Delivery on)
@@ -732,6 +798,10 @@ async function handleAutoFill() {
         if (data.expirationDate) {
             document.getElementById('expiration-date').value = data.expirationDate;
         }
+        if (data.dob) {
+            const dobInput = document.getElementById('dob');
+            if (dobInput) dobInput.value = data.dob;
+        }
         if (caseId) {
             // Validate case URL format
             if (!isValidCaseUrl(caseId)) {
@@ -742,7 +812,7 @@ async function handleAutoFill() {
         }
 
         // Trigger input events to update validation and auto-geocode
-        const addressFields = ['full-name', 'address', 'apt', 'city', 'state', 'zip', 'county', 'phone', 'authorized-amount', 'expiration-date', 'case-url'];
+        const addressFields = ['full-name', 'address', 'apt', 'city', 'state', 'zip', 'county', 'phone', 'authorized-amount', 'expiration-date', 'dob', 'case-url'];
         addressFields.forEach(id => {
             const input = document.getElementById(id);
             if (input) {
@@ -814,9 +884,9 @@ function setupFormValidation() {
             }
         }
 
-        // Check service type radio
-        const serviceType = document.querySelector('input[name="service-type"]:checked');
-        if (!serviceType) {
+        // Check service type
+        const serviceTypeField = document.getElementById('service-type');
+        if (!serviceTypeField || !serviceTypeField.value) {
             isValid = false;
         }
 
@@ -839,10 +909,10 @@ function setupFormValidation() {
     // Add event listeners to all form fields
     requiredFields.forEach(fieldId => {
         if (fieldId === 'service-type') {
-            const radios = document.querySelectorAll('input[name="service-type"]');
-            radios.forEach(radio => {
-                radio.addEventListener('change', validateForm);
-            });
+            const field = document.getElementById('service-type');
+            if (field) {
+                field.addEventListener('change', validateForm);
+            }
         } else {
             const field = document.getElementById(fieldId);
             if (field) {
