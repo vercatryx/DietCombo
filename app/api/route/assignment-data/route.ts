@@ -18,36 +18,32 @@ export async function GET(req: Request) {
         const day = (searchParams.get("day") || "all").toLowerCase();
 
         // 1) Clients: only columns needed for assignment, filter paused/delivery in DB
-        let clientsQuery = supabase
-            .from("clients")
-            .select(
-                "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id, service_type"
-            )
-            .eq("paused", false)
-            .or("delivery.is.null,delivery.eq.true");
-        if (brooklynOnly) {
-            clientsQuery = clientsQuery.eq("unite_account", "Brooklyn");
-        }
-        clientsQuery = clientsQuery.order("id", { ascending: true });
-
-        const { data: clientsRows, error: clientsError } = await clientsQuery;
-
-        if (clientsError) {
-            console.error("[/api/route/assignment-data] clients error:", clientsError);
-            return NextResponse.json(
-                { error: clientsError.message },
-                { status: 500 }
-            );
-        }
+        const clientsRows = await fetchAllRows((sb) => {
+            let q = sb
+                .from("clients")
+                .select(
+                    "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id, service_type"
+                )
+                .eq("paused", false)
+                .or("delivery.is.null,delivery.eq.true");
+            if (brooklynOnly) {
+                q = q.eq("unite_account", "Brooklyn");
+            }
+            return q.order("id", { ascending: true });
+        });
 
         // 1b) Client stats for routes page summary (same Brooklyn filter when brooklyn_admin)
-        let statsQuery = supabase
-            .from("clients")
-            .select("id, parent_client_id, service_type, paused, delivery, lat, lng");
-        if (brooklynOnly) {
-            statsQuery = statsQuery.eq("unite_account", "Brooklyn");
-        }
-        const { data: statsRows } = await statsQuery;
+        const statsRows = await fetchAllRows((sb) => {
+            let q = sb
+                .from("clients")
+                .select("id, parent_client_id, service_type, paused, delivery, lat, lng");
+            if (brooklynOnly) {
+                q = q.eq("unite_account", "Brooklyn");
+            }
+            // Note: ordering isn't strictly required for stats correctness,
+            // but keeping it stable helps with debugging.
+            return q.order("id", { ascending: true });
+        });
         const rows = (statsRows || []) as { parent_client_id: string | null; service_type: string | null; paused: boolean; delivery: boolean; lat: number | null; lng: number | null }[];
         const hasFood = (st: string | null) => (st ?? "").toLowerCase().includes("food");
         const hasProduce = (st: string | null) => (st ?? "").toLowerCase().includes("produce");

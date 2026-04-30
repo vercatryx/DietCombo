@@ -4,8 +4,11 @@
  * Same JSON format as /api/extension/billing-requests.
  *
  * - Order list: only orders NOT already marked billing_successful.
- * - Proof URLs: from ALL orders for the household, the 2 most recent that have proof_of_delivery_url
- *   (or 1 if only one); if none, uses sign_token signature PDF.
+ * - Proof URLs:
+ *   - If ?date=YYYY-MM-DD is provided (week start), first try to use up to 2 proof URLs from orders whose
+ *     delivery date falls within that 7-day window (date..date+6, inclusive).
+ *   - If none exist in the window, fall back to the 2 most recent proof URLs across all orders.
+ *   - If still none, uses sign_token signature PDF.
  * - Unite Us `url`: parent client's case_id_external / client_id_external only (not copied from orders).
  *
  * GET /api/bill
@@ -31,6 +34,22 @@ const MAX_PROOF_URLS = 2;
 function orderDate(o: { actual_delivery_date?: string | null; scheduled_delivery_date?: string | null }): string {
     const d = o.actual_delivery_date || o.scheduled_delivery_date || '';
     return d;
+}
+
+/** Extract YYYY-MM-DD from an order date (ISO datetime or date). Returns '' when missing/invalid. */
+function orderISODate(o: { actual_delivery_date?: string | null; scheduled_delivery_date?: string | null }): string {
+    const raw = orderDate(o);
+    if (!raw) return '';
+    // Accept "YYYY-MM-DD", "YYYY-MM-DDTHH:MM:SSZ", or "YYYY-MM-DD HH:MM:SS"
+    const s = String(raw).trim();
+    if (s.length >= 10) return s.slice(0, 10);
+    return '';
+}
+
+function isISODateInRangeInclusive(isoDate: string, startISO: string, endISO: string): boolean {
+    if (!isoDate || isoDate.length < 10) return false;
+    // Lex compare works for YYYY-MM-DD.
+    return isoDate >= startISO && isoDate <= endISO;
 }
 
 /** Default date for billing (YYYY-MM-DD) when no query param is provided. */
@@ -105,6 +124,7 @@ async function fetchAllRows<T = any>(build: (from: number, to: number) => any, p
 export async function GET(request: NextRequest) {
     try {
         const billDate = parseBillDateFromRequest(request) ?? BILL_DATE_DEFAULT;
+        const billEndDate = billDateEnd(billDate);
         const accountFilter = parseAccountFilter(request);
 
         // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
@@ -232,7 +252,7 @@ export async function GET(request: NextRequest) {
 
         // Per household:
         // - Order list: only orders NOT billing_successful (already billed are excluded).
-        // - Proof URLs: from ALL orders (any status), sort by most recent, take up to MAX_PROOF_URLS that have proof.
+        // - Proof URLs: prefer proofs within the requested week; fall back to most recent overall.
         const orderNumbersByHousehold: Record<string, string[]> = {};
         const proofURLsByHousehold: Record<string, string[]> = {};
         for (const householdId of Object.keys(ordersByHousehold)) {
@@ -241,7 +261,11 @@ export async function GET(request: NextRequest) {
             const ordersForList = list.filter((o: any) => String(o.status || '').toLowerCase() !== BILLING_SUCCESSFUL);
             orderNumbersByHousehold[householdId] = ordersForList.map((o: any) => String(o.order_number ?? ''));
 
-            // Proof URLs: all orders sorted by date (most recent first), then take those with proof, up to MAX_PROOF_URLS
+            // Proof URLs:
+            // 1) Sort by date (most recent first)
+            // 2) Filter to those with proof
+            // 3) Prefer those whose date is within [billDate, billEndDate] inclusive
+            // 4) If none in week, fall back to most recent overall
             const sortedByDate = [...list].sort((a: any, b: any) => {
                 const da = orderDate(a);
                 const db = orderDate(b);
@@ -250,10 +274,13 @@ export async function GET(request: NextRequest) {
             const withProof = sortedByDate.filter(
                 (o: any) => o.proof_of_delivery_url != null && String(o.proof_of_delivery_url).trim() !== ''
             );
-            const urls = withProof
+            const inWeek = withProof.filter((o: any) =>
+                isISODateInRangeInclusive(orderISODate(o), billDate, billEndDate)
+            );
+            const preferred = inWeek.length > 0 ? inWeek : withProof;
+            proofURLsByHousehold[householdId] = preferred
                 .slice(0, MAX_PROOF_URLS)
                 .map((o: any) => String(o.proof_of_delivery_url).trim());
-            proofURLsByHousehold[householdId] = urls;
         }
 
         // 6. One entry per household (parent). Orders include parent + dependants. Amount by parent service_type: Produce => 146/person, else 336/person
@@ -267,9 +294,8 @@ export async function GET(request: NextRequest) {
             let orderNumbers = orderNumbersByHousehold[pid] ?? [];
             let proofURLs = proofURLsByHousehold[pid] ?? [];
             if (proofURLs.length === 0 && parent.sign_token) {
-                const endDate = billDateEnd(billDate);
                 proofURLs = [
-                    `${baseUrl}/api/signatures/${encodeURIComponent(String(parent.sign_token))}/pdf?start=${billDate}&end=${endDate}&delivery=${billDate}`,
+                    `${baseUrl}/api/signatures/${encodeURIComponent(String(parent.sign_token))}/pdf?start=${billDate}&end=${billEndDate}&delivery=${billDate}`,
                 ];
             }
 
@@ -287,7 +313,7 @@ export async function GET(request: NextRequest) {
                 orderNumbers,
                 proofURLs,
                 date: billDate,
-                endDate: billDateEnd(billDate),
+                endDate: billEndDate,
                 amount: Number(amount),
                 dependants: deps.map((d: any) => ({
                     name: d.full_name ?? '',

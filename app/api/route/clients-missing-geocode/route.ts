@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { fetchAllRows, supabase } from "@/lib/supabase";
 import { getSession } from "@/lib/session";
 
 /**
@@ -15,25 +15,21 @@ export async function GET() {
         const session = await getSession();
         const brooklynOnly = session?.role === "brooklyn_admin";
 
-        let query = supabase
-            .from("clients")
-            .select(
-                "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id"
-            )
-            .eq("paused", false)
-            .or("delivery.is.null,delivery.eq.true")
-            .or("lat.is.null,lng.is.null");
-        if (brooklynOnly) {
-            query = query.eq("unite_account", "Brooklyn");
-        }
-        const { data: rows, error } = await query.order("id", { ascending: true });
+        const rawRows = await fetchAllRows((sb) => {
+            let q = sb
+                .from("clients")
+                .select(
+                    "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id"
+                )
+                .eq("paused", false)
+                .or("delivery.is.null,delivery.eq.true")
+                .or("lat.is.null,lng.is.null");
+            if (brooklynOnly) {
+                q = q.eq("unite_account", "Brooklyn");
+            }
+            return q.order("id", { ascending: true });
+        });
 
-        if (error) {
-            console.error("[/api/route/clients-missing-geocode] error:", error);
-            return NextResponse.json({ error: error.message }, { status: 500 });
-        }
-
-        const rawRows = rows || [];
         const str = (v: unknown): string => (v != null && v !== "" ? String(v).trim() : "");
         // Read any column from row (clients table: address, city, state, zip) – match key case-insensitively
         const get = (r: Record<string, unknown>, col: string): string => {

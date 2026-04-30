@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, type ComponentType } from 're
 import dynamic from 'next/dynamic';
 import { processDeliveryProof } from '@/app/delivery/actions';
 import { Camera, CheckCircle, Upload, AlertCircle, X } from 'lucide-react';
+import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
 
 const Webcam = dynamic(
     () => import('react-webcam') as Promise<{ default: ComponentType<any> }>,
@@ -66,12 +67,16 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
         if (hasCamera === false) setStep('NO_CAMERA');
     }, [hasCamera]);
 
-    const capture = useCallback(() => {
-        const src = webcamRef.current?.getScreenshot?.();
-        if (src) {
-            setImageSrc(src);
-            setStep('PREVIEW');
+    const capture = useCallback(async () => {
+        const raw = webcamRef.current?.getScreenshot?.();
+        if (!raw) return;
+        try {
+            const stamped = await stampTimestampOnImageDataUrl(raw);
+            setImageSrc(stamped);
+        } catch {
+            setImageSrc(raw);
         }
+        setStep('PREVIEW');
     }, []);
 
     const handleUpload = async () => {

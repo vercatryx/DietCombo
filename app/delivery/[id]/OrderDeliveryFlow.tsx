@@ -6,6 +6,7 @@ import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, PenTool, ExternalLink } from 'lucide-react';
 import '../delivery.css';
+import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -69,12 +70,16 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         return () => { cancelled = true; };
     }, [step]);
 
-    const capture = useCallback(() => {
-        const imageSrc = webcamRef.current?.getScreenshot();
-        if (imageSrc) {
-            setImageSrc(imageSrc);
-            setStep('PREVIEW');
+    const capture = useCallback(async () => {
+        const raw = webcamRef.current?.getScreenshot();
+        if (!raw) return;
+        try {
+            const stamped = await stampTimestampOnImageDataUrl(raw);
+            setImageSrc(stamped);
+        } catch {
+            setImageSrc(raw);
         }
+        setStep('PREVIEW');
     }, [webcamRef]);
 
     async function handleUpload() {

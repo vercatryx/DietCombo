@@ -11,6 +11,7 @@ import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz } 
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
+import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
 
 type BulkResult<T> = { success: true } & T | { success: false; error: string; errors?: string[] };
 
@@ -29,6 +30,7 @@ export async function processProduceProof(formData: FormData) {
     const file = formData.get('file') as File;
     const orderNumber = formData.get('orderNumber') as string;
     const testUrl = formData.get('testUrl') as string | null; // Optional test URL to bypass R2
+    let proofTimeIso: string | null = null;
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -114,7 +116,13 @@ export async function processProduceProof(formData: FormData) {
             publicUrl = testUrl;
         } else if (file) {
             // Normal flow: Upload to R2
-            const buffer = Buffer.from(await file.arrayBuffer());
+            const rawBuffer = Buffer.from(await file.arrayBuffer());
+            const { buffer, stampedAtIso } = await stampTimestampOnImageBuffer(
+                rawBuffer,
+                file.type || 'image/jpeg',
+                new Date()
+            );
+            proofTimeIso = stampedAtIso;
             const timestamp = Date.now();
             const extension = file.name.split('.').pop();
             const key = `produce-proof-${orderNumber}-${timestamp}.${extension}`;
@@ -141,7 +149,7 @@ export async function processProduceProof(formData: FormData) {
 
         // For orders table, update with produce processing status.
         // Set both actual_delivery_date and scheduled_delivery_date to proof upload date (Produce = prompt/realtime).
-        const proofUploadTime = new Date();
+        const proofUploadTime = proofTimeIso ? new Date(proofTimeIso) : new Date();
         const proofUploadDateStr = toDateStringInAppTz(proofUploadTime);
         const updateData: any = {
             proof_of_delivery_url: publicUrl,
@@ -280,7 +288,8 @@ export async function uploadProduceProofOnly(formData: FormData) {
     }
 
     try {
-        const buffer = Buffer.from(await file.arrayBuffer());
+        const rawBuffer = Buffer.from(await file.arrayBuffer());
+        const { buffer } = await stampTimestampOnImageBuffer(rawBuffer, file.type || 'image/jpeg', new Date());
         const timestamp = Date.now();
         const extension = file.name.split('.').pop() || 'jpg';
         const key = `produce-proof-${clientId}-${timestamp}.${extension}`;

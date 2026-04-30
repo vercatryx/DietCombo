@@ -5,6 +5,7 @@ import Webcam from 'react-webcam';
 import { uploadProduceProofOnly, createProduceOrderWithProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ExternalLink, ImageIcon } from 'lucide-react';
 import '../produce.css';
+import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
 
 interface ClientDetails {
     id: string;
@@ -23,12 +24,16 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const [error, setError] = useState<string>('');
     const webcamRef = useRef<Webcam>(null);
 
-    const capture = useCallback(() => {
-        const imageSrc = webcamRef.current?.getScreenshot();
-        if (imageSrc) {
-            setImageSrc(imageSrc);
-            setStep('PREVIEW');
+    const capture = useCallback(async () => {
+        const raw = webcamRef.current?.getScreenshot();
+        if (!raw) return;
+        try {
+            const stamped = await stampTimestampOnImageDataUrl(raw);
+            setImageSrc(stamped);
+        } catch {
+            setImageSrc(raw);
         }
+        setStep('PREVIEW');
     }, [webcamRef]);
 
     async function handleUpload() {

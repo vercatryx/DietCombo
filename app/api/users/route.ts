@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { fetchAllRows, supabase } from "@/lib/supabase";
 
 /**
  * API endpoint to get clients formatted as "users" for routes feature compatibility
@@ -9,42 +9,23 @@ import { supabase } from "@/lib/supabase";
  */
 export async function GET(req: Request) {
     try {
-        const { data: clients, error: clientsError } = await supabase
-            .from('clients')
-            .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex, assigned_driver_id')
-            .order('id', { ascending: true });
+        const clients = await fetchAllRows((sb) =>
+            sb.from('clients')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex, assigned_driver_id')
+                .order('id', { ascending: true })
+        );
 
-        if (clientsError) {
-            console.error("[/api/users] Error fetching clients:", clientsError);
-            console.error("[/api/users] Error details:", {
-                message: clientsError.message,
-                code: clientsError.code,
-                details: clientsError.details,
-                hint: clientsError.hint
-            });
-            
-            // Check for RLS/permission errors
-            if (clientsError.code === 'PGRST301' || clientsError.message?.includes('permission denied')) {
-                console.error("[/api/users] ⚠️  RLS (Row Level Security) may be blocking this query.");
-                console.error("[/api/users] SOLUTION: Set SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY).");
-            }
-            
-            return NextResponse.json({ 
-                error: `Failed to fetch clients: ${clientsError.message}`,
-                code: clientsError.code,
-                hint: clientsError.hint
-            }, { status: 500 });
-        }
-        
         console.log(`[/api/users] Successfully fetched ${clients?.length || 0} clients`);
 
         // Get schedules for clients
-        const { data: schedules, error: schedulesError } = await supabase
-            .from('schedules')
-            .select('client_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday');
-
-        if (schedulesError) {
-            console.error("[/api/users] Error fetching schedules:", schedulesError);
+        let schedules: any[] = [];
+        try {
+            schedules = await fetchAllRows((sb) =>
+                sb.from('schedules')
+                    .select('client_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday')
+            );
+        } catch (e) {
+            console.error("[/api/users] Error fetching schedules:", e);
             // Don't fail the request if schedules fail, just log it
         }
 

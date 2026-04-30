@@ -4,6 +4,9 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { uploadFile } from "@/lib/storage";
+import { stampTimestampOnImageBuffer } from "@/lib/stampTimestampOnImageBuffer";
+
+export const runtime = 'nodejs';
 
 const R2_DELIVERY_BUCKET = process.env.R2_DELIVERY_BUCKET_NAME;
 const R2_PUBLIC_BASE = process.env.NEXT_PUBLIC_R2_DOMAIN || "https://storage.thedietfantasy.com";
@@ -76,6 +79,15 @@ export async function POST(req: Request) {
     if (!R2_DELIVERY_BUCKET) {
         console.error("[mobile/stop/proof] R2_DELIVERY_BUCKET_NAME not set");
         return NextResponse.json({ ok: false, error: "Upload not configured" }, { status: 500 });
+    }
+
+    // Stamp timestamp onto the image (prefer EXIF capture time; fall back to upload time).
+    try {
+        const stamped = await stampTimestampOnImageBuffer(buffer, mimeType || "image/jpeg", new Date());
+        buffer = stamped.buffer;
+        // Note: we don't currently persist stampedAt/source for stops; the stamp itself is the record.
+    } catch {
+        // If stamping fails for any reason, continue with original image.
     }
 
     const ext = mimeType.includes("png") ? "png" : "jpg";
