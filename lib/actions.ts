@@ -20,7 +20,7 @@ import { getSupabaseDbApiKey } from './supabase-env';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { uploadFile, deleteFile } from './storage';
 import { getClientSubmissions } from './form-actions';
-import { composeUniteUsUrl } from './utils';
+import { composeUniteUsUrl, roundCurrency } from './utils';
 import { toStoredUpcomingOrder, fromStoredUpcomingOrder } from './upcoming-order-schema';
 import { prepareMealPlannerDataForUpdate, mealPlannerDateOnly, mealPlannerCutoffDate, type MealPlannerOrderResult } from './meal-planner-utils';
 import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
@@ -12650,4 +12650,247 @@ export async function deleteProduceVendor(id: string): Promise<void> {
         throw new Error('Failed to deactivate produce vendor: ' + error.message);
     }
     revalidatePath('/admin');
+}
+
+type ProduceVendorBulkResult<T> = ({ success: true } & T) | { success: false; error: string; errors?: string[] };
+
+async function getProduceVendorByTokenForBulk(supabaseAdmin: SupabaseClient, vendorToken: string) {
+    if (!vendorToken?.trim()) return null;
+    const { data } = await supabaseAdmin
+        .from('produce_vendors')
+        .select('id, name, token, is_active')
+        .eq('token', vendorToken.trim())
+        .maybeSingle();
+    if (!data || data.is_active === false) return null;
+    return data as { id: string; name: string; token: string; is_active: boolean };
+}
+
+/** Token link: bulk-create Produce orders for vendor clients (no SMS / billing until POD). */
+export async function bulkCreateProduceOrdersForVendor(
+    clientIds: string[],
+    deliveryDate: string,
+    vendorToken: string
+): Promise<
+    ProduceVendorBulkResult<{
+        created: number;
+        errors: string[];
+        orders: Array<{
+            clientId: string;
+            clientName: string;
+            address: string;
+            city: string;
+            state: string;
+            zip: string;
+            phone: string;
+            orderNumber: number;
+            deliveryDate: string;
+        }>;
+    }>
+> {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
+
+    try {
+        const vendor = await getProduceVendorByTokenForBulk(supabaseAdmin, vendorToken);
+        if (!vendor) return { success: false, error: 'Unauthorized' };
+
+        const ids = (clientIds || []).map(s => (s || '').trim()).filter(Boolean);
+        if (ids.length === 0) {
+            return { success: true, created: 0, errors: [], orders: [] };
+        }
+
+        const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) ? deliveryDate : toDateStringInAppTz(new Date(deliveryDate));
+
+        const defaultTemplate = await getDefaultOrderTemplate('Produce');
+        const billAmount = defaultTemplate?.billAmount || 0;
+        if (!billAmount || billAmount <= 0) {
+            return { success: false, error: 'Default bill amount not configured for Produce.' };
+        }
+
+        const defaultVendorId = await getDefaultVendorId();
+
+        const { data: clientRows, error: clientsErr } = await supabaseAdmin
+            .from('clients')
+            .select('id, full_name, address, city, state, zip, phone_number, service_type, paused, produce_vendor_id')
+            .in('id', ids);
+        if (clientsErr) return { success: false, error: `Failed to load clients: ${clientsErr.message}` };
+
+        const validClients = (clientRows || []).filter(
+            c => c.service_type === 'Produce' && !c.paused && c.produce_vendor_id === vendor.id
+        );
+
+        if (validClients.length === 0) {
+            return { success: true, created: 0, errors: [], orders: [] };
+        }
+
+        const orderNumbers = await generateBatchOrderNumbers(supabaseAdmin, validClients.length);
+
+        const nowIso = new Date().toISOString();
+        const insertPayload = validClients.map((c, idx) => {
+            const payload: any = {
+                id: randomUUID(),
+                client_id: c.id,
+                service_type: 'Produce',
+                order_number: orderNumbers[idx],
+                scheduled_delivery_date: dateKey,
+                status: 'pending',
+                total_value: billAmount,
+                total_items: 1,
+                bill_amount: billAmount,
+                proof_of_delivery_url: null,
+                created_at: nowIso
+            };
+            if (defaultVendorId) payload.vendor_id = defaultVendorId;
+            return payload;
+        });
+
+        const { data: insertedOrders, error: insertErr } = await supabaseAdmin
+            .from('orders')
+            .insert(insertPayload)
+            .select('id, client_id, order_number, scheduled_delivery_date');
+        if (insertErr) return { success: false, error: `Failed to create orders: ${insertErr.message}` };
+
+        const byClientId = new Map(validClients.map(c => [c.id, c]));
+        const orders = (insertedOrders || []).map(o => {
+            const c: any = byClientId.get(o.client_id);
+            return {
+                clientId: o.client_id,
+                clientName: c?.full_name || 'Unknown',
+                address: c?.address || '',
+                city: c?.city || '',
+                state: c?.state || '',
+                zip: c?.zip || '',
+                phone: (c?.phone_number || '').trim(),
+                orderNumber: o.order_number,
+                deliveryDate: o.scheduled_delivery_date || dateKey
+            };
+        });
+
+        revalidatePath('/admin');
+        revalidatePath('/vendors');
+
+        return { success: true, created: orders.length, errors: [], orders };
+    } catch (e: any) {
+        return { success: false, error: e?.message || 'Failed to create orders' };
+    }
+}
+
+/** Token link: bulk attach POD URLs by order number (no SMS). */
+export async function bulkUpdateProduceProofsForVendor(
+    updates: Array<{ orderNumber: string; proofUrl: string }>,
+    vendorToken: string
+): Promise<ProduceVendorBulkResult<{ updated: number; errors: string[] }>> {
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
+
+    try {
+        const vendor = await getProduceVendorByTokenForBulk(supabaseAdmin, vendorToken);
+        if (!vendor) return { success: false, error: 'Unauthorized' };
+
+        const rows = (updates || [])
+            .map(u => ({ orderNumber: (u?.orderNumber || '').trim(), proofUrl: (u?.proofUrl || '').trim() }))
+            .filter(u => u.orderNumber && u.proofUrl);
+
+        if (rows.length === 0) return { success: true, updated: 0, errors: [] };
+
+        const { data: vendorClients, error: vcErr } = await supabaseAdmin
+            .from('clients')
+            .select('id')
+            .eq('produce_vendor_id', vendor.id);
+        if (vcErr) return { success: false, error: `Failed to load vendor clients: ${vcErr.message}` };
+        const allowedClientIds = new Set((vendorClients || []).map(c => c.id));
+
+        const errors: string[] = [];
+        let updated = 0;
+
+        for (let i = 0; i < rows.length; i++) {
+            const { orderNumber, proofUrl } = rows[i];
+
+            try {
+                const asNumber = Number(orderNumber);
+                const isNumeric = Number.isFinite(asNumber) && String(asNumber) === orderNumber;
+
+                const { data: order, error: orderErr } = await supabaseAdmin
+                    .from('orders')
+                    .select('id, client_id, total_value, bill_amount, service_type')
+                    .eq('service_type', 'Produce')
+                    .eq('order_number', isNumeric ? asNumber : orderNumber)
+                    .maybeSingle();
+
+                if (orderErr) {
+                    errors.push(`Row ${i + 1} (Order ${orderNumber}): ${orderErr.message}`);
+                    continue;
+                }
+                if (!order) {
+                    errors.push(`Row ${i + 1} (Order ${orderNumber}): Order not found`);
+                    continue;
+                }
+
+                if (!allowedClientIds.has(order.client_id)) {
+                    errors.push(`Row ${i + 1} (Order ${orderNumber}): Unauthorized`);
+                    continue;
+                }
+
+                const nowIso = new Date().toISOString();
+                const { error: updErr } = await supabaseAdmin
+                    .from('orders')
+                    .update({
+                        proof_of_delivery_url: proofUrl,
+                        status: 'billing_pending',
+                        actual_delivery_date: nowIso
+                    })
+                    .eq('id', order.id);
+                if (updErr) {
+                    errors.push(`Row ${i + 1} (Order ${orderNumber}): Failed to update order: ${updErr.message}`);
+                    continue;
+                }
+
+                const { data: existingBilling } = await supabaseAdmin
+                    .from('billing_records')
+                    .select('id')
+                    .eq('order_id', order.id)
+                    .maybeSingle();
+
+                if (!existingBilling) {
+                    const { data: clientRow } = await supabaseAdmin
+                        .from('clients')
+                        .select('navigator_id, authorized_amount')
+                        .eq('id', order.client_id)
+                        .single();
+
+                    const billingAmount = order.bill_amount ?? order.total_value ?? 0;
+                    await supabaseAdmin.from('billing_records').insert([
+                        {
+                            id: randomUUID(),
+                            client_id: order.client_id,
+                            order_id: order.id,
+                            status: 'pending',
+                            amount: billingAmount,
+                            navigator: clientRow?.navigator_id || null,
+                            remarks: 'Auto-generated upon vendor bulk proof upload'
+                        }
+                    ]);
+
+                    if (clientRow?.authorized_amount !== null && clientRow?.authorized_amount !== undefined) {
+                        const currentAmount = clientRow.authorized_amount ?? 0;
+                        const orderAmount = billingAmount || 0;
+                        const newAuthorizedAmount = Math.max(0, roundCurrency(currentAmount - orderAmount));
+                        await supabaseAdmin
+                            .from('clients')
+                            .update({ authorized_amount: newAuthorizedAmount })
+                            .eq('id', order.client_id);
+                    }
+                }
+
+                updated += 1;
+            } catch (rowErr: any) {
+                errors.push(`Row ${i + 1} (Order ${rows[i].orderNumber}): ${rowErr?.message || 'Unknown error'}`);
+            }
+        }
+
+        revalidatePath('/admin');
+        revalidatePath('/vendors');
+
+        return { success: true, updated, errors };
+    } catch (e: any) {
+        return { success: false, error: e?.message || 'Failed to update proofs' };
+    }
 }

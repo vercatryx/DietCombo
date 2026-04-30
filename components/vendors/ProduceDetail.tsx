@@ -7,7 +7,7 @@ import { getClients, getMenuItems, getBoxTypes, getProduceVendors } from '@/lib/
 import { Package, FileText, Search, User, AlertTriangle, PlusCircle, X, Download } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
-import { bulkCreateProduceOrdersForVendor, bulkUpdateProduceProofsForVendor } from '@/app/produce/actions';
+import { bulkCreateProduceOrdersForVendor, bulkUpdateProduceProofsForVendor } from '@/lib/actions';
 import * as XLSX from 'xlsx';
 import styles from './VendorDetail.module.css';
 
@@ -63,7 +63,8 @@ export function ProduceDetail() {
 
     useEffect(() => {
         loadData();
-    }, []);
+        // Re-run when token becomes available (vendor link) so we don’t stick with an empty list.
+    }, [token]);
 
     async function loadData() {
         setIsLoading(true);
