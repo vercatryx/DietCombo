@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, type WheelEvent } from 'react';
 import { Vendor, MenuItem, OrderConfiguration, BoxType, BoxConfiguration, ItemCategory } from '@/lib/types';
 import { getDefaultOrderTemplate, saveDefaultOrderTemplate, getMealPlannerCustomItems, saveMealPlannerCustomItems, getMealPlannerItemCountsByDate, addMenuItem, updateMenuItem, deleteMenuItem, updateMenuItemOrder } from '@/lib/actions';
 import { clearDefaultOrderTemplateCache } from '@/lib/default-order-template-cache';
@@ -25,6 +25,15 @@ import styles from './DefaultOrderTemplate.module.css';
 import { useDataCache } from '@/lib/data-cache';
 
 type MealPlannerCustomItem = { id: string; name: string; quantity: number; value?: number | null; sortOrder?: number };
+
+function totalQtyFromMealPlannerDraft(items: MealPlannerCustomItem[]): number {
+    return items.reduce((sum, i) => sum + Math.max(0, Number(i.quantity) || 0), 0);
+}
+
+/** Wheel / trackpad scroll must not nudge number values (common while reordering rows). */
+function preventNumberInputWheelNudge(e: WheelEvent<HTMLInputElement>) {
+    e.preventDefault();
+}
 
 interface SortableMealPlannerRowProps {
     item: MealPlannerCustomItem;
@@ -62,7 +71,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
             />
             <input
                 type="number"
-                className="input"
+                className={`input ${styles.inputNumberNoSpinners}`}
                 placeholder="Qty"
                 value={item.quantity ?? 1}
                 onChange={(e) => {
@@ -71,6 +80,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                         quantity: Number.isNaN(n) ? 1 : Math.max(0, n)
                     });
                 }}
+                onWheel={preventNumberInputWheelNudge}
                 min={0}
                 style={{ width: '60px', textAlign: 'center' }}
                 aria-label="Quantity (default 1)"
@@ -78,7 +88,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
             />
             <input
                 type="number"
-                className="input"
+                className={`input ${styles.inputNumberNoSpinners}`}
                 placeholder="Meals"
                 step="0.01"
                 min="0"
@@ -89,6 +99,7 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                         value: v === '' ? 1 : (parseFloat(v) || 1)
                     });
                 }}
+                onWheel={preventNumberInputWheelNudge}
                 style={{ width: '70px', textAlign: 'right' }}
                 aria-label="Meals per item (default 1)"
                 disabled={disabled}
@@ -150,9 +161,10 @@ function SortableDefaultOrderItemRow({ item, template, updateItemQuantity, start
                 </button>
                 <input
                     type="number"
-                    className="input"
+                    className={`input ${styles.inputNumberNoSpinners}`}
                     value={template.vendorSelections?.[0]?.items[item.id] || 0}
                     onChange={e => updateItemQuantity(item.id, parseInt(e.target.value) || 0)}
+                    onWheel={preventNumberInputWheelNudge}
                     min="0"
                     style={{ width: '80px', textAlign: 'center' }}
                 />
@@ -211,7 +223,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
     const [mealPlannerPopupDate, setMealPlannerPopupDate] = useState<string | null>(null);
     const [mealPlannerDraftItems, setMealPlannerDraftItems] = useState<MealPlannerCustomItem[]>([]);
     const [mealPlannerExpirationDate, setMealPlannerExpirationDate] = useState<string>('');
-    const [mealPlannerExpectedTotalMeals, setMealPlannerExpectedTotalMeals] = useState<string>('');
     const [mealPlannerPopupLoading, setMealPlannerPopupLoading] = useState(false);
     const [mealPlannerPopupSaving, setMealPlannerPopupSaving] = useState(false);
     /** Message shown inside the meal planner popup (Saving… / Saved / error) so user always sees feedback. */
@@ -757,7 +768,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         setMealPlannerDraftItems([]);
         setMealPlannerExpirationDate('');
         try {
-            const { items, expirationDate, expectedTotalMeals } = await getMealPlannerCustomItems(dateKey, null);
+            const { items, expirationDate } = await getMealPlannerCustomItems(dateKey, null);
             setMealPlannerDraftItems(
                 items.map((i) => ({
                     id: i.id,
@@ -769,7 +780,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
             );
             const loadedExp = expirationDate ?? dateKey;
             setMealPlannerExpirationDate(loadedExp > dateKey ? dateKey : loadedExp);
-            setMealPlannerExpectedTotalMeals(expectedTotalMeals != null ? String(expectedTotalMeals) : '10');
         } catch (e) {
             setMessage('Error loading meal planner items.');
             setTimeout(() => setMessage(null), 3000);
@@ -779,17 +789,23 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
     }
 
     function addMealPlannerDraftItem() {
-        const maxSort = mealPlannerDraftItems.reduce((m, i) => Math.max(m, i.sortOrder ?? 0), -1);
-        setMealPlannerDraftItems((prev) => [
-            ...prev,
-            {
-                id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                name: '',
-                quantity: 1,
-                value: 1,
-                sortOrder: maxSort + 1
-            }
-        ]);
+        setMealPlannerDraftItems((prev) => {
+            const maxSort = prev.reduce((m, i) => Math.max(m, i.sortOrder ?? 0), -1);
+            const id =
+                typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                    ? `custom-${crypto.randomUUID()}`
+                    : `custom-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+            return [
+                ...prev,
+                {
+                    id,
+                    name: '',
+                    quantity: 1,
+                    value: 1,
+                    sortOrder: maxSort + 1
+                }
+            ];
+        });
     }
 
     async function handleMealPlannerSave() {
@@ -831,10 +847,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
             if (typeof window !== 'undefined') {
                 console.log('[Meal planner] Calling saveMealPlannerCustomItems...', savePayload.date, 'items:', savePayload.items.length);
             }
-            const expectedTotal =
-                mealPlannerExpectedTotalMeals.trim() === ''
-                    ? null
-                    : Math.max(0, parseInt(mealPlannerExpectedTotalMeals, 10) || 0);
+            const expectedTotal = totalQtyFromMealPlannerDraft(mealPlannerDraftItems);
             const savePromise = saveMealPlannerCustomItems(
                 mealPlannerPopupDate,
                 savePayload.items,
@@ -903,7 +916,6 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         setMealPlannerPopupDate(null);
         setMealPlannerDraftItems([]);
         setMealPlannerExpirationDate('');
-        setMealPlannerExpectedTotalMeals('');
     }
 
     function handleMealPlannerDragEnd(event: DragEndEvent) {
@@ -921,6 +933,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         () => [...mealPlannerDraftItems].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
         [mealPlannerDraftItems]
     );
+
+    const mealPlannerExpectedTotalMealsDisplay = useMemo(() => {
+        if (!mealPlannerPopupDate || mealPlannerPopupLoading) return '';
+        return String(totalQtyFromMealPlannerDraft(mealPlannerDraftItems));
+    }, [mealPlannerPopupDate, mealPlannerPopupLoading, mealPlannerDraftItems]);
 
     const handleUpdateMealPlannerDraftItem = useCallback(
         (id: string, patch: Partial<Pick<MealPlannerCustomItem, 'name' | 'quantity' | 'value' | 'sortOrder'>>) => {
@@ -1002,18 +1019,20 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                 <label className="label" style={{ display: 'block', marginBottom: 4 }}>Value</label>
                                 <input
                                     type="number"
-                                    className="input"
+                                    className={`input ${styles.inputNumberNoSpinners}`}
                                     value={itemForm.value}
                                     onChange={e => setItemForm(f => ({ ...f, value: Number(e.target.value) || 0 }))}
+                                    onWheel={preventNumberInputWheelNudge}
                                 />
                             </div>
                             <div style={{ width: '90px' }}>
                                 <label className="label" style={{ display: 'block', marginBottom: 4 }}>Price</label>
                                 <input
                                     type="number"
-                                    className="input"
+                                    className={`input ${styles.inputNumberNoSpinners}`}
                                     value={itemForm.priceEach}
                                     onChange={e => setItemForm(f => ({ ...f, priceEach: Number(e.target.value) || 0 }))}
+                                    onWheel={preventNumberInputWheelNudge}
                                     min="0"
                                     step="0.01"
                                 />
@@ -1022,9 +1041,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                 <label className="label" style={{ display: 'block', marginBottom: 4 }}>Order</label>
                                 <input
                                     type="number"
-                                    className="input"
+                                    className={`input ${styles.inputNumberNoSpinners}`}
                                     value={itemForm.sortOrder}
                                     onChange={e => setItemForm(f => ({ ...f, sortOrder: Number(e.target.value) || 0 }))}
+                                    onWheel={preventNumberInputWheelNudge}
                                     min="0"
                                 />
                             </div>
@@ -1243,19 +1263,18 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                             </div>
                                             <div>
                                                 <label htmlFor="meal-planner-expected-total" className={styles.popupSectionLabel}>
-                                                    Expected total meals (max items for this date)
+                                                    Expected total meals (sum of quantities)
                                                 </label>
                                                 <input
                                                     id="meal-planner-expected-total"
-                                                    type="number"
+                                                    type="text"
                                                     className="input"
-                                                    min={0}
-                                                    placeholder="e.g. 7"
-                                                    value={mealPlannerExpectedTotalMeals}
-                                                    onChange={(e) => setMealPlannerExpectedTotalMeals(e.target.value)}
-                                                    disabled={isPast}
-                                                    style={{ maxWidth: '8rem' }}
-                                                    aria-label="Expected total meals for this date"
+                                                    readOnly
+                                                    inputMode="numeric"
+                                                    value={mealPlannerExpectedTotalMealsDisplay}
+                                                    title="Updates automatically when you add items or change quantities."
+                                                    style={{ maxWidth: '8rem', opacity: isPast ? 0.85 : 1 }}
+                                                    aria-label="Expected total meals (sum of line quantities)"
                                                 />
                                             </div>
                                         </div>
@@ -1287,21 +1306,21 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                         {!isPast && <span style={{ width: '40px' }} />}
                                     </div>
                                 )}
-                                {mealPlannerDraftItems.length === 0 ? (
-                                    <p className={styles.popupNoItems}>
-                                        {isPast ? 'No custom items for this date.' : 'No custom items yet. Click "Add item" to add one.'}
-                                    </p>
-                                ) : (
-                                    <DndContext
-                                        sensors={mealPlannerSensors}
-                                        collisionDetection={closestCenter}
-                                        onDragEnd={handleMealPlannerDragEnd}
+                                <DndContext
+                                    sensors={mealPlannerSensors}
+                                    collisionDetection={closestCenter}
+                                    onDragEnd={handleMealPlannerDragEnd}
+                                >
+                                    <SortableContext
+                                        items={mealPlannerOrderedItems.map((i) => i.id)}
+                                        strategy={verticalListSortingStrategy}
                                     >
-                                        <SortableContext
-                                            items={mealPlannerOrderedItems.map((i) => i.id)}
-                                            strategy={verticalListSortingStrategy}
-                                        >
-                                            {mealPlannerOrderedItems.map((item) => (
+                                        {mealPlannerOrderedItems.length === 0 ? (
+                                            <p className={styles.popupNoItems}>
+                                                {isPast ? 'No custom items for this date.' : 'No custom items yet. Click "Add item" to add one.'}
+                                            </p>
+                                        ) : (
+                                            mealPlannerOrderedItems.map((item) => (
                                                 <SortableMealPlannerRow
                                                     key={item.id}
                                                     item={item}
@@ -1309,10 +1328,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                     onRemove={handleRemoveMealPlannerDraftItem}
                                                     disabled={isPast}
                                                 />
-                                            ))}
-                                        </SortableContext>
-                                    </DndContext>
-                                )}
+                                            ))
+                                        )}
+                                    </SortableContext>
+                                </DndContext>
                             </div>
                             <div className={styles.popupFooter}>
                                 {mealPlannerPopupStatus && (
@@ -1509,9 +1528,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                                                 </button>
                                                                                 <input
                                                                                     type="number"
-                                                                                    className="input"
+                                                                                    className={`input ${styles.inputNumberNoSpinners}`}
                                                                                     value={qty}
                                                                                     onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
+                                                                                    onWheel={preventNumberInputWheelNudge}
                                                                                     min="0"
                                                                                     style={{ width: '80px', textAlign: 'center' }}
                                                                                 />
@@ -1581,9 +1601,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                                             </button>
                                                                             <input
                                                                                 type="number"
-                                                                                className="input"
+                                                                                className={`input ${styles.inputNumberNoSpinners}`}
                                                                                 value={qty}
                                                                                 onChange={e => updateBoxItem(box.boxNumber, item.id, parseInt(e.target.value) || 0)}
+                                                                                onWheel={preventNumberInputWheelNudge}
                                                                                 min="0"
                                                                                 style={{ width: '80px', textAlign: 'center' }}
                                                                             />
@@ -1719,9 +1740,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                 <input
                                                     type="number"
                                                     step="0.01"
-                                                    className="input"
+                                                    className={`input ${styles.inputNumberNoSpinners}`}
                                                     value={item.price || 0}
                                                     onChange={e => updateCustomItem(index, 'price', e.target.value)}
+                                                    onWheel={preventNumberInputWheelNudge}
                                                     placeholder="0.00"
                                                     style={{ fontSize: '0.9rem' }}
                                                 />
@@ -1731,9 +1753,10 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                                                 <input
                                                     type="number"
                                                     min="1"
-                                                    className="input"
+                                                    className={`input ${styles.inputNumberNoSpinners}`}
                                                     value={item.quantity || 1}
                                                     onChange={e => updateCustomItem(index, 'quantity', e.target.value)}
+                                                    onWheel={preventNumberInputWheelNudge}
                                                     style={{ fontSize: '0.9rem' }}
                                                 />
                                             </div>
@@ -1767,12 +1790,13 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                             type="number"
                             step="0.01"
                             min="0"
-                            className="input"
+                            className={`input ${styles.inputNumberNoSpinners}`}
                             value={template.billAmount || 0}
                             onChange={e => setTemplate({
                                 ...template,
                                 billAmount: parseFloat(e.target.value) || 0
                             })}
+                            onWheel={preventNumberInputWheelNudge}
                             placeholder="0.00"
                             style={{ maxWidth: '300px' }}
                         />

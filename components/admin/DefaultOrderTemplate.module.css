@@ -631,3 +631,16 @@
     background: var(--bg-app);
     border-radius: 0 0 var(--radius-xl) var(--radius-xl);
 }
+
+/* Number inputs: hide native stepper arrows (easy to mis-click) */
+.inputNumberNoSpinners {
+    -moz-appearance: textfield;
+    appearance: textfield;
+    min-height: 2.25rem;
+}
+
+.inputNumberNoSpinners::-webkit-outer-spin-button,
+.inputNumberNoSpinners::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
