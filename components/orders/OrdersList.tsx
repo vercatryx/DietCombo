@@ -279,9 +279,14 @@ export function OrdersList() {
                     <div
                         key={order.id}
                         className={styles.row}
-                        onClick={() => router.push(`/orders/${order.id}`)}
-                        style={{ cursor: 'pointer' }}
                     >
+                        <Link
+                            href={`/orders/${order.id}`}
+                            className={styles.rowLinkOverlay}
+                            aria-label={`Open order ${order.order_number ?? order.id}`}
+                        >
+                            <span className={styles.srOnly}>Open</span>
+                        </Link>
                         <span
                             style={{ width: '50px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                             onClick={(e) => { e.stopPropagation(); handleSelectOrder(order.id); }}
