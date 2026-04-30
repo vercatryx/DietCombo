@@ -198,16 +198,14 @@ export async function GET(
             }
         }
 
-        page.drawText(
-            "Member attestation of MEDICALLY TAILORED OR NUTRITIONALLY APPROPRIATE FOOD PRESCRIPTIONS",
-            {
-            x: margin,
-            y,
-            size: 16,
-            font: bold,
-            }
-        );
-        y -= 28;
+        const attestationTitle =
+            "Member attestation of MEDICALLY TAILORED OR NUTRITIONALLY APPROPRIATE FOOD PRESCRIPTIONS";
+        const titleLineHeight = 20;
+        for (const ln of wrapText(attestationTitle, usableWidth, bold, 16)) {
+            page.drawText(ln, { x: margin, y, size: 16, font: bold });
+            y -= titleLineHeight;
+        }
+        y -= 8;
         page.drawLine({
             start: { x: margin, y },
             end: { x: page.getWidth() - margin, y },
