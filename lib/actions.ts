@@ -1869,7 +1869,7 @@ export async function getMealPlannerCustomItems(
         const items = rows.map((row: any) => ({
             id: row.id,
             name: row.name,
-            quantity: row.quantity != null && !Number.isNaN(Number(row.quantity)) ? Math.max(0, Number(row.quantity)) : 0,
+            quantity: row.quantity != null && !Number.isNaN(Number(row.quantity)) ? Math.max(0, Number(row.quantity)) : 1,
             value: row.value != null && !Number.isNaN(Number(row.value)) ? Number(row.value) : null,
             sortOrder: row.sort_order ?? 0
         }));
@@ -1947,7 +1947,7 @@ async function getMealPlannerCustomItemsBatch(dates: string[]): Promise<Map<stri
             entry.items.push({
                 id: (row as any).id,
                 name: (row as any).name,
-                quantity: (row as any).quantity != null && !Number.isNaN(Number((row as any).quantity)) ? Math.max(0, Number((row as any).quantity)) : 0,
+                quantity: (row as any).quantity != null && !Number.isNaN(Number((row as any).quantity)) ? Math.max(0, Number((row as any).quantity)) : 1,
                 value: (row as any).value != null && !Number.isNaN(Number((row as any).value)) ? Number((row as any).value) : null,
                 sortOrder: (row as any).sort_order ?? 0
             });
@@ -3646,7 +3646,7 @@ export async function saveMealPlannerCustomItems(
             client_id: clientIdVal,
             calendar_date: dateOnly,
             name: (item.name ?? '').trim(),
-            quantity: Math.max(0, item.quantity ?? 0),
+            quantity: Math.max(0, item.quantity ?? 1),
             value: item.value != null && !Number.isNaN(Number(item.value)) ? Number(item.value) : null,
             sort_order: item.sortOrder ?? idx,
             expiration_date: expirationDateVal

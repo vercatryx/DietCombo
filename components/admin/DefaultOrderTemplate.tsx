@@ -64,16 +64,16 @@ function SortableMealPlannerRow({ item, onUpdate, onRemove, disabled = false }: 
                 type="number"
                 className="input"
                 placeholder="Qty"
-                value={item.quantity ?? 0}
+                value={item.quantity ?? 1}
                 onChange={(e) => {
                     const n = parseInt(e.target.value, 10);
                     onUpdate(item.id, {
-                        quantity: Number.isNaN(n) ? 0 : Math.max(0, n)
+                        quantity: Number.isNaN(n) ? 1 : Math.max(0, n)
                     });
                 }}
                 min={0}
                 style={{ width: '60px', textAlign: 'center' }}
-                aria-label="Quantity (default 0)"
+                aria-label="Quantity (default 1)"
                 disabled={disabled}
             />
             <input
@@ -758,12 +758,11 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
         setMealPlannerExpirationDate('');
         try {
             const { items, expirationDate, expectedTotalMeals } = await getMealPlannerCustomItems(dateKey, null);
-            // Default quantity to 0 and value to 1 in the UI when loading (backend stores as-is)
             setMealPlannerDraftItems(
                 items.map((i) => ({
                     id: i.id,
                     name: i.name,
-                    quantity: i.quantity ?? 0,
+                    quantity: i.quantity ?? 1,
                     value: i.value ?? 1,
                     sortOrder: i.sortOrder ?? 0
                 }))
@@ -786,7 +785,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
             {
                 id: `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`,
                 name: '',
-                quantity: 0,
+                quantity: 1,
                 value: 1,
                 sortOrder: maxSort + 1
             }
@@ -823,7 +822,7 @@ export function DefaultOrderTemplate({ mainVendor, menuItems, onMenuItemsChange 
                 items: valid.map((i) => ({
                     id: i.id,
                     name: i.name,
-                    quantity: i.quantity ?? 0,
+                    quantity: i.quantity ?? 1,
                     value: i.value ?? 1,
                     sortOrder: i.sortOrder ?? 0
                 })),
