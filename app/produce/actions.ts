@@ -612,7 +612,7 @@ export async function bulkCreateProduceOrdersForVendor(
     clientIds: string[],
     deliveryDate: string, // 'YYYY-MM-DD'
     vendorToken: string
-): Promise<BulkResult<{ created: number; errors: string[]; orders: Array<{ clientId: string; clientName: string; address: string; phone: string; orderNumber: number; deliveryDate: string }> }>> {
+): Promise<BulkResult<{ created: number; errors: string[]; orders: Array<{ clientId: string; clientName: string; address: string; city: string; state: string; zip: string; phone: string; orderNumber: number; deliveryDate: string }> }>> {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         getSupabaseDbApiKey()!
@@ -640,7 +640,7 @@ export async function bulkCreateProduceOrdersForVendor(
         // Fetch client info and enforce vendor ownership
         const { data: clientRows, error: clientsErr } = await supabaseAdmin
             .from('clients')
-            .select('id, full_name, address, phone_number, service_type, paused, produce_vendor_id')
+            .select('id, full_name, address, city, state, zip, phone_number, service_type, paused, produce_vendor_id')
             .in('id', ids);
         if (clientsErr) return { success: false, error: `Failed to load clients: ${clientsErr.message}` };
 
@@ -687,6 +687,9 @@ export async function bulkCreateProduceOrdersForVendor(
                 clientId: o.client_id,
                 clientName: c?.full_name || 'Unknown',
                 address: c?.address || '',
+                city: c?.city || '',
+                state: c?.state || '',
+                zip: c?.zip || '',
                 phone: (c?.phone_number || '').trim(),
                 orderNumber: o.order_number,
                 deliveryDate: o.scheduled_delivery_date || dateKey

@@ -15,6 +15,9 @@ type CreatedProduceOrderRow = {
     clientId: string;
     clientName: string;
     address: string;
+    city: string;
+    state: string;
+    zip: string;
     phone: string;
     orderNumber: number;
     deliveryDate: string;
@@ -194,13 +197,16 @@ export function ProduceDetail() {
 
         const sheetRows = sorted.map(r => ({
             'Order Number': r.orderNumber,
-            'Client Name': r.clientName,
+            'Name': r.clientName,
             'Address': r.address,
+            'City': r.city,
+            'State': r.state,
+            'Zip': r.zip,
             'Phone': r.phone,
             'Delivery Date': r.deliveryDate || exportDeliveryDate
         }));
 
-        const ws = XLSX.utils.json_to_sheet(sheetRows, { header: ['Order Number', 'Client Name', 'Address', 'Phone', 'Delivery Date'] });
+        const ws = XLSX.utils.json_to_sheet(sheetRows, { header: ['Order Number', 'Name', 'Address', 'City', 'State', 'Zip', 'Phone', 'Delivery Date'] });
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Orders');
         XLSX.writeFile(wb, `produce-orders-${exportDeliveryDate}.xlsx`);
