@@ -2417,6 +2417,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     navigators={navigators}
                     submissions={detailsCache[infoShelfClientId]?.submissions || []}
                     allClients={clients}
+                    currentUserRole={currentUser?.role}
                     onClose={() => setInfoShelfClientId(null)}
                     onOpenProfile={(clientId) => {
                         setInfoShelfClientId(null);
@@ -2457,6 +2458,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             {infoShelfDependantId && clients.find(c => c.id === infoShelfDependantId) && (
                 <DependantInfoShelf
                     client={detailsCache[infoShelfDependantId]?.client || clients.find(c => c.id === infoShelfDependantId)!}
+                    currentUserRole={currentUser?.role}
                     onClose={() => setInfoShelfDependantId(null)}
                     onOpenProfile={(clientId) => {
                         setInfoShelfDependantId(null);

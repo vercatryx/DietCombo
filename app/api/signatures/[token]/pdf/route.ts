@@ -198,12 +198,15 @@ export async function GET(
             }
         }
 
-        page.drawText("Member Attestation of Medically Tailored Meal Delivery", {
+        page.drawText(
+            "Member attestation of MEDICALLY TAILORED OR NUTRITIONALLY APPROPRIATE FOOD PRESCRIPTIONS",
+            {
             x: margin,
             y,
             size: 16,
             font: bold,
-        });
+            }
+        );
         y -= 28;
         page.drawLine({
             start: { x: margin, y },
@@ -253,7 +256,7 @@ export async function GET(
             dateText = " on the date indicated above";
         }
 
-        const afterName = `${fullName || "Member"}  confirms that they personally received their medically tailored meals${dateText}.`;
+        const afterName = `${fullName || "Member"} confirms that they personally received their nutritionally appropriate food box or vouchers to cover the cost of preparing 3 nutritious meals a day${dateText}.`;
         for (const ln of wrapText(afterName, usableWidth, font, 12)) {
             page.drawText(ln, { x: margin, y, size: 12, font });
             y -= 16;

@@ -4,10 +4,21 @@ import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ClientProfile, MenuItem, BoxType, ProduceVendor } from '@/lib/types';
 import { getClients, getMenuItems, getBoxTypes, getProduceVendors } from '@/lib/cached-data';
-import { Package, FileText, Search, User, AlertTriangle } from 'lucide-react';
+import { Package, FileText, Search, User, AlertTriangle, PlusCircle, X, Download } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
+import { bulkCreateProduceOrdersForVendor, bulkUpdateProduceProofsForVendor } from '@/app/produce/actions';
+import * as XLSX from 'xlsx';
 import styles from './VendorDetail.module.css';
+
+type CreatedProduceOrderRow = {
+    clientId: string;
+    clientName: string;
+    address: string;
+    phone: string;
+    orderNumber: number;
+    deliveryDate: string;
+};
 
 export function ProduceDetail() {
     const router = useRouter();
@@ -24,6 +35,21 @@ export function ProduceDetail() {
     const [vendorFilter, setVendorFilter] = useState<string>('all');
     const [tokenVendor, setTokenVendor] = useState<ProduceVendor | null>(null);
     const [invalidToken, setInvalidToken] = useState(false);
+
+    const [showCreateOrdersModal, setShowCreateOrdersModal] = useState(false);
+    const [deliveryDate, setDeliveryDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+    const [isCreatingOrders, setIsCreatingOrders] = useState(false);
+    const [createOrdersError, setCreateOrdersError] = useState<string>('');
+    const [lastCreatedOrders, setLastCreatedOrders] = useState<CreatedProduceOrderRow[] | null>(null);
+
+    const [showUploadExcelModal, setShowUploadExcelModal] = useState(false);
+    const [uploadExcelError, setUploadExcelError] = useState<string>('');
+    const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
+    const [excelRows, setExcelRows] = useState<any[][]>([]);
+    const [orderNumberColumn, setOrderNumberColumn] = useState<string>('');
+    const [proofUrlColumn, setProofUrlColumn] = useState<string>('');
+    const [isProcessingExcel, setIsProcessingExcel] = useState(false);
+    const [uploadResult, setUploadResult] = useState<{ updated: number; errors: string[] } | null>(null);
 
     function getLastName(name: string): string {
         const trimmed = (name || '').trim();
@@ -159,6 +185,154 @@ export function ProduceDetail() {
         });
     }
 
+    function downloadCreatedOrdersExcel(rows: CreatedProduceOrderRow[], exportDeliveryDate: string) {
+        const sorted = [...rows].sort((a, b) => {
+            const byLast = getLastName(a.clientName).localeCompare(getLastName(b.clientName), undefined, { sensitivity: 'base' });
+            if (byLast !== 0) return byLast;
+            return a.clientName.localeCompare(b.clientName, undefined, { sensitivity: 'base' });
+        });
+
+        const sheetRows = sorted.map(r => ({
+            'Order Number': r.orderNumber,
+            'Client Name': r.clientName,
+            'Address': r.address,
+            'Phone': r.phone,
+            'Delivery Date': r.deliveryDate || exportDeliveryDate
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(sheetRows, { header: ['Order Number', 'Client Name', 'Address', 'Phone', 'Delivery Date'] });
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Orders');
+        XLSX.writeFile(wb, `produce-orders-${exportDeliveryDate}.xlsx`);
+    }
+
+    async function handleCreateOrders() {
+        setCreateOrdersError('');
+        if (!deliveryDate) {
+            setCreateOrdersError('Delivery Date is required.');
+            return;
+        }
+        if (!token) {
+            setCreateOrdersError('Missing vendor token.');
+            return;
+        }
+        if (filteredClients.length === 0) {
+            setCreateOrdersError('No clients to create orders for.');
+            return;
+        }
+
+        setIsCreatingOrders(true);
+        try {
+            const clientIds = filteredClients.map(c => c.id);
+            const res = await bulkCreateProduceOrdersForVendor(clientIds, deliveryDate, token);
+            if (!res.success) {
+                setCreateOrdersError(res.error || 'Failed to create orders');
+                return;
+            }
+
+            setLastCreatedOrders(res.orders || []);
+            downloadCreatedOrdersExcel(res.orders || [], deliveryDate);
+        } catch (e: any) {
+            setCreateOrdersError(e?.message || 'Failed to create orders');
+        } finally {
+            setIsCreatingOrders(false);
+        }
+    }
+
+    function normalizeHeader(h: string) {
+        return (h || '').toLowerCase().replace(/[_\s]/g, '');
+    }
+
+    async function handleExcelSelected(file: File) {
+        setUploadExcelError('');
+        setUploadResult(null);
+        try {
+            const buf = await file.arrayBuffer();
+            const wb = XLSX.read(buf, { type: 'array' });
+            const sheetName = wb.SheetNames[0];
+            if (!sheetName) {
+                setUploadExcelError('Excel file has no sheets.');
+                return;
+            }
+            const ws = wb.Sheets[sheetName];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false }) as any[][];
+            if (!rows || rows.length < 2) {
+                setUploadExcelError('Excel file must have a header row and at least one data row.');
+                return;
+            }
+            const headers = (rows[0] || []).map((v: any) => String(v ?? '').trim()).filter(Boolean);
+            if (headers.length === 0) {
+                setUploadExcelError('Header row is empty.');
+                return;
+            }
+
+            setExcelHeaders(headers);
+            setExcelRows(rows.slice(1));
+
+            // best-effort default mappings
+            const normalized = headers.map(normalizeHeader);
+            const orderIdx = normalized.findIndex(h => h === 'ordernumber' || h === 'orderid' || h === 'order');
+            const urlIdx = normalized.findIndex(h => h === 'image' || h === 'imageurl' || h === 'proof' || h === 'proofurl' || h === 'deliveryproofurl');
+            setOrderNumberColumn(orderIdx >= 0 ? headers[orderIdx] : headers[0]);
+            setProofUrlColumn(urlIdx >= 0 ? headers[urlIdx] : (headers[1] || headers[0]));
+
+            setShowUploadExcelModal(true);
+        } catch (e: any) {
+            setUploadExcelError(e?.message || 'Failed to read Excel file.');
+        }
+    }
+
+    async function processExcelUpload() {
+        setUploadExcelError('');
+        setUploadResult(null);
+
+        if (!token) {
+            setUploadExcelError('Missing vendor token.');
+            return;
+        }
+        if (!orderNumberColumn || !proofUrlColumn) {
+            setUploadExcelError('Please select both columns.');
+            return;
+        }
+
+        const orderIdx = excelHeaders.indexOf(orderNumberColumn);
+        const urlIdx = excelHeaders.indexOf(proofUrlColumn);
+        if (orderIdx < 0 || urlIdx < 0) {
+            setUploadExcelError('Invalid column selection.');
+            return;
+        }
+
+        const updates = excelRows
+            .map((r, i) => {
+                const orderNumber = String(r?.[orderIdx] ?? '').trim();
+                const proofUrl = String(r?.[urlIdx] ?? '').trim();
+                return { orderNumber, proofUrl, _row: i + 2 };
+            })
+            .filter(u => u.orderNumber && u.proofUrl);
+
+        if (updates.length === 0) {
+            setUploadExcelError('No valid rows found. Make sure the selected columns are filled in.');
+            return;
+        }
+
+        setIsProcessingExcel(true);
+        try {
+            const res = await bulkUpdateProduceProofsForVendor(
+                updates.map(u => ({ orderNumber: u.orderNumber, proofUrl: u.proofUrl })),
+                token
+            );
+            if (!res.success) {
+                setUploadExcelError(res.error || 'Failed to process Excel');
+                return;
+            }
+            setUploadResult({ updated: res.updated, errors: res.errors || [] });
+        } catch (e: any) {
+            setUploadExcelError(e?.message || 'Failed to process Excel');
+        } finally {
+            setIsProcessingExcel(false);
+        }
+    }
+
     if (invalidToken) {
         return (
             <div className={styles.container}>
@@ -196,6 +370,45 @@ export function ProduceDetail() {
                         {pageTitle}
                     </h1>
                     <div style={{ display: 'flex', gap: '1rem' }}>
+                        {isExternalView && (
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => {
+                                    setCreateOrdersError('');
+                                    setShowCreateOrdersModal(true);
+                                }}
+                                style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                            >
+                                <PlusCircle size={20} /> Create Orders
+                            </button>
+                        )}
+                        {isExternalView && (
+                            <>
+                                <input
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    style={{ display: 'none' }}
+                                    id="produce-upload-excel"
+                                    onChange={async e => {
+                                        const file = e.target.files?.[0];
+                                        e.target.value = '';
+                                        if (file) await handleExcelSelected(file);
+                                    }}
+                                />
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                        setUploadExcelError('');
+                                        setUploadResult(null);
+                                        const el = document.getElementById('produce-upload-excel') as HTMLInputElement | null;
+                                        el?.click();
+                                    }}
+                                    style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                >
+                                    <Download size={20} /> Upload Excel
+                                </button>
+                            </>
+                        )}
                         <button
                             className="btn btn-secondary"
                             onClick={exportLabelsPDF}
@@ -206,6 +419,175 @@ export function ProduceDetail() {
                     </div>
                 </div>
             </div>
+
+            {showCreateOrdersModal && (
+                <div className={styles.importModalOverlay} onClick={() => !isCreatingOrders && setShowCreateOrdersModal(false)}>
+                    <div className={styles.importModal} onClick={e => e.stopPropagation()}>
+                        <div className={styles.importModalHeader}>
+                            <h3>Create Produce Orders</h3>
+                            <button
+                                className={styles.closeButton}
+                                onClick={() => !isCreatingOrders && setShowCreateOrdersModal(false)}
+                                aria-label="Close"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className={styles.importModalContent}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                <label style={{ fontWeight: 600 }}>Delivery Date</label>
+                                <input
+                                    className="input"
+                                    type="date"
+                                    value={deliveryDate}
+                                    onChange={e => setDeliveryDate(e.target.value)}
+                                    disabled={isCreatingOrders}
+                                />
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                    This will create 1 Produce order per client in the current list ({filteredClients.length}).
+                                </div>
+                            </div>
+
+                            {createOrdersError && (
+                                <div style={{ color: '#ef4444', fontWeight: 600 }}>{createOrdersError}</div>
+                            )}
+
+                            {lastCreatedOrders && (
+                                <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+                                    <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                                        Created {lastCreatedOrders.length} orders
+                                    </div>
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                        The Excel file should have downloaded automatically.
+                                    </div>
+                                    <button
+                                        className="btn btn-secondary"
+                                        style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                        onClick={() => downloadCreatedOrdersExcel(lastCreatedOrders, deliveryDate)}
+                                    >
+                                        <Download size={18} /> Re-download Excel
+                                    </button>
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                                <button
+                                    className="btn btn-secondary"
+                                    disabled={isCreatingOrders}
+                                    onClick={() => setShowCreateOrdersModal(false)}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    disabled={isCreatingOrders}
+                                    onClick={handleCreateOrders}
+                                >
+                                    {isCreatingOrders ? 'Creating…' : 'Create Orders'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showUploadExcelModal && (
+                <div className={styles.importModalOverlay} onClick={() => !isProcessingExcel && setShowUploadExcelModal(false)}>
+                    <div className={styles.importModal} onClick={e => e.stopPropagation()}>
+                        <div className={styles.importModalHeader}>
+                            <h3>Upload Excel (Proof of Delivery)</h3>
+                            <button
+                                className={styles.closeButton}
+                                onClick={() => !isProcessingExcel && setShowUploadExcelModal(false)}
+                                aria-label="Close"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className={styles.importModalContent}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                    Select which columns contain the order numbers and the image/proof URLs. This will attach the URL as proof of delivery and mark orders delivered. No SMS will be sent.
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                        <label style={{ fontWeight: 600 }}>Order Number column</label>
+                                        <select
+                                            className="input"
+                                            value={orderNumberColumn}
+                                            disabled={isProcessingExcel}
+                                            onChange={e => setOrderNumberColumn(e.target.value)}
+                                        >
+                                            {excelHeaders.map(h => (
+                                                <option key={h} value={h}>{h}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                        <label style={{ fontWeight: 600 }}>Image URL column</label>
+                                        <select
+                                            className="input"
+                                            value={proofUrlColumn}
+                                            disabled={isProcessingExcel}
+                                            onChange={e => setProofUrlColumn(e.target.value)}
+                                        >
+                                            {excelHeaders.map(h => (
+                                                <option key={h} value={h}>{h}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                    Rows detected: {excelRows.length}
+                                </div>
+                            </div>
+
+                            {uploadExcelError && (
+                                <div style={{ color: '#ef4444', fontWeight: 600 }}>{uploadExcelError}</div>
+                            )}
+
+                            {uploadResult && (
+                                <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+                                    <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+                                        Updated {uploadResult.updated} orders
+                                    </div>
+                                    {uploadResult.errors.length > 0 ? (
+                                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                            {uploadResult.errors.length} errors. First 10 shown:
+                                            <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
+                                                {uploadResult.errors.slice(0, 10).map((err, idx) => (
+                                                    <li key={idx} style={{ marginBottom: '0.25rem' }}>{err}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                                            No errors.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                                <button
+                                    className="btn btn-secondary"
+                                    disabled={isProcessingExcel}
+                                    onClick={() => setShowUploadExcelModal(false)}
+                                >
+                                    Close
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    disabled={isProcessingExcel}
+                                    onClick={processExcelUpload}
+                                >
+                                    {isProcessingExcel ? 'Processing…' : 'Process'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Clients Section */}
             <div className={styles.ordersSection}>

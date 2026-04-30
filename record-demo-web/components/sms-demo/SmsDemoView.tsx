@@ -8,10 +8,9 @@ const BRAND = 'Demo Company';
 const PROOF_OF_DELIVERY_IMAGE_URL =
   'https://placehold.co/1200x800/f2f2f7/0a6ecc.jpeg?text=Proof+of+delivery+%28demo%29';
 
-const MS_PER_CHAR = 38;
-const PAUSE_AFTER_USER_TYPING_MS = 2000;
-const PAUSE_AFTER_SYSTEM_MS = 2200;
-const PAUSE_AFTER_FULL_LOOP_MS = 5000;
+const MS_PER_CHAR = 65;
+const PAUSE_AFTER_USER_TYPING_MS = 3000;
+const PAUSE_AFTER_SYSTEM_MS = 3500;
 
 type OutMsg =
   | { id: string; kind: 'user'; text: string; typing: boolean; showSender?: never }
@@ -134,63 +133,57 @@ export function SmsDemoView() {
     timersRef.current = [];
 
     const run = async () => {
-      while (!cancelledRef.current) {
-        for (let s = 0; s < SCRIPT.length; s += 1) {
-          if (cancelledRef.current) return;
-          const step = SCRIPT[s]!;
+      for (let s = 0; s < SCRIPT.length; s += 1) {
+        if (cancelledRef.current) return;
+        const step = SCRIPT[s]!;
 
-          if (step.role === 'user') {
-            const text = step.text;
-            for (let i = 0; i <= text.length; i += 1) {
-              if (cancelledRef.current) return;
-              const typing = i < text.length;
-              const piece = text.slice(0, i);
-              setRows((prev) => {
-                const withoutTail = prev.filter((m) => !m.id.startsWith('typing-'));
-                const key = 'typing-user';
-                return [
-                  ...withoutTail,
-                  { id: key, kind: 'user' as const, text: piece, typing } satisfies OutMsg,
-                ];
-              });
-              if (i < text.length) {
-                await sleep(MS_PER_CHAR, timersRef, cancelledRef);
-              }
-            }
+        if (step.role === 'user') {
+          const text = step.text;
+          for (let i = 0; i <= text.length; i += 1) {
+            if (cancelledRef.current) return;
+            const typing = i < text.length;
+            const piece = text.slice(0, i);
             setRows((prev) => {
               const withoutTail = prev.filter((m) => !m.id.startsWith('typing-'));
+              const key = 'typing-user';
               return [
                 ...withoutTail,
-                {
-                  id: nextMessageId(),
-                  kind: 'user' as const,
-                  text,
-                  typing: false,
-                },
+                { id: key, kind: 'user' as const, text: piece, typing } satisfies OutMsg,
               ];
             });
-            await sleep(PAUSE_AFTER_USER_TYPING_MS, timersRef, cancelledRef);
-            continue;
+            if (i < text.length) {
+              await sleep(MS_PER_CHAR, timersRef, cancelledRef);
+            }
           }
-
-          if (step.role === 'system') {
-            if (cancelledRef.current) return;
-            setRows((prev) => [
-              ...prev,
+          setRows((prev) => {
+            const withoutTail = prev.filter((m) => !m.id.startsWith('typing-'));
+            return [
+              ...withoutTail,
               {
                 id: nextMessageId(),
-                kind: 'system',
-                text: step.text,
-                showSender: step.showSender === true,
+                kind: 'user' as const,
+                text,
+                typing: false,
               },
-            ]);
-            const isLast = s === SCRIPT.length - 1;
-            await sleep(isLast ? PAUSE_AFTER_FULL_LOOP_MS : PAUSE_AFTER_SYSTEM_MS, timersRef, cancelledRef);
-          }
+            ];
+          });
+          await sleep(PAUSE_AFTER_USER_TYPING_MS, timersRef, cancelledRef);
+          continue;
         }
-        if (cancelledRef.current) return;
-        setRows([]);
-        await sleep(300, timersRef, cancelledRef);
+
+        if (step.role === 'system') {
+          if (cancelledRef.current) return;
+          setRows((prev) => [
+            ...prev,
+            {
+              id: nextMessageId(),
+              kind: 'system',
+              text: step.text,
+              showSender: step.showSender === true,
+            },
+          ]);
+          await sleep(PAUSE_AFTER_SYSTEM_MS, timersRef, cancelledRef);
+        }
       }
     };
 

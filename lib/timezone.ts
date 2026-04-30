@@ -93,7 +93,7 @@ export function formatInAppTz(
   date: Date | string,
   options: Intl.DateTimeFormatOptions = APP_DATE_ONLY_OPTIONS
 ): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  const d = typeof date === 'string' ? parsePossiblyNaiveUtcTimestamp(date) : date;
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('en-US', { ...APP_DATE_ONLY_OPTIONS, ...options });
 }
@@ -162,7 +162,7 @@ export function getCalendarDaysForMonthInAppTz(
  * Format a datetime for display in the app timezone (Eastern).
  */
 export function formatDateTimeInAppTz(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  const d = typeof date === 'string' ? parsePossiblyNaiveUtcTimestamp(date) : date;
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-US', {
     timeZone: APP_TIMEZONE,
@@ -174,6 +174,44 @@ export function formatDateTimeInAppTz(date: Date | string): string {
   });
 }
 
+/**
+ * Supabase/Postgres `timestamp` (without time zone) columns often come back as a string like
+ * `2026-04-30T12:29:00` (no `Z` or offset). If that value is actually a UTC instant, `new Date(...)`
+ * will incorrectly treat it as local time.
+ *
+ * For display, we interpret *timezone-less* date-time strings as UTC instants by appending `Z`.
+ * (If the input already includes `Z` or an explicit offset, we leave it as-is.)
+ */
+function parsePossiblyNaiveUtcTimestamp(value: string): Date {
+  const raw = String(value ?? '').trim();
+  if (!raw) return new Date(NaN);
+
+  // If it already has a timezone designator (`Z` or ±HH:MM / ±HHMM / ±HH), parse normally.
+  const hasTz =
+    /[zZ]$/.test(raw) ||
+    /[+-]\d{2}:\d{2}$/.test(raw) ||
+    /[+-]\d{2}\d{2}$/.test(raw) ||
+    /[+-]\d{2}$/.test(raw);
+  if (hasTz) return new Date(raw);
+
+  // Normalize "YYYY-MM-DD HH:mm:ss" → "YYYY-MM-DDTHH:mm:ss"
+  const normalized = raw.replace(' ', 'T');
+
+  // If it looks like an ISO-like datetime but has no TZ, assume UTC.
+  const isoNoTzMatch = normalized.match(
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(:\d{2})?(\.\d{1,9})?$/
+  );
+  if (isoNoTzMatch) {
+    const base = `${isoNoTzMatch[1]}${isoNoTzMatch[2] ?? ''}`; // up to seconds
+    const frac = isoNoTzMatch[3] ?? '';
+    // JS Date parsing is reliably millisecond-precision; truncate fractional seconds to 3 digits.
+    const ms = frac ? `.${frac.slice(1, 4).padEnd(3, '0')}` : '';
+    return new Date(`${base}${ms}Z`);
+  }
+
+  // Fallback: let JS parse it (could be already-local or a non-ISO format).
+  return new Date(raw);
+}
 /**
  * Inclusive UTC range for admin date filters: interpret `from` / `to` as calendar dates in
  * APP_TIMEZONE (America/New_York), not as naive local strings or UTC midnight.

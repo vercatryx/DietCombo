@@ -10,10 +10,12 @@ import { getAllClientNumbers, normalizePhone } from '@/lib/phone-utils';
 import { getProduceVendors } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
+import { formatDateTimeInAppTz } from '@/lib/timezone';
 import styles from './ClientInfoShelf.module.css';
 
 interface DependantInfoShelfProps {
     client: ClientProfile;
+    currentUserRole?: string;
     onClose: () => void;
     /** Opens the profile with order details (service config) for this dependant. */
     onOpenProfile: (clientId: string) => void;
@@ -23,6 +25,7 @@ interface DependantInfoShelfProps {
 
 export function DependantInfoShelf({
     client,
+    currentUserRole,
     onClose,
     onOpenProfile,
     onClientUpdated,
@@ -30,6 +33,7 @@ export function DependantInfoShelf({
 }: DependantInfoShelfProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const brooklynOnly = currentUserRole === 'brooklyn_admin';
 
     const getInitialEditForm = useCallback((c: ClientProfile) => ({
         fullName: c.fullName,
@@ -174,6 +178,11 @@ export function DependantInfoShelf({
                             <>
                                 <h2>{client.fullName}</h2>
                                 <span style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>Dependent</span>
+                                {client.createdAt ? (
+                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>
+                                        Created {formatDateTimeInAppTz(client.createdAt)}
+                                    </div>
+                                ) : null}
                                 <Link
                                     href={`/client-portal/${client.id}`}
                                     target="_blank"
@@ -204,9 +213,11 @@ export function DependantInfoShelf({
                                 <button className={styles.editBtn} onClick={() => setIsEditing(true)}>
                                     <Pencil size={18} />
                                 </button>
-                                <button className={styles.deleteBtn} onClick={handleDelete}>
-                                    <Trash2 size={18} />
-                                </button>
+                                {!brooklynOnly && (
+                                    <button className={styles.deleteBtn} onClick={handleDelete}>
+                                        <Trash2 size={18} />
+                                    </button>
+                                )}
                                 <button className={styles.closeBtn} onClick={onClose}>
                                     <X size={24} />
                                 </button>

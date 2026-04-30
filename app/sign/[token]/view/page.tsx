@@ -384,9 +384,10 @@ export default function SignaturesViewPage() {
                 } catch { }
             }
 
-            page.drawText("Member Attestation of Medically Tailored Meal Delivery", {
-                x: margin, y, size: 16, font: bold,
-            });
+            page.drawText(
+                "Member attestation of MEDICALLY TAILORED OR NUTRITIONALLY APPROPRIATE FOOD PRESCRIPTIONS",
+                { x: margin, y, size: 16, font: bold }
+            );
             y -= 28;
             page.drawLine({
                 start: { x: margin, y }, end: { x: page.getWidth() - margin, y },
@@ -447,7 +448,7 @@ export default function SignaturesViewPage() {
             }
             
             const afterName =
-                `  confirms that they personally received their medically tailored meals${dateText}.`;
+                ` confirms that they personally received their nutritionally appropriate food box or vouchers to cover the cost of preparing 3 nutritious meals a day${dateText}.`;
 
             const remainingWidth = Math.max(0, usableWidth - startWidth);
 

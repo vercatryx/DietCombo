@@ -133,7 +133,7 @@ export default function SignPage() {
 
     const statements = useMemo(
         () => [
-            "I hereby authorize Diet Combo to apply my electronic signature to future attestations confirming that I have personally received my medically tailored meals.",
+            "I hereby authorize Diet Combo to apply my electronic signature to future attestations confirming that I have personally received my medically tailored or nutritionally appropriate food prescriptions.",
             "I consent to the electronic storage and secure use of my signature for documentation, reimbursement, and compliance purposes.",
             "I affirm that all information associated with my meal deliveries is true, accurate, and complete to the best of my knowledge.",
             "I understand and authorize that my signature and related information may be securely stored and shared only with authorized program administrators, auditors, or payers as required by law.",
@@ -256,7 +256,7 @@ export default function SignPage() {
             </h1>
             <p style={{ marginBottom: 16, color: "#444" }}>
                 By signing the following sections, I give Diet Combo permission to securely store and
-                apply my electronic signature for future medically tailored meal delivery attestations,
+                apply my electronic signature for future medically tailored or nutritionally appropriate food prescription attestations,
                 billing, and compliance documentation.
             </p>
 

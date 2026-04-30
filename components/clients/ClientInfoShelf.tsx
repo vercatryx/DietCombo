@@ -17,6 +17,7 @@ import { getProduceVendors } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { getSingleForm } from '@/lib/form-actions';
+import { formatDateTimeInAppTz } from '@/lib/timezone';
 import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
 import styles from './ClientInfoShelf.module.css';
@@ -27,6 +28,7 @@ interface ClientInfoShelfProps {
     navigators: Navigator[];
     submissions?: Submission[];
     allClients?: ClientProfile[];
+    currentUserRole?: string;
     onClose: () => void;
     onOpenProfile: (clientId: string) => void;
     /** When provided, clicking a dependant in the list opens the dependant sidebar instead of full profile. */
@@ -42,6 +44,7 @@ export function ClientInfoShelf({
     navigators,
     submissions = [],
     allClients = [],
+    currentUserRole,
     onClose,
     onOpenProfile,
     onOpenDependantShelf,
@@ -50,6 +53,7 @@ export function ClientInfoShelf({
 }: ClientInfoShelfProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const brooklynOnly = currentUserRole === 'brooklyn_admin';
 
     const getInitialEditForm = useCallback((c: ClientProfile) => ({
         fullName: c.fullName,
@@ -322,6 +326,11 @@ export function ClientInfoShelf({
                         ) : (
                             <>
                                 <h2>{client.fullName}</h2>
+                                {client.createdAt ? (
+                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>
+                                        Created {formatDateTimeInAppTz(client.createdAt)}
+                                    </div>
+                                ) : null}
                                 <Link
                                     href={`/client-portal/${client.id}`}
                                     target="_blank"
@@ -352,9 +361,11 @@ export function ClientInfoShelf({
                                 <button className={styles.editBtn} onClick={() => setIsEditing(true)}>
                                     <Pencil size={18} />
                                 </button>
-                                <button className={styles.deleteBtn} onClick={handleDelete}>
-                                    <Trash2 size={18} />
-                                </button>
+                                {!brooklynOnly && (
+                                    <button className={styles.deleteBtn} onClick={handleDelete}>
+                                        <Trash2 size={18} />
+                                    </button>
+                                )}
                                 <button className={styles.closeBtn} onClick={onClose}>
                                     <X size={24} />
                                 </button>
@@ -1045,24 +1056,26 @@ export function ClientInfoShelf({
                                             >
                                                 <Pencil size={14} />
                                             </button>
-                                            <button
-                                                type="button"
-                                                className="btn btn-secondary btn-sm"
-                                                style={{ flexShrink: 0, padding: '4px 8px' }}
-                                                title="Delete dependent"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleDeleteDependent(dep);
-                                                }}
-                                                disabled={deletingDependentId === dep.id}
-                                                aria-label={`Delete ${dep.fullName}`}
-                                            >
-                                                {deletingDependentId === dep.id ? (
-                                                    <Loader2 size={14} className="animate-spin" />
-                                                ) : (
-                                                    <Trash2 size={14} />
-                                                )}
-                                            </button>
+                                            {!brooklynOnly && (
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-sm"
+                                                    style={{ flexShrink: 0, padding: '4px 8px' }}
+                                                    title="Delete dependent"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleDeleteDependent(dep);
+                                                    }}
+                                                    disabled={deletingDependentId === dep.id}
+                                                    aria-label={`Delete ${dep.fullName}`}
+                                                >
+                                                    {deletingDependentId === dep.id ? (
+                                                        <Loader2 size={14} className="animate-spin" />
+                                                    ) : (
+                                                        <Trash2 size={14} />
+                                                    )}
+                                                </button>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
