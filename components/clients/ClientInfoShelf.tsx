@@ -10,7 +10,7 @@ import {
     MapPinned
 } from 'lucide-react';
 import { ClientProfile, ClientStatus, Navigator, Submission, ProduceVendor } from '@/lib/types';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { addDependent, getDependentsByParentId, updateClient, deleteClient, recordClientChange, getClientChangeLog, type ClientChangeLogEntry } from '@/lib/actions';
 import { getAllClientNumbers, normalizePhone } from '@/lib/phone-utils';
 import { getProduceVendors } from '@/lib/cached-data';
@@ -90,7 +90,7 @@ export function ClientInfoShelf({
     }), []);
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
-    const editStartSnapshotRef = React.useRef<ReturnType<typeof getAuditSnapshotFromEditForm> | null>(null);
+    const editStartSnapshotRef = useRef<ReturnType<typeof getAuditSnapshotFromEditForm> | null>(null);
     const [showChangeLog, setShowChangeLog] = useState(false);
     const [changeLogLoading, setChangeLogLoading] = useState(false);
     const [changeLogError, setChangeLogError] = useState<string | null>(null);
@@ -213,6 +213,18 @@ export function ClientInfoShelf({
             return pv?.name || (typeof id === 'string' ? id : String(id));
         };
 
+        const statusName = (id: unknown) => {
+            if (id == null || (typeof id === 'string' && id.trim() === '')) return '—';
+            const st = statuses.find(s => s.id === id);
+            return st?.name || (typeof id === 'string' ? id : String(id));
+        };
+
+        const navigatorName = (id: unknown) => {
+            if (id == null || (typeof id === 'string' && id.trim() === '')) return '—';
+            const nav = navigators.find(n => n.id === id);
+            return nav?.name || (typeof id === 'string' ? id : String(id));
+        };
+
         const serviceTypeDiff = byPath.get('serviceType');
         const produceVendorDiff = byPath.get('produceVendorId');
 
@@ -232,7 +244,11 @@ export function ClientInfoShelf({
         }
 
         for (const [path, d] of Array.from(byPath.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-            if (path === 'produceVendorId') {
+            if (path === 'statusId') {
+                out.push(`status: "${statusName(d.before)}" → "${statusName(d.after)}"`);
+            } else if (path === 'navigatorId') {
+                out.push(`navigator: "${navigatorName(d.before)}" → "${navigatorName(d.after)}"`);
+            } else if (path === 'produceVendorId') {
                 out.push(`produceVendor: "${vendorName(d.before)}" → "${vendorName(d.after)}"`);
             } else {
                 out.push(`${path}: ${formatAuditValue(d.before)} → ${formatAuditValue(d.after)}`);
@@ -241,6 +257,21 @@ export function ClientInfoShelf({
 
         return out.join('\n');
     }
+
+    const hasUnsavedChanges = useMemo(() => {
+        if (!isEditing) return false;
+        const start = editStartSnapshotRef.current ?? getAuditSnapshotFromClient(client);
+        const current = getAuditSnapshotFromEditForm(editForm);
+        return (
+            diffObjects(start, current, {
+                ignorePathPrefixes: [],
+                maxDepth: 6,
+                maxEntries: 200,
+                nullishEqual: true,
+                emptyStringEqualNullish: true,
+            }).length > 0
+        );
+    }, [isEditing, editForm, client]);
 
     const beginEdit = () => {
         editStartSnapshotRef.current = getAuditSnapshotFromClient(client);
@@ -322,7 +353,7 @@ export function ClientInfoShelf({
         }
     }, [client?.id, isEditing, editForm.address, editForm.city, editForm.state, editForm.zip, geoBusy, onClientUpdated]);
 
-    const handleSave = async () => {
+    const handleSave = async (): Promise<boolean> => {
         setIsSaving(true);
         try {
             const beforeSnapshot = editStartSnapshotRef.current ?? getAuditSnapshotFromClient(client);
@@ -382,17 +413,44 @@ export function ClientInfoShelf({
             setIsEditing(false);
             editStartSnapshotRef.current = null;
             if (onClientUpdated) onClientUpdated(updated ?? undefined);
+            return true;
         } catch (error) {
             console.error('Failed to update client:', error);
             alert('Failed to save changes. Please try again.');
+            return false;
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleSaveAndClose = async () => {
-        await handleSave();
-        onClose();
+        const ok = await handleSave();
+        if (ok) onClose();
+    };
+
+    const handleCancelEdit = () => {
+        if (isSaving) {
+            window.alert('Please wait until saving finishes before leaving edit mode.');
+            return;
+        }
+        if (hasUnsavedChanges) {
+            if (!window.confirm('Discard unsaved changes? Your edits will be lost.')) return;
+        }
+        setIsEditing(false);
+        setEditForm(getInitialEditForm(client));
+        editStartSnapshotRef.current = null;
+    };
+
+    const handleOverlayClick = async () => {
+        if (!isEditing) {
+            onClose();
+            return;
+        }
+        if (isSaving) {
+            window.alert('Saving is still in progress. Please wait before closing.');
+            return;
+        }
+        await handleSaveAndClose();
     };
 
     const handleDelete = async () => {
@@ -482,7 +540,7 @@ export function ClientInfoShelf({
 
     return (
         <>
-            <div className={styles.shelfOverlay} onClick={() => (isEditing ? handleSaveAndClose() : onClose())} />
+            <div className={styles.shelfOverlay} onClick={() => void handleOverlayClick()} />
             <div className={styles.shelf}>
                 <div className={styles.header}>
                     <div className={styles.titleSection}>
@@ -519,11 +577,7 @@ export function ClientInfoShelf({
                                 <button className={styles.saveBtn} onClick={handleSave} disabled={isSaving}>
                                     {isSaving ? <Loader2 className="animate-spin" size={18} /> : <Check size={18} />}
                                 </button>
-                                <button className={styles.cancelBtn} onClick={() => {
-                                    setIsEditing(false);
-                                    setEditForm(getInitialEditForm(client));
-                                    editStartSnapshotRef.current = null;
-                                }}>
+                                <button className={styles.cancelBtn} onClick={handleCancelEdit}>
                                     <X size={18} />
                                 </button>
                             </>

@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ItemCategory, BoxQuota, BoxConfiguration, ServiceType } from '@/lib/types';
-import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, saveClientFoodOrder, saveClientBoxOrder, saveClientMealPlannerData, isFoodOrderSameAsDefault } from '@/lib/actions';
+import { syncCurrentOrderToUpcoming, getBoxQuotas, invalidateOrderData, updateClient, updateClientDietaryDislikes, saveClientFoodOrder, saveClientBoxOrder, saveClientMealPlannerData, isFoodOrderSameAsDefault } from '@/lib/actions';
+import { parseDietaryFlags, type DietaryFlags } from '@/lib/dietary-preferences-note';
 import { getCachedDefaultOrderTemplate, getDefaultOrderTemplateCachedSync } from '@/lib/default-order-template-cache';
 import { migrateLegacyBoxOrder, getTotalBoxCount, validateBoxCountAgainstAuthorization, getMaxBoxesAllowed } from '@/lib/box-order-helpers';
 import { isProduceServiceType } from '@/lib/isProduceServiceType';
@@ -84,6 +85,12 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
     const [mealPlanDiscardTrigger, setMealPlanDiscardTrigger] = useState(0);
     const [mealPlanJump, setMealPlanJump] = useState<{ date: string; nonce: number } | null>(null);
 
+    const [dietaryFlags, setDietaryFlags] = useState<DietaryFlags>(() =>
+        parseDietaryFlags(initialClient.dislikes ?? '')
+    );
+    const [savingDietary, setSavingDietary] = useState(false);
+    const [dietaryError, setDietaryError] = useState<string | null>(null);
+
     // Reset missing-items toast when client changes so it can show again for another client
     useEffect(() => {
         setMissingItemsToastDismissed(false);
@@ -106,6 +113,8 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             address: initialClient.address || ''
         });
         setClient(initialClient);
+        setDietaryFlags(parseDietaryFlags(initialClient.dislikes ?? ''));
+        setDietaryError(null);
     }, [initialClient]);
 
     // Track if we've already initialized to prevent overwriting user changes
@@ -3029,6 +3038,25 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
             </div>
     );
 
+    const persistDietaryFlags = async (next: DietaryFlags) => {
+        setSavingDietary(true);
+        setDietaryError(null);
+        try {
+            const updated = await updateClientDietaryDislikes(client.id, next);
+            if (updated) {
+                setClient(updated);
+                setDietaryFlags(parseDietaryFlags(updated.dislikes ?? ''));
+            }
+            router.refresh();
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : 'Could not save dietary preferences';
+            setDietaryError(msg);
+            setDietaryFlags(parseDietaryFlags(client.dislikes ?? ''));
+        } finally {
+            setSavingDietary(false);
+        }
+    };
+
     const clientInfoSidebar = orderAndMealPlanOnly && (
         <aside className={`${styles.profileLayoutSidebar} ${styles.profileLayoutSidebarCompact}`}>
             <section className={styles.clientInfoCard}>
@@ -3048,6 +3076,49 @@ export function ClientPortalInterface({ client: initialClient, householdPeople =
                 <div className={styles.clientInfoValue}>{client.address || '—'}</div>
                 <span className="label">Service</span>
                 <div className={styles.clientInfoValue}>{client.serviceType || '—'}</div>
+
+                <span className="label">Dietary preferences</span>
+                <p style={{ margin: '0 0 0.5rem', fontSize: '0.82rem', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+                    Simple yes/no for your whole account for each line—not choices for individual meals or menu items. Update anytime below, or ask us by text and we’ll change the same account note.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    {([
+                        { key: 'glutenFree' as const, label: 'Gluten free' },
+                        { key: 'sugarFree' as const, label: 'Sugar free' },
+                        { key: 'dairyFree' as const, label: 'Dairy free' }
+                    ]).map(({ key, label }) => (
+                        <label
+                            key={key}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                cursor: savingDietary ? 'not-allowed' : 'pointer',
+                                fontSize: '0.95rem',
+                                color: 'var(--text-primary)'
+                            }}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={dietaryFlags[key]}
+                                disabled={savingDietary}
+                                onChange={(e) => {
+                                    void persistDietaryFlags({ ...dietaryFlags, [key]: e.target.checked });
+                                }}
+                            />
+                            <span>{label}</span>
+                        </label>
+                    ))}
+                    {savingDietary && (
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Loader2 className="animate-spin" size={14} /> Saving…
+                        </span>
+                    )}
+                    {dietaryError && (
+                        <span style={{ fontSize: '0.8rem', color: 'var(--color-danger, #c0392b)' }}>{dietaryError}</span>
+                    )}
+                </div>
+
                 <span className="label">People on this account</span>
                 <div className={`${styles.clientInfoValue} ${styles.clientInfoValueLast}`}>
                     {householdPeople.length > 0 ? (

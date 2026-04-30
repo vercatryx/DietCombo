@@ -28,7 +28,8 @@
     "test-telnyx-sms": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-telnyx-sms.ts",
     "dump-db-schema": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/dump-db-schema.ts",
     "copy-admins-to-brooklyn": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/copy-admins-to-brooklyn-db.ts",
-    "import-brooklyn-clients-to-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/import-brooklyn-clients-to-parent.ts"
+    "import-brooklyn-clients-to-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/import-brooklyn-clients-to-parent.ts",
+    "diagnose-produce-vendor-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-produce-vendor-client.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

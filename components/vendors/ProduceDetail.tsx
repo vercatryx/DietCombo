@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ClientProfile, MenuItem, BoxType, ProduceVendor } from '@/lib/types';
-import { getMenuItems, getBoxTypes, getProduceVendors } from '@/lib/cached-data';
+import { getMenuItems, getBoxTypes, getProduceVendors, getStatuses } from '@/lib/cached-data';
 import { Package, FileText, Search, User, AlertTriangle, PlusCircle, X, Download } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
@@ -15,6 +15,7 @@ import {
     getProduceClientsForVendorToken
 } from '@/lib/actions';
 import { isProduceServiceType } from '@/lib/isProduceServiceType';
+import { isExcludedFromDeliveries } from '@/lib/deliveryEligibility';
 import * as XLSX from 'xlsx';
 import styles from './VendorDetail.module.css';
 
@@ -80,14 +81,19 @@ export function ProduceDetail() {
         setInvalidToken(false);
         try {
             const tokenTrim = (token || '').trim();
-            const [clientsData, menuItemsData, boxTypesData, pvData] = await Promise.all([
+            const [clientsData, menuItemsData, boxTypesData, pvData, statusesData] = await Promise.all([
                 tokenTrim
                     ? getProduceClientsForVendorToken(tokenTrim)
                     : getClientsUnlimited(),
                 getMenuItems(),
                 getBoxTypes(),
-                getProduceVendors()
+                getProduceVendors(),
+                getStatuses()
             ]);
+
+            const statusAllowMap = new Map<string, boolean>(
+                (statusesData || []).map((s) => [s.id, s.deliveriesAllowed !== false])
+            );
 
             setProduceVendors(pvData);
 
@@ -132,7 +138,8 @@ export function ProduceDetail() {
             } else {
                 produceClientsList = clientsData
                     .filter(client => {
-                        if (!isProduceServiceType(client.serviceType) || client.paused) return false;
+                        if (!isProduceServiceType(client.serviceType)) return false;
+                        if (isExcludedFromDeliveries(client.paused, client.statusId, statusAllowMap)) return false;
                         return true;
                     })
                     .sort((a, b) => {

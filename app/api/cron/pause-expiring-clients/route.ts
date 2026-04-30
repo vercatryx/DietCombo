@@ -9,7 +9,7 @@ import { sendEmail } from "@/lib/email";
 const NOTIFY_EMAILS = [
   "stslansky@gmail.com",
   "customersupport@thedietfantasy.com",
-  "hshloimie@gmail.com",
+  
 ];
 
 function escapeHtml(s: string): string {

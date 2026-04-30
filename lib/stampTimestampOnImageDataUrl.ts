@@ -1,44 +1,13 @@
+import { formatProofStampText } from '@/lib/formatProofStampText';
+import { APP_TIMEZONE } from '@/lib/timezone';
+
 export type StampTimestampOptions = {
-  /**
-   * Defaults to the user's locale (`navigator.language`) when available.
-   */
   locale?: string;
-  /**
-   * Defaults to the user's local timezone (omit `timeZone` so the runtime uses local).
-   */
+  /** Defaults to Eastern (app timezone); pass a zone name for local wall time. */
   timeZone?: string;
-  /**
-   * Override the timestamp text entirely (advanced use).
-   */
+  /** Override the timestamp text entirely (advanced use). */
   text?: string;
 };
-
-function buildTimestampText({ locale, timeZone }: { locale?: string; timeZone?: string }) {
-  // Always use English month abbreviations for the stamp (e.g. "Apr"), even if the device
-  // UI language is Spanish (which would otherwise render "abr").
-  const resolvedLocale = locale ?? 'en-US';
-
-  // Important: if `timeZone` is omitted, the browser uses the user's local timezone.
-  // Avoid `dateStyle` / `timeStyle` here because some Safari builds throw
-  // `TypeError: Invalid option : option` even though it's valid per spec.
-  const baseOptions: Intl.DateTimeFormatOptions = {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-    ...(timeZone ? { timeZone } : {}),
-  };
-
-  try {
-    return new Intl.DateTimeFormat(resolvedLocale, {
-      ...baseOptions,
-      timeZoneName: 'short',
-    }).format(new Date());
-  } catch {
-    return new Intl.DateTimeFormat(resolvedLocale, baseOptions).format(new Date());
-  }
-}
 
 async function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   const img = new Image();
@@ -87,7 +56,11 @@ export async function stampTimestampOnImageDataUrl(
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
     const text =
-      options.text ?? buildTimestampText({ locale: options.locale, timeZone: options.timeZone });
+      options.text ??
+      formatProofStampText(new Date(), {
+        locale: options.locale,
+        timeZone: options.timeZone ?? APP_TIMEZONE,
+      });
 
     // Scale stamp styling based on image size.
     const minDim = Math.min(canvas.width, canvas.height);

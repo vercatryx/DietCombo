@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { X, ExternalLink, Pencil, Trash2, Check, Loader2, MapPinned } from 'lucide-react';
 import { ClientProfile, ProduceVendor } from '@/lib/types';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { updateClient, deleteClient, recordClientChange, getClientChangeLog, type ClientChangeLogEntry } from '@/lib/actions';
 import { getAllClientNumbers, normalizePhone } from '@/lib/phone-utils';
 import { getProduceVendors } from '@/lib/cached-data';
@@ -62,7 +62,7 @@ export function DependantInfoShelf({
 
     const [editForm, setEditForm] = useState(() => getInitialEditForm(client));
     const [produceVendors, setProduceVendors] = useState<ProduceVendor[]>([]);
-    const editStartSnapshotRef = React.useRef<ReturnType<typeof getAuditSnapshotFromEditForm> | null>(null);
+    const editStartSnapshotRef = useRef<ReturnType<typeof getAuditSnapshotFromEditForm> | null>(null);
 
     const [showChangeLog, setShowChangeLog] = useState(false);
     const [changeLogLoading, setChangeLogLoading] = useState(false);
@@ -179,6 +179,20 @@ export function DependantInfoShelf({
         return out.join('\n');
     }
 
+    const hasUnsavedChanges = useMemo(() => {
+        if (!isEditing) return false;
+        const start = editStartSnapshotRef.current ?? getAuditSnapshotFromClient(client);
+        const current = getAuditSnapshotFromEditForm(editForm);
+        return (
+            diffObjects(start, current, {
+                maxDepth: 6,
+                maxEntries: 200,
+                nullishEqual: true,
+                emptyStringEqualNullish: true,
+            }).length > 0
+        );
+    }, [isEditing, editForm, client]);
+
     const beginEdit = () => {
         editStartSnapshotRef.current = getAuditSnapshotFromClient(client);
         setIsEditing(true);
@@ -237,7 +251,7 @@ export function DependantInfoShelf({
         }
     }, [client?.id, isEditing, editForm.address, editForm.city, editForm.state, editForm.zip, geoBusy, onClientUpdated]);
 
-    const handleSave = async () => {
+    const handleSave = async (): Promise<boolean> => {
         setIsSaving(true);
         try {
             const beforeSnapshot = editStartSnapshotRef.current ?? getAuditSnapshotFromClient(client);
@@ -287,17 +301,44 @@ export function DependantInfoShelf({
             setIsEditing(false);
             editStartSnapshotRef.current = null;
             if (onClientUpdated) onClientUpdated(updated ?? undefined);
+            return true;
         } catch (error) {
             console.error('Failed to update dependent:', error);
             alert('Failed to save changes. Please try again.');
+            return false;
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleSaveAndClose = async () => {
-        await handleSave();
-        onClose();
+        const ok = await handleSave();
+        if (ok) onClose();
+    };
+
+    const handleCancelEdit = () => {
+        if (isSaving) {
+            window.alert('Please wait until saving finishes before leaving edit mode.');
+            return;
+        }
+        if (hasUnsavedChanges) {
+            if (!window.confirm('Discard unsaved changes? Your edits will be lost.')) return;
+        }
+        setIsEditing(false);
+        setEditForm(getInitialEditForm(client));
+        editStartSnapshotRef.current = null;
+    };
+
+    const handleOverlayClick = async () => {
+        if (!isEditing) {
+            onClose();
+            return;
+        }
+        if (isSaving) {
+            window.alert('Saving is still in progress. Please wait before closing.');
+            return;
+        }
+        await handleSaveAndClose();
     };
 
     const handleDelete = async () => {
@@ -315,7 +356,7 @@ export function DependantInfoShelf({
 
     return (
         <>
-            <div className={styles.shelfOverlay} onClick={() => (isEditing ? handleSaveAndClose() : onClose())} />
+            <div className={styles.shelfOverlay} onClick={() => void handleOverlayClick()} />
             <div className={styles.shelf}>
                 <div className={styles.header}>
                     <div className={styles.titleSection}>
@@ -354,11 +395,7 @@ export function DependantInfoShelf({
                                 <button className={styles.saveBtn} onClick={handleSave} disabled={isSaving}>
                                     {isSaving ? <Loader2 className="animate-spin" size={18} /> : <Check size={18} />}
                                 </button>
-                                <button className={styles.cancelBtn} onClick={() => {
-                                    setIsEditing(false);
-                                    setEditForm(getInitialEditForm(client));
-                                    editStartSnapshotRef.current = null;
-                                }}>
+                                <button className={styles.cancelBtn} onClick={handleCancelEdit}>
                                     <X size={18} />
                                 </button>
                             </>

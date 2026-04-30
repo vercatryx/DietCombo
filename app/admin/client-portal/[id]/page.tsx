@@ -19,9 +19,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function AdminClientPortalPage({ params }: Props) {
   const { id } = await params;
 
-  // Admin-only: only admin and super-admin may view this page
+  // Admin / Brooklyn admin: super-admin and admin have full access; brooklyn_admin only for Brooklyn-account clients (checked after load).
   const session = await getSession();
-  if (session?.role !== 'admin' && session?.role !== 'super-admin') {
+  if (
+    session?.role !== 'admin' &&
+    session?.role !== 'super-admin' &&
+    session?.role !== 'brooklyn_admin'
+  ) {
     redirect('/clients');
   }
 
@@ -31,6 +35,13 @@ export default async function AdminClientPortalPage({ params }: Props) {
   }
 
   const { client, householdPeople, statuses, navigators, vendors, menuItems, boxTypes, categories, activeOrder, previousOrders, mealPlanData } = payload;
+
+  if (session.role === 'brooklyn_admin') {
+    const isBrooklynClient = (client.uniteAccount || '').trim() === 'Brooklyn';
+    if (!isBrooklynClient) {
+      redirect('/clients');
+    }
+  }
 
   if (isProduceServiceType(client.serviceType) && householdPeople.length === 0) {
     return (

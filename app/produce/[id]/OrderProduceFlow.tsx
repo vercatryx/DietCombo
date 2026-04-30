@@ -5,7 +5,7 @@ import Webcam from 'react-webcam';
 import { uploadProduceProofOnly, createProduceOrderWithProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ExternalLink, ImageIcon } from 'lucide-react';
 import '../produce.css';
-import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
+import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
 
 interface ClientDetails {
     id: string;
@@ -19,6 +19,7 @@ interface ClientDetails {
 export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>('VERIFY');
     const [imageSrc, setImageSrc] = useState<string | null>(null);
+    const [previewCapturedAt, setPreviewCapturedAt] = useState<Date | null>(null);
     const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
     const [createdOrderNumber, setCreatedOrderNumber] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
@@ -27,12 +28,8 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
-        try {
-            const stamped = await stampTimestampOnImageDataUrl(raw);
-            setImageSrc(stamped);
-        } catch {
-            setImageSrc(raw);
-        }
+        setPreviewCapturedAt(new Date());
+        setImageSrc(raw);
         setStep('PREVIEW');
     }, [webcamRef]);
 
@@ -223,7 +220,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     if (step === 'PREVIEW') {
         return (
             <div className="camera-overlay-full">
-                <div className="camera-view" style={{ backgroundColor: 'black' }}>
+                <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative' }}>
                     {imageSrc && (
                         <img
                             src={imageSrc}
@@ -231,6 +228,9 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                             style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                         />
                     )}
+                    {previewCapturedAt ? (
+                        <ProofStampPreviewOverlay capturedAt={previewCapturedAt} />
+                    ) : null}
                 </div>
                 <div className="preview-actions">
                     <button
@@ -244,6 +244,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                     <button
                         onClick={() => {
                             setImageSrc(null);
+                            setPreviewCapturedAt(null);
                             setStep('CAPTURE');
                         }}
                         className="btn-secondary"

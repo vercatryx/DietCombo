@@ -249,11 +249,14 @@ function setupEventListeners() {
     if (serviceTypeSelect) {
         serviceTypeSelect.addEventListener('change', function() {
             const authUnitsGroup = document.getElementById('auth-units-group');
-            if (this.value === 'Food') {
-                authUnitsGroup.style.display = 'block';
-            } else {
-                authUnitsGroup.style.display = 'none';
-                document.getElementById('auth-units').value = '';
+            const authUnitsInput = document.getElementById('auth-units');
+            if (authUnitsGroup) {
+                if (this.value === 'Food') {
+                    authUnitsGroup.style.display = 'block';
+                } else {
+                    authUnitsGroup.style.display = 'none';
+                    if (authUnitsInput) authUnitsInput.value = '';
+                }
             }
             // Food → produce vendor: default Delivery off (user can re-check)
             const prev = this.dataset.prevServiceType || 'Food';
@@ -588,7 +591,6 @@ async function handleSubmit(e) {
             throw new Error('Select Food or a produce vendor');
         }
 
-        const authUnits = document.getElementById('auth-units').value.trim();
         const depRaw = (document.getElementById('dependents-count') && document.getElementById('dependents-count').value) || '0';
         const dependentCount = Math.min(50, Math.max(0, parseInt(String(depRaw).trim(), 10) || 0));
         
@@ -638,7 +640,7 @@ async function handleSubmit(e) {
             dislikes: document.getElementById('notes').value.trim() || null,
             serviceType: serviceType,
             caseId: document.getElementById('case-url').value.trim(),
-            approvedMealsPerWeek: serviceType === 'Food' && authUnits ? parseInt(authUnits, 10) : 0,
+            approvedMealsPerWeek: serviceType === 'Food' ? 21 : 0,
             authorizedAmount: authorizedAmountValue ? parseFloat(authorizedAmountValue) : null,
             expirationDate: expirationDateValue || null,
             dob: dobValue || null,
@@ -746,7 +748,7 @@ async function handleSubmit(e) {
             const depInput = document.getElementById('dependents-count');
             if (depInput) depInput.value = '0';
             const authUnitsGroup = document.getElementById('auth-units-group');
-            authUnitsGroup.style.display = 'block';
+            if (authUnitsGroup) authUnitsGroup.style.display = 'block';
             // Reset flags to defaults (Paused off, Complex off, Bill on, Delivery on)
             document.getElementById('flag-paused').checked = false;
             document.getElementById('flag-complex').checked = false;

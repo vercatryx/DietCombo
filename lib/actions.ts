@@ -25,8 +25,11 @@ import { toStoredUpcomingOrder, fromStoredUpcomingOrder } from './upcoming-order
 import { prepareMealPlannerDataForUpdate, mealPlannerDateOnly, mealPlannerCutoffDate, type MealPlannerOrderResult } from './meal-planner-utils';
 import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
 import { isProduceServiceType } from './isProduceServiceType';
+import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from './deliveryEligibility';
+import { mergeDietaryFlagsIntoNote, type DietaryFlags } from './dietary-preferences-note';
 
 export type { MealPlannerOrderResult } from './meal-planner-utils';
+export type { DietaryFlags } from './dietary-preferences-note';
 
 // Meal planner orders use meal_planner_orders and meal_planner_order_items (no longer upcoming_orders)
 const MEAL_PLANNER_SERVICE_TYPE = 'meal_planner';
@@ -4796,6 +4799,39 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     return getClient(id);
 }
 
+/** Portal dietary toggles: updates `dislikes` with minimal plain-text edits. Caller must be the client (own row), admin, super-admin, or navigator. */
+export async function updateClientDietaryDislikes(clientId: string, desired: DietaryFlags): Promise<ClientProfile | null> {
+    const session = await getSession();
+    if (!session?.userId) {
+        throw new Error('Unauthorized');
+    }
+    const role = session.role as string;
+    if (role === 'client' && session.userId !== clientId) {
+        throw new Error('Forbidden');
+    }
+    const staffRoles = ['admin', 'super-admin', 'navigator', 'brooklyn_admin'] as const;
+    if (role !== 'client' && !staffRoles.includes(role as (typeof staffRoles)[number])) {
+        throw new Error('Forbidden');
+    }
+
+    const client = await getClient(clientId);
+    if (!client) return null;
+
+    if (role === 'brooklyn_admin' && (client.uniteAccount || '').trim() !== 'Brooklyn') {
+        throw new Error('Forbidden');
+    }
+
+    const merged = mergeDietaryFlagsIntoNote(client.dislikes ?? '', desired);
+    const updated = await updateClient(
+        clientId,
+        { dislikes: merged, serviceType: client.serviceType },
+        { skipOrderSync: true }
+    );
+    revalidatePath(`/client-portal/${clientId}`);
+    revalidatePath(`/admin/client-portal/${clientId}`);
+    return updated ?? null;
+}
+
 export async function deleteClient(id: string) {
     // First, get all dependents of this client (if it's a parent client)
     const { data: dependents } = await supabase
@@ -8075,6 +8111,7 @@ export async function processUpcomingOrders() {
     const menuItems = await getMenuItems();
     const errors: string[] = [];
     let processedCount = 0;
+    const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
 
     for (const upcomingOrder of upcomingOrders) {
         try {
@@ -8244,7 +8281,7 @@ export async function processUpcomingOrders() {
                 const scheduledDate = orderData.scheduled_delivery_date;
                 const vendorIdForDep = orderData.vendor_id;
                 for (const dep of dependants) {
-                    if (dep.delivery === false || dep.paused === true) continue;
+                    if (dep.delivery === false || isExcludedFromDeliveries(dep.paused, dep.statusId, statusAllowMap)) continue;
                     const existingQuery = supabase
                         .from('orders')
                         .select('id')
@@ -12706,6 +12743,8 @@ export async function getProduceClientsForVendorToken(vendorToken: string): Prom
             .maybeSingle();
         if (pvErr || !pv || pv.is_active === false) return [];
 
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(admin);
+
         const PAGE_SIZE = 1000;
         const allRows: any[] = [];
         let offset = 0;
@@ -12736,15 +12775,20 @@ export async function getProduceClientsForVendorToken(vendorToken: string): Prom
                 }
             })
             .filter((c): c is ClientProfile => c != null)
-            .filter(c => isProduceServiceType(c.serviceType));
+            .filter(c => isProduceServiceType(c.serviceType))
+            .filter(c => !isExcludedFromDeliveries(c.paused, c.statusId, statusAllowMap));
     }
 
     const pvList = await getProduceVendors();
     const vendor = pvList.find(p => p.token === trimmed);
     if (!vendor) return [];
+    const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
     const all = await getClientsUnlimited();
     return all.filter(
-        c => isProduceServiceType(c.serviceType) && !c.paused && c.produceVendorId === vendor.id
+        c =>
+            isProduceServiceType(c.serviceType) &&
+            !isExcludedFromDeliveries(c.paused, c.statusId, statusAllowMap) &&
+            c.produceVendorId === vendor.id
     );
 }
 
@@ -12858,14 +12902,19 @@ export async function bulkCreateProduceOrdersForVendor(
 
         const defaultVendorId = await getDefaultVendorId();
 
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabaseAdmin);
+
         const { data: clientRows, error: clientsErr } = await supabaseAdmin
             .from('clients')
-            .select('id, full_name, address, city, state, zip, phone_number, service_type, paused, produce_vendor_id')
+            .select('id, full_name, address, city, state, zip, phone_number, service_type, paused, produce_vendor_id, status_id')
             .in('id', ids);
         if (clientsErr) return { success: false, error: `Failed to load clients: ${clientsErr.message}` };
 
         const validClients = (clientRows || []).filter(
-            c => isProduceServiceType(c.service_type) && !c.paused && c.produce_vendor_id === vendor.id
+            c =>
+                isProduceServiceType(c.service_type) &&
+                !isExcludedFromDeliveries(c.paused, c.status_id, statusAllowMap) &&
+                c.produce_vendor_id === vendor.id
         );
 
         if (validClients.length === 0) {

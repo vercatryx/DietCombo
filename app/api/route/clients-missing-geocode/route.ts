@@ -2,12 +2,13 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { fetchAllRows, supabase } from "@/lib/supabase";
+import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
 import { getSession } from "@/lib/session";
 
 /**
  * Returns clients from the clients table that are missing lat/lng (for manual geocoding).
  * Includes both primary clients and dependants (dependants can have their own orders and need geocoding).
- * Same filters as assignment: not paused, delivery true or null.
+ * Same filters as assignment: not paused, status allows deliveries, delivery true or null.
  * Brooklyn admins: only clients with unite_account = 'Brooklyn'.
  */
 export async function GET() {
@@ -15,11 +16,13 @@ export async function GET() {
         const session = await getSession();
         const brooklynOnly = session?.role === "brooklyn_admin";
 
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
+
         const rawRows = await fetchAllRows((sb) => {
             let q = sb
                 .from("clients")
                 .select(
-                    "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id"
+                    "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id, paused, delivery, status_id"
                 )
                 .eq("paused", false)
                 .or("delivery.is.null,delivery.eq.true")
@@ -39,7 +42,16 @@ export async function GET() {
             return key != null ? str(r[key]) : "";
         };
 
-        const clients = rawRows.map((c: Record<string, unknown>) => ({
+        const eligibleRows = (rawRows || []).filter((c: Record<string, unknown>) => {
+            const paused = c.paused === true;
+            const sid = c.status_id != null ? String(c.status_id) : null;
+            return (
+                !isExcludedFromDeliveries(paused, sid, statusAllowMap) &&
+                (c.delivery === undefined || c.delivery === null || c.delivery === true)
+            );
+        });
+
+        const clients = eligibleRows.map((c: Record<string, unknown>) => ({
             id: c.id,
             first: get(c, "first_name"),
             last: get(c, "last_name"),

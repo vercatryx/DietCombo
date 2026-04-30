@@ -14,6 +14,7 @@ import {
   getUnknownCannedReplyCap24h,
 } from './sms-inbound-blocks';
 import { normalizePhone } from './phone-utils';
+import { mergeDietaryFlagsIntoNote, parseDietaryFlags } from './dietary-preferences-note';
 
 const CONVERSATION_TTL_HOURS = 2;
 const MAX_HISTORY_MESSAGES = 20;
@@ -170,6 +171,20 @@ function defineBotTools(hasMultipleAccounts: boolean): Anthropic.Tool[] {
       input_schema: { type: 'object' as const, properties: { email: { type: 'string' } }, required: ['email'] },
     },
     {
+      name: 'set_dietary_preferences',
+      description:
+        'Set whole-account gluten-free, sugar-free, and dairy-free (yes/no each—not per meal or menu item). Updates the same dietary note as the client portal. Pass the full desired state for all three flags (true = yes for that restriction, false = no). Confirm with the client before calling.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          gluten_free: { type: 'boolean', description: 'True if they need gluten-free' },
+          sugar_free: { type: 'boolean', description: 'True if they need sugar-free' },
+          dairy_free: { type: 'boolean', description: 'True if they need dairy-free' },
+        },
+        required: ['gluten_free', 'sugar_free', 'dairy_free'],
+      },
+    },
+    {
       name: 'get_delivery_history',
       description: 'Get recent delivery history for the client (includes all household members). Shows delivery dates, times, and proof of delivery photo links.',
       input_schema: { type: 'object' as const, properties: { limit: { type: 'number' } }, required: [] },
@@ -196,6 +211,8 @@ async function executeTool(
       return executeSaveMealPlan(supabase, clientId, args.date, args.items);
     case 'set_email':
       return executeSetEmail(supabase, clientId, args.email);
+    case 'set_dietary_preferences':
+      return executeSetDietaryPreferences(supabase, clientId, args);
     case 'get_delivery_history':
       return executeGetDeliveryHistory(supabase, clientId, args.limit);
     default:
@@ -221,7 +238,9 @@ async function executeGetAccountInfo(supabase: SupabaseClient, clientId: string)
     address: fullAddress || 'Not on file', city: client.city, state: client.state, zip: client.zip, county: client.county,
     service_type: client.service_type, expiration_date: client.expiration_date,
     dob: client.dob, cin: client.cin,
-    dislikes: client.dislikes, notes: client.notes,
+    dislikes: client.dislikes,
+    dietary_preferences: parseDietaryFlags(client.dislikes ?? null),
+    notes: client.notes,
     household_members: (dependents ?? []).map((d: any) => ({
       name: d.full_name, email: d.email, phone: d.phone_number, service_type: d.service_type, dob: d.dob,
     })),
@@ -401,6 +420,36 @@ async function executeSetEmail(supabase: SupabaseClient, clientId: string, email
   return JSON.stringify({ success: true, email: trimmed, message: `Email set to ${trimmed}. You can now log in at http://customer.thedietfantasy.com/ with this email.` });
 }
 
+async function executeSetDietaryPreferences(
+  supabase: SupabaseClient,
+  clientId: string,
+  args: { gluten_free: boolean; sugar_free: boolean; dairy_free: boolean },
+): Promise<string> {
+  const { data: row, error: fetchErr } = await supabase.from('clients').select('dislikes').eq('id', clientId).single();
+  if (fetchErr || !row) {
+    return JSON.stringify({ success: false, error: fetchErr?.message ?? 'Client not found.' });
+  }
+
+  const merged = mergeDietaryFlagsIntoNote(row.dislikes ?? '', {
+    glutenFree: args.gluten_free,
+    sugarFree: args.sugar_free,
+    dairyFree: args.dairy_free,
+  });
+
+  const { error } = await supabase.from('clients').update({ dislikes: merged }).eq('id', clientId);
+  if (error) {
+    return JSON.stringify({ success: false, error: error.message });
+  }
+
+  const flags = parseDietaryFlags(merged);
+  return JSON.stringify({
+    success: true,
+    dietary_preferences: flags,
+    message:
+      `Saved. Gluten free: ${flags.glutenFree ? 'yes' : 'no'}, Sugar free: ${flags.sugarFree ? 'yes' : 'no'}, Dairy free: ${flags.dairyFree ? 'yes' : 'no'}.`,
+  });
+}
+
 async function executeGetDeliveryHistory(supabase: SupabaseClient, clientId: string, limit?: number): Promise<string> {
   const count = Math.min(Math.max(limit ?? 5, 1), 10);
   const today = getTodayInAppTz();
@@ -485,7 +534,16 @@ YOU OFFER THESE SERVICES:
 1. Account Info — view account details (read-only)
 2. Meal Plan — view and edit meal orders for delivery dates
 3. Delivery History — view recent deliveries with proof of delivery photos
-4. Set Email — set or update their email for portal login${client.email ? '' : '\n\nIMPORTANT: This client has NO EMAIL on file. After greeting, recommend they set one so they can log into the portal.'}
+4. Set Email — set or update their email for portal login
+5. Dietary preferences — three whole-account yes/no flags: gluten-free, sugar-free, dairy-free (not individual meals or menu items; stored in their dietary note). ${client.email ? 'The client can turn each on or off on their own: log in at http://customer.thedietfantasy.com/ and use the checkboxes on their account (client portal). SMS with you is optional.' : 'They can ask you in this chat to set yes/no for each, or add an email (set_email) so they can log in and set them on their account at http://customer.thedietfantasy.com/ anytime.'}${client.email ? '' : '\n\nIMPORTANT: This client has NO EMAIL on file. After greeting, recommend they set one so they can log into the portal—including for dietary preferences on their account.'}
+
+DIETARY PREFERENCES FLOW:
+- These are account-wide toggles only (yes/no per category). Never imply they can pick dietary rules per item or per delivery date here—only these three flags for the whole account.
+- They may update yes/no themselves at http://customer.thedietfantasy.com/ (portal sidebar checkboxes), or ask you to change it here.
+- get_account_info shows dietary_preferences (parsed) and dislikes (raw note text).
+- If they want YOU to change preferences: confirm the three settings (gluten free yes/no, sugar free yes/no, dairy free yes/no).
+- Call set_dietary_preferences with all three booleans as the complete desired state (not deltas).
+- Keep replies short; confirm what was saved.
 
 SET EMAIL FLOW:
 - Ask for the email address.
@@ -509,6 +567,7 @@ RULES:
 - Be extremely concise. No filler text.
 - Outside capabilities: "Please call (845) 478-6605."
 - First message only: sign off with "— The Diet Fantasy"
+- Whenever dietary preferences come up, briefly remind them they can turn each yes/no on their account at http://customer.thedietfantasy.com/ if they prefer to self-serve (whole account only—not per item).
 - At the end of every conversation, remind them they can also use http://customer.thedietfantasy.com/ (log in with their email).`;
 }
 

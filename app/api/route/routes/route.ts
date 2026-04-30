@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase, fetchAllRows } from "@/lib/supabase";
+import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
 import { isProduceServiceType } from "@/lib/isProduceServiceType";
 import { v4 as uuidv4 } from "uuid";
 
@@ -38,6 +39,8 @@ export async function GET(req: Request) {
 
         const normalizedDeliveryDate = deliveryDate ? deliveryDate.split('T')[0].split(' ')[0] : null;
         log(`[route/routes] GET delivery_date=${deliveryDate ?? 'none'} normalized=${normalizedDeliveryDate ?? 'null'} day=${day}`);
+
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
 
         // Fast path (drivers pages): build routes + stops entirely in DB via RPC.
         // This avoids multi-query JS hydration for every /drivers and /drivers/[id] load.
@@ -176,7 +179,7 @@ export async function GET(req: Request) {
             const batch = clientIds.slice(i, i + CLIENTS_BATCH);
             const { data } = await supabase
                 .from('clients')
-                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type, status_id')
                 .in('id', batch);
             if (data) clientsArr.push(...data);
         }
@@ -191,7 +194,7 @@ export async function GET(req: Request) {
             assigned_driver_id: c.assigned_driver_id
         }]));
 
-        // Exclude stops for clients who are paused or have delivery turned off (profile)
+        // Exclude stops for clients who are paused, status ineligible, or have delivery turned off (profile)
         const isDeliverableClient = (c: any) => {
             const v = c?.delivery;
             return v === undefined || v === null ? true : Boolean(v);
@@ -200,7 +203,7 @@ export async function GET(req: Request) {
             const client = stop?.userId != null ? clientById.get(String(stop.userId)) : clientById.get(String((stop as any).client_id));
             if (!client) return true; // no client record → show (legacy)
             if (excludeProduce && isProduceServiceType((client as any).service_type)) return false;
-            if (client.paused) return false;
+            if (isExcludedFromDeliveries(client.paused, client.status_id, statusAllowMap)) return false;
             return isDeliverableClient(client);
         };
 
@@ -568,7 +571,7 @@ export async function GET(req: Request) {
                     const { data: extraClients } = await supabase
                         .from("clients")
                         .select(
-                            "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type"
+                            "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type, status_id"
                         )
                         .in("id", toLoadClients);
                     for (const c of extraClients || []) {
@@ -637,7 +640,7 @@ export async function GET(req: Request) {
                     }
                     const c = clientById.get(cid) as any;
                     if (!c) continue;
-                    if (c.paused || !isDeliverableClient(c)) continue;
+                    if (isExcludedFromDeliveries(c.paused, c.status_id, statusAllowMap) || !isDeliverableClient(c)) continue;
                     const orderRow = orderByClientForGap.get(cid);
                     if (!orderRow) continue;
                     orderMapById.set(String(orderRow.id), orderRow);
@@ -838,7 +841,7 @@ export async function GET(req: Request) {
         // Fetch all clients with their assigned_driver_id for stop creation
         const allClientsWithDriver = await fetchAllRows((sb: any) =>
             sb.from('clients')
-                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes, status_id')
                 .order('id', { ascending: true })
         );
         
@@ -1110,8 +1113,8 @@ export async function GET(req: Request) {
             
             const reasons: string[] = [];
             
-            if (client.paused) {
-                reasons.push("paused");
+            if (isExcludedFromDeliveries(client.paused, client.status_id, statusAllowMap)) {
+                reasons.push(client.paused ? "paused" : "status does not allow deliveries");
             }
             if (!isDeliverable(client)) {
                 reasons.push("delivery off");

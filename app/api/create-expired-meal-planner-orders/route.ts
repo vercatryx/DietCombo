@@ -11,6 +11,7 @@ import {
     generateBatchOrderNumbers
 } from '@/lib/actions';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
+import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from '@/lib/deliveryEligibility';
 
 /**
  * API Route: Create Orders for Meal Planner by Scheduled Delivery Date
@@ -65,23 +66,25 @@ export async function POST(request: NextRequest) {
         // 2. Pre-fetch all reference data in parallel
         // Use getClientsForAdmin to bypass Supabase's 1000-row limit - avoids "Unknown Client" on vendor sheets
         // Fetch menu_items with admin client so we have full list for name resolution and duplicate filter (getMenuItems uses anon and can be RLS-limited)
-        const [allClients, defaultTemplate, menuItemsFromLib, defaultVendorId, menuItemsAdmin] = await Promise.all([
+        const [allClients, defaultTemplate, menuItemsFromLib, defaultVendorId, menuItemsAdmin, statusAllowMap] = await Promise.all([
             getClientsForAdmin(supabaseAdmin),
             getDefaultOrderTemplate('Food'),
             getMenuItems(),
             getDefaultVendorId(),
-            supabaseAdmin.from('menu_items').select('id, name, value, price_each').then((r) => (r.data || []).map((i: any) => ({ id: i.id, name: i.name, value: i.value, priceEach: i.price_each ?? i.value })))
+            supabaseAdmin.from('menu_items').select('id, name, value, price_each').then((r) => (r.data || []).map((i: any) => ({ id: i.id, name: i.name, value: i.value, priceEach: i.price_each ?? i.value }))),
+            fetchStatusDeliveriesAllowedMap(supabaseAdmin)
         ]);
         const menuItems = (menuItemsAdmin?.length ? menuItemsAdmin : menuItemsFromLib) as any[];
 
         const foodClientsAll = allClients.filter(
             (c: any) => c.serviceType && String(c.serviceType).toLowerCase().includes('food')
         );
-        // Only run for clients who are not paused and have delivery enabled
-        const pausedDefault = false;
+        // Only run for clients who are eligible for delivery (not paused / status allows) and have delivery enabled
         const deliveryDefault = true;
         let foodClients = foodClientsAll.filter(
-            (c: any) => !(c.paused ?? pausedDefault) && (c.delivery ?? deliveryDefault)
+            (c: any) =>
+                !isExcludedFromDeliveries(c.paused, c.statusId, statusAllowMap) &&
+                (c.delivery ?? deliveryDefault)
         );
 
         if (accountTypeParam && ['Regular', 'Brooklyn'].includes(accountTypeParam)) {

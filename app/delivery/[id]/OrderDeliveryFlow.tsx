@@ -6,7 +6,7 @@ import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ImageIcon, ExternalLink } from 'lucide-react';
 import '../delivery.css';
-import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
+import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -28,6 +28,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
     const [imageSrc, setImageSrc] = useState<string | null>(null);
+    const [previewCapturedAt, setPreviewCapturedAt] = useState<Date | null>(null);
     const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
@@ -74,12 +75,8 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
-        try {
-            const stamped = await stampTimestampOnImageDataUrl(raw);
-            setImageSrc(stamped);
-        } catch {
-            setImageSrc(raw);
-        }
+        setPreviewCapturedAt(new Date());
+        setImageSrc(raw);
         setStep('PREVIEW');
     }, [webcamRef]);
 
@@ -296,7 +293,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     if (step === 'PREVIEW') {
         return (
             <div className="camera-overlay-full">
-                <div className="camera-view" style={{ backgroundColor: 'black' }}>
+                <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative' }}>
                     {imageSrc && (
                         <img
                             src={imageSrc}
@@ -304,6 +301,9 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                             style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                         />
                     )}
+                    {previewCapturedAt ? (
+                        <ProofStampPreviewOverlay capturedAt={previewCapturedAt} />
+                    ) : null}
                 </div>
                 <div className="preview-actions">
                     <button
@@ -317,6 +317,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     <button
                         onClick={() => {
                             setImageSrc(null);
+                            setPreviewCapturedAt(null);
                             setStep('CAPTURE');
                         }}
                         className="btn-secondary"

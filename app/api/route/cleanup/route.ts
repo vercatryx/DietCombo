@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase, fetchAllRows } from "@/lib/supabase";
+import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
 import { v4 as uuidv4 } from "uuid";
 
 const s = (v: unknown) => (v == null ? "" : String(v));
@@ -9,6 +10,8 @@ const n = (v: unknown) => (typeof v === "number" ? v : null);
 
 export async function POST(req: Request) {
     try {
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
+
         // Try to get day from body first, then fall back to query string
         let day = "all";
         let deliveryDate: string | null = null;
@@ -41,7 +44,7 @@ export async function POST(req: Request) {
         // Get all clients including assigned_driver_id (paginated to support >1000 clients)
         const allClients = await fetchAllRows((sb: any) =>
             sb.from('clients')
-                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes, status_id')
                 .order('id', { ascending: true })
         );
 
@@ -221,8 +224,8 @@ export async function POST(req: Request) {
             const clientId = String(client.id);
             
             // Check if client should have stops
-            if (client.paused) {
-                continue; // Paused clients don't get stops
+            if (isExcludedFromDeliveries(client.paused, client.status_id, statusAllowMap)) {
+                continue; // Paused or status blocks deliveries
             }
             if (!isDeliverable(client)) {
                 continue; // Delivery disabled clients don't get stops

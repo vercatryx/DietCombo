@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabase, fetchAllRows } from "@/lib/supabase";
+import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
 import { getSession } from "@/lib/session";
 
 /**
@@ -14,6 +15,8 @@ export async function GET(req: Request) {
         const session = await getSession();
         const brooklynOnly = session?.role === "brooklyn_admin";
 
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
+
         const { searchParams } = new URL(req.url);
         const day = (searchParams.get("day") || "all").toLowerCase();
 
@@ -22,7 +25,7 @@ export async function GET(req: Request) {
             let q = sb
                 .from("clients")
                 .select(
-                    "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id, service_type"
+                    "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id, service_type, status_id"
                 )
                 .eq("paused", false)
                 .or("delivery.is.null,delivery.eq.true");
@@ -36,7 +39,7 @@ export async function GET(req: Request) {
         const statsRows = await fetchAllRows((sb) => {
             let q = sb
                 .from("clients")
-                .select("id, parent_client_id, service_type, paused, delivery, lat, lng");
+                .select("id, parent_client_id, service_type, paused, delivery, lat, lng, status_id");
             if (brooklynOnly) {
                 q = q.eq("unite_account", "Brooklyn");
             }
@@ -44,11 +47,20 @@ export async function GET(req: Request) {
             // but keeping it stable helps with debugging.
             return q.order("id", { ascending: true });
         });
-        const rows = (statsRows || []) as { parent_client_id: string | null; service_type: string | null; paused: boolean; delivery: boolean; lat: number | null; lng: number | null }[];
+        const rows = (statsRows || []) as {
+            parent_client_id: string | null;
+            service_type: string | null;
+            paused: boolean;
+            delivery: boolean;
+            lat: number | null;
+            lng: number | null;
+            status_id?: string | null;
+        }[];
         const hasFood = (st: string | null) => (st ?? "").toLowerCase().includes("food");
         const hasProduce = (st: string | null) => (st ?? "").toLowerCase().includes("produce");
         const isProduceOnly = (st: string | null) => (st ?? "").trim().toLowerCase() === "produce";
-        const isDeliveryEligible = (r: typeof rows[0]) => !r.paused && (r.delivery !== false);
+        const isDeliveryEligible = (r: typeof rows[0]) =>
+            !isExcludedFromDeliveries(r.paused, r.status_id, statusAllowMap) && (r.delivery !== false);
         const stats = {
             total_clients: rows.length,
             total_dependants: rows.filter((r) => r.parent_client_id != null && r.parent_client_id !== "").length,
@@ -57,7 +69,9 @@ export async function GET(req: Request) {
             primary_paused_or_delivery_off: rows.filter(
                 (r) =>
                     !r.parent_client_id &&
-                    (r.paused === true || r.delivery === false) &&
+                    (r.paused === true ||
+                        r.delivery === false ||
+                        isExcludedFromDeliveries(false, r.status_id, statusAllowMap)) &&
                     !isProduceOnly(r.service_type)
             ).length,
             primary_food_missing_geo: rows.filter(
@@ -163,7 +177,10 @@ export async function GET(req: Request) {
             }
             return "";
         };
-        const clients = (clientsRows || []).map((c: any) => ({
+        const eligibleAssignmentRows = (clientsRows || []).filter(
+            (c: any) => !isExcludedFromDeliveries(c.paused, c.status_id, statusAllowMap)
+        );
+        const clients = eligibleAssignmentRows.map((c: any) => ({
             id: c.id,
             first: pick(c, "first_name", "firstName"),
             last: pick(c, "last_name", "lastName"),

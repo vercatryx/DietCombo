@@ -1,12 +1,4 @@
--- Fast RPC for /api/route/routes when delivery_date is provided.
--- Goal: replace multi-query JS hydration with a single DB roundtrip.
---
--- Returns: { routes: [...], unrouted: [...] }
--- routes[] shape matches the existing API payload:
---   { driverId, driverName, color, stops: [...] }
--- stop shape matches what the drivers UI reads today (subset is fine, extra fields ok):
---   id, client_id/userId, name, address, apt, city, state, zip, phone, lat, lng, dislikes,
---   delivery_date, completed, proofUrl, assigned_driver_id, order_id, orderId, orderNumber
+-- Align get_routes_for_date RPC with app rules: hide stops when client_statuses.deliveries_allowed is false.
 
 create or replace function public.get_routes_for_date(
   p_delivery_date date,
@@ -19,7 +11,6 @@ stable
 as $$
 with
 drivers_union as (
-  -- Primary drivers table (day-filtered)
   select
     d.id::text as id,
     d.name::text as name,
@@ -29,7 +20,6 @@ drivers_union as (
 
   union all
 
-  -- Legacy routes table (treated as applicable to all days)
   select
     r.id::text as id,
     r.name::text as name,
@@ -39,7 +29,6 @@ drivers_union as (
 drivers_sorted as (
   select
     id, name, color,
-    -- sort "Driver 0/1/2..." numerically, then name
     case
       when regexp_match(lower(name), 'driver\s+(\d+)') is null then 2147483647
       else (regexp_match(lower(name), 'driver\s+(\d+)'))[1]::int
@@ -134,7 +123,6 @@ stops_payload as (
   from stops_enriched
 ),
 ordered_stops as (
-  -- Stops placed by stable route order for each driver
   select
     dro.driver_id::text as driver_id,
     dro.position as position,
@@ -146,7 +134,6 @@ ordered_stop_ids as (
   select distinct id from ordered_stops
 ),
 tail_stops as (
-  -- Stops that are assigned to a driver but not in route order (append after ordered list)
   select
     sp.assigned_driver_id as driver_id,
     100000000 + row_number() over (partition by sp.assigned_driver_id order by sp.id) as position,
@@ -249,4 +236,3 @@ select jsonb_build_object(
   'unrouted', coalesce((select unrouted from unrouted_json), '[]'::jsonb)
 );
 $$;
-

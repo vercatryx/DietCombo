@@ -1,26 +1,12 @@
 import sharp from 'sharp';
 import * as exifr from 'exifr';
-import { APP_TIMEZONE } from '@/lib/timezone';
+import { formatProofStampText } from '@/lib/formatProofStampText';
 
 export type StampTimestampResult = {
   buffer: Buffer;
   stampedAtIso: string;
   source: 'exif' | 'upload_time';
 };
-
-function formatTimestampForStamp(date: Date): string {
-  // Project-wide convention is Eastern time for display.
-  // Avoid `dateStyle` / `timeStyle` for broader runtime compatibility.
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: APP_TIMEZONE,
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  }).format(date);
-}
 
 function escapeXml(text: string): string {
   return text
@@ -105,7 +91,7 @@ export async function stampTimestampOnImageBuffer(
     const pad = Math.max(10, Math.round(fontSize * 0.75));
     const boxH = Math.round(fontSize * 1.7);
 
-    const text = escapeXml(formatTimestampForStamp(stampDate));
+    const text = escapeXml(formatProofStampText(stampDate));
 
     // Render an overlay across the whole image so we can position precisely.
     // Bottom-right "pill" with right-aligned text.

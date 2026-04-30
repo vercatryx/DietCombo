@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { ClientStatus } from '@/lib/types';
 import { addStatus, deleteStatus, updateStatus } from '@/lib/actions';
 import { useDataCache } from '@/lib/data-cache';
-import { Trash2, Plus, Edit2, X, Check, Truck } from 'lucide-react';
+import { Trash2, Plus, Edit2, X, Check } from 'lucide-react';
 import styles from './StatusManagement.module.css';
 
 export function StatusManagement() {
@@ -69,14 +69,6 @@ export function StatusManagement() {
         }
     }
 
-    async function toggleRequiresUnitsOnChange(status: ClientStatus) {
-        const updated = await updateStatus(status.id, { requiresUnitsOnChange: !status.requiresUnitsOnChange });
-        if (updated) {
-            invalidateReferenceData(); // Invalidate cache after update
-            setStatuses(statuses.map(s => s.id === status.id ? updated : s));
-        }
-    }
-
     if (loading) return <div>Loading...</div>;
 
     return (
@@ -90,7 +82,6 @@ export function StatusManagement() {
                 <div className={styles.listHeader}>
                     <span>Status Name</span>
                     <span>Deliveries Allowed?</span>
-                    <span>Requires Units?</span>
                     <span style={{ width: '80px' }}>Actions</span>
                 </div>
                 {statuses.map(status => (
@@ -127,17 +118,6 @@ export function StatusManagement() {
                                             onChange={() => toggleDeliveriesAllowed(status)}
                                         />
                                         {status.deliveriesAllowed ? 'Allowed' : 'Not Allowed'}
-                                    </label>
-                                </div>
-
-                                <div style={{ width: '150px', display: 'flex', alignItems: 'center' }}>
-                                    <label className={styles.toggleLabel}>
-                                        <input
-                                            type="checkbox"
-                                            checked={status.requiresUnitsOnChange ?? false}
-                                            onChange={() => toggleRequiresUnitsOnChange(status)}
-                                        />
-                                        {status.requiresUnitsOnChange ? 'Yes' : 'No'}
                                     </label>
                                 </div>
 

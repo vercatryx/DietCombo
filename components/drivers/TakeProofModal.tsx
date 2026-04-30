@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect, type ComponentType } from 're
 import dynamic from 'next/dynamic';
 import { processDeliveryProof } from '@/app/delivery/actions';
 import { Camera, CheckCircle, Upload, AlertCircle, X } from 'lucide-react';
-import { stampTimestampOnImageDataUrl } from '@/lib/stampTimestampOnImageDataUrl';
+import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
 
 const Webcam = dynamic(
     () => import('react-webcam') as Promise<{ default: ComponentType<any> }>,
@@ -23,6 +23,7 @@ interface TakeProofModalProps {
 export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModalProps) {
     const [step, setStep] = useState<Step>('CHECK');
     const [imageSrc, setImageSrc] = useState<string | null>(null);
+    const [previewCapturedAt, setPreviewCapturedAt] = useState<Date | null>(null);
     const [error, setError] = useState('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(null);
     const webcamRef = useRef<any>(null);
@@ -33,6 +34,7 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
         if (!open || !stop) return;
         setStep('CHECK');
         setImageSrc(null);
+        setPreviewCapturedAt(null);
         setError('');
         setHasCamera(null);
     }, [open, stop?.id]);
@@ -70,12 +72,8 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot?.();
         if (!raw) return;
-        try {
-            const stamped = await stampTimestampOnImageDataUrl(raw);
-            setImageSrc(stamped);
-        } catch {
-            setImageSrc(raw);
-        }
+        setPreviewCapturedAt(new Date());
+        setImageSrc(raw);
         setStep('PREVIEW');
     }, []);
 
@@ -180,14 +178,15 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
         return (
             <div style={{ ...modalStyle, background: '#000' }}>
                 <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', width: '100%' }}>
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', position: 'relative' }}>
                         {imageSrc && <img src={imageSrc} alt="Preview" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />}
+                        {previewCapturedAt ? <ProofStampPreviewOverlay capturedAt={previewCapturedAt} /> : null}
                     </div>
                     <div style={{ display: 'flex', gap: 12, padding: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
                         <button type="button" onClick={handleUpload} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 8, border: 'none', background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
                             <Upload size={20} /> Submit proof
                         </button>
-                        <button type="button" onClick={() => { setImageSrc(null); setStep('CAPTURE'); }} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Retake</button>
+                        <button type="button" onClick={() => { setImageSrc(null); setPreviewCapturedAt(null); setStep('CAPTURE'); }} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Retake</button>
                     </div>
                 </div>
             </div>
