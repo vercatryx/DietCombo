@@ -15,6 +15,7 @@
  * Query params:
  *   ?date=YYYY-MM-DD   – billing window start (default 2026-02-23)
  *   ?account=regular|brooklyn|both  – filter by unite_account (default: both)
+ * Each entry includes createdAt (ISO 8601) for the parent client and each dependant.
  * No auth required.
  */
 
@@ -129,7 +130,7 @@ export async function GET(request: NextRequest) {
 
         // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
         const selectClients =
-            'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account';
+            'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at';
         const clients = await fetchAllRows<any>(
             (from, to) => {
                 let q = supabase.from('clients').select(selectClients).order('id', { ascending: true }).range(from, to);
@@ -175,7 +176,7 @@ export async function GET(request: NextRequest) {
                 (from, to) =>
                     supabase
                         .from('clients')
-                        .select('id, full_name, dob, cin, parent_client_id, unite_account')
+                        .select('id, full_name, dob, cin, parent_client_id, unite_account, created_at')
                         .not('parent_client_id', 'is', null)
                         .order('id', { ascending: true })
                         .range(from, to),
@@ -309,6 +310,7 @@ export async function GET(request: NextRequest) {
             return {
                 clientId: pid,
                 name: parent.full_name || 'Unknown Client',
+                createdAt: parent.created_at != null ? String(parent.created_at) : null,
                 url,
                 orderNumbers,
                 proofURLs,
@@ -319,6 +321,7 @@ export async function GET(request: NextRequest) {
                     name: d.full_name ?? '',
                     Birthday: formatDate(d.dob),
                     CIN: d.cin != null ? String(d.cin) : '',
+                    createdAt: d.created_at != null ? String(d.created_at) : null,
                 })),
             };
         });
