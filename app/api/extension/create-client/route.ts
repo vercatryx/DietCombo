@@ -1,7 +1,119 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addClient, addPlaceholderDependents, getProduceVendors } from '@/lib/actions';
-import { ServiceType } from '@/lib/types';
+import { addClient, addPlaceholderDependents, getProduceVendors, getStatuses, getNavigators } from '@/lib/actions';
+import { sendEmail } from '@/lib/email';
+import { ServiceType, type ClientProfile } from '@/lib/types';
 import { isValidUniteUsUrl } from '@/lib/utils';
+
+export const runtime = 'nodejs';
+
+/** Same support address used elsewhere (e.g. cron notifications). */
+const BROOKLYN_NOTIFY_TO = ['customersupport@thedietfantasy.com', 'hshloimie@gmail.com'].join(', ');
+
+function escapeHtml(s: string | null | undefined): string {
+    if (s === null || s === undefined || s === '') return '—';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function fmtBool(v: boolean | null | undefined): string {
+    return v ? 'Yes' : 'No';
+}
+
+async function sendBrooklynNewClientNotification(
+    client: ClientProfile,
+    opts: { dependentsCreated: number; produceVendorName: string | null }
+): Promise<void> {
+    try {
+        const [statuses, navigators] = await Promise.all([getStatuses(), getNavigators()]);
+        const statusName = statuses.find((s) => s.id === client.statusId)?.name ?? client.statusId;
+        const navigatorName = navigators.find((n) => n.id === client.navigatorId)?.name ?? client.navigatorId;
+
+        const serviceLabelRaw =
+            client.serviceType === 'Produce' && opts.produceVendorName
+                ? `Produce — ${opts.produceVendorName}`
+                : String(client.serviceType ?? '');
+
+        const caseUrlRaw = client.caseIdExternal?.trim() || '';
+        const caseCellHtml =
+            caseUrlRaw && /^https:\/\//i.test(caseUrlRaw)
+                ? `<a href="${escapeHtml(caseUrlRaw)}">${escapeHtml(caseUrlRaw)}</a>`
+                : escapeHtml(caseUrlRaw || undefined);
+
+        const rows: [string, string][] = [
+            ['Client ID', escapeHtml(client.id)],
+            ['Full name', escapeHtml(client.fullName)],
+            ['Email', escapeHtml(client.email)],
+            ['Phone', escapeHtml(client.phoneNumber)],
+            ['Secondary phone', escapeHtml(client.secondaryPhoneNumber)],
+            ['Street address', escapeHtml(client.address)],
+            ['Apt', escapeHtml(client.apt)],
+            ['City', escapeHtml(client.city)],
+            ['State', escapeHtml(client.state)],
+            ['ZIP', escapeHtml(client.zip)],
+            ['County', escapeHtml(client.county)],
+            ['Date of birth', escapeHtml(client.dob)],
+            ['Notes', escapeHtml(client.notes)],
+            ['Dislikes / dietary', escapeHtml(client.dislikes)],
+            ['Service', escapeHtml(serviceLabelRaw)],
+            ['Produce vendor ID', escapeHtml(client.produceVendorId)],
+            [
+                'Auth units / week (Food)',
+                escapeHtml(
+                    client.approvedMealsPerWeek != null ? String(client.approvedMealsPerWeek) : undefined
+                )
+            ],
+            [
+                'Authorized amount',
+                escapeHtml(client.authorizedAmount != null ? String(client.authorizedAmount) : undefined)
+            ],
+            ['Expiration date', escapeHtml(client.expirationDate)],
+            ['Unite account', escapeHtml(client.uniteAccount ?? 'Brooklyn')],
+            ['Status', escapeHtml(`${statusName} (${client.statusId})`)],
+            ['Navigator', escapeHtml(`${navigatorName} (${client.navigatorId})`)],
+            ['Case URL', caseCellHtml],
+            ['Latitude', escapeHtml(client.lat != null ? String(client.lat) : undefined)],
+            ['Longitude', escapeHtml(client.lng != null ? String(client.lng) : undefined)],
+            ['Paused', escapeHtml(fmtBool(client.paused))],
+            ['Complex', escapeHtml(fmtBool(client.complex))],
+            ['Bill', escapeHtml(fmtBool(client.bill))],
+            ['Delivery', escapeHtml(fmtBool(client.delivery))],
+            ['Medicaid', escapeHtml(fmtBool(client.medicaid))]
+        ];
+
+        const tableRows = rows
+            .map(
+                ([label, val]) =>
+                    `<tr><td style="padding:6px 14px 6px 0;font-weight:600;vertical-align:top;color:#334155;white-space:nowrap">${escapeHtml(label)}</td><td style="padding:6px 0;vertical-align:top">${val}</td></tr>`
+            )
+            .join('');
+
+        const depNote =
+            opts.dependentsCreated > 0
+                ? `<p style="margin:16px 0 0"><strong>Placeholder dependents created:</strong> ${opts.dependentsCreated} (names 1, 2, …)</p>`
+                : '';
+
+        const html = `<!DOCTYPE html><html><body style="font-family:system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;color:#0f172a;max-width:640px">
+<p style="margin:0 0 16px"><strong>New Brooklyn client</strong> — added via Chrome extension API.</p>
+<table style="border-collapse:collapse;width:100%">${tableRows}</table>
+${depNote}
+</body></html>`;
+
+        const subjectSafe = (client.fullName || 'Client').replace(/[\r\n]/g, ' ').slice(0, 200);
+        const result = await sendEmail({
+            to: BROOKLYN_NOTIFY_TO,
+            subject: `[Brooklyn] New client: ${subjectSafe}`,
+            html
+        });
+        if (!result.success) {
+            console.error('[extension/create-client] Brooklyn notify email failed:', result.error);
+        }
+    } catch (e) {
+        console.error('[extension/create-client] Brooklyn notify email error:', e);
+    }
+}
 
 /**
  * API Route: Create a new client from Chrome extension
@@ -130,6 +242,7 @@ export async function POST(request: NextRequest) {
         }
 
         let resolvedProduceVendorId: string | null = null;
+        let resolvedProduceVendorName: string | null = null;
         if (serviceType === 'Produce') {
             const vid = typeof produceVendorId === 'string' ? produceVendorId.trim() : '';
             if (!vid) {
@@ -147,6 +260,7 @@ export async function POST(request: NextRequest) {
                 }, { status: 400 });
             }
             resolvedProduceVendorId = vid;
+            resolvedProduceVendorName = match.name;
         }
 
         // Validate case URL format
@@ -241,6 +355,13 @@ export async function POST(request: NextRequest) {
             }
             await addPlaceholderDependents(newClient.id, n);
             dependentsCreated = n;
+        }
+
+        if (uniteAccount.trim() === 'Brooklyn') {
+            await sendBrooklynNewClientNotification(newClient, {
+                dependentsCreated,
+                produceVendorName: resolvedProduceVendorName
+            });
         }
 
         return NextResponse.json({

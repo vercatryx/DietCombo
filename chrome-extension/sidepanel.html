@@ -55,12 +55,15 @@
                     </select>
                 </div>
 
-                <div class="form-group">
-                    <label for="unite-account">Unite Account *</label>
+                <div class="form-group" id="unite-account-group">
+                    <label for="unite-account">Unite account *</label>
                     <select id="unite-account" required>
                         <option value="Regular">Regular</option>
                         <option value="Brooklyn">Brooklyn</option>
                     </select>
+                    <div id="unite-account-brooklyn-label" class="unite-brooklyn-fixed" style="display: none;" aria-hidden="true">
+                        <span class="unite-brooklyn-fixed-text">Brooklyn</span>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -134,8 +137,7 @@
                 <div class="form-group">
                     <label for="dob">Date of birth</label>
                     <input type="date" id="dob">
-                    <small class="field-hint">Optional. “Auto fill from page” reads the Unite DOB field when present.</small>
-                </div>
+               </div>
 
                 <div class="form-group">
                     <label for="notes">Notes</label>
@@ -179,10 +181,10 @@
                     <small class="field-hint">Creates placeholder clients named 1, 2, … with only a name (fill details in the app).</small>
                 </div>
 
-                <div class="form-group" id="auth-units-group" style="display: block;">
+                <!-- <div class="form-group" id="auth-units-group" style="display: block;">
                     <label for="auth-units">Auth Units Per Week</label>
                     <input type="number" id="auth-units" min="0" value="21" placeholder="Enter authorized units per week">
-                </div>
+                </div> -->
 
                 <div class="form-group">
                     <label for="authorized-amount">Authorized Amount</label>

@@ -1,6 +1,9 @@
 // Single connection config
 const DEFAULT_BASE = 'https://customer.thedietfantasy.com';
 
+/** Set to `true` to always use Unite “Brooklyn” and the light blue theme (hides the Unite dropdown). */
+const BROOKLYN_ONLY = true;
+
 let config = { baseUrl: DEFAULT_BASE, apiKey: '' };
 let statuses = [];
 let navigators = [];
@@ -10,6 +13,45 @@ function getConfig() {
         baseUrl: (config.baseUrl || '').replace(/\/$/, ''),
         apiKey: config.apiKey || ''
     };
+}
+
+function isBrooklynOnlyMode() {
+    return BROOKLYN_ONLY;
+}
+
+function getUniteAccountValue() {
+    if (isBrooklynOnlyMode()) return 'Brooklyn';
+    const sel = document.getElementById('unite-account');
+    return sel ? sel.value : 'Regular';
+}
+
+/** Brooklyn-only: blue theme, Unite fixed to Brooklyn (no dropdown). */
+function applyBrooklynOnlyUi() {
+    const body = document.getElementById('panel-body');
+    const brooklyn = isBrooklynOnlyMode();
+    if (body) {
+        body.classList.remove('theme-main', 'theme-brooklyn-only');
+        body.classList.add(brooklyn ? 'theme-brooklyn-only' : 'theme-main');
+    }
+    const sel = document.getElementById('unite-account');
+    const fixed = document.getElementById('unite-account-brooklyn-label');
+    if (sel && fixed) {
+        if (brooklyn) {
+            sel.style.display = 'none';
+            sel.removeAttribute('required');
+            sel.disabled = true;
+            sel.value = 'Brooklyn';
+            fixed.style.display = 'block';
+            fixed.setAttribute('aria-hidden', 'false');
+        } else {
+            sel.style.display = '';
+            sel.setAttribute('required', '');
+            sel.disabled = false;
+            fixed.style.display = 'none';
+            fixed.setAttribute('aria-hidden', 'true');
+            if (sel.value === 'Brooklyn') sel.value = 'Regular';
+        }
+    }
 }
 
 // Initialize
@@ -47,6 +89,7 @@ async function loadConfig() {
             await chrome.storage.sync.set({ config });
         }
     }
+    applyBrooklynOnlyUi();
 }
 
 // Validate API key and initialize
@@ -129,7 +172,10 @@ async function validateAndInitialize() {
         formSection.style.display = 'block';
 
         const uniteAccountSelect = document.getElementById('unite-account');
-        if (uniteAccountSelect) uniteAccountSelect.value = 'Regular';
+        if (uniteAccountSelect) {
+            uniteAccountSelect.value = isBrooklynOnlyMode() ? 'Brooklyn' : 'Regular';
+        }
+        applyBrooklynOnlyUi();
 
         await loadStatuses();
         await loadNavigators();
@@ -209,6 +255,13 @@ function setupEventListeners() {
                 authUnitsGroup.style.display = 'none';
                 document.getElementById('auth-units').value = '';
             }
+            // Food → produce vendor: default Delivery off (user can re-check)
+            const prev = this.dataset.prevServiceType || 'Food';
+            if (prev === 'Food' && this.value.startsWith('produce:')) {
+                const deliveryFlag = document.getElementById('flag-delivery');
+                if (deliveryFlag) deliveryFlag.checked = false;
+            }
+            this.dataset.prevServiceType = this.value;
             const form = document.getElementById('client-form');
             if (form && form._validateForm) form._validateForm();
         });
@@ -428,6 +481,7 @@ async function loadProduceVendorOptions() {
         });
 
         sel.value = 'Food';
+        sel.dataset.prevServiceType = 'Food';
         const authUnitsGroup = document.getElementById('auth-units-group');
         if (authUnitsGroup) authUnitsGroup.style.display = 'block';
         sel.dispatchEvent(new Event('change', { bubbles: true }));
@@ -439,6 +493,7 @@ async function loadProduceVendorOptions() {
         foodOpt.textContent = 'Food';
         sel.appendChild(foodOpt);
         sel.value = 'Food';
+        sel.dataset.prevServiceType = 'Food';
         const authUnitsGroup = document.getElementById('auth-units-group');
         if (authUnitsGroup) authUnitsGroup.style.display = 'block';
         showStatus(
@@ -570,7 +625,7 @@ async function handleSubmit(e) {
             fullName: document.getElementById('full-name').value.trim(),
             statusId: document.getElementById('status').value,
             navigatorId: document.getElementById('navigator').value,
-            uniteAccount: document.getElementById('unite-account').value,
+            uniteAccount: getUniteAccountValue(),
             address: fullAddress,
             apt: apt,
             city: city,
@@ -678,11 +733,15 @@ async function handleSubmit(e) {
             }
             // Reset Unite Account to default
             const uniteAccountSelect = document.getElementById('unite-account');
-            if (uniteAccountSelect) uniteAccountSelect.value = 'Regular';
+            if (uniteAccountSelect) {
+                uniteAccountSelect.value = isBrooklynOnlyMode() ? 'Brooklyn' : 'Regular';
+            }
+            applyBrooklynOnlyUi();
             // Reset service type + dependents; show auth units when Food
             const serviceTypeEl = document.getElementById('service-type');
             if (serviceTypeEl && serviceTypeEl.querySelector('option[value="Food"]')) {
                 serviceTypeEl.value = 'Food';
+                serviceTypeEl.dataset.prevServiceType = 'Food';
             }
             const depInput = document.getElementById('dependents-count');
             if (depInput) depInput.value = '0';

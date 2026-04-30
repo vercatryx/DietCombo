@@ -14,6 +14,31 @@ body {
     font-size: 14px;
 }
 
+/* Brooklyn-only: light blue (set via body.theme-brooklyn-only in JS) */
+.theme-brooklyn-only {
+    --bg-app: #dbeafe;
+    --bg-surface: #ffffff;
+    --bg-surface-hover: #bfdbfe;
+    --bg-input: #ffffff;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-tertiary: #64748b;
+    --border-color: #e2e8f0;
+    --border-color-light: #f1f5f9;
+    --color-danger: #ef4444;
+    --color-success: #15803d;
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.75rem;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.06), 0 2px 4px -2px rgb(0 0 0 / 0.04);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.06), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+    --color-brand: #3b82f6;
+    --color-primary: var(--color-brand);
+    --color-primary-hover: #2563eb;
+    --focus-ring: rgba(59, 130, 246, 0.22);
+}
+
 :root, .theme-main {
     /* Shared layout & neutrals — Main = obvious green tint */
     --bg-app: #d1fae5;
@@ -183,6 +208,25 @@ body {
     background-color: var(--text-tertiary);
     cursor: not-allowed;
     transform: none;
+}
+
+.unite-brooklyn-fixed {
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    margin-top: 0.25rem;
+}
+
+.unite-brooklyn-fixed .field-hint {
+    display: block;
+    margin-top: 0.35rem;
+}
+
+.unite-brooklyn-fixed-text {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.95rem;
 }
 
 .form-group {
