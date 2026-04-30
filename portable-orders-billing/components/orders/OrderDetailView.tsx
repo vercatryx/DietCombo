@@ -171,7 +171,27 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                             {order.actualDeliveryDate && <div className={styles.infoRow}><strong>Actual Delivery:</strong><span>{new Date(order.actualDeliveryDate).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}</span></div>}
                             <div className={styles.infoRow}><strong>Total Value:</strong><span>${order.totalValue.toFixed(2)}</span></div>
                             {order.notes && <div className={styles.infoRow}><strong>Notes:</strong><span>{order.notes}</span></div>}
-                            {order.deliveryProofUrl && <div className={styles.infoRow}><strong>Delivery Proof:</strong><a href={order.deliveryProofUrl} target="_blank" rel="noopener noreferrer" className={styles.link}>View Image</a></div>}
+                            <div className={styles.infoRow}>
+                                <strong>Delivery Proof:</strong>
+                                {order.deliveryProofUrl ? (
+                                    <a
+                                        href={order.deliveryProofUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={styles.thumbnailLink}
+                                        aria-label="Open delivery proof image in a new tab"
+                                    >
+                                        <img
+                                            src={order.deliveryProofUrl}
+                                            alt="Delivery proof"
+                                            className={styles.thumbnailImage}
+                                            loading="lazy"
+                                        />
+                                    </a>
+                                ) : (
+                                    <span className={styles.muted}>img not attached yet</span>
+                                )}
+                            </div>
                         </div>
                     </div>
                     {renderOrderItems()}

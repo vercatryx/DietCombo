@@ -44,8 +44,28 @@
 .infoRow { display: grid; grid-template-columns: 150px 1fr; gap: 1rem; align-items: start; }
 .infoRow strong { color: var(--text-secondary, #555); font-weight: 500; }
 .infoRow span { color: var(--text-primary, #111); }
+.muted { color: var(--text-secondary, #555); }
 .link { color: var(--color-primary, #2563eb); text-decoration: underline; }
 .link:hover { color: var(--color-primary-hover, #1d4ed8); }
+
+.thumbnailLink {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+}
+
+.thumbnailImage {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color, #ddd);
+    background: var(--bg-surface, #f5f5f5);
+}
+
+.thumbnailLink:hover .thumbnailImage {
+    border-color: var(--color-primary, #2563eb);
+}
 
 .orderItemsSection { background: var(--bg-panel, #fff); border: 1px solid var(--border-color, #ddd); border-radius: 0.75rem; padding: 1rem; }
 .vendorSection { margin-bottom: 2rem; }
