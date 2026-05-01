@@ -5,7 +5,7 @@
  * - Address: address, apt, city, state, zip (and county if present) — only copied if dependant
  *   has no address (all of address/city/state/zip empty).
  * - Driver: only copied if dependant's assigned_driver_id is null or empty.
- * - Geocoding: lat, lng, geocoded_at — only copied if dependant is missing valid lat/lng.
+ * - Geocoding: lat, lng, geocoded_at — only copied when dependant lacks coords AND (no own address OR same address as parent). Not copied if dependant has a different address.
  *
  * Usage: npx ts-node --compiler-options '{"module":"CommonJS","moduleResolution":"node"}' scripts/sync-dependants-from-parent.ts
  * Or: npm run sync-dependants-from-parent
@@ -19,6 +19,7 @@ dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 import { createClient } from "@supabase/supabase-js";
+import { shouldCopyParentGeoToDependant } from "../lib/dependantParentGeoSync";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -29,12 +30,6 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-function hasValidGeo(lat: unknown, lng: unknown): boolean {
-    const la = lat != null ? Number(lat) : NaN;
-    const ln = lng != null ? Number(lng) : NaN;
-    return Number.isFinite(la) && Number.isFinite(ln);
-}
 
 function hasDriver(id: unknown): boolean {
     return id != null && String(id).trim() !== "";
@@ -114,9 +109,7 @@ async function main() {
             driverCopied++;
         }
 
-        const dependantHasGeo = hasValidGeo(d.lat, d.lng);
-        const parentHasGeo = hasValidGeo(parent.lat, parent.lng);
-        if (!dependantHasGeo && parentHasGeo) {
+        if (shouldCopyParentGeoToDependant(d, parent)) {
             payload.lat = parent.lat;
             payload.lng = parent.lng;
             if (parent.geocoded_at != null) payload.geocoded_at = parent.geocoded_at;

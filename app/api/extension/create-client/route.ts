@@ -216,60 +216,82 @@ export async function POST(request: NextRequest) {
             dob
         } = body;
 
-        // Validate required fields
-        if (!fullName || !fullName.trim() || !statusId || !navigatorId || !address || !phone || !serviceType || !caseId) {
+        const addressTrimmed = typeof address === 'string' ? address.trim() : '';
+        if (!fullName || !fullName.trim() || !addressTrimmed) {
             return NextResponse.json({
                 success: false,
-                error: 'Missing required fields: fullName, statusId, navigatorId, address, phone, serviceType, and caseId are required'
+                error: 'fullName and address are required'
             }, { status: 400 });
         }
 
-        // Unite account is required (Regular or Brooklyn)
         const validUniteAccounts = ['Regular', 'Brooklyn'];
-        if (!uniteAccount || typeof uniteAccount !== 'string' || !validUniteAccounts.includes(uniteAccount.trim())) {
-            return NextResponse.json({
-                success: false,
-                error: 'uniteAccount is required and must be "Regular" or "Brooklyn"'
-            }, { status: 400 });
+        if (
+            !uniteAccount ||
+            typeof uniteAccount !== 'string' ||
+            !validUniteAccounts.includes(uniteAccount.trim())
+        ) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: 'uniteAccount is required and must be "Regular" or "Brooklyn"',
+                },
+                { status: 400 }
+            );
         }
+        const resolvedUnite = uniteAccount.trim();
 
-        // Extension only sends Food or Produce (produce = specific vendor from /api/extension/produce-vendors)
-        if (serviceType !== 'Food' && serviceType !== 'Produce') {
-            return NextResponse.json({
-                success: false,
-                error: 'serviceType must be "Food" or "Produce"'
-            }, { status: 400 });
-        }
+        let effectiveServiceType: 'Food' | 'Produce' =
+            serviceType === 'Produce' || serviceType === 'Food' ? serviceType : 'Food';
 
         let resolvedProduceVendorId: string | null = null;
         let resolvedProduceVendorName: string | null = null;
-        if (serviceType === 'Produce') {
+        if (effectiveServiceType === 'Produce') {
             const vid = typeof produceVendorId === 'string' ? produceVendorId.trim() : '';
-            if (!vid) {
-                return NextResponse.json({
-                    success: false,
-                    error: 'produceVendorId is required when service type is Produce'
-                }, { status: 400 });
-            }
             const vendors = await getProduceVendors();
-            const match = vendors.find((v) => v.id === vid && v.isActive);
-            if (!match) {
-                return NextResponse.json({
-                    success: false,
-                    error: 'Invalid or inactive produce vendor'
-                }, { status: 400 });
+            const match = vid ? vendors.find((v) => v.id === vid && v.isActive) : undefined;
+            if (match) {
+                resolvedProduceVendorId = vid;
+                resolvedProduceVendorName = match.name;
+            } else {
+                effectiveServiceType = 'Food';
             }
-            resolvedProduceVendorId = vid;
-            resolvedProduceVendorName = match.name;
         }
 
-        // Validate case URL format
-        if (!isValidUniteUsUrl(caseId)) {
+        const caseIdTrimmed = typeof caseId === 'string' ? caseId.trim() : '';
+        if (!caseIdTrimmed || !isValidUniteUsUrl(caseIdTrimmed)) {
             return NextResponse.json({
                 success: false,
-                error: 'Please make sure you are on the clients open case page or enter the real case url'
+                error:
+                    'caseId must be the full Unite Us URL from the address bar while viewing the client\'s open case contact page (format: https://app.uniteus.io/dashboard/cases/open/<case-uuid>/contact/<contact-uuid>). Short links or other Unite pages are not accepted.',
             }, { status: 400 });
         }
+
+        let resolvedStatusId =
+            typeof statusId === 'string' && statusId.trim() ? statusId.trim() : '';
+        let resolvedNavigatorId =
+            typeof navigatorId === 'string' && navigatorId.trim() ? navigatorId.trim() : '';
+
+        if (!resolvedStatusId || !resolvedNavigatorId) {
+            const [statuses, navigators] = await Promise.all([getStatuses(), getNavigators()]);
+            if (!resolvedStatusId && statuses.length) {
+                resolvedStatusId =
+                    statuses.find((s) => s.name.toLowerCase() === 'active')?.id ?? statuses[0].id;
+            }
+            if (!resolvedNavigatorId && navigators.length) {
+                resolvedNavigatorId =
+                    navigators.find((n) => n.name.toLowerCase().includes('orit fried'))?.id ??
+                    navigators[0].id;
+            }
+        }
+
+        if (!resolvedStatusId || !resolvedNavigatorId) {
+            return NextResponse.json({
+                success: false,
+                error: 'Configure at least one status and navigator in the app, or select them in the extension.'
+            }, { status: 400 });
+        }
+
+        const phoneTrimmed = typeof phone === 'string' ? phone.trim() : '';
 
         // Geocode address if coordinates not provided
         let finalLat = lat ?? latitude ?? null;
@@ -280,7 +302,7 @@ export async function POST(request: NextRequest) {
             try {
                 const { geocodeIfNeeded } = await import('@/lib/geocodeOneClient');
                 const addressInput = {
-                    address: address.trim(),
+                    address: addressTrimmed,
                     apt: apt?.trim() || null,
                     city: city?.trim() || null,
                     state: state?.trim() || null,
@@ -302,22 +324,22 @@ export async function POST(request: NextRequest) {
             firstName: firstName?.trim() || null,
             lastName: lastName?.trim() || null,
             email: email?.trim() || null,
-            address: address.trim(),
+            address: addressTrimmed,
             apt: apt?.trim() || null,
             city: city?.trim() || null,
             state: state?.trim()?.toUpperCase() || null,
             zip: zip?.trim() || null,
             county: county?.trim() || null,
-            phoneNumber: phone.trim(),
+            phoneNumber: phoneTrimmed,
             secondaryPhoneNumber: secondaryPhone?.trim() || null,
-            navigatorId: navigatorId,
+            navigatorId: resolvedNavigatorId,
             endDate: '',
             screeningTookPlace: false,
             screeningSigned: false,
             notes: notes?.trim() || '',
             dislikes: dislikes?.trim() || null,
-            statusId: statusId,
-            serviceType: serviceType as ServiceType,
+            statusId: resolvedStatusId,
+            serviceType: effectiveServiceType as ServiceType,
             approvedMealsPerWeek: approvedMealsPerWeek ? parseInt(approvedMealsPerWeek.toString(), 10) : 0,
             authorizedAmount: authorizedAmount !== undefined && authorizedAmount !== null ? parseFloat(authorizedAmount.toString()) : null,
             expirationDate: expirationDate?.trim() || null,
@@ -332,13 +354,13 @@ export async function POST(request: NextRequest) {
             complex: complex ?? false,
             bill: bill ?? true,
             delivery: delivery ?? true,
-            uniteAccount: uniteAccount.trim(),
-            caseIdExternal: caseId.trim(), // Store Unite Us link in case_id_external
+            uniteAccount: resolvedUnite,
+            caseIdExternal: caseIdTrimmed,
             produceVendorId: resolvedProduceVendorId,
             activeOrder: {
-                serviceType: serviceType as ServiceType,
-                caseId: caseId.trim()
-            }
+                serviceType: effectiveServiceType as ServiceType,
+                caseId: caseIdTrimmed,
+            },
         };
 
         const newClient = await addClient(clientData);
@@ -357,7 +379,7 @@ export async function POST(request: NextRequest) {
             dependentsCreated = n;
         }
 
-        if (uniteAccount.trim() === 'Brooklyn') {
+        if (resolvedUnite === 'Brooklyn') {
             await sendBrooklynNewClientNotification(newClient, {
                 dependentsCreated,
                 produceVendorName: resolvedProduceVendorName

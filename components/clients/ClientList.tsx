@@ -4,7 +4,7 @@ import { ClientProfileDetail, type ClientProfileDetailHandle } from './ClientPro
 import { ClientInfoShelf } from './ClientInfoShelf';
 import { DependantInfoShelf } from './DependantInfoShelf';
 
-import { useState, useEffect, useRef, useMemo, ReactElement } from 'react';
+import { useState, useEffect, useRef, useMemo, ReactElement, type CSSProperties, type ReactNode } from 'react';
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType, ProduceVendor } from '@/lib/types';
 import {
     getClientsPaginated,
@@ -28,14 +28,48 @@ import {
 } from '@/lib/actions';
 import { invalidateClientData, getProduceVendors as getCachedProduceVendors } from '@/lib/cached-data';
 import { hasNonDefaultFlags, getNonDefaultFlagLabels, clientMatchesFlagFilter, FLAGS_FILTER_OPTIONS, type FlagsFilterValue } from '@/lib/client-flags';
-import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag, Download } from 'lucide-react';
+import { Plus, Search, ChevronRight, CheckSquare, Square, StickyNote, Package, ArrowUpDown, ArrowUp, ArrowDown, Filter, Eye, EyeOff, Loader2, AlertCircle, X, PenTool, Copy, Check, ExternalLink, Flag, Download, Table2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import styles from './ClientList.module.css';
+import {
+    clientListColumnLayoutStorageKey,
+    clientListDefaultColumnWidths,
+    type ClientListColumnLayoutView,
+} from './clientListColumnWidths';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 interface ClientListProps {
     currentUser?: { role: string; id: string } | null;
 }
+
+type ExpandedBoolFilter = '' | 'yes' | 'no';
+
+const EMPTY_EXPANDED_COLUMN_FILTERS = {
+    dob: '',
+    created: '',
+    apt: '',
+    city: '',
+    state: '',
+    zip: '',
+    county: '',
+    uniteCase: '',
+    uniteAccount: '',
+    voucher: '',
+    history: '',
+    authorized: '',
+    expiration: '',
+    paused: '' as ExpandedBoolFilter,
+    complex: '' as ExpandedBoolFilter,
+    bill: '' as ExpandedBoolFilter,
+    delivery: '' as ExpandedBoolFilter,
+    doNotText: '' as ExpandedBoolFilter,
+};
+
+type ExpandedColumnFilters = typeof EMPTY_EXPANDED_COLUMN_FILTERS;
+
+type ExpandedTextFilterKey =
+    | 'dob' | 'created' | 'apt' | 'city' | 'state' | 'zip' | 'county'
+    | 'uniteCase' | 'uniteAccount' | 'voucher' | 'history' | 'authorized' | 'expiration';
 
 export function ClientList({ currentUser }: ClientListProps = {}) {
     const router = useRouter();
@@ -114,6 +148,161 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     // Order Details Visibility Toggle
     const [showOrderDetails, setShowOrderDetails] = useState(false);
+
+    /** Extra columns mirroring ClientInfoShelf fields (not geocoding / change log). */
+    const [showExpandedTable, setShowExpandedTable] = useState(false);
+    const [expandedColumnFilters, setExpandedColumnFilters] = useState<ExpandedColumnFilters>(() => ({ ...EMPTY_EXPANDED_COLUMN_FILTERS }));
+
+    useEffect(() => {
+        if (!showExpandedTable) {
+            setExpandedColumnFilters({ ...EMPTY_EXPANDED_COLUMN_FILTERS });
+        }
+    }, [showExpandedTable]);
+
+    const columnDefaults = useMemo(
+        () => clientListDefaultColumnWidths(currentView as ClientListColumnLayoutView, showExpandedTable),
+        [currentView, showExpandedTable],
+    );
+    const columnStorageKey = useMemo(
+        () => clientListColumnLayoutStorageKey(currentView as ClientListColumnLayoutView, showExpandedTable),
+        [currentView, showExpandedTable],
+    );
+
+    const [colWidths, setColWidths] = useState<number[]>(columnDefaults);
+    const colWidthsRef = useRef(colWidths);
+    /** Header row only — during column drag we update this via DOM so body rows don’t re-render every mousemove. */
+    const listHeaderRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        colWidthsRef.current = colWidths;
+    }, [colWidths]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(columnStorageKey);
+            if (raw) {
+                const parsed = JSON.parse(raw) as number[];
+                if (Array.isArray(parsed) && parsed.length === columnDefaults.length) {
+                    setColWidths(parsed.map((w, i) => Math.max(48, Number(w) || columnDefaults[i])));
+                    return;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        setColWidths(columnDefaults);
+    }, [columnStorageKey, columnDefaults]);
+
+    const expandColumnStartIndex = useMemo(
+        () => 7 + (currentView === 'needs-attention' ? 3 : 7),
+        [currentView],
+    );
+
+    function beginColumnResize(columnIndex: number, clientX: number) {
+        const startX = clientX;
+        const startWidths = [...colWidthsRef.current];
+        let rafId = 0;
+
+        function applyHeaderPreview(widths: number[]) {
+            const el = listHeaderRef.current;
+            if (!el) return;
+            const tpl = widths.map((w) => `${Math.max(48, w)}px`).join(' ');
+            el.style.gridTemplateColumns = tpl;
+            el.style.minWidth = `${widths.reduce((a, b) => a + Math.max(48, b), 0)}px`;
+        }
+
+        function onMove(ev: MouseEvent) {
+            const nw = Math.max(48, startWidths[columnIndex] + (ev.clientX - startX));
+            const draft = [...startWidths];
+            draft[columnIndex] = nw;
+            cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+                applyHeaderPreview(draft);
+            });
+        }
+
+        function onUp(ev: MouseEvent) {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            cancelAnimationFrame(rafId);
+
+            const nw = Math.max(48, startWidths[columnIndex] + (ev.clientX - startX));
+            const finalWidths = [...startWidths];
+            finalWidths[columnIndex] = nw;
+
+            const hdr = listHeaderRef.current;
+            if (hdr) {
+                hdr.style.removeProperty('grid-template-columns');
+                hdr.style.removeProperty('min-width');
+            }
+
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+
+            colWidthsRef.current = finalWidths;
+            setColWidths(finalWidths);
+            try {
+                localStorage.setItem(columnStorageKey, JSON.stringify(finalWidths));
+            } catch {
+                /* ignore */
+            }
+        }
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+    }
+
+    const gridTemplateColumns = useMemo(
+        () => colWidths.map((w) => `${Math.max(48, w)}px`).join(' '),
+        [colWidths],
+    );
+
+    const gridRowStyle: CSSProperties = useMemo(
+        () => ({
+            display: 'grid',
+            gridTemplateColumns,
+            gap: 0,
+            alignItems: 'center',
+            minWidth: colWidths.reduce((a, b) => a + Math.max(48, b), 0),
+        }),
+        [colWidths, gridTemplateColumns],
+    );
+
+    const TableCell = ({
+        index,
+        children,
+        title,
+        style,
+        className,
+    }: {
+        index: number;
+        children?: ReactNode;
+        title?: string;
+        style?: CSSProperties;
+        className?: string;
+    }) => (
+        <span
+            title={title}
+            className={`${styles.tableGridCell} ${className ?? ''}`}
+            style={{ minWidth: 0, position: 'relative', ...style }}
+        >
+            {children}
+            {index < colWidths.length - 1 ? (
+                <div
+                    className={styles.columnResizeHandle}
+                    aria-hidden
+                    onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        beginColumnResize(index, e.clientX);
+                    }}
+                />
+            ) : null}
+        </span>
+    );
 
     // Signature state (matching dietfantasy pattern)
     const [signatureCounts, setSignatureCounts] = useState<Record<string, number>>({});
@@ -460,6 +649,79 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
     }
 
+    function formatClientDobCell(c: ClientProfile): string {
+        if (!c.dob) return '—';
+        try {
+            const d = new Date(c.dob);
+            if (isNaN(d.getTime())) return c.dob;
+            return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+        } catch {
+            return c.dob || '—';
+        }
+    }
+
+    function formatClientExpirationCell(c: ClientProfile): string {
+        if (!c.expirationDate) return '—';
+        try {
+            return new Date(c.expirationDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+        } catch {
+            return '—';
+        }
+    }
+
+    function formatCreatedAtCell(c: ClientProfile): string {
+        if (!c.createdAt) return '—';
+        try {
+            return new Date(c.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+        } catch {
+            return '—';
+        }
+    }
+
+    function boolTriMatches(want: ExpandedBoolFilter, val: boolean | undefined): boolean {
+        if (!want) return true;
+        const v = !!val;
+        if (want === 'yes') return v;
+        if (want === 'no') return !v;
+        return true;
+    }
+
+    function clientMatchesExpandedColumnFilters(c: ClientProfile): boolean {
+        if (!showExpandedTable) return true;
+        const f = expandedColumnFilters;
+        const inc = (needle: string, hay: string | null | undefined) =>
+            !needle.trim() || (hay ?? '').toLowerCase().includes(needle.trim().toLowerCase());
+
+        if (!inc(f.dob, formatClientDobCell(c)) && !inc(f.dob, c.dob ?? '')) return false;
+        if (!inc(f.created, formatCreatedAtCell(c)) && !inc(f.created, c.createdAt ?? '')) return false;
+        if (!inc(f.apt, c.apt ?? '')) return false;
+        if (!inc(f.city, c.city ?? '')) return false;
+        if (!inc(f.state, c.state ?? '')) return false;
+        if (!inc(f.zip, c.zip ?? '')) return false;
+        if (!inc(f.county, c.county ?? '')) return false;
+        if (!inc(f.uniteCase, c.caseIdExternal ?? '')) return false;
+        if (!inc(f.uniteAccount, c.uniteAccount ?? '')) return false;
+        if (!inc(f.voucher, c.voucherAmount ?? '')) return false;
+        if (!inc(f.history, c.history ?? '')) return false;
+
+        const authStr =
+            c.authorizedAmount != null && c.authorizedAmount !== undefined
+                ? `$${Number(c.authorizedAmount).toFixed(2)}`
+                : '';
+        if (!inc(f.authorized, authStr) && !inc(f.authorized, c.authorizedAmount != null ? String(c.authorizedAmount) : '')) return false;
+
+        const expStr = c.expirationDate ? formatClientExpirationCell(c) : '';
+        if (!inc(f.expiration, expStr) && !inc(f.expiration, String(c.expirationDate ?? ''))) return false;
+
+        if (!boolTriMatches(f.paused, c.paused)) return false;
+        if (!boolTriMatches(f.complex, c.complex)) return false;
+        if (!boolTriMatches(f.bill, c.bill)) return false;
+        if (!boolTriMatches(f.delivery, c.delivery)) return false;
+        if (!boolTriMatches(f.doNotText, c.doNotText)) return false;
+
+        return true;
+    }
+
     const baseFilteredClients = clients.filter(c => {
         const searchLower = search.toLowerCase();
         const matchesSearch =
@@ -560,7 +822,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         // Filter by Flags (all, non-default only, or specific flag)
         const matchesFlagsFilter = clientMatchesFlagFilter(c, flagsFilter);
 
-        return matchesSearch && matchesView && matchesStatusFilter && matchesNavigatorFilter && matchesScreeningFilter && matchesServiceTypeFilter && matchesNeedsVendorFilter && matchesDependentsFilter && matchesFlagsFilter;
+        return matchesSearch && matchesView && matchesStatusFilter && matchesNavigatorFilter && matchesScreeningFilter && matchesServiceTypeFilter && matchesNeedsVendorFilter && matchesDependentsFilter && matchesFlagsFilter && clientMatchesExpandedColumnFilters(c);
     });
 
     // Group dependents under their parent clients
@@ -674,6 +936,60 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 } else {
                     comparison = (getNonDefaultFlagLabels(a).join(', ') || '').localeCompare(getNonDefaultFlagLabels(b).join(', ') || '');
                 }
+                break;
+            case 'dob':
+                const dobTa = a.dob ? new Date(a.dob).getTime() : 0;
+                const dobTb = b.dob ? new Date(b.dob).getTime() : 0;
+                const dobNa = !a.dob || isNaN(dobTa) ? 0 : dobTa;
+                const dobNb = !b.dob || isNaN(dobTb) ? 0 : dobTb;
+                comparison = (dobNa || Infinity) - (dobNb || Infinity); // missing last
+                break;
+            case 'apt':
+                comparison = (a.apt || '').localeCompare(b.apt || '');
+                break;
+            case 'city':
+                comparison = (a.city || '').localeCompare(b.city || '');
+                break;
+            case 'state':
+                comparison = (a.state || '').localeCompare(b.state || '');
+                break;
+            case 'zip':
+                comparison = (a.zip || '').localeCompare(b.zip || '');
+                break;
+            case 'county':
+                comparison = (a.county || '').localeCompare(b.county || '');
+                break;
+            case 'uniteCase':
+                comparison = (a.caseIdExternal || '').localeCompare(b.caseIdExternal || '');
+                break;
+            case 'uniteAccount':
+                comparison = (a.uniteAccount || '').localeCompare(b.uniteAccount || '');
+                break;
+            case 'voucherAmount':
+                comparison = (a.voucherAmount || '').localeCompare(b.voucherAmount || '');
+                break;
+            case 'createdAt':
+                const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                comparison = (isNaN(createdA) ? 0 : createdA) - (isNaN(createdB) ? 0 : createdB);
+                break;
+            case 'paused':
+                comparison = (a.paused ? 1 : 0) - (b.paused ? 1 : 0);
+                break;
+            case 'complex':
+                comparison = (a.complex ? 1 : 0) - (b.complex ? 1 : 0);
+                break;
+            case 'bill':
+                comparison = (a.bill !== false ? 1 : 0) - (b.bill !== false ? 1 : 0);
+                break;
+            case 'delivery':
+                comparison = (a.delivery !== false ? 1 : 0) - (b.delivery !== false ? 1 : 0);
+                break;
+            case 'doNotText':
+                comparison = (a.doNotText ? 1 : 0) - (b.doNotText ? 1 : 0);
+                break;
+            case 'history':
+                comparison = (a.history || '').localeCompare(b.history || '');
                 break;
             default:
                 comparison = a.fullName.localeCompare(b.fullName);
@@ -872,6 +1188,154 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             return <ArrowUpDown size={14} />;
         }
         return sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />;
+    }
+
+    /** Sidebar-equivalent columns for expanded dashboard table (no geocoding / change log). */
+    function renderExpandedShelfHeaders(): ReactNode {
+        if (!showExpandedTable) return null;
+        const isNeedsAttentionView = currentView === 'needs-attention';
+        const inps: CSSProperties = { fontSize: '0.72rem', padding: '3px 5px', width: '100%' };
+
+        const txtFilter = (field: ExpandedTextFilterKey) => (
+            <input
+                className="input"
+                style={inps}
+                placeholder="Filter…"
+                value={expandedColumnFilters[field]}
+                onChange={e => setExpandedColumnFilters(p => ({ ...p, [field]: e.target.value }))}
+                onClick={e => e.stopPropagation()}
+            />
+        );
+
+        const boolSel = (field: 'paused' | 'complex' | 'bill' | 'delivery' | 'doNotText') => (
+            <select
+                className="input"
+                style={{ ...inps, padding: '2px 4px' }}
+                value={expandedColumnFilters[field]}
+                onChange={e => setExpandedColumnFilters(p => ({ ...p, [field]: e.target.value as ExpandedBoolFilter }))}
+                onClick={e => e.stopPropagation()}
+            >
+                <option value="">All</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+            </select>
+        );
+
+        const hdr = (sortKey: string, label: string, filter: ReactNode, colIdx: number): ReactNode => (
+            <TableCell index={colIdx}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%', minWidth: 0 }}>
+                    <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }} onClick={() => handleSort(sortKey)}>
+                        {label} {getSortIcon(sortKey)}
+                    </span>
+                    {filter}
+                </div>
+            </TableCell>
+        );
+
+        let ci = expandColumnStartIndex;
+        return (
+            <>
+                {hdr('dob', 'DOB', txtFilter('dob'), ci++)}
+                {hdr('createdAt', 'Created', txtFilter('created'), ci++)}
+                {hdr('apt', 'Unit', txtFilter('apt'), ci++)}
+                {hdr('city', 'City', txtFilter('city'), ci++)}
+                {hdr('state', 'State', txtFilter('state'), ci++)}
+                {hdr('zip', 'Zip', txtFilter('zip'), ci++)}
+                {hdr('county', 'County', txtFilter('county'), ci++)}
+                {hdr('uniteCase', 'Unite Us', txtFilter('uniteCase'), ci++)}
+                {hdr('uniteAccount', 'Unite Acct', txtFilter('uniteAccount'), ci++)}
+                {!isNeedsAttentionView ? (
+                    <>
+                        {hdr('authorizedAmount', 'Authorized', txtFilter('authorized'), ci++)}
+                        {hdr('expirationDate', 'Expiration', txtFilter('expiration'), ci++)}
+                    </>
+                ) : null}
+                {hdr('voucherAmount', 'Voucher', txtFilter('voucher'), ci++)}
+                {hdr('paused', 'Paused', boolSel('paused'), ci++)}
+                {hdr('complex', 'Complex', boolSel('complex'), ci++)}
+                {hdr('bill', 'Bill', boolSel('bill'), ci++)}
+                {hdr('delivery', 'Delivery', boolSel('delivery'), ci++)}
+                {hdr('doNotText', 'Do not text', boolSel('doNotText'), ci++)}
+                {hdr('history', 'History', txtFilter('history'), ci++)}
+            </>
+        );
+    }
+
+    function renderExpandedShelfCells(client: ClientProfile): ReactNode {
+        if (!showExpandedTable) return null;
+        const isNeedsAttentionView = currentView === 'needs-attention';
+        const cellText: CSSProperties = {
+            fontSize: '0.82rem',
+            color: 'var(--text-secondary)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            width: '100%',
+        };
+        const yn = (v: boolean | undefined) => (v ? 'Yes' : '—');
+        const uniteRaw = (client.caseIdExternal || '').trim();
+        const uniteHref = uniteRaw
+            ? uniteRaw.startsWith('http')
+                ? uniteRaw
+                : `https://${uniteRaw}`
+            : '';
+
+        let ci = expandColumnStartIndex;
+        return (
+            <>
+                <TableCell index={ci++} title={client.dob || undefined} style={cellText}>{formatClientDobCell(client)}</TableCell>
+                <TableCell index={ci++} title={client.createdAt || undefined} style={cellText}>{formatCreatedAtCell(client)}</TableCell>
+                <TableCell index={ci++} title={client.apt || undefined} style={cellText}>{client.apt?.trim() || '—'}</TableCell>
+                <TableCell index={ci++} title={client.city || undefined} style={cellText}>{client.city?.trim() || '—'}</TableCell>
+                <TableCell index={ci++} title={client.state || undefined} style={cellText}>{client.state?.trim() || '—'}</TableCell>
+                <TableCell index={ci++} title={client.zip || undefined} style={cellText}>{client.zip?.trim() || '—'}</TableCell>
+                <TableCell index={ci++} title={client.county || undefined} style={cellText}>{client.county?.trim() || '—'}</TableCell>
+                <TableCell index={ci++} style={{ ...cellText, overflow: 'visible' }}>
+                    {uniteHref ? (
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ fontSize: '0.75rem', padding: '4px 10px', whiteSpace: 'nowrap' }}
+                            title={uniteRaw}
+                            onClick={e => {
+                                e.stopPropagation();
+                                window.open(uniteHref, '_blank', 'noopener,noreferrer');
+                            }}
+                        >
+                            Open in Unite
+                        </button>
+                    ) : (
+                        '—'
+                    )}
+                </TableCell>
+                <TableCell index={ci++} title={client.uniteAccount || undefined} style={cellText}>{client.uniteAccount?.trim() || '—'}</TableCell>
+                {!isNeedsAttentionView ? (
+                    <>
+                        <TableCell index={ci++} style={cellText}>
+                            {client.authorizedAmount !== null && client.authorizedAmount !== undefined
+                                ? `$${Number(client.authorizedAmount).toFixed(2)}`
+                                : '—'}
+                        </TableCell>
+                        <TableCell index={ci++} style={cellText}>{formatClientExpirationCell(client)}</TableCell>
+                    </>
+                ) : null}
+                <TableCell
+                    index={ci++}
+                    title={client.serviceType === 'Produce' ? (client.voucherAmount || undefined) : undefined}
+                    style={cellText}
+                >
+                    {client.serviceType === 'Produce' ? (client.voucherAmount?.trim() || '—') : '—'}
+                </TableCell>
+                <TableCell index={ci++} style={cellText}>{yn(client.paused)}</TableCell>
+                <TableCell index={ci++} style={cellText}>{yn(client.complex)}</TableCell>
+                <TableCell index={ci++} style={cellText}>{client.bill !== false ? 'Yes' : 'No'}</TableCell>
+                <TableCell index={ci++} style={cellText}>{client.delivery !== false ? 'Yes' : 'No'}</TableCell>
+                <TableCell index={ci++} style={cellText}>{yn(client.doNotText)}</TableCell>
+                <TableCell index={ci++} title={client.history || undefined} style={cellText}>
+                    {client.history?.trim() ? (client.history.trim().length > 40 ? `${client.history.trim().slice(0, 37)}…` : client.history.trim()) : '—'}
+                </TableCell>
+            </>
+        );
     }
 
     function getScreeningStatusLabel(status: string) {
@@ -1775,6 +2239,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
             <div className={styles.filters}>
                 <button
+                    className={`btn ${showExpandedTable ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setShowExpandedTable(v => !v)}
+                    style={{ fontSize: '0.9rem' }}
+                    title="Show address parts, eligibility, Unite Us, per-flag columns, history, CIN, and filters"
+                >
+                    <Table2 size={16} /> {showExpandedTable ? 'Compact' : 'Expand'} table
+                </button>
+                <button
                     className={`btn ${showDependents ? 'btn-primary' : 'btn-secondary'}`}
                     onClick={() => setShowDependents(!showDependents)}
                     style={{ fontSize: '0.9rem' }}
@@ -1804,7 +2276,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
 
                 {/* Clear All Filters Button */}
-                {(statusFilter || navigatorFilter || screeningFilter || serviceTypeFilter || needsVendorFilter) && (
+                {(statusFilter || navigatorFilter || screeningFilter || serviceTypeFilter || needsVendorFilter ||
+                    Object.values(expandedColumnFilters).some(v => v !== '')) && (
                     <button
                         className="btn btn-secondary"
                         onClick={() => {
@@ -1813,6 +2286,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             setScreeningFilter(null);
                             setServiceTypeFilter(null);
                             setNeedsVendorFilter(false);
+                            setExpandedColumnFilters({ ...EMPTY_EXPANDED_COLUMN_FILTERS });
                         }}
                         style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem' }}
                     >
@@ -1964,23 +2438,24 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             )}
 
             <div className={styles.list}>
-                <div className={styles.listHeader}>
-                    <span style={{ minWidth: '60px', flex: 0.3, paddingRight: '16px', display: 'flex', alignItems: 'center' }}>
-                        #
-                    </span>
-                    <span style={{ minWidth: '200px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                        onClick={() => handleSort('name')}>
-                        Name {getSortIcon('name')}
-                    </span>
-
-                    {/* SIGN column */}
-                    <span style={{ minWidth: '100px', flex: 0.8, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                        onClick={() => handleSort('signatures')}>
-                        SIGN {getSortIcon('signatures')}
-                    </span>
+                <div ref={listHeaderRef} className={`${styles.listHeader} ${styles.tableGridRow}`} style={gridRowStyle}>
+                    <TableCell index={0}>#</TableCell>
+                    <TableCell index={1}>
+                        <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            onClick={() => handleSort('name')}>
+                            Name {getSortIcon('name')}
+                        </span>
+                    </TableCell>
+                    <TableCell index={2}>
+                        <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            onClick={() => handleSort('signatures')}>
+                            SIGN {getSortIcon('signatures')}
+                        </span>
+                    </TableCell>
 
                     {/* Type (Food / Produce) column - sortable + filter */}
-                    <span style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                    <TableCell index={3}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative', width: '100%', minWidth: 0 }} data-filter-dropdown>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('clientType')}>
                             Type {getSortIcon('clientType')}
                         </span>
@@ -2033,9 +2508,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             </div>
                         )}
                     </span>
+                    </TableCell>
 
                     {/* Flags (non-default) column - sortable + filter */}
-                    <span style={{ minWidth: '120px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                    <TableCell index={4}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative', width: '100%', minWidth: 0 }} data-filter-dropdown>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('flags')}>
                             <Flag size={14} /> Flags {getSortIcon('flags')}
                         </span>
@@ -2064,9 +2541,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             </div>
                         )}
                     </span>
+                    </TableCell>
 
                     {/* Status column with filter */}
-                    <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                    <TableCell index={5}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative', width: '100%', minWidth: 0 }} data-filter-dropdown>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('status')}>
                             Status {getSortIcon('status')}
                         </span>
@@ -2104,9 +2583,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             </div>
                         )}
                     </span>
+                    </TableCell>
 
                     {/* Navigator column (all views, including needs-attention) */}
-                    <span style={{ minWidth: '160px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                    <TableCell index={6}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative', width: '100%', minWidth: 0 }} data-filter-dropdown>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('navigator')}>
                             Navigator {getSortIcon('navigator')}
                         </span>
@@ -2144,11 +2625,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             </div>
                         )}
                     </span>
+                    </TableCell>
 
                     {currentView !== 'needs-attention' && (
                         <>
                             {/* Screening column with filter */}
-                            <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }} data-filter-dropdown>
+                            <TableCell index={7}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative', width: '100%', minWidth: 0 }} data-filter-dropdown>
                                 <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleSort('screening')}>
                                     Screening {getSortIcon('screening')}
                                 </span>
@@ -2186,53 +2669,73 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     </div>
                                 )}
                             </span>
+                            </TableCell>
 
-                            <span style={{ minWidth: '200px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            <TableCell index={8}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('dislikes')}>
                                 Notes {getSortIcon('dislikes')}
                             </span>
+                            </TableCell>
                         </>
                     )}
 
                     {currentView === 'needs-attention' ? (
                         <>
-                            <span style={{ minWidth: '400px', flex: 4, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <TableCell index={7}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                 Reason
                             </span>
-                            <span style={{ minWidth: '150px', flex: 1.2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            </TableCell>
+                            <TableCell index={8}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('authorizedAmount')}>
                                 Authorized Amount {getSortIcon('authorizedAmount')}
                             </span>
-                            <span style={{ minWidth: '150px', flex: 1.2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            </TableCell>
+                            <TableCell index={9}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('expirationDate')}>
                                 Expiration Date {getSortIcon('expirationDate')}
                             </span>
+                            </TableCell>
                         </>
                     ) : (
                         <>
-                            <span style={{ minWidth: '180px', flex: 1.2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            <TableCell index={9}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('email')}>
                                 Email {getSortIcon('email')}
                             </span>
-                            <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            </TableCell>
+                            <TableCell index={10}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('phone')}>
                                 Phone {getSortIcon('phone')}
                             </span>
-                            <span style={{ minWidth: '140px', flex: 1, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            </TableCell>
+                            <TableCell index={11}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('secondaryPhone')}>
                                 Secondary Phone {getSortIcon('secondaryPhone')}
                             </span>
-                            <span style={{ minWidth: '250px', flex: 2, paddingRight: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            </TableCell>
+                            <TableCell index={12}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('address')}>
                                 Address {getSortIcon('address')}
                             </span>
-                            <span style={{ minWidth: '200px', flex: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                            </TableCell>
+                            <TableCell index={13}>
+                            <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                                 onClick={() => handleSort('notes')}>
                                 Notes {getSortIcon('notes')}
                             </span>
+                            </TableCell>
                         </>
                     )}
-                    <span style={{ width: '40px' }}></span>
+                    {renderExpandedShelfHeaders()}
+                    <TableCell index={colWidths.length - 1} />
                 </div>
                 {filteredClients.map((client, index) => {
                     const status = statuses.find(s => s.id === client.statusId);
@@ -2262,26 +2765,28 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                     }
                                 }
                             }}
-                            className={`${styles.clientRow} ${isDependent ? styles.clientRowDependent : ''}`}
-                            style={{ cursor: 'pointer' }}
+                            className={`${styles.clientRow} ${isDependent ? styles.clientRowDependent : ''} ${styles.tableGridRow}`}
+                            style={{ cursor: 'pointer', ...gridRowStyle }}
                         >
-                            <span style={{ minWidth: '60px', flex: 0.3, paddingRight: '16px', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                            <TableCell index={0} style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                                 {index + 1}
-                            </span>
-                            <span title={client.fullName} style={{ minWidth: '200px', flex: 2, fontWeight: 600, paddingRight: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                {isNotAllowed && <span className={styles.redTab}></span>}
-                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{client.fullName}</span>
-                            </span>
-                            <span style={{ minWidth: '100px', flex: 0.8, paddingRight: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            </TableCell>
+                            <TableCell index={1} title={client.fullName}>
+                                <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', width: '100%', minWidth: 0 }}>
+                                    {isNotAllowed && <span className={styles.redTab}></span>}
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{client.fullName}</span>
+                                </span>
+                            </TableCell>
+                            <TableCell index={2} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 {isDependent ? '-' : <SignCell client={client} />}
-                            </span>
-                            <span title={client.serviceType === 'Produce' ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}` : client.serviceType} style={{ minWidth: '90px', flex: 0.7, paddingRight: '16px', fontSize: '0.9rem' }}>
+                            </TableCell>
+                            <TableCell index={3} title={client.serviceType === 'Produce' ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}` : client.serviceType} style={{ fontSize: '0.9rem' }}>
                                 {client.serviceType === 'Produce' ? (() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? pv.name : 'Produce'; })() : 'Food'}
-                            </span>
-                            <span title={isDependent ? '' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : 'All default')} style={{ minWidth: '120px', flex: 1, fontSize: '0.85rem', color: hasNonDefaultFlags(client) ? 'var(--color-primary)' : 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                            </TableCell>
+                            <TableCell index={4} title={isDependent ? '' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : 'All default')} style={{ fontSize: '0.85rem', color: hasNonDefaultFlags(client) ? 'var(--color-primary)' : 'var(--text-tertiary)' }}>
                                 {isDependent ? '-' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : '—')}
-                            </span>
-                            <span title={client.parentClientId ? `Parent: ${getParentClientName(client)}` : getStatusName(client.statusId)} style={{ minWidth: '140px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                            </TableCell>
+                            <TableCell index={5} title={client.parentClientId ? `Parent: ${getParentClientName(client)}` : getStatusName(client.statusId)}>
                                 {client.parentClientId ? (
                                     <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
                                         Parent: {getParentClientName(client)}
@@ -2291,52 +2796,57 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                         {getStatusName(client.statusId)}
                                     </span>
                                 )}
-                            </span>
-                            <span title={isDependent ? '' : getNavigatorName(client.navigatorId)} style={{ minWidth: '160px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getNavigatorName(client.navigatorId)}</span>
+                            </TableCell>
+                            <TableCell index={6} title={isDependent ? '' : getNavigatorName(client.navigatorId)}>
+                                {isDependent ? '-' : getNavigatorName(client.navigatorId)}
+                            </TableCell>
                             {currentView !== 'needs-attention' && (
                                 <>
-                                    <span style={{ minWidth: '140px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>{isDependent ? '-' : getScreeningStatus(client)}</span>
-                                    <span title={isDependent ? undefined : (client.dislikes || undefined)} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    <TableCell index={7}>{isDependent ? '-' : getScreeningStatus(client)}</TableCell>
+                                    <TableCell index={8} title={isDependent ? undefined : (client.dislikes || undefined)} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {isDependent ? '-' : (client.dislikes || '-')}
-                                    </span>
+                                    </TableCell>
                                 </>
                             )}
                             {currentView === 'needs-attention' ? (
                                 <>
-                                    <span title={getNeedsAttentionReason(client)} style={{ minWidth: '400px', flex: 4, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    <TableCell index={7} title={getNeedsAttentionReason(client)} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {getNeedsAttentionReason(client)}
-                                    </span>
-                                    <span style={{ minWidth: '150px', flex: 1.2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    </TableCell>
+                                    <TableCell index={8} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {client.authorizedAmount !== null && client.authorizedAmount !== undefined
                                             ? `$${client.authorizedAmount.toFixed(2)}`
                                             : '-'}
-                                    </span>
-                                    <span style={{ minWidth: '150px', flex: 1.2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    </TableCell>
+                                    <TableCell index={9} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {client.expirationDate
                                             ? new Date(client.expirationDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
                                             : '-'}
-                                    </span>
+                                    </TableCell>
                                 </>
                             ) : (
                                 <>
-                                    <span title={isDependent ? undefined : (client.email || undefined)} style={{ minWidth: '180px', flex: 1.2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    <TableCell index={9} title={isDependent ? undefined : (client.email || undefined)} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {isDependent ? '-' : (client.email || '-')}
-                                    </span>
-                                    <span title={client.phoneNumber || undefined} style={{ minWidth: '140px', flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    </TableCell>
+                                    <TableCell index={10} title={client.phoneNumber || undefined} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {client.phoneNumber || '-'}
-                                    </span>
-                                    <span title={client.secondaryPhoneNumber || undefined} style={{ minWidth: '140px', flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    </TableCell>
+                                    <TableCell index={11} title={client.secondaryPhoneNumber || undefined} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {client.secondaryPhoneNumber || '-'}
-                                    </span>
-                                    <span title={isDependent ? undefined : client.address} style={{ minWidth: '250px', flex: 2, fontSize: '0.85rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    </TableCell>
+                                    <TableCell index={12} title={isDependent ? undefined : client.address} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         {isDependent ? '-' : (client.address || '-')}
-                                    </span>
-                                    <span title={isDependent ? undefined : client.notes} style={{ minWidth: '200px', flex: 2, fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                                    </TableCell>
+                                    <TableCell index={13} title={isDependent ? undefined : client.notes} style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
                                         {isDependent ? '-' : (client.notes || '-')}
-                                    </span>
+                                    </TableCell>
                                 </>
                             )}
-                            <span style={{ width: '40px' }}><ChevronRight size={16} /></span>
+                            {renderExpandedShelfCells(client)}
+                            <TableCell index={colWidths.length - 1} style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <ChevronRight size={16} />
+                            </TableCell>
                         </div>
                     );
                 })}

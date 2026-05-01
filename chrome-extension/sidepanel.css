@@ -497,6 +497,23 @@ body {
     color: var(--text-primary);
 }
 
+.submit-readiness {
+    margin-top: 0.75rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    min-height: 1.15em;
+    color: var(--text-secondary);
+}
+
+.submit-readiness-pending {
+    color: var(--text-secondary);
+}
+
+.submit-readiness-ready {
+    color: var(--color-success);
+}
+
 .btn-submit {
     width: 100%;
     background-color: var(--color-primary);

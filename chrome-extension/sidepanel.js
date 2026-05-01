@@ -4,6 +4,10 @@ const DEFAULT_BASE = 'https://customer.thedietfantasy.com';
 /** Set to `true` to always use Unite “Brooklyn” and the light blue theme (hides the Unite dropdown). */
 const BROOKLYN_ONLY = true;
 
+/** Explains the exact Unite Us pattern when the pasted URL does not match `isValidCaseUrl`. */
+const CASE_URL_INCORRECT_HINT =
+    'case URL — paste the full link from the address bar while you have the client\'s open case loaded in Unite Us. It must match this shape: https://app.uniteus.io/dashboard/cases/open/<case-uuid>/contact/<contact-uuid> (not a short link or a different Unite page).';
+
 let config = { baseUrl: DEFAULT_BASE, apiKey: '' };
 let statuses = [];
 let navigators = [];
@@ -45,13 +49,31 @@ function applyBrooklynOnlyUi() {
             fixed.setAttribute('aria-hidden', 'false');
         } else {
             sel.style.display = '';
-            sel.setAttribute('required', '');
             sel.disabled = false;
             fixed.style.display = 'none';
             fixed.setAttribute('aria-hidden', 'true');
             if (sel.value === 'Brooklyn') sel.value = 'Regular';
         }
     }
+    const form = document.getElementById('client-form');
+    if (form && form._validateForm) form._validateForm();
+}
+
+/** Labels for required-field gaps shown next to the submit buttons. */
+function getSubmitMissingReasons() {
+    const missing = [];
+    const fullName = document.getElementById('full-name')?.value.trim() ?? '';
+    const street = document.getElementById('address')?.value.trim() ?? '';
+    const caseUrl = document.getElementById('case-url')?.value.trim() ?? '';
+    const unite = getUniteAccountValue();
+
+    if (!fullName) missing.push('full name');
+    if (!street) missing.push('street address');
+    if (unite !== 'Regular' && unite !== 'Brooklyn') missing.push('Unite account');
+    if (!caseUrl) missing.push('case link');
+    else if (!isValidCaseUrl(caseUrl)) missing.push(CASE_URL_INCORRECT_HINT);
+
+    return missing;
 }
 
 // Initialize
@@ -574,21 +596,24 @@ async function loadNavigators() {
 async function handleSubmit(e) {
     e.preventDefault();
 
+    const formEl = document.getElementById('client-form');
+    if (!formEl._validateForm || !formEl._validateForm()) {
+        return;
+    }
+
     const submitBtn = document.getElementById('submit-btn');
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitting...';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Submitting...';
+    }
 
     try {
         const serviceRaw = document.getElementById('service-type').value;
-        let serviceType;
+        let serviceType = 'Food';
         let produceVendorIdForApi = null;
-        if (serviceRaw === 'Food') {
-            serviceType = 'Food';
-        } else if (serviceRaw.startsWith('produce:')) {
+        if (serviceRaw.startsWith('produce:')) {
             serviceType = 'Produce';
             produceVendorIdForApi = serviceRaw.slice('produce:'.length);
-        } else {
-            throw new Error('Select Food or a produce vendor');
         }
 
         const depRaw = (document.getElementById('dependents-count') && document.getElementById('dependents-count').value) || '0';
@@ -658,19 +683,20 @@ async function handleSubmit(e) {
             produceVendorId: produceVendorIdForApi
         };
 
-        // Validate case URL format
+        const uniteVal = getUniteAccountValue();
+        if (uniteVal !== 'Regular' && uniteVal !== 'Brooklyn') {
+            throw new Error('Unite account is required.');
+        }
+
+        if (!formData.caseId) {
+            throw new Error('Case URL is required.');
+        }
         if (!isValidCaseUrl(formData.caseId)) {
-            throw new Error('Please make sure you are on the clients open case page or enter the real case url');
+            throw new Error(CASE_URL_INCORRECT_HINT);
         }
 
-        // Validate required fields
-        if (!formData.fullName || !formData.statusId || !formData.navigatorId || !formData.uniteAccount || !streetAddress || !city || !state || !zip || !formData.phone || !formData.serviceType || !formData.caseId) {
-            throw new Error('Please fill in all required fields (including Unite Account)');
-        }
-
-        // Require geocoding before submit
-        if (!window.geocodeLat || !window.geocodeLng) {
-            throw new Error('Address must be geocoded before submitting. Fill in address, city, state, and ZIP, then wait for geocoding or click "Geocode Address".');
+        if (!formData.fullName || !streetAddress) {
+            throw new Error('Full name and street address are required.');
         }
 
         const { baseUrl, apiKey } = getConfig();
@@ -713,7 +739,7 @@ async function handleSubmit(e) {
             hideManualGeocodeFields();
             const manualSection = document.getElementById('manual-geocode-section');
             if (manualSection) manualSection.style.display = 'none';
-            updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
+            updateGeocodeUI('idle', '');
             // Reset status and navigator dropdowns to defaults
             const statusSelect = document.getElementById('status');
             const navigatorSelect = document.getElementById('navigator');
@@ -772,8 +798,8 @@ async function handleSubmit(e) {
             showStatus('form-status', error.message, 'error');
         }
     } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Submit';
+        if (submitBtn) submitBtn.textContent = 'Submit';
+        if (formEl && formEl._validateForm) formEl._validateForm();
     }
 }
 
@@ -864,11 +890,6 @@ async function handleAutoFill() {
             if (dobInput) dobInput.value = data.dob;
         }
         if (caseId) {
-            // Validate case URL format
-            if (!isValidCaseUrl(caseId)) {
-                showStatus('auto-fill-status', 'Please make sure you are on the clients open case page or enter the real case url', 'error');
-                return;
-            }
             document.getElementById('case-url').value = caseId;
         }
 
@@ -908,92 +929,42 @@ function isValidCaseUrl(url) {
     return pattern.test(url.trim());
 }
 
-// Setup form validation to enable/disable submit button (geocoding required)
 function setupFormValidation() {
     const form = document.getElementById('client-form');
     const submitBtn = document.getElementById('submit-btn');
-    const requiredFields = ['full-name', 'status', 'navigator', 'address', 'city', 'state', 'zip', 'phone', 'case-url', 'service-type'];
+    const readiness = document.getElementById('submit-readiness');
 
     function validateForm() {
-        let isValid = true;
-
-        // Check required text inputs
-        ['full-name', 'address', 'city', 'state', 'zip', 'phone', 'case-url'].forEach(id => {
-            const field = document.getElementById(id);
-            if (field && !field.value.trim()) {
-                isValid = false;
-            }
-        });
-
-        // Check status select
-        const status = document.getElementById('status');
-        if (!status || !status.value) {
-            isValid = false;
+        const missing = getSubmitMissingReasons();
+        const ready = missing.length === 0;
+        if (submitBtn) submitBtn.disabled = !ready;
+        if (readiness) {
+            readiness.textContent = ready
+                ? ''
+                : 'Still needed: ' + missing.join('; ') + '.';
+            readiness.className = 'submit-readiness ' + (ready ? 'submit-readiness-ready' : 'submit-readiness-pending');
         }
-
-        // Check navigator select
-        const navigator = document.getElementById('navigator');
-        if (!navigator || !navigator.value) {
-            isValid = false;
-        }
-
-        // Check case URL format
-        const caseUrl = document.getElementById('case-url');
-        if (caseUrl && caseUrl.value.trim()) {
-            if (!isValidCaseUrl(caseUrl.value.trim())) {
-                isValid = false;
-            }
-        }
-
-        // Check service type
-        const serviceTypeField = document.getElementById('service-type');
-        if (!serviceTypeField || !serviceTypeField.value) {
-            isValid = false;
-        }
-
-        // Require geocoding: must have coordinates when address is complete
-        const hasAddress = document.getElementById('address').value.trim() &&
-            document.getElementById('city').value.trim() &&
-            document.getElementById('state').value.trim() &&
-            document.getElementById('zip').value.trim();
-        if (hasAddress && (!window.geocodeLat || !window.geocodeLng)) {
-            isValid = false;
-        }
-
-        submitBtn.disabled = !isValid;
-        return isValid;
+        return ready;
     }
 
-    // Expose so autoGeocode can re-run validation when geocode completes
     form._validateForm = validateForm;
 
-    // Add event listeners to all form fields
-    requiredFields.forEach(fieldId => {
-        if (fieldId === 'service-type') {
-            const field = document.getElementById('service-type');
-            if (field) {
-                field.addEventListener('change', validateForm);
+    if (!form._submitValidationBound) {
+        form._submitValidationBound = true;
+        const revalidateIds = ['full-name', 'address', 'case-url', 'unite-account'];
+        revalidateIds.forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+                const run = () => {
+                    const f = document.getElementById('client-form');
+                    if (f && f._validateForm) f._validateForm();
+                };
+                el.addEventListener('input', run);
+                el.addEventListener('change', run);
             }
-        } else {
-            const field = document.getElementById(fieldId);
-            if (field) {
-                field.addEventListener('input', validateForm);
-                field.addEventListener('change', validateForm);
-                // For case-url, also validate format on blur
-                if (fieldId === 'case-url') {
-                    field.addEventListener('blur', function() {
-                        if (this.value.trim() && !isValidCaseUrl(this.value.trim())) {
-                            showStatus('form-status', 'Please make sure you are on the clients open case page or enter the real case url', 'error');
-                        } else {
-                            validateForm();
-                        }
-                    });
-                }
-            }
-        }
-    });
+        });
+    }
 
-    // Initial validation
     validateForm();
 }
 
@@ -1005,11 +976,8 @@ function updateGeocodeUI(state, message) {
     if (!el) return;
     el.textContent = message || '';
     el.className = 'geocode-status ' + (state || 'idle');
-    const hasAddress = document.getElementById('address').value.trim() &&
-        document.getElementById('city').value.trim() &&
-        document.getElementById('state').value.trim() &&
-        document.getElementById('zip').value.trim();
-    btn.disabled = !hasAddress;
+    const hasStreet = !!document.getElementById('address').value.trim();
+    if (btn) btn.disabled = !hasStreet;
 
     if (manualSection) {
         if (state === 'error') {
@@ -1071,51 +1039,42 @@ function setupManualGeocode() {
 
         window.geocodeLat = lat;
         window.geocodeLng = lng;
-        updateGeocodeUI('success', `\u2713 Coordinates set manually (${lat}, ${lng})`);
+        updateGeocodeUI('success', '');
         const form = document.getElementById('client-form');
         if (form._validateForm) form._validateForm();
     });
 }
 
-// Clear stored coordinates when address changes (so submit stays disabled until re-geocoded)
 function clearGeocodeOnAddressChange() {
     window.geocodeLat = null;
     window.geocodeLng = null;
     hideManualGeocodeFields();
     const manualSection = document.getElementById('manual-geocode-section');
     if (manualSection) manualSection.style.display = 'none';
-    const hasAddress = document.getElementById('address').value.trim() &&
-        document.getElementById('city').value.trim() &&
-        document.getElementById('state').value.trim() &&
-        document.getElementById('zip').value.trim();
-    if (hasAddress) {
-        updateGeocodeUI('idle', 'Address changed — geocode required');
-    } else {
-        updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
-    }
+    updateGeocodeUI('idle', '');
     const form = document.getElementById('client-form');
     if (form._validateForm) form._validateForm();
 }
 
-// Auto-geocode function (required before submit). manualCall = true when user clicks "Geocode Address"
+// manualCall = true when user clicks "Geocode Address"
 async function autoGeocode(manualCall) {
     const address = document.getElementById('address').value.trim();
     const city = document.getElementById('city').value.trim();
     const state = document.getElementById('state').value.trim();
     const zip = document.getElementById('zip').value.trim();
 
-    if (!address || !city || !state || !zip) {
-        updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
+    if (!address) {
+        updateGeocodeUI('idle', '');
         return;
     }
 
-    updateGeocodeUI('loading', 'Geocoding…');
+    updateGeocodeUI('loading', '');
     const geocodeBtn = document.getElementById('geocode-btn');
     if (geocodeBtn) geocodeBtn.disabled = true;
 
     const { baseUrl } = getConfig();
     try {
-        const addressQuery = `${address}, ${city}, ${state} ${zip}`;
+        const addressQuery = [address, city, state, zip].filter(Boolean).join(', ');
         const response = await fetch(`${baseUrl}/api/geocode?q=${encodeURIComponent(addressQuery)}&provider=auto`, {
             method: 'GET'
         });
@@ -1125,27 +1084,23 @@ async function autoGeocode(manualCall) {
         if (response.ok && data.lat != null && data.lng != null) {
             window.geocodeLat = data.lat;
             window.geocodeLng = data.lng;
-            updateGeocodeUI('success', '✓ Address geocoded');
+            updateGeocodeUI('success', '');
             const form = document.getElementById('client-form');
             if (form._validateForm) form._validateForm();
         } else {
-            const errMsg = data.error || (response.ok ? 'No coordinates returned' : `Geocode failed (${response.status})`);
-            updateGeocodeUI('error', errMsg + ' — click "Geocode Address" to retry');
+            updateGeocodeUI('error', '');
             window.geocodeLat = null;
             window.geocodeLng = null;
         }
     } catch (error) {
         console.error('Geocoding failed:', error);
-        updateGeocodeUI('error', 'Network error — check connection and click "Geocode Address" to retry');
+        updateGeocodeUI('error', '');
         window.geocodeLat = null;
         window.geocodeLng = null;
     } finally {
-        const hasAddress = document.getElementById('address').value.trim() &&
-            document.getElementById('city').value.trim() &&
-            document.getElementById('state').value.trim() &&
-            document.getElementById('zip').value.trim();
+        const hasStreet = !!document.getElementById('address').value.trim();
         const btn = document.getElementById('geocode-btn');
-        if (btn) btn.disabled = !hasAddress;
+        if (btn) btn.disabled = !hasStreet;
     }
 }
 
@@ -1167,6 +1122,5 @@ function setupAutoGeocode() {
         }
     });
 
-    // Initial UI state
-    updateGeocodeUI('idle', 'Fill address, city, state, and ZIP to geocode');
+    updateGeocodeUI('idle', '');
 }

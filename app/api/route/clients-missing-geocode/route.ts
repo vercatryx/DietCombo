@@ -10,6 +10,9 @@ import { getSession } from "@/lib/session";
  * Includes both primary clients and dependants (dependants can have their own orders and need geocoding).
  * Same filters as assignment: not paused, status allows deliveries, delivery true or null.
  * Brooklyn admins: only clients with unite_account = 'Brooklyn'.
+ *
+ * Note: Dependants who share the parent's household address get parent's coordinates via
+ * POST /api/route/sync-dependant-geo-from-parent — only rows that still need manual work appear here.
  */
 export async function GET() {
     try {
@@ -34,7 +37,6 @@ export async function GET() {
         });
 
         const str = (v: unknown): string => (v != null && v !== "" ? String(v).trim() : "");
-        // Read any column from row (clients table: address, city, state, zip) – match key case-insensitively
         const get = (r: Record<string, unknown>, col: string): string => {
             const val = r[col];
             if (val != null && val !== "") return String(val).trim();
@@ -66,13 +68,11 @@ export async function GET() {
             zip: get(c, "zip"),
             lat: c.lat != null ? Number(c.lat) : null,
             lng: c.lng != null ? Number(c.lng) : null,
-            parent_client_id: c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
+            parent_client_id:
+                c.parent_client_id != null && c.parent_client_id !== "" ? String(c.parent_client_id) : null,
         }));
 
-        return NextResponse.json(
-            { clients },
-            { headers: { "Cache-Control": "no-store" } }
-        );
+        return NextResponse.json({ clients }, { headers: { "Cache-Control": "no-store" } });
     } catch (e: unknown) {
         console.error("[/api/route/clients-missing-geocode] error:", e);
         return NextResponse.json(

@@ -36,28 +36,28 @@
             </div>
             <form id="client-form">
                 <div class="form-group">
-                    <label for="full-name">Full Name *</label>
-                    <input type="text" id="full-name" required>
+                    <label for="full-name">Full Name</label>
+                    <input type="text" id="full-name">
                 </div>
 
                 <div class="form-group">
-                    <label for="status">Status *</label>
-                    <select id="status" required>
+                    <label for="status">Status</label>
+                    <select id="status">
                         <option value="">Loading...</option>
                     </select>
                 </div>
 
                 <div class="form-group">
-                    <label for="navigator">Assigned Navigator *</label>
-                    <select id="navigator" required>
+                    <label for="navigator">Assigned Navigator</label>
+                    <select id="navigator">
                         <option value="">Select a navigator</option>
                         <option value="">Loading...</option>
                     </select>
                 </div>
 
                 <div class="form-group" id="unite-account-group">
-                    <label for="unite-account">Unite account *</label>
-                    <select id="unite-account" required>
+                    <label for="unite-account">Unite account</label>
+                    <select id="unite-account">
                         <option value="Regular">Regular</option>
                         <option value="Brooklyn">Brooklyn</option>
                     </select>
@@ -67,8 +67,8 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="address">Street Address *</label>
-                    <input type="text" id="address" required>
+                    <label for="address">Street Address</label>
+                    <input type="text" id="address">
                 </div>
 
                 <div class="form-group">
@@ -78,19 +78,19 @@
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="city">City *</label>
-                        <input type="text" id="city" required>
+                        <label for="city">City</label>
+                        <input type="text" id="city">
                     </div>
                     <div class="form-group">
-                        <label for="state">State *</label>
-                        <input type="text" id="state" maxlength="2" required>
+                        <label for="state">State</label>
+                        <input type="text" id="state" maxlength="2">
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="zip">ZIP Code *</label>
-                        <input type="text" id="zip" required>
+                        <label for="zip">ZIP Code</label>
+                        <input type="text" id="zip">
                     </div>
                     <div class="form-group">
                         <label for="county">County</label>
@@ -107,11 +107,11 @@
                             <div class="manual-geocode-row">
                                 <div class="manual-geocode-field">
                                     <label for="manual-lat">Latitude</label>
-                                    <input type="text" id="manual-lat" placeholder="e.g. 40.7128" inputmode="decimal">
+                                    <input type="text" id="manual-lat" inputmode="decimal">
                                 </div>
                                 <div class="manual-geocode-field">
                                     <label for="manual-lng">Longitude</label>
-                                    <input type="text" id="manual-lng" placeholder="e.g. -74.0060" inputmode="decimal">
+                                    <input type="text" id="manual-lng" inputmode="decimal">
                                 </div>
                             </div>
                             <button type="button" id="manual-geocode-apply" class="btn btn-geocode-apply" disabled>Apply Coordinates</button>
@@ -120,8 +120,8 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="phone">Phone *</label>
-                    <input type="tel" id="phone" required>
+                    <label for="phone">Phone</label>
+                    <input type="tel" id="phone">
                 </div>
 
                 <div class="form-group">
@@ -141,7 +141,7 @@
 
                 <div class="form-group">
                     <label for="notes">Notes</label>
-                    <textarea id="notes" rows="4" placeholder="Notes, dietary restrictions, or other info"></textarea>
+                    <textarea id="notes" rows="4"></textarea>
                 </div>
 
                 <div class="form-group">
@@ -164,40 +164,38 @@
                             <span>Delivery</span>
                         </label>
                     </div>
-                    <small class="field-hint">Defaults: Paused off, Complex off, Bill on, Delivery on</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="service-type">Food or produce vendor *</label>
-                    <select id="service-type" required>
+                    <label for="service-type">Food or produce vendor</label>
+                    <select id="service-type">
                         <option value="">Loading…</option>
                     </select>
-                    <small class="field-hint">Food, or a specific produce vendor from your organization.</small>
                 </div>
 
                 <div class="form-group">
                     <label for="dependents-count">Number of dependents</label>
                     <input type="number" id="dependents-count" min="0" max="50" value="0" inputmode="numeric">
-                    <small class="field-hint">Creates placeholder clients named 1, 2, … with only a name (fill details in the app).</small>
                 </div>
 
                 <div class="form-group">
                     <label for="authorized-amount">Authorized Amount</label>
-                    <input type="number" id="authorized-amount" min="0" step="0.01" placeholder="Enter authorized amount (e.g., 100.00)">
+                    <input type="number" id="authorized-amount" min="0" step="0.01">
                 </div>
 
                 <div class="form-group">
                     <label for="expiration-date">Expiration Date</label>
-                    <input type="date" id="expiration-date" placeholder="Select expiration date">
+                    <input type="date" id="expiration-date">
                 </div>
 
                 <div class="form-group">
-                    <label for="case-url">Case URL *</label>
-                    <input type="text" id="case-url" placeholder="https://app.uniteus.io/dashboard/cases/open/..." required>
+                    <label for="case-url">Case URL</label>
+                    <input type="text" id="case-url">
                 </div>
 
                 <div id="form-status" class="status-message"></div>
 
+                <p id="submit-readiness" class="submit-readiness" aria-live="polite"></p>
                 <button type="submit" id="submit-btn" class="btn btn-submit" disabled>Submit</button>
             </form>
         </div>

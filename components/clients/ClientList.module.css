@@ -93,6 +93,50 @@
     /* Space between columns */
 }
 
+.tableGridRow {
+    gap: 0;
+}
+
+.tableGridCell {
+    box-sizing: border-box;
+    padding: 0 10px;
+    border-right: 1px solid var(--border-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.listHeader.tableGridRow .tableGridCell {
+    overflow: visible;
+}
+
+.clientRow.tableGridRow .tableGridCell {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+}
+
+.listHeader.tableGridRow .tableGridCell:last-child,
+.clientRow.tableGridRow .tableGridCell:last-child {
+    border-right: none;
+}
+
+.columnResizeHandle {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    margin-right: -4px;
+    cursor: col-resize;
+    z-index: 4;
+    touch-action: none;
+}
+
+.columnResizeHandle:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+}
+
 .clientRow {
     display: flex;
     padding: var(--spacing-md);

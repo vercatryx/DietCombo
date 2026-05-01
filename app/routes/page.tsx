@@ -271,6 +271,7 @@ export default function RoutesPage() {
         (async () => {
             setAssignmentDataLoading(true);
             try {
+                await fetch("/api/route/sync-dependant-geo-from-parent", { method: "POST" }).catch(() => {});
                 const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
                 if (!res.ok) throw new Error("Failed to load assignment data");
                 const data = await res.json();
@@ -315,6 +316,7 @@ export default function RoutesPage() {
 
     const refreshAssignmentData = React.useCallback(async () => {
         try {
+            await fetch("/api/route/sync-dependant-geo-from-parent", { method: "POST" }).catch(() => {});
             const res = await fetch(`/api/route/assignment-data?day=${selectedDay}`, { cache: "no-store" });
             if (res.ok) {
                 const data = await res.json();
