@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck } from 'lucide-react';
+import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck, ClipboardList } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -11,6 +11,7 @@ import { getNavigatorLogs } from '@/lib/actions';
 
 const navItems = [
     { label: 'Client Dashboard', href: '/clients', icon: Users },
+    { label: 'Pending screenings', href: '/pending-screenings', icon: ClipboardList },
     { label: 'My History', href: '/navigator-history', icon: History, role: 'navigator' },
     { label: 'Downloads', href: '/vendors', icon: Download },
     { label: 'Produce', href: '/vendors/produce', icon: Package },
@@ -136,7 +137,10 @@ export function Sidebar({
             <nav className={styles.nav}>
                 {navItems.filter(item => {
                     if (userRole === 'brooklyn_admin') {
-                        return item.label === 'Client Dashboard' || item.label === 'Routes' || item.label === 'Meal Plan Edits';
+                        return item.label === 'Client Dashboard' || item.label === 'Routes' || item.label === 'Meal Plan Edits' || item.label === 'Pending screenings';
+                    }
+                    if (item.label === 'Pending screenings') {
+                        return userRole === 'admin' || userRole === 'super-admin' || userRole === 'brooklyn_admin';
                     }
                     if (item.label === 'Admin Control') {
                         return userRole === 'admin' || userRole === 'super-admin';

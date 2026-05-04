@@ -1,4 +1,5 @@
 import { CheckCircle, XCircle, Clock, Download, ExternalLink, MessageSquare } from 'lucide-react';
+import { formatInAppTz } from '@/lib/timezone';
 
 const R2_DOMAIN = process.env.NEXT_PUBLIC_R2_DOMAIN;
 
@@ -68,7 +69,7 @@ export default function SubmissionsList({ submissions }: SubmissionsListProps) {
 
                             <div>
                                 <div style={{ fontWeight: '500' }}>
-                                    Screening Form - {new Date(submission.created_at).toLocaleDateString()}
+                                    Screening Form - {formatInAppTz(submission.created_at)}
                                 </div>
                                 <div style={{
                                     fontSize: '12px',

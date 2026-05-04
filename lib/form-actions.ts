@@ -311,6 +311,8 @@ export async function createSubmission(data: Record<string, string>, clientId?: 
 
         const submission = { id: submissionId, token, form_id: formResult.data.id, client_id: clientId || null, status: 'pending', data };
 
+        revalidatePath('/pending-screenings');
+
         // Set screening status to waiting_approval when form is submitted
         if (clientId) {
             try {
@@ -415,6 +417,9 @@ export async function updateSubmissionStatus(token: string, status: 'accepted' |
             }
         }
 
+        revalidatePath('/pending-screenings');
+        revalidatePath('/clients');
+
         return { success: true };
     } catch (error: any) {
         console.error('Error updating submission status:', error);
@@ -459,6 +464,61 @@ export async function getClientSubmissions(clientId: string) {
         return { success: true, data: data || [] };
     } catch (error: any) {
         console.error('Error fetching client submissions:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export type PendingScreeningSubmissionRow = {
+    id: string;
+    token: string;
+    created_at: string;
+    client_id: string | null;
+    client_name: string | null;
+};
+
+/** All screening form submissions awaiting nutritionist approval (same flow as /verify-order/[token]). */
+export async function getPendingScreeningSubmissions(): Promise<{
+    success: boolean;
+    data?: PendingScreeningSubmissionRow[];
+    error?: string;
+}> {
+    try {
+        // No embedded `clients(...)` select: client_id FK was removed from schema, so PostgREST has no relationship hint.
+        const { data, error } = await supabase
+            .from('form_submissions')
+            .select('id, token, created_at, client_id')
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false });
+
+        if (error) return { success: false, error: error.message };
+
+        const submissions = data || [];
+        const clientIds = [...new Set(submissions.map((s: { client_id: string | null }) => s.client_id).filter(Boolean))] as string[];
+
+        const namesMap: Record<string, string> = {};
+        if (clientIds.length > 0) {
+            const { data: clientsRows, error: clientsError } = await supabase
+                .from('clients')
+                .select('id, full_name')
+                .in('id', clientIds);
+            if (!clientsError && clientsRows) {
+                for (const c of clientsRows as { id: string; full_name: string | null }[]) {
+                    namesMap[c.id] = c.full_name ?? '';
+                }
+            }
+        }
+
+        const rows: PendingScreeningSubmissionRow[] = submissions.map((row: { id: string; token: string; created_at: string; client_id: string | null }) => ({
+            id: row.id,
+            token: row.token,
+            created_at: row.created_at,
+            client_id: row.client_id,
+            client_name: row.client_id ? (namesMap[row.client_id] || null) : null,
+        }));
+
+        return { success: true, data: rows };
+    } catch (error: any) {
+        console.error('Error fetching pending screening submissions:', error);
         return { success: false, error: error.message };
     }
 }
