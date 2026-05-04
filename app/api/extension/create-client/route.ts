@@ -7,7 +7,7 @@ import { isValidUniteUsUrl } from '@/lib/utils';
 export const runtime = 'nodejs';
 
 /** Same support address used elsewhere (e.g. cron notifications). */
-const BROOKLYN_NOTIFY_TO = ['customersupport@thedietfantasy.com', 'hshloimie@gmail.com'].join(', ');
+const BROOKLYN_NOTIFY_TO = 'customersupport@thedietfantasy.com';
 
 function escapeHtml(s: string | null | undefined): string {
     if (s === null || s === undefined || s === '') return '—';
