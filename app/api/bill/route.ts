@@ -15,6 +15,7 @@
  * Query params:
  *   ?date=YYYY-MM-DD   – billing window start (default 2026-02-23)
  *   ?account=regular|brooklyn|both  – filter by unite_account (default: both)
+ * Excludes parent clients with clients.bill === false (same as app “no billing” / bill unchecked).
  * Each entry includes createdAt (ISO 8601) for the parent client and each dependant.
  * No auth required.
  */
@@ -130,7 +131,7 @@ export async function GET(request: NextRequest) {
 
         // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
         const selectClients =
-            'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at';
+            'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill';
         const clients = await fetchAllRows<any>(
             (from, to) => {
                 let q = supabase.from('clients').select(selectClients).order('id', { ascending: true }).range(from, to);
@@ -153,9 +154,9 @@ export async function GET(request: NextRequest) {
             clientMap[String(c.id)] = c;
         });
 
-        // 2. Households = all parents (clients with no parent_client_id); use string ids for consistent lookups
+        // 2. Households = parents with no parent_client_id and billing enabled (bill !== false; matches bill ?? true elsewhere)
         const billableClientIds = (clients as any[])
-            .filter((c) => c.parent_client_id == null)
+            .filter((c) => c.parent_client_id == null && c.bill !== false)
             .map((c) => String(c.id));
 
         if (billableClientIds.length === 0) {

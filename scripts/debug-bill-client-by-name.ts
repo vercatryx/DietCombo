@@ -59,7 +59,7 @@ function matchesAccount(uniteAccount: unknown, account: AccountFilter): boolean 
 async function fetchClientById(id: string) {
     const { data, error } = await supabase
         .from('clients')
-        .select('id, full_name, parent_client_id, service_type, unite_account, case_id_external, client_id_external')
+        .select('id, full_name, parent_client_id, service_type, unite_account, case_id_external, client_id_external, bill')
         .eq('id', id)
         .maybeSingle();
     if (error) throw error;
@@ -78,7 +78,7 @@ async function main() {
     // Search with ilike to handle casing and partial matches.
     const { data: matches, error } = await supabase
         .from('clients')
-        .select('id, full_name, parent_client_id, unite_account, service_type')
+        .select('id, full_name, parent_client_id, unite_account, service_type, bill')
         .ilike('full_name', `%${needle}%`)
         .order('id', { ascending: true });
 
@@ -121,10 +121,15 @@ async function main() {
         console.log('parent_client_id:', parentId ?? '(null)');
 
         const passesAccount = matchesAccount(c.unite_account, account);
+        const passesBill = c.bill !== false;
         console.log('Passes /api/bill account filter?:', passesAccount ? 'YES' : 'NO');
+        console.log('Passes /api/bill bill filter (bill !== false)?:', passesBill ? 'YES' : 'NO');
 
         if (parentId == null) {
-            console.log('Would appear in /api/bill output as its own household row?:', passesAccount ? 'YES' : 'NO');
+            console.log(
+                'Would appear in /api/bill output as its own household row?:',
+                passesAccount && passesBill ? 'YES' : 'NO'
+            );
         } else {
             console.log(
                 'Would appear in /api/bill output as its own household row?: NO (it is a dependent, not a parent)'
@@ -142,6 +147,7 @@ async function main() {
                 );
             } else {
                 const parentPassesAccount = matchesAccount(parent.unite_account, account);
+                const parentPassesBill = parent.bill !== false;
                 console.log(
                     'Parent household:',
                     JSON.stringify({
@@ -149,15 +155,21 @@ async function main() {
                         full_name: parent.full_name,
                         unite_account: parent.unite_account,
                         service_type: parent.service_type,
+                        bill: parent.bill,
                     })
                 );
                 console.log(
                     'Would appear under parent household in /api/bill (dependants list)?:',
-                    passesAccount && parentPassesAccount ? 'YES' : 'NO'
+                    passesAccount && parentPassesAccount && parentPassesBill ? 'YES' : 'NO'
                 );
                 if (!parentPassesAccount) {
                     console.log(
                         'Note: parent fails account filter; /api/bill will omit the entire household row for this parent.'
+                    );
+                }
+                if (!parentPassesBill) {
+                    console.log(
+                        'Note: parent has bill=false; /api/bill will omit the entire household row for this parent.'
                     );
                 }
             }
