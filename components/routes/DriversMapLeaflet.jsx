@@ -801,6 +801,8 @@ export default function DriversMapLeaflet({
                                               readonly = false, // disable all editing interactions
                                               isOrdersViewTab = false, // whether we're in the Orders View tab
                                               dataSourceLabel, // optional: for debug logging where map data came from
+                                              /** Food-eligible clients missing lat/lng: searchable but no pin (Client Assignment). */
+                                              searchSupplement = [],
                                           }) {
     const mapRef = useRef(null);
     const [mapReady, setMapReady] = useState(false);
@@ -1115,8 +1117,20 @@ export default function DriversMapLeaflet({
         requestAnimationFrame(() => searchInputRef.current?.focus());
     }, []);
 
+    // Collapse runs of whitespace so "32 th" matches "32  thomsen" in DB, and name/address search is forgiving
+    const normalizeSearchHay = useCallback((parts) => {
+        return String(
+            (Array.isArray(parts) ? parts : [parts])
+                .filter((x) => x != null && String(x).trim() !== "")
+                .join(" ")
+        )
+            .toLowerCase()
+            .replace(/\s+/g, " ")
+            .trim();
+    }, []);
+
     useEffect(() => {
-        const needle = q.trim().toLowerCase();
+        const needle = normalizeSearchHay([q]);
         if (!needle) {
             setResults([]);
             return;
@@ -1124,27 +1138,63 @@ export default function DriversMapLeaflet({
         const rows = [];
         for (const d of sortedDrivers)
             for (const s of d.stops || []) {
-                const hay = [s.name, s.address, s.city, s.state, s.zip, s.phone]
-                    .filter(Boolean)
-                    .join(" ")
-                    .toLowerCase();
+                const hay = normalizeSearchHay([
+                    s.name,
+                    s.fullName,
+                    s.full_name,
+                    s.address,
+                    s.apt,
+                    s.city,
+                    s.state,
+                    s.zip,
+                    s.phone,
+                ]);
                 if (hay.includes(needle)) {
                     const r = { ...s, __driverId: d.driverId, __driverName: d.name, __unrouted: false, __color: d.color, __source: `driver:${d.name}` };
                     rows.push(r);
                 }
             }
         for (const s of unroutedFiltered) {
-            const hay = [s.name, s.address, s.city, s.state, s.zip, s.phone]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase();
+            const hay = normalizeSearchHay([
+                s.name,
+                s.fullName,
+                s.full_name,
+                s.address,
+                s.apt,
+                s.city,
+                s.state,
+                s.zip,
+                s.phone,
+            ]);
             if (hay.includes(needle)) {
                 const r = { ...s, __driverId: null, __driverName: "Unrouted", __unrouted: true, __color: "#666", __source: "unrouted" };
                 rows.push(r);
             }
         }
+        for (const s of Array.isArray(searchSupplement) ? searchSupplement : []) {
+            const hay = normalizeSearchHay([
+                s.name,
+                s.fullName,
+                s.full_name,
+                s.address,
+                s.apt,
+                s.city,
+                s.state,
+                s.zip,
+                s.phone,
+            ]);
+            if (hay.includes(needle)) {
+                rows.push({
+                    ...s,
+                    __noCoords: true,
+                    __unrouted: false,
+                    __source: "no_geocode",
+                    __driverName: "Not on map (no geocode)",
+                });
+            }
+        }
         setResults(rows.slice(0, 50));
-    }, [q, sortedDrivers, unroutedFiltered]);
+    }, [q, sortedDrivers, unroutedFiltered, searchSupplement, normalizeSearchHay]);
 
     const focusResult = useCallback(
         async (row, { clear = false } = {}) => {
@@ -1152,7 +1202,15 @@ export default function DriversMapLeaflet({
             console.log("[focusResult] map data from:", dataSourceLabel ?? "?", "search hit:", row.__source ?? (row.__unrouted ? "unrouted" : `driver:${row.__driverName}`), "row:", { id: row.id, name: row.name, __driverName: row.__driverName, __driverId: row.__driverId, orderNumber: row.orderNumber ?? row.order_number });
             const map = mapRef.current;
             const ll = getLL(row);
-            if (!map || !ll) return;
+            if (!map) return;
+            if (!ll) {
+                if (row.__noCoords) {
+                    window.alert(
+                        "This client has no geolocation, so they do not appear as a pin on the Client Assignment map. Others can still show pins if their address is geocoded. Use Needs geocoding, or open the Map tab to see route stops (which use delivery coordinates)."
+                    );
+                }
+                return;
+            }
             map.setView(ll, Math.max(map.getZoom(), 14), { animate: true });
 
             // Open stop preview popup (same as clicking the marker)

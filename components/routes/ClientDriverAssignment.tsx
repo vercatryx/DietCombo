@@ -21,6 +21,8 @@ interface Client {
     firstName?: string | null;
     lastName?: string | null;
     address?: string;
+    apt?: string | null;
+    zip?: string | null;
     city?: string;
     state?: string;
     phoneNumber?: string;
@@ -105,6 +107,8 @@ export default function ClientDriverAssignment({
                 firstName: user.first ?? null,
                 lastName: user.last ?? null,
                 address: user.address ?? '',
+                apt: user.apt != null && String(user.apt).trim() !== '' ? String(user.apt) : null,
+                zip: user.zip != null && String(user.zip).trim() !== '' ? String(user.zip) : null,
                 city: user.city ?? '',
                 state: user.state ?? '',
                 phoneNumber: user.phone ?? '',
@@ -263,17 +267,30 @@ export default function ClientDriverAssignment({
         setSelectedClientIds(newSelected);
     }
 
-    // Filter clients by search term
+    // Filter clients by search term (collapse whitespace so "32 th" matches "32  thomsen" in DB)
     const filteredClients = useMemo(() => {
         if (!searchTerm.trim()) return clients;
-        
-        const term = searchTerm.toLowerCase();
-        return clients.filter(client => 
-            client.fullName.toLowerCase().includes(term) ||
-            client.address?.toLowerCase().includes(term) ||
-            client.city?.toLowerCase().includes(term) ||
-            client.phoneNumber?.toLowerCase().includes(term)
-        );
+
+        const normalizeHay = (parts: (string | null | undefined)[]) =>
+            parts
+                .filter((x): x is string => x != null && String(x).trim() !== '')
+                .join(' ')
+                .toLowerCase()
+                .replace(/\s+/g, ' ')
+                .trim();
+        const term = normalizeHay([searchTerm]);
+        return clients.filter((client) => {
+            const hay = normalizeHay([
+                client.fullName,
+                client.address,
+                client.apt,
+                client.zip,
+                client.city,
+                client.state,
+                client.phoneNumber,
+            ]);
+            return hay.includes(term);
+        });
     }, [clients, searchTerm]);
 
     function handleSelectAll(checked: boolean) {
@@ -317,10 +334,10 @@ export default function ClientDriverAssignment({
                     fullName: client.fullName,
                     full_name: client.fullName,
                     address: client.address ?? '',
-                    apt: '',
+                    apt: client.apt ?? '',
                     city: client.city ?? '',
                     state: client.state ?? '',
-                    zip: '',
+                    zip: client.zip ?? '',
                     phone: client.phoneNumber ?? '',
                     lat: client.lat,
                     lng: client.lng,
@@ -334,6 +351,30 @@ export default function ClientDriverAssignment({
                 };
             });
     }, [filteredClients, clientDriverMap, drivers]);
+
+    /** Food clients missing geocode: still appear in map search (supplement), not as pins */
+    const searchSupplement = useMemo(() => {
+        return filteredClients
+            .filter((client) => hasFoodServiceType(client.serviceType ?? client.service_type))
+            .filter((client) => {
+                const lat = client.lat;
+                const lng = client.lng;
+                return lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng);
+            })
+            .map((client) => ({
+                id: client.id,
+                userId: client.id,
+                name: client.fullName,
+                fullName: client.fullName,
+                full_name: client.fullName,
+                address: client.address ?? '',
+                apt: client.apt ?? '',
+                city: client.city ?? '',
+                state: client.state ?? '',
+                zip: client.zip ?? '',
+                phone: client.phoneNumber ?? '',
+            }));
+    }, [filteredClients]);
 
     // Build map drivers from props (id, name, color) and mapStops
     const mapDrivers = useMemo(() => {
@@ -427,6 +468,7 @@ export default function ClientDriverAssignment({
                     return <Component
                         drivers={mapDrivers}
                         unrouted={unroutedStops}
+                        searchSupplement={searchSupplement}
                         onReassign={readOnly ? undefined : handleMapReassign}
                         driversForAssignment={driversForDropdown}
                         onDriverChange={async (stop: any, driverId: any) => {
