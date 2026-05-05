@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useMemo, ReactElement, type CSSProperties,
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType, ProduceVendor } from '@/lib/types';
 import {
     getClientsPaginated,
+    searchClientsForDashboard,
     getClientFullDetails,
     getStatuses,
     getNavigators,
@@ -81,14 +82,18 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [boxTypes, setBoxTypes] = useState<BoxType[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [parentNamesMap, setParentNamesMap] = useState<Record<string, string>>({});
-    const [search, setSearch] = useState('');
+    /** Input field value (does not trigger server search until submitted). */
+    const [searchDraft, setSearchDraft] = useState('');
+    /** Last submitted query; drives RPC and filtering for search / full modes. */
+    const [committedSearch, setCommittedSearch] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
+    /** empty: no client rows loaded; search: results from RPC; full: full list from getClientsPaginated */
+    const [datasetMode, setDatasetMode] = useState<'empty' | 'search' | 'full'>('empty');
+    const [isSearchLoading, setIsSearchLoading] = useState(false);
+    const [isLoadingAllClients, setIsLoadingAllClients] = useState(false);
 
-    // Pagination State
-    const [page, setPage] = useState(1);
     const [totalClients, setTotalClients] = useState(0);
-    const [isFetchingMore, setIsFetchingMore] = useState(false);
     const CLIENT_FETCH_LIMIT = 2000; // Single request loads all clients (avoids many round-trips)
 
     // Prefetching State
@@ -311,7 +316,29 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [tokenCache, setTokenCache] = useState<Record<string, string>>({});
 
     useEffect(() => {
-        loadInitialData();
+        (async () => {
+            setIsLoading(true);
+            try {
+                const [sData, nData, vData, bData, mData, pvData] = await Promise.all([
+                    getStatuses(),
+                    getNavigators(),
+                    getVendors(),
+                    getBoxTypes(),
+                    getMenuItems(),
+                    getCachedProduceVendors()
+                ]);
+                setStatuses(sData);
+                setNavigators(nData);
+                setVendors(vData);
+                setBoxTypes(bData);
+                setMenuItems(mData);
+                setProduceVendors(pvData);
+            } catch (error) {
+                console.error('Error loading reference data:', error);
+            } finally {
+                setIsLoading(false);
+            }
+        })();
         loadSignatureCounts();
     }, []);
 
@@ -339,13 +366,92 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
     }
 
-    // Reload data when view changes
-    useEffect(() => {
-        if (!isLoading) {
-            loadInitialData();
-            loadSignatureCounts();
+    async function loadReferenceData() {
+        const [sData, nData, vData, bData, mData, pvData] = await Promise.all([
+            getStatuses(),
+            getNavigators(),
+            getVendors(),
+            getBoxTypes(),
+            getMenuItems(),
+            getCachedProduceVendors()
+        ]);
+        setStatuses(sData);
+        setNavigators(nData);
+        setVendors(vData);
+        setBoxTypes(bData);
+        setMenuItems(mData);
+        setProduceVendors(pvData);
+    }
+
+    function hydrateParentNamesForClientList(clientList: ClientProfile[]) {
+        const parentIds = [...new Set(clientList.map(c => c.parentClientId).filter(Boolean))] as string[];
+        if (parentIds.length > 0) {
+            getClientNamesByIds(parentIds).then(map => setParentNamesMap(prev => ({ ...prev, ...map })));
         }
-    }, [currentView]);
+    }
+
+    async function loadAllClientsIntoState() {
+        setIsLoadingAllClients(true);
+        try {
+            await loadReferenceData();
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+            const cRes = await getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined);
+            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            setClients(clientList);
+            setTotalClients(cRes.total);
+            setDatasetMode('full');
+            hydrateParentNamesForClientList(clientList);
+        } catch (error) {
+            console.error('Error loading all clients:', error);
+        } finally {
+            setIsLoadingAllClients(false);
+        }
+    }
+
+    function commitSearch() {
+        setCommittedSearch(searchDraft.trim());
+    }
+
+    function clearSearchFields() {
+        setSearchDraft('');
+        setCommittedSearch('');
+    }
+
+    // Server search runs only when committedSearch changes (Enter or Search button), not while typing.
+    useEffect(() => {
+        if (datasetMode === 'full') return;
+
+        const q = committedSearch.trim();
+        if (!q) {
+            setIsSearchLoading(false);
+            setClients([]);
+            setTotalClients(0);
+            setDatasetMode('empty');
+            return;
+        }
+
+        let cancelled = false;
+        setIsSearchLoading(true);
+        void (async () => {
+            try {
+                const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+                const { clients: rows } = await searchClientsForDashboard(q, { brooklynOnly });
+                if (cancelled) return;
+                setClients(rows);
+                setTotalClients(rows.length);
+                setDatasetMode('search');
+                hydrateParentNamesForClientList(rows);
+            } catch (e) {
+                console.error('Client search failed:', e);
+            } finally {
+                if (!cancelled) setIsSearchLoading(false);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [committedSearch, datasetMode, currentUser?.role]);
 
     // Helper function to get signature count for a client
     const getSignatureCount = (clientId: string): number => {
@@ -495,22 +601,35 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
     }, [clients, detailsCache, isLoading]);
 
-    // Preload profile auxiliary data (allClients, regularClients, settings, categories) so the profile
-    // dialog can open without calling loadAuxiliaryData (getClients/getRegularClients are heavy).
+    // Preload profile auxiliary data. Full list uses getClients/getRegularClients; search mode avoids loading every row.
     useEffect(() => {
         if (isLoading || clients.length === 0) return;
         let cancelled = false;
-        Promise.all([getClients(), getRegularClients(), getSettings(), getCategories()])
-            .then(([allClientsData, regularClientsData, settingsData, categoriesData]) => {
-                if (cancelled) return;
-                setAllClientsForProfile(Array.isArray(allClientsData) ? allClientsData.filter((c): c is ClientProfile => c != null) : []);
-                setRegularClients(Array.isArray(regularClientsData) ? regularClientsData.filter((c): c is ClientProfile => c != null) : []);
-                setSettingsForProfile(settingsData ?? null);
-                setCategoriesForProfile(Array.isArray(categoriesData) ? categoriesData : []);
-            })
-            .catch(err => console.error('[ClientList] Preload profile auxiliary failed:', err));
+
+        if (datasetMode === 'full') {
+            Promise.all([getClients(), getRegularClients(), getSettings(), getCategories()])
+                .then(([allClientsData, regularClientsData, settingsData, categoriesData]) => {
+                    if (cancelled) return;
+                    setAllClientsForProfile(Array.isArray(allClientsData) ? allClientsData.filter((c): c is ClientProfile => c != null) : []);
+                    setRegularClients(Array.isArray(regularClientsData) ? regularClientsData.filter((c): c is ClientProfile => c != null) : []);
+                    setSettingsForProfile(settingsData ?? null);
+                    setCategoriesForProfile(Array.isArray(categoriesData) ? categoriesData : []);
+                })
+                .catch(err => console.error('[ClientList] Preload profile auxiliary failed:', err));
+        } else {
+            Promise.all([getSettings(), getCategories()])
+                .then(([settingsData, categoriesData]) => {
+                    if (cancelled) return;
+                    setAllClientsForProfile(clients);
+                    setRegularClients(clients.filter(c => !c.parentClientId));
+                    setSettingsForProfile(settingsData ?? null);
+                    setCategoriesForProfile(Array.isArray(categoriesData) ? categoriesData : []);
+                })
+                .catch(err => console.error('[ClientList] Preload profile auxiliary failed:', err));
+        }
+
         return () => { cancelled = true; };
-    }, [isLoading, clients.length]);
+    }, [isLoading, datasetMode, clients]);
 
     // Load client details when info shelf opens
     useEffect(() => {
@@ -552,79 +671,27 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
     }, [openFilterMenu]);
 
-    async function loadInitialData() {
-        setIsLoading(true);
-        try {
-            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
-            const [sData, nData, vData, bData, mData, cRes, pvData] = await Promise.all([
-                getStatuses(),
-                getNavigators(),
-                getVendors(),
-                getBoxTypes(),
-                getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined),
-                getCachedProduceVendors()
-            ]);
-
-            setStatuses(sData);
-            setNavigators(nData);
-            setVendors(vData);
-            setBoxTypes(bData);
-            setMenuItems(mData);
-            setProduceVendors(pvData);
-            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
-            setClients(clientList);
-            setTotalClients(cRes.total);
-            setPage(1);
-
-            // Fetch parent names only for dependents on this page (lightweight query)
-            const parentIds = [...new Set(clientList.map(c => c.parentClientId).filter(Boolean))] as string[];
-            if (parentIds.length > 0) {
-                getClientNamesByIds(parentIds).then(map => setParentNamesMap(prev => ({ ...prev, ...map })));
-            }
-        } catch (error) {
-            console.error("Error loading initial data:", error);
-        } finally {
-            setIsLoading(false);
-        }
-    }
-
     async function refreshDataInBackground() {
         setIsRefreshing(true);
         try {
-            // Invalidate cache to ensure fresh data
             invalidateClientData();
 
-            // Fetch fresh data (single request for all clients)
-            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
-            const [sData, nData, vData, bData, mData, cRes] = await Promise.all([
-                getStatuses(),
-                getNavigators(),
-                getVendors(),
-                getBoxTypes(),
-                getMenuItems(),
-                getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined)
-            ]);
+            await loadReferenceData();
 
-            // Update all data
-            setStatuses(sData);
-            setNavigators(nData);
-            setVendors(vData);
-            setBoxTypes(bData);
-            setMenuItems(mData);
-            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
-            setClients(clientList);
-            setTotalClients(cRes.total);
-            setPage(1);
-            // Refresh parent names for visible dependents
-            const parentIds = [...new Set(clientList.map(c => c.parentClientId).filter(Boolean))] as string[];
-            if (parentIds.length > 0) {
-                getClientNamesByIds(parentIds).then(map =>
-                    setParentNamesMap(prev => ({ ...prev, ...map }))
-                );
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+            if (datasetMode === 'full') {
+                const cRes = await getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined);
+                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                setClients(clientList);
+                setTotalClients(cRes.total);
+                hydrateParentNamesForClientList(clientList);
+            } else if (datasetMode === 'search' && committedSearch.trim()) {
+                const { clients: rows } = await searchClientsForDashboard(committedSearch.trim(), { brooklynOnly });
+                setClients(rows);
+                setTotalClients(rows.length);
+                hydrateParentNamesForClientList(rows);
             }
-            
-            // Refresh signature counts
+
             loadSignatureCounts();
         } catch (error) {
             console.error("Error refreshing data:", error);
@@ -723,14 +790,18 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     }
 
     const baseFilteredClients = clients.filter(c => {
-        const searchLower = search.toLowerCase();
+        const searchLower = committedSearch.toLowerCase();
         const matchesSearch =
-            c.fullName.toLowerCase().includes(searchLower) ||
-            (c.phoneNumber && c.phoneNumber.includes(searchLower)) ||
-            (c.secondaryPhoneNumber && c.secondaryPhoneNumber.includes(searchLower)) ||
-            (c.address && c.address.toLowerCase().includes(searchLower)) ||
-            (c.email && c.email.toLowerCase().includes(searchLower)) ||
-            (c.notes && c.notes.toLowerCase().includes(searchLower));
+            datasetMode === 'search'
+                ? true
+                : !committedSearch.trim()
+                  ? true
+                  : c.fullName.toLowerCase().includes(searchLower) ||
+                    (c.phoneNumber && c.phoneNumber.includes(searchLower)) ||
+                    (c.secondaryPhoneNumber && c.secondaryPhoneNumber.includes(searchLower)) ||
+                    (c.address && c.address.toLowerCase().includes(searchLower)) ||
+                    (c.email && c.email.toLowerCase().includes(searchLower)) ||
+                    (c.notes && c.notes.toLowerCase().includes(searchLower));
 
         // Filter by View
         let matchesView = true;
@@ -816,7 +887,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             }
         }
 
-        // Filter by Dependents visibility
+        // Filter by Dependents visibility (same in search mode: hide dependents unless toggle is on)
         const matchesDependentsFilter = showDependents || !c.parentClientId;
 
         // Filter by Flags (all, non-default only, or specific flag)
@@ -2157,14 +2228,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px' }}>
                     <h1 className={styles.title}>Clients</h1>
                     {!isLoading && (
-                        <>
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                Total: {totalRegularClients} clients
-                            </span>
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                ({clients.length} / {totalClients} loaded)
-                            </span>
-                        </>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                            {datasetMode === 'empty'
+                                ? 'Search or load all clients to view the list'
+                                : datasetMode === 'search'
+                                  ? `Showing ${clients.length} client${clients.length === 1 ? '' : 's'} (search)`
+                                  : `Total: ${totalRegularClients} clients (${clients.length} / ${totalClients} loaded)`}
+                        </span>
                     )}
                     {isLoading && (
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading…</span>
@@ -2258,21 +2328,51 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     <Search size={18} className={styles.searchIcon} />
                     <input
                         className="input"
-                        placeholder="Search clients..."
-                        style={{ paddingLeft: '2.5rem', paddingRight: search ? '2rem' : '0.75rem', width: '300px' }}
-                        value={search}
-                        onChange={e => setSearch(e.target.value)}
+                        placeholder="Search name, phone, address, email…"
+                        style={{ paddingLeft: '2.5rem', paddingRight: searchDraft ? '2rem' : '0.75rem', width: '300px' }}
+                        value={searchDraft}
+                        onChange={e => setSearchDraft(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitSearch();
+                            }
+                        }}
+                        disabled={isLoadingAllClients}
+                        aria-label="Search clients"
                     />
-                    {search && (
+                    {searchDraft && (
                         <button
+                            type="button"
                             className={styles.clearButton}
-                            onClick={() => setSearch('')}
+                            onClick={() => clearSearchFields()}
                             aria-label="Clear search"
                         >
                             <X size={16} />
                         </button>
                     )}
                 </div>
+
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => commitSearch()}
+                    disabled={isLoading || isSearchLoading || isLoadingAllClients || isRefreshing}
+                >
+                    {isSearchLoading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    Search
+                </button>
+
+                <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void loadAllClientsIntoState()}
+                    disabled={isLoading || isSearchLoading || isLoadingAllClients || isRefreshing}
+                    title="Load the full client list into this page (slower)"
+                >
+                    {isLoadingAllClients ? <Loader2 size={16} className="animate-spin" /> : null}
+                    Load all clients
+                </button>
 
 
 
@@ -2853,14 +2953,17 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 })}
                 {filteredClients.length === 0 && !isLoading && (
                     <div className={styles.empty}>
-                        {flagsFilter !== 'all' ? `No clients with "${FLAGS_FILTER_OPTIONS.find(o => o.value === flagsFilter)?.label ?? flagsFilter}".` :
-                            serviceTypeFilter ? `No clients with type "${serviceTypeFilter}".` :
-                            needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
-                                currentView === 'ineligible' ? 'No ineligible clients found.' :
-                                    currentView === 'eligible' ? 'No eligible clients found.' :
-                                        currentView === 'brooklyn' ? 'No Brooklyn clients found.' :
-                                            currentView === 'needs-attention' ? 'No clients need attention.' :
-                                                'No clients found.'}
+                        {isSearchLoading ? 'Searching…' :
+                            datasetMode === 'empty' && !committedSearch.trim()
+                                ? 'Enter a search and press Enter or click Search, or load all clients.'
+                                : flagsFilter !== 'all' ? `No clients with "${FLAGS_FILTER_OPTIONS.find(o => o.value === flagsFilter)?.label ?? flagsFilter}".` :
+                                    serviceTypeFilter ? `No clients with type "${serviceTypeFilter}".` :
+                                        needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
+                                            currentView === 'ineligible' ? 'No ineligible clients found.' :
+                                                currentView === 'eligible' ? 'No eligible clients found.' :
+                                                    currentView === 'brooklyn' ? 'No Brooklyn clients found.' :
+                                                        currentView === 'needs-attention' ? 'No clients need attention.' :
+                                                            'No clients found.'}
                     </div>
                 )}
             </div>

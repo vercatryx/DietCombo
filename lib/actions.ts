@@ -9394,6 +9394,40 @@ export async function getClientsPaginated(page: number, pageSize: number, search
     }
 }
 
+/**
+ * Dashboard search via Postgres RPC: matches name, phones, address, email, notes (same fields as client-side filter),
+ * then expands each hit to its household (parent row + all dependents). Does not fetch the full client table.
+ */
+export async function searchClientsForDashboard(
+    searchQuery: string,
+    options?: { brooklynOnly?: boolean }
+): Promise<{ clients: ClientProfile[] }> {
+    const q = searchQuery.trim();
+    if (!q) return { clients: [] };
+    try {
+        const { data, error } = await supabase.rpc('search_clients_for_dashboard', {
+            p_search_query: q,
+            p_brooklyn_only: options?.brooklynOnly ?? false
+        });
+        if (error) {
+            logQueryError(error, 'search_clients_for_dashboard', 'rpc');
+            return { clients: [] };
+        }
+        const mapped = (data || []).map((c: any) => {
+            try {
+                return mapClientFromDB(c);
+            } catch (err) {
+                console.error(`[searchClientsForDashboard] map client ${c?.id}:`, err);
+                return null;
+            }
+        }).filter((c: ClientProfile | null): c is ClientProfile => c != null);
+        return { clients: mapped };
+    } catch (err) {
+        console.error('[searchClientsForDashboard]', err);
+        return { clients: [] };
+    }
+}
+
 export async function getClientFullDetails(clientId: string) {
     if (!clientId) return null;
 

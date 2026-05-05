@@ -1,14 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Search, ChevronRight, ArrowUpDown, Trash2, Loader2, ChevronLeft } from 'lucide-react';
 import { getOrdersPaginatedBilling, deleteOrder } from '@/lib/actions-orders-billing';
 import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import styles from './OrdersList.module.css';
-
-const SEARCH_DEBOUNCE_MS = 350;
 
 export function OrdersList() {
     const router = useRouter();
@@ -26,18 +24,10 @@ export function OrdersList() {
     const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
     const [isDeleting, setIsDeleting] = useState(false);
     const [goToPageInput, setGoToPageInput] = useState('');
-    const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    useEffect(() => {
-        if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-        searchDebounceRef.current = setTimeout(() => {
-            setSearchForFetch(search);
-            setPage(1);
-            searchDebounceRef.current = null;
-        }, SEARCH_DEBOUNCE_MS);
-        return () => {
-            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-        };
+    const commitSearch = useCallback(() => {
+        setSearchForFetch(search);
+        setPage(1);
     }, [search]);
 
     useEffect(() => {
@@ -186,15 +176,27 @@ export function OrdersList() {
             </div>
 
             <div className={styles.filters}>
-                <div className={styles.searchBox}>
-                    <Search size={18} className={styles.searchIcon} />
-                    <input
-                        className="input"
-                        placeholder="Search by client, order # or vendor..."
-                        style={{ paddingLeft: '2.5rem', width: '300px' }}
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                    />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className={styles.searchBox}>
+                        <Search size={18} className={styles.searchIcon} />
+                        <input
+                            className="input"
+                            placeholder="Search by client, order # or vendor…"
+                            style={{ paddingLeft: '2.5rem', width: '300px' }}
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitSearch();
+                                }
+                            }}
+                            aria-label="Search orders"
+                        />
+                    </div>
+                    <button type="button" className="btn btn-primary" onClick={commitSearch}>
+                        Search
+                    </button>
                 </div>
                 <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '200px' }}>
                     <option value="all">All Statuses</option>
