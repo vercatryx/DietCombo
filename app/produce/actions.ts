@@ -104,17 +104,16 @@ export async function processProduceProof(formData: FormData) {
         } else if (file) {
             // Normal flow: Upload to R2
             const rawBuffer = Buffer.from(await file.arrayBuffer());
-            const { buffer, stampedAtIso } = await stampTimestampOnImageBuffer(
+            const { buffer, stampedAtIso, contentType, fileExtension } = await stampTimestampOnImageBuffer(
                 rawBuffer,
                 file.type || 'image/jpeg',
                 new Date()
             );
             proofTimeIso = stampedAtIso;
             const timestamp = Date.now();
-            const extension = file.name.split('.').pop();
-            const key = `produce-proof-${orderNumber}-${timestamp}.${extension}`;
+            const key = `produce-proof-${orderNumber}-${timestamp}.${fileExtension}`;
 
-            await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
+            await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
             const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
             const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
             publicUrl = `${baseUrl}/${key}`;
@@ -276,12 +275,15 @@ export async function uploadProduceProofOnly(formData: FormData) {
 
     try {
         const rawBuffer = Buffer.from(await file.arrayBuffer());
-        const { buffer } = await stampTimestampOnImageBuffer(rawBuffer, file.type || 'image/jpeg', new Date());
+        const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
+            rawBuffer,
+            file.type || 'image/jpeg',
+            new Date()
+        );
         const timestamp = Date.now();
-        const extension = file.name.split('.').pop() || 'jpg';
-        const key = `produce-proof-${clientId}-${timestamp}.${extension}`;
+        const key = `produce-proof-${clientId}-${timestamp}.${fileExtension}`;
 
-        await uploadFile(key, buffer, file.type, process.env.R2_DELIVERY_BUCKET_NAME);
+        await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
         const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
         const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
         const publicUrl = `${baseUrl}/${key}`;

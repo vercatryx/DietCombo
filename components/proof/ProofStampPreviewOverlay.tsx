@@ -16,6 +16,7 @@ export function ProofStampPreviewOverlay({ capturedAt }: { capturedAt: Date }) {
         position: 'absolute',
         right: 'max(12px, env(safe-area-inset-right))',
         bottom: 'max(12px, env(safe-area-inset-bottom))',
+        width: 'fit-content',
         maxWidth: 'calc(100% - 24px)',
         padding: '10px 14px',
         borderRadius: 12,

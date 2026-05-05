@@ -82,20 +82,14 @@ export async function POST(req: Request) {
     }
 
     // Stamp timestamp onto the image (prefer EXIF capture time; fall back to upload time).
-    try {
-        const stamped = await stampTimestampOnImageBuffer(buffer, mimeType || "image/jpeg", new Date());
-        buffer = stamped.buffer;
-        // Note: we don't currently persist stampedAt/source for stops; the stamp itself is the record.
-    } catch (e) {
-        // If stamping fails for any reason, continue with original image.
-        console.warn("[mobile/stop/proof] Timestamp stamping failed; uploading original image:", e);
-    }
+    const stamped = await stampTimestampOnImageBuffer(buffer, mimeType || "image/jpeg", new Date());
+    buffer = stamped.buffer;
+    // Note: we don't currently persist stampedAt/source for stops; the stamp itself is the record.
 
-    const ext = mimeType.includes("png") ? "png" : "jpg";
-    const key = `stop-proof-${stopId}-${Date.now()}.${ext}`;
+    const key = `stop-proof-${stopId}-${Date.now()}.${stamped.fileExtension}`;
 
     try {
-        await uploadFile(key, buffer, mimeType, R2_DELIVERY_BUCKET);
+        await uploadFile(key, buffer, stamped.contentType, R2_DELIVERY_BUCKET);
     } catch (err) {
         console.error("[mobile/stop/proof] Upload error:", err);
         return NextResponse.json({ ok: false, error: "Upload failed" }, { status: 500 });
