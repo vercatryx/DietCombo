@@ -4890,6 +4890,17 @@ export async function deleteClient(id: string) {
         handleError(droErr, 'deleteClient driver_route_order');
     }
 
+    const dependentCount = Math.max(0, idsToArchive.length - 1);
+    for (const cid of idsToArchive) {
+        const summary =
+            cid === id
+                ? dependentCount > 0
+                    ? `Deleted from main client list; archived ${dependentCount} dependent(s).`
+                    : 'Deleted from main client list.'
+                : 'Deleted from main client list (archived with primary client).';
+        await recordClientChange(cid, summary);
+    }
+
     revalidatePath('/clients');
     revalidatePath(`/clients/${id}`);
     for (const cid of idsToArchive) {
@@ -4903,6 +4914,7 @@ export async function deleteClient(id: string) {
 export async function unarchiveClient(id: string) {
     const { error } = await supabase.from('clients').update({ archived_at: null }).eq('id', id);
     handleError(error, 'unarchiveClient');
+    await recordClientChange(id, 'Restored to main client list.');
     revalidatePath('/clients');
     revalidatePath(`/clients/${id}`);
     const { triggerSyncInBackground } = await import('./local-db');

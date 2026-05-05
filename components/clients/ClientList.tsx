@@ -94,6 +94,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [isLoadingAllClients, setIsLoadingAllClients] = useState(false);
     /** When true, the table lists soft-deleted (`archived_at`) clients only — shown in the UI as "deleted". */
     const [showDeletedClients, setShowDeletedClients] = useState(false);
+    /** Active list mode before opening deleted view — used to restore search vs full vs empty when toggling # off */
+    const preDeletedBasisRef = useRef<'full' | 'search' | 'empty'>('empty');
 
     const [totalClients, setTotalClients] = useState(0);
     const CLIENT_FETCH_LIMIT = 2000; // Single request loads all clients (avoids many round-trips)
@@ -412,6 +414,10 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     }
 
     async function loadDeletedClientsIntoState() {
+        const basis: 'full' | 'search' | 'empty' =
+            datasetMode === 'full' ? 'full' : committedSearch.trim() ? 'search' : 'empty';
+        preDeletedBasisRef.current = basis;
+
         setIsLoadingAllClients(true);
         setShowDeletedClients(true);
         setCurrentView('all');
@@ -419,20 +425,66 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         try {
             await loadReferenceData();
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+
+            if (basis === 'empty') {
+                setClients([]);
+                setTotalClients(0);
+                setDatasetMode('empty');
+                return;
+            }
+
+            const q = committedSearch.trim();
             const cRes = await getClientsPaginated(
                 1,
                 CLIENT_FETCH_LIMIT,
-                committedSearch.trim(),
+                q,
                 undefined,
                 { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
             );
             const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
             setClients(clientList);
             setTotalClients(cRes.total);
-            setDatasetMode('full');
+            setDatasetMode(basis === 'full' ? 'full' : 'search');
             hydrateParentNamesForClientList(clientList);
         } catch (error) {
             console.error('Error loading deleted clients:', error);
+        } finally {
+            setIsLoadingAllClients(false);
+        }
+    }
+
+    async function exitDeletedClientsMode() {
+        setIsLoadingAllClients(true);
+        try {
+            await loadReferenceData();
+            const basis = preDeletedBasisRef.current;
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+
+            if (basis === 'full') {
+                const cRes = await getClientsPaginated(
+                    1,
+                    CLIENT_FETCH_LIMIT,
+                    '',
+                    undefined,
+                    brooklynOnly ? { brooklynOnly: true } : undefined
+                );
+                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                setClients(clientList);
+                setTotalClients(cRes.total);
+                setDatasetMode('full');
+                setShowDeletedClients(false);
+                hydrateParentNamesForClientList(clientList);
+            } else if (basis === 'search' && committedSearch.trim()) {
+                setShowDeletedClients(false);
+                // Search effect reloads active results (showDeletedClients now false)
+            } else {
+                setClients([]);
+                setTotalClients(0);
+                setDatasetMode('empty');
+                setShowDeletedClients(false);
+            }
+        } catch (error) {
+            console.error('Error exiting deleted clients mode:', error);
         } finally {
             setIsLoadingAllClients(false);
         }
@@ -444,16 +496,26 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         try {
             await loadReferenceData();
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+            const trimmed = q.trim();
+            if (!trimmed) {
+                setClients([]);
+                setTotalClients(0);
+                setDatasetMode('empty');
+                preDeletedBasisRef.current = 'empty';
+                return;
+            }
             const cRes = await getClientsPaginated(
                 1,
                 CLIENT_FETCH_LIMIT,
-                q,
+                trimmed,
                 undefined,
                 { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
             );
             const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
             setClients(clientList);
             setTotalClients(cRes.total);
+            setDatasetMode('search');
+            preDeletedBasisRef.current = 'search';
             hydrateParentNamesForClientList(clientList);
         } catch (error) {
             console.error('Error loading deleted clients:', error);
@@ -467,7 +529,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     function handleDeletedClientsHeaderToggle() {
         if (deletedListToggleBusy) return;
-        if (showDeletedClients) void loadAllClientsIntoState();
+        if (showDeletedClients) void exitDeletedClientsMode();
         else void loadDeletedClientsIntoState();
     }
 
@@ -487,6 +549,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     // Server search runs only when committedSearch changes (Enter or Search button), not while typing.
     useEffect(() => {
         if (datasetMode === 'full') return;
+        if (showDeletedClients) return;
 
         const q = committedSearch.trim();
         if (!q) {
@@ -518,7 +581,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         return () => {
             cancelled = true;
         };
-    }, [committedSearch, datasetMode, currentUser?.role]);
+    }, [committedSearch, datasetMode, currentUser?.role, showDeletedClients]);
 
     // Helper function to get signature count for a client
     const getSignatureCount = (clientId: string): number => {
@@ -673,7 +736,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         if (isLoading || clients.length === 0) return;
         let cancelled = false;
 
-        if (datasetMode === 'full') {
+        if (datasetMode === 'full' && !showDeletedClients) {
             Promise.all([getClients(), getRegularClients(), getSettings(), getCategories()])
                 .then(([allClientsData, regularClientsData, settingsData, categoriesData]) => {
                     if (cancelled) return;
@@ -696,7 +759,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
 
         return () => { cancelled = true; };
-    }, [isLoading, datasetMode, clients]);
+    }, [isLoading, datasetMode, clients, showDeletedClients]);
 
     // Load client details when info shelf opens
     useEffect(() => {
@@ -746,7 +809,19 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             await loadReferenceData();
 
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
-            if (datasetMode === 'full' && showDeletedClients) {
+            if (showDeletedClients && datasetMode === 'full') {
+                const cRes = await getClientsPaginated(
+                    1,
+                    CLIENT_FETCH_LIMIT,
+                    committedSearch.trim(),
+                    undefined,
+                    { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
+                );
+                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                setClients(clientList);
+                setTotalClients(cRes.total);
+                hydrateParentNamesForClientList(clientList);
+            } else if (showDeletedClients && datasetMode === 'search' && committedSearch.trim()) {
                 const cRes = await getClientsPaginated(
                     1,
                     CLIENT_FETCH_LIMIT,
@@ -2308,12 +2383,16 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     <h1 className={styles.title}>Clients</h1>
                     {!isLoading && (
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                            {datasetMode === 'empty'
-                                ? 'Search or load all clients to view the list'
-                                : datasetMode === 'search'
-                                  ? `Showing ${clients.length} client${clients.length === 1 ? '' : 's'} (search)`
-                                  : showDeletedClients
-                                    ? `Deleted: ${totalRegularClients} client${totalRegularClients === 1 ? '' : 's'} (${clients.length} / ${totalClients} loaded)`
+                            {showDeletedClients
+                                ? datasetMode === 'empty'
+                                    ? 'Deleted mode — search or load all clients first, then use search to list deleted rows'
+                                    : datasetMode === 'search'
+                                      ? `Deleted (search): ${totalRegularClients} primary (${clients.length} / ${totalClients})`
+                                      : `Deleted: ${totalRegularClients} primary (${clients.length} / ${totalClients} loaded)`
+                                : datasetMode === 'empty'
+                                  ? 'Search or load all clients to view the list'
+                                  : datasetMode === 'search'
+                                    ? `Showing ${clients.length} client${clients.length === 1 ? '' : 's'} (search)`
                                     : `Total: ${totalRegularClients} clients (${clients.length} / ${totalClients} loaded)`}
                         </span>
                     )}
