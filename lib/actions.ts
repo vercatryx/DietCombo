@@ -4854,6 +4854,18 @@ export async function updateClientDietaryDislikes(clientId: string, desired: Die
     return updated ?? null;
 }
 
+/** Support inbox for operational alerts (same as extension API / cron notifications). */
+const CLIENT_DELETE_NOTIFY_TO = 'customersupport@thedietfantasy.com';
+
+function escapeHtmlEmailFragment(s: string | null | undefined): string {
+    if (s === null || s === undefined || s === '') return '—';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 /**
  * Soft-delete: archives the client (sets archived_at) and hides them from the main dashboard.
  * Preserves orders, billing, stops, and all related data. UI still calls this `deleteClient`.
@@ -4863,19 +4875,21 @@ export async function deleteClient(id: string) {
     const now = new Date().toISOString();
     const { data: row, error: fetchErr } = await supabase
         .from('clients')
-        .select('id, parent_client_id')
+        .select('id, parent_client_id, full_name, email')
         .eq('id', id)
         .maybeSingle();
     handleError(fetchErr, 'deleteClient fetch');
     if (!row) return;
 
+    let dependents: { id: string; full_name: string | null }[] | null = null;
     const idsToArchive: string[] = [id];
     if (!row.parent_client_id) {
-        const { data: dependents, error: depFetchErr } = await supabase
+        const { data: depRows, error: depFetchErr } = await supabase
             .from('clients')
-            .select('id')
+            .select('id, full_name')
             .eq('parent_client_id', id);
         handleError(depFetchErr, 'deleteClient dependents fetch');
+        dependents = depRows;
         for (const d of dependents || []) idsToArchive.push(d.id);
     }
 
@@ -4899,6 +4913,43 @@ export async function deleteClient(id: string) {
                     : 'Deleted from main client list.'
                 : 'Deleted from main client list (archived with primary client).';
         await recordClientChange(cid, summary);
+    }
+
+    const nameById = new Map<string, string | null>();
+    nameById.set(row.id, row.full_name);
+    for (const d of dependents || []) nameById.set(d.id, d.full_name);
+
+    const archivedLines = idsToArchive
+        .map((cid) => {
+            const nm = nameById.get(cid);
+            return `<li>${escapeHtmlEmailFragment(nm)} <span style="color:#64748b">(${escapeHtmlEmailFragment(cid)})</span></li>`;
+        })
+        .join('');
+
+    const emailOnFileLine =
+        row.email != null && String(row.email).trim() !== ''
+            ? `<p style="margin:0 0 12px"><strong>Email on file (deleted row):</strong> ${escapeHtmlEmailFragment(row.email)}</p>`
+            : '';
+
+    try {
+        const { sendEmail } = await import('./email');
+        const subjectSafe = (row.full_name || 'Client').replace(/[\r\n]/g, ' ').slice(0, 120);
+        const result = await sendEmail({
+            to: CLIENT_DELETE_NOTIFY_TO,
+            subject: `[Diet Fantasy] Client archived (dashboard): ${subjectSafe}`,
+            html: `<!DOCTYPE html><html><body style="font-family:system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;color:#0f172a;max-width:640px">
+<p style="margin:0 0 12px">Someone removed the following from the main client list (soft-delete). Orders and history are still stored; records can be restored from the deleted-clients view.</p>
+${emailOnFileLine}
+<p style="margin:0 0 8px"><strong>Archived at:</strong> ${escapeHtmlEmailFragment(now)}</p>
+<p style="margin:0 0 8px"><strong>Archived (${idsToArchive.length}):</strong></p>
+<ul style="margin:0;padding-left:20px">${archivedLines}</ul>
+</body></html>`
+        });
+        if (!result.success) {
+            console.error('[deleteClient] Notify email failed:', result.error);
+        }
+    } catch (e) {
+        console.error('[deleteClient] Notify email error:', e);
     }
 
     revalidatePath('/clients');
