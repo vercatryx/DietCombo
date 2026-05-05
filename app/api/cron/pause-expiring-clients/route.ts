@@ -74,6 +74,7 @@ export async function GET(req: Request) {
       .select(
         "id, full_name, first_name, last_name, expiration_date, paused, parent_client_id"
       )
+      .is("archived_at", null)
       .not("expiration_date", "is", null)
       .gte("expiration_date", startDate)
       .lte("expiration_date", endDate)
@@ -153,6 +154,7 @@ export async function GET(req: Request) {
         .select(
           "id, full_name, first_name, last_name, expiration_date, paused, parent_client_id"
         )
+        .is("archived_at", null)
         .in("parent_client_id", primaryIdsExpiring)
         .eq("paused", false);
 

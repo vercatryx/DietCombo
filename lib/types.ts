@@ -82,6 +82,9 @@ export interface ClientProfile {
   /** Free-form history/notes. Not shown on dashboard, editable in client sidebar. */
   history?: string | null;
 
+  /** Set when client is archived (soft-deleted); hidden from main dashboard until restored. */
+  archivedAt?: string | null;
+
   createdAt: string;
   updatedAt: string;
 }

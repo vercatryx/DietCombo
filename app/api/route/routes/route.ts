@@ -179,7 +179,7 @@ export async function GET(req: Request) {
             const batch = clientIds.slice(i, i + CLIENTS_BATCH);
             const { data } = await supabase
                 .from('clients')
-                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type, status_id')
+                .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type, status_id, archived_at')
                 .in('id', batch);
             if (data) clientsArr.push(...data);
         }
@@ -202,6 +202,7 @@ export async function GET(req: Request) {
         const shouldShowStop = (stop: any) => {
             const client = stop?.userId != null ? clientById.get(String(stop.userId)) : clientById.get(String((stop as any).client_id));
             if (!client) return true; // no client record → show (legacy)
+            if ((client as any).archived_at) return false;
             if (excludeProduce && isProduceServiceType((client as any).service_type)) return false;
             if (isExcludedFromDeliveries(client.paused, client.status_id, statusAllowMap)) return false;
             return isDeliverableClient(client);
@@ -571,7 +572,7 @@ export async function GET(req: Request) {
                     const { data: extraClients } = await supabase
                         .from("clients")
                         .select(
-                            "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type, status_id"
+                            "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, assigned_driver_id, service_type, status_id, archived_at"
                         )
                         .in("id", toLoadClients);
                     for (const c of extraClients || []) {
@@ -842,6 +843,7 @@ export async function GET(req: Request) {
         const allClientsWithDriver = await fetchAllRows((sb: any) =>
             sb.from('clients')
                 .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, dislikes, status_id')
+                .is('archived_at', null)
                 .order('id', { ascending: true })
         );
         

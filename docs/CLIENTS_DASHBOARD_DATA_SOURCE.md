@@ -18,10 +18,10 @@ So the dashboard is not “getting the address from somewhere else.” It’s sh
 | **Page** | `app/clients/page.tsx` → renders `<ClientList />` |
 | **List data** | `components/clients/ClientList.tsx` calls `getClientsPaginated(1, limit, '')` |
 | **Data source** | `lib/actions.ts` → **`getClientsPaginated()`** |
-| **Query** | `supabase.from('clients').select('*', { count: 'exact' })` |
+| **Query** | `supabase.from('clients').select('*', { count: 'exact' })` with **`archived_at` IS NULL** so soft-deleted (archived) rows stay out of the default list |
 | **Mapping** | Each row is passed to **`mapClientFromDB(c)`** in the same file |
 
-So the dashboard list is **pulled from the `clients` table** with `select('*')` (all columns, including `address`, `city`, `state`, `zip`).
+So the dashboard list is **pulled from the `clients` table** with `select('*')` (all columns, including `address`, `city`, `state`, `zip`), excluding soft-deleted clients (`archived_at` set) unless you use the small **Deleted** checkbox above **Add Dependent** in `ClientList`.
 
 ## Individual client profile (`/clients/[id]`)
 

@@ -150,6 +150,7 @@ model Client {
   updatedBy            String?             @map("updated_by") @db.VarChar(510)
   uniteAccount         String?             @map("unite_account") @db.VarChar(50)
   history              String?
+  archivedAt           DateTime?           @map("archived_at") @db.Timestamptz(6)
   client_box_orders       client_box_orders[]
   mealPlannerCustomItems  MealPlannerCustomItem[]
   mealPlannerDateConfigs  MealPlannerDateConfig[]

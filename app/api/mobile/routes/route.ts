@@ -136,11 +136,12 @@ export async function GET(req: Request) {
             }
             const cids = [...new Set(rawStops.map((s: any) => s.client_id).filter(Boolean))];
             const { data: clients } = cids.length > 0
-                ? await supabase.from('clients').select('id, assigned_driver_id, service_type').in('id', cids)
+                ? await supabase.from('clients').select('id, assigned_driver_id, service_type, archived_at').in('id', cids)
                 : { data: [] };
             const clientById = new Map((clients || []).map((c: any) => [String(c.id), c]));
             stops = rawStops.filter((s: any) => {
                 const c = clientById.get(String(s.client_id));
+                if (c?.archived_at) return false;
                 if (c && isProduceServiceType(c.service_type)) return false;
                 const driverId = (c?.assigned_driver_id ?? s?.assigned_driver_id) ? String(c?.assigned_driver_id ?? s.assigned_driver_id) : null;
                 return driverId && driverIds.includes(driverId);
@@ -153,7 +154,7 @@ export async function GET(req: Request) {
         if (stops.length > 0) {
             const cids = [...new Set(stops.map((s: any) => s.client_id).filter(Boolean))];
             const { data: clientsForStops } = cids.length > 0
-                ? await supabase.from('clients').select('id, assigned_driver_id, service_type').in('id', cids)
+                ? await supabase.from('clients').select('id, assigned_driver_id, service_type, archived_at').in('id', cids)
                 : { data: [] };
             (clientsForStops || []).forEach((c: any) => clientByIdForStops.set(String(c.id), c));
         }

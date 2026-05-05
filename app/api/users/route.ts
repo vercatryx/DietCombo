@@ -12,6 +12,7 @@ export async function GET(req: Request) {
         const clients = await fetchAllRows((sb) =>
             sb.from('clients')
                 .select('id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, dislikes, paused, delivery, complex, assigned_driver_id')
+                .is('archived_at', null)
                 .order('id', { ascending: true })
         );
 

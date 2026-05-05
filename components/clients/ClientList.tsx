@@ -92,6 +92,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const [datasetMode, setDatasetMode] = useState<'empty' | 'search' | 'full'>('empty');
     const [isSearchLoading, setIsSearchLoading] = useState(false);
     const [isLoadingAllClients, setIsLoadingAllClients] = useState(false);
+    /** When true, the table lists soft-deleted (`archived_at`) clients only — shown in the UI as "deleted". */
+    const [showDeletedClients, setShowDeletedClients] = useState(false);
 
     const [totalClients, setTotalClients] = useState(0);
     const CLIENT_FETCH_LIMIT = 2000; // Single request loads all clients (avoids many round-trips)
@@ -392,6 +394,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     async function loadAllClientsIntoState() {
         setIsLoadingAllClients(true);
+        setShowDeletedClients(false);
         try {
             await loadReferenceData();
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
@@ -408,8 +411,72 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         }
     }
 
+    async function loadDeletedClientsIntoState() {
+        setIsLoadingAllClients(true);
+        setShowDeletedClients(true);
+        setCurrentView('all');
+        setNeedsVendorFilter(false);
+        try {
+            await loadReferenceData();
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+            const cRes = await getClientsPaginated(
+                1,
+                CLIENT_FETCH_LIMIT,
+                committedSearch.trim(),
+                undefined,
+                { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
+            );
+            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            setClients(clientList);
+            setTotalClients(cRes.total);
+            setDatasetMode('full');
+            hydrateParentNamesForClientList(clientList);
+        } catch (error) {
+            console.error('Error loading deleted clients:', error);
+        } finally {
+            setIsLoadingAllClients(false);
+        }
+    }
+
+    async function reloadDeletedWithSearchQuery(q: string) {
+        if (!showDeletedClients) return;
+        setIsLoadingAllClients(true);
+        try {
+            await loadReferenceData();
+            const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+            const cRes = await getClientsPaginated(
+                1,
+                CLIENT_FETCH_LIMIT,
+                q,
+                undefined,
+                { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
+            );
+            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            setClients(clientList);
+            setTotalClients(cRes.total);
+            hydrateParentNamesForClientList(clientList);
+        } catch (error) {
+            console.error('Error loading deleted clients:', error);
+        } finally {
+            setIsLoadingAllClients(false);
+        }
+    }
+
+    const deletedListToggleBusy =
+        isLoading || isSearchLoading || isLoadingAllClients || isRefreshing;
+
+    function handleDeletedClientsHeaderToggle() {
+        if (deletedListToggleBusy) return;
+        if (showDeletedClients) void loadAllClientsIntoState();
+        else void loadDeletedClientsIntoState();
+    }
+
     function commitSearch() {
-        setCommittedSearch(searchDraft.trim());
+        const q = searchDraft.trim();
+        setCommittedSearch(q);
+        if (showDeletedClients) {
+            void reloadDeletedWithSearchQuery(q);
+        }
     }
 
     function clearSearchFields() {
@@ -679,7 +746,19 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             await loadReferenceData();
 
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
-            if (datasetMode === 'full') {
+            if (datasetMode === 'full' && showDeletedClients) {
+                const cRes = await getClientsPaginated(
+                    1,
+                    CLIENT_FETCH_LIMIT,
+                    committedSearch.trim(),
+                    undefined,
+                    { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
+                );
+                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                setClients(clientList);
+                setTotalClients(cRes.total);
+                hydrateParentNamesForClientList(clientList);
+            } else if (datasetMode === 'full') {
                 const cRes = await getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined);
                 const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
                 setClients(clientList);
@@ -2233,7 +2312,9 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 ? 'Search or load all clients to view the list'
                                 : datasetMode === 'search'
                                   ? `Showing ${clients.length} client${clients.length === 1 ? '' : 's'} (search)`
-                                  : `Total: ${totalRegularClients} clients (${clients.length} / ${totalClients} loaded)`}
+                                  : showDeletedClients
+                                    ? `Deleted: ${totalRegularClients} client${totalRegularClients === 1 ? '' : 's'} (${clients.length} / ${totalClients} loaded)`
+                                    : `Total: ${totalRegularClients} clients (${clients.length} / ${totalClients} loaded)`}
                         </span>
                     )}
                     {isLoading && (
@@ -2294,7 +2375,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button className="btn btn-secondary" onClick={handleExportExcel} title="Download current client list as Excel">
                             <Download size={16} /> Export Excel
                         </button>
@@ -2373,8 +2454,6 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     {isLoadingAllClients ? <Loader2 size={16} className="animate-spin" /> : null}
                     Load all clients
                 </button>
-
-
 
                 {/* Clear All Filters Button */}
                 {(statusFilter || navigatorFilter || screeningFilter || serviceTypeFilter || needsVendorFilter ||
@@ -2540,7 +2619,23 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
             <div className={styles.list}>
                 <div ref={listHeaderRef} className={`${styles.listHeader} ${styles.tableGridRow}`} style={gridRowStyle}>
-                    <TableCell index={0}>#</TableCell>
+                    <TableCell index={0}>
+                        <button
+                            type="button"
+                            className={`${styles.deletedClientsHeaderToggle} ${showDeletedClients ? styles.deletedClientsHeaderToggleOn : ''}`}
+                            onClick={handleDeletedClientsHeaderToggle}
+                            disabled={deletedListToggleBusy}
+                            title={showDeletedClients ? 'Click to hide deleted clients (back to active list)' : 'Click to show deleted clients only'}
+                            aria-pressed={showDeletedClients}
+                            aria-label={showDeletedClients ? 'Hide deleted clients' : 'Show deleted clients'}
+                        >
+                            {showDeletedClients ? (
+                                <span className={styles.deletedClientsHeaderLabel}>Deleted</span>
+                            ) : (
+                                '#'
+                            )}
+                        </button>
+                    </TableCell>
                     <TableCell index={1}>
                         <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                             onClick={() => handleSort('name')}>
@@ -2876,6 +2971,23 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', width: '100%', minWidth: 0 }}>
                                     {isNotAllowed && <span className={styles.redTab}></span>}
                                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{client.fullName}</span>
+                                    {client.archivedAt ? (
+                                        <span
+                                            style={{
+                                                flexShrink: 0,
+                                                fontSize: '0.65rem',
+                                                fontWeight: 800,
+                                                letterSpacing: '0.06em',
+                                                padding: '3px 7px',
+                                                borderRadius: '4px',
+                                                background: '#fecaca',
+                                                color: '#7f1d1d',
+                                                border: '1px solid #f87171',
+                                            }}
+                                        >
+                                            DELETED
+                                        </span>
+                                    ) : null}
                                 </span>
                             </TableCell>
                             <TableCell index={2} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -3046,6 +3158,17 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     onClientUpdated={(updatedClient) => {
                         const id = infoShelfClientId;
                         if (updatedClient && id && updatedClient.id === id) {
+                            if (showDeletedClients && !updatedClient.archivedAt) {
+                                setClients(prev => prev.filter(c => c.id !== id));
+                                setDetailsCache(prev => {
+                                    const next = { ...prev };
+                                    delete next[id];
+                                    return next;
+                                });
+                                setInfoShelfClientId(null);
+                                void refreshDataInBackground();
+                                return;
+                            }
                             // Update only this client in the list and cache (no full reload)
                             setClients(prev => prev.map(c => (c.id === id ? updatedClient : c)));
                             setDetailsCache(prev => ({
@@ -3082,6 +3205,17 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     onClientUpdated={(updatedClient) => {
                         const id = infoShelfDependantId;
                         if (updatedClient && id && updatedClient.id === id) {
+                            if (showDeletedClients && !updatedClient.archivedAt) {
+                                setClients(prev => prev.filter(c => c.id !== id));
+                                setDetailsCache(prev => {
+                                    const next = { ...prev };
+                                    delete next[id];
+                                    return next;
+                                });
+                                setInfoShelfDependantId(null);
+                                void refreshDataInBackground();
+                                return;
+                            }
                             setClients(prev => prev.map(c => (c.id === id ? updatedClient : c)));
                             setDetailsCache(prev => ({
                                 ...prev,

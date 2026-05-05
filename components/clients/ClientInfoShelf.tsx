@@ -7,13 +7,13 @@ import {
     Calendar, DollarSign, StickyNote, Square, CheckSquare,
     Users, FileText, CheckCircle, XCircle, Clock, Download,
     MessageSquare, Pencil, Trash2, Check, Save, Trash, Loader2, Plus,
-    MapPinned
+    MapPinned, RotateCcw
 } from 'lucide-react';
 import { ClientProfile, ClientStatus, Navigator, Submission, ProduceVendor } from '@/lib/types';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { addDependent, getDependentsByParentId, updateClient, deleteClient, recordClientChange, getClientChangeLog, type ClientChangeLogEntry } from '@/lib/actions';
+import { addDependent, getDependentsByParentId, updateClient, deleteClient, unarchiveClient, recordClientChange, getClientChangeLog, type ClientChangeLogEntry } from '@/lib/actions';
 import { getAllClientNumbers, normalizePhone } from '@/lib/phone-utils';
-import { getProduceVendors } from '@/lib/cached-data';
+import { getProduceVendors, getClient, invalidateClientData } from '@/lib/cached-data';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { getSingleForm } from '@/lib/form-actions';
@@ -45,7 +45,7 @@ export function ClientInfoShelf({
     navigators,
     submissions = [],
     allClients = [],
-    currentUserRole,
+    currentUserRole: _currentUserRole,
     onClose,
     onOpenProfile,
     onOpenDependantShelf,
@@ -54,8 +54,7 @@ export function ClientInfoShelf({
 }: ClientInfoShelfProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const brooklynOnly = currentUserRole === 'brooklyn_admin';
-
+    const [restoringClient, setRestoringClient] = useState(false);
     const getInitialEditForm = useCallback((c: ClientProfile) => ({
         fullName: c.fullName,
         dob: c.dob || '',
@@ -108,6 +107,7 @@ export function ClientInfoShelf({
     const [loadingDependents, setLoadingDependents] = useState(false);
     const [localDependents, setLocalDependents] = useState<ClientProfile[]>([]);
     const [deletingDependentId, setDeletingDependentId] = useState<string | null>(null);
+    const [restoringDependentId, setRestoringDependentId] = useState<string | null>(null);
 
     // Screening State
     const [loadingForm, setLoadingForm] = useState(false);
@@ -303,24 +303,25 @@ export function ClientInfoShelf({
         getProduceVendors().then(setProduceVendors);
     }, []);
 
-    // Load dependents from allClients when provided (stable list = no refetch every render). When allClients empty, fetch once per client.id.
-    const lastFetchedParentIdRef = React.useRef<string | null>(null);
+    // Load dependents from allClients when provided (stable list = no refetch every render). When allClients empty, fetch per parent + deleted flag.
+    const lastDependentsFetchKeyRef = React.useRef<string | null>(null);
     useEffect(() => {
+        const fetchKey = `${client.id}:${client.archivedAt ? '1' : '0'}`;
         if (allClients.length > 0) {
             setLocalDependents(allClients.filter(c => c.parentClientId === client.id));
             setLoadingDependents(false);
         } else {
-            if (lastFetchedParentIdRef.current === client.id) return;
-            lastFetchedParentIdRef.current = client.id;
+            if (lastDependentsFetchKeyRef.current === fetchKey) return;
+            lastDependentsFetchKeyRef.current = fetchKey;
             setLoadingDependents(true);
-            getDependentsByParentId(client.id)
+            getDependentsByParentId(client.id, { includeArchived: !!client.archivedAt })
                 .then(setLocalDependents)
                 .catch((error) => {
                     console.error('Error fetching dependents:', error);
                 })
                 .finally(() => setLoadingDependents(false));
         }
-    }, [allClients, client.id]);
+    }, [allClients, client.id, client.archivedAt]);
 
     const status = statuses.find(s => s.id === (isEditing ? editForm.statusId : client.statusId));
     const navigator = navigators.find(n => n.id === (isEditing ? editForm.navigatorId : client.navigatorId));
@@ -453,6 +454,22 @@ export function ClientInfoShelf({
         await handleSaveAndClose();
     };
 
+    const handleRestore = async () => {
+        setRestoringClient(true);
+        try {
+            await unarchiveClient(client.id);
+            invalidateClientData(client.id);
+            invalidateClientData();
+            const refreshed = await getClient(client.id);
+            if (refreshed) onClientUpdated?.(refreshed);
+        } catch (e) {
+            console.error('Restore failed:', e);
+            alert(e instanceof Error ? e.message : 'Failed to restore client.');
+        } finally {
+            setRestoringClient(false);
+        }
+    };
+
     const handleDelete = async () => {
         if (confirm(`Are you sure you want to delete ${client.fullName}? This action cannot be undone.`)) {
             try {
@@ -514,6 +531,24 @@ export function ClientInfoShelf({
         }
     };
 
+    const handleRestoreDependent = async (dep: ClientProfile) => {
+        setRestoringDependentId(dep.id);
+        try {
+            await unarchiveClient(dep.id);
+            invalidateClientData(dep.id);
+            invalidateClientData(client.id);
+            invalidateClientData();
+            const refreshed = await getDependentsByParentId(client.id, { includeArchived: !!client.archivedAt });
+            setLocalDependents(refreshed);
+            if (onClientUpdated) onClientUpdated(undefined);
+        } catch (error) {
+            console.error('Error restoring dependent:', error);
+            alert(error instanceof Error ? error.message : 'Failed to restore dependent');
+        } finally {
+            setRestoringDependentId(null);
+        }
+    };
+
     const handleOpenScreeningForm = async () => {
         setLoadingForm(true);
         try {
@@ -553,7 +588,10 @@ export function ClientInfoShelf({
                             />
                         ) : (
                             <>
-                                <h2>{client.fullName}</h2>
+                                <div className={styles.nameRow}>
+                                    <h2>{client.fullName}</h2>
+                                    {client.archivedAt ? <span className={styles.deletedBadge}>DELETED</span> : null}
+                                </div>
                                 {client.createdAt ? (
                                     <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>
                                         Created {formatDateTimeInAppTz(client.createdAt)}
@@ -583,10 +621,26 @@ export function ClientInfoShelf({
                             </>
                         ) : (
                             <>
-                                <button className={styles.editBtn} onClick={beginEdit}>
-                                    <Pencil size={18} />
-                                </button>
-                                {!brooklynOnly && (
+                                {!client.archivedAt && (
+                                    <button className={styles.editBtn} onClick={beginEdit}>
+                                        <Pencil size={18} />
+                                    </button>
+                                )}
+                                {client.archivedAt && (
+                                    <button
+                                        type="button"
+                                        className={`${styles.editBtn} ${styles.restoreBtn}`}
+                                        onClick={() => void handleRestore()}
+                                        disabled={restoringClient}
+                                        title="Restore to active client list"
+                                        aria-label="Restore client"
+                                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', fontWeight: 600 }}
+                                    >
+                                        {restoringClient ? <Loader2 className="animate-spin" size={16} /> : <RotateCcw size={16} />}
+                                        <span>Restore</span>
+                                    </button>
+                                )}
+                                {!client.archivedAt && (
                                     <button className={styles.deleteBtn} onClick={handleDelete}>
                                         <Trash2 size={18} />
                                     </button>
@@ -1262,7 +1316,10 @@ export function ClientInfoShelf({
                                             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                                         >
                                             <div style={{ flex: 1, minWidth: 0 }}>
-                                                <div className={styles.depName}>{dep.fullName}</div>
+                                                <div className={styles.depName} style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                                    <span>{dep.fullName}</span>
+                                                    {dep.archivedAt ? <span className={styles.deletedBadge}>DELETED</span> : null}
+                                                </div>
                                                 <div className={styles.depInfo}>
                                                     {dep.dob && <span>DOB: {new Date(dep.dob).toLocaleDateString()}</span>}
                                                     {dep.cin && <span> | CIN: {dep.cin}</span>}
@@ -1281,7 +1338,27 @@ export function ClientInfoShelf({
                                             >
                                                 <Pencil size={14} />
                                             </button>
-                                            {!brooklynOnly && (
+                                            {dep.archivedAt ? (
+                                                <button
+                                                    type="button"
+                                                    className={`btn btn-secondary btn-sm ${styles.restoreBtn}`}
+                                                    style={{ flexShrink: 0, padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600, fontSize: '0.75rem' }}
+                                                    title="Restore dependent"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        void handleRestoreDependent(dep);
+                                                    }}
+                                                    disabled={restoringDependentId === dep.id}
+                                                    aria-label={`Restore ${dep.fullName}`}
+                                                >
+                                                    {restoringDependentId === dep.id ? (
+                                                        <Loader2 size={14} className="animate-spin" />
+                                                    ) : (
+                                                        <RotateCcw size={14} />
+                                                    )}
+                                                    <span>Restore</span>
+                                                </button>
+                                            ) : (
                                                 <button
                                                     type="button"
                                                     className="btn btn-secondary btn-sm"

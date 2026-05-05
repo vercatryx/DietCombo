@@ -57,11 +57,12 @@ export default async function middleware(request: NextRequest) {
 
   // Role-based redirects when user is logged in
   if (session?.userId) {
-    // Brooklyn admin: Client Dashboard (Brooklyn), Routes, Meal Plan Edits, admin client portal (Brooklyn clients only — page enforces). No Orders, Billing, general Admin.
+    // Brooklyn admin: Client Dashboard (Brooklyn), Orders (Brooklyn clients only — server actions filter), Routes, Meal Plan Edits, admin client portal. No Billing, general Admin.
     if (session.role === 'brooklyn_admin') {
       const allowed =
         path === '/' ||
         path.startsWith('/clients') ||
+        path.startsWith('/orders') ||
         path.startsWith('/routes') ||
         path.startsWith('/meal-plan-edits') ||
         path.startsWith('/admin/client-portal');

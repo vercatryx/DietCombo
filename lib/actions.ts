@@ -1290,7 +1290,8 @@ async function getMealPlannerClientIds(): Promise<string[]> {
     const { data: rows, error } = await supabaseAdmin
         .from('clients')
         .select('id, service_type')
-        .not('service_type', 'is', null);
+        .not('service_type', 'is', null)
+        .is('archived_at', null);
     if (error) {
         logQueryError(error, 'clients', 'select');
         return [];
@@ -1314,7 +1315,8 @@ async function getFoodClientIds(): Promise<string[]> {
     const { data: rows, error } = await supabase
         .from('clients')
         .select('id, service_type')
-        .not('service_type', 'is', null);
+        .not('service_type', 'is', null)
+        .is('archived_at', null);
     if (error) {
         logQueryError(error, 'clients', 'select');
         return [];
@@ -1342,7 +1344,8 @@ async function getFoodClientIdsAdmin(): Promise<string[]> {
     const { data: rows, error } = await supabaseAdmin
         .from('clients')
         .select('id, service_type')
-        .not('service_type', 'is', null);
+        .not('service_type', 'is', null)
+        .is('archived_at', null);
     if (error) {
         logQueryError(error, 'clients', 'select');
         return [];
@@ -2245,7 +2248,8 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
         let clientsQuery = supabaseClient
             .from('clients')
             .select('id, full_name, meal_planner_data')
-            .not('meal_planner_data', 'is', null);
+            .not('meal_planner_data', 'is', null)
+            .is('archived_at', null);
         if (brooklynOnly) {
             clientsQuery = clientsQuery.eq('unite_account', 'Brooklyn');
         }
@@ -2328,7 +2332,8 @@ export async function getMealPlanEditCountsByMonth(startDate: string, endDate: s
         let fallbackQuery = supabaseClient
             .from('clients')
             .select('id, meal_planner_data')
-            .not('meal_planner_data', 'is', null);
+            .not('meal_planner_data', 'is', null)
+            .is('archived_at', null);
         if (brooklynOnly) {
             fallbackQuery = fallbackQuery.eq('unite_account', 'Brooklyn');
         }
@@ -4135,6 +4140,7 @@ function mapClientFromDB(c: any): ClientProfile {
         mealPlannerData: c.meal_planner_data ?? null,
         uniteAccount: c.unite_account || null,
         history: c.history || null,
+        archivedAt: c.archived_at ?? null,
         createdAt: c.created_at,
         updatedAt: c.updated_at
     };
@@ -4166,7 +4172,7 @@ export async function getClientNamesByIds(ids: string[]): Promise<Record<string,
 
 export async function getClients() {
     try {
-        const { data, error } = await supabase.from('clients').select('*');
+        const { data, error } = await supabase.from('clients').select('*').is('archived_at', null);
         if (error) {
             logQueryError(error, 'clients');
             return [];
@@ -4221,6 +4227,7 @@ export async function getClientsForAdmin(supabaseClient: { from: (table: string)
         const { data, error } = await supabaseClient
             .from('clients')
             .select('*')
+            .is('archived_at', null)
             .range(offset, offset + PAGE_SIZE - 1)
             .order('id', { ascending: true });
 
@@ -4650,6 +4657,7 @@ export async function getRegularClients() {
             .from('clients')
             .select('*')
             .is('parent_client_id', null)
+            .is('archived_at', null)
             .order('full_name');
         
         if (error) return [];
@@ -4662,6 +4670,7 @@ export async function getRegularClients() {
             const { data: allData } = await supabase
                 .from('clients')
                 .select('*')
+                .is('archived_at', null)
                 .order('full_name');
             return (allData || []).map(mapClientFromDB);
         } catch (allError) {
@@ -4671,13 +4680,16 @@ export async function getRegularClients() {
     }
 }
 
-export async function getDependentsByParentId(parentClientId: string) {
+export async function getDependentsByParentId(parentClientId: string, options?: { includeArchived?: boolean }) {
     try {
-        const { data, error } = await supabase
+        let q = supabase
             .from('clients')
             .select('*')
-            .eq('parent_client_id', parentClientId)
-            .order('full_name');
+            .eq('parent_client_id', parentClientId);
+        if (!options?.includeArchived) {
+            q = q.is('archived_at', null);
+        }
+        const { data, error } = await q.order('full_name');
         
         if (error) return [];
         if (!data) return [];
@@ -4693,6 +4705,16 @@ export async function getDependentsByParentId(parentClientId: string) {
 }
 
 export async function updateClient(id: string, data: Partial<ClientProfile>, options?: { skipOrderSync?: boolean }) {
+    const { data: existingRow, error: existingErr } = await supabase
+        .from('clients')
+        .select('archived_at')
+        .eq('id', id)
+        .maybeSingle();
+    handleError(existingErr, 'updateClient precheck');
+    if (existingRow?.archived_at) {
+        throw new Error('This client is deleted from the main list. Restore the client before making changes.');
+    }
+
     const payload: any = {};
     if (data.fullName) payload.full_name = data.fullName;
     if (data.email !== undefined) payload.email = data.email;
@@ -4832,219 +4854,57 @@ export async function updateClientDietaryDislikes(clientId: string, desired: Die
     return updated ?? null;
 }
 
+/**
+ * Soft-delete: archives the client (sets archived_at) and hides them from the main dashboard.
+ * Preserves orders, billing, stops, and all related data. UI still calls this `deleteClient`.
+ * Parent archive also archives all current dependents; dependent-only archives that row only.
+ */
 export async function deleteClient(id: string) {
-    // First, get all dependents of this client (if it's a parent client)
-    const { data: dependents } = await supabase
+    const now = new Date().toISOString();
+    const { data: row, error: fetchErr } = await supabase
         .from('clients')
-        .select('id')
-        .eq('parent_client_id', id);
+        .select('id, parent_client_id')
+        .eq('id', id)
+        .maybeSingle();
+    handleError(fetchErr, 'deleteClient fetch');
+    if (!row) return;
 
-    // Delete all dependents first (cascade delete)
-    // Dependents cannot have their own dependents (enforced in addDependent),
-    // so we can safely delete them directly
-    if (dependents && dependents.length > 0) {
-        const dependentIds = dependents.map(d => d.id);
-
-        // Delete upcoming orders for all dependents
-        const { error: depUpcomingErr } = await supabase
-            .from('upcoming_orders')
-            .delete()
-            .in('client_id', dependentIds);
-        handleError(depUpcomingErr, 'deleteClient dependents upcoming_orders');
-
-        // Delete meal planner data for dependents
-        const { data: depMpo } = await supabase.from('meal_planner_orders').select('id').in('client_id', dependentIds);
-        const depMpoIds = (depMpo ?? []).map((r: { id: string }) => r.id);
-        if (depMpoIds.length > 0) {
-            const { error: em } = await supabase.from('meal_planner_order_items').delete().in('meal_planner_order_id', depMpoIds);
-            handleError(em, 'deleteClient dependents meal_planner_order_items');
-            const { error: em2 } = await supabase.from('meal_planner_orders').delete().in('client_id', dependentIds);
-            handleError(em2, 'deleteClient dependents meal_planner_orders');
-        }
-
-        // Fetch all order IDs for dependents and delete child rows then orders
-        const { data: depOrders } = await supabase
-            .from('orders')
-            .select('id')
-            .in('client_id', dependentIds);
-        const depOrderIds = (depOrders ?? []).map((o: { id: string }) => o.id);
-        if (depOrderIds.length > 0) {
-            const { data: depSelections } = await supabase
-                .from('order_vendor_selections')
-                .select('id')
-                .in('order_id', depOrderIds);
-            const depSelectionIds = (depSelections ?? []).map((s: { id: string }) => s.id);
-            if (depSelectionIds.length > 0) {
-                const { error: e } = await supabase.from('order_items').delete().in('vendor_selection_id', depSelectionIds);
-                handleError(e, 'deleteClient dependents order_items');
-            }
-            const { error: e2 } = await supabase.from('order_box_selections').delete().in('order_id', depOrderIds);
-            handleError(e2, 'deleteClient dependents order_box_selections');
-            const { error: e3 } = await supabase.from('order_vendor_selections').delete().in('order_id', depOrderIds);
-            handleError(e3, 'deleteClient dependents order_vendor_selections');
-        }
-        const { error: depBillingErr } = await supabase.from('billing_records').delete().in('client_id', dependentIds);
-        handleError(depBillingErr, 'deleteClient dependents billing_records');
-        const { error: depOrdersErr } = await supabase.from('orders').delete().in('client_id', dependentIds);
-        handleError(depOrdersErr, 'deleteClient dependents orders');
-
-        // Delete other client-referencing data for dependents
-        const { error: e4 } = await supabase.from('delivery_history').delete().in('client_id', dependentIds);
-        handleError(e4, 'deleteClient dependents delivery_history');
-        const { error: e5 } = await supabase.from('order_history').delete().in('client_id', dependentIds);
-        handleError(e5, 'deleteClient dependents order_history');
-        const { error: e6 } = await supabase.from('navigator_logs').delete().in('client_id', dependentIds);
-        handleError(e6, 'deleteClient dependents navigator_logs');
-        const { error: e7 } = await supabase.from('signatures').delete().in('client_id', dependentIds);
-        handleError(e7, 'deleteClient dependents signatures');
-        const { error: e8 } = await supabase.from('schedules').delete().in('client_id', dependentIds);
-        handleError(e8, 'deleteClient dependents schedules');
-        const { error: e9 } = await supabase.from('stops').delete().in('client_id', dependentIds);
-        handleError(e9, 'deleteClient dependents stops');
-
-        const { error: e10 } = await supabase.from('client_box_orders').delete().in('client_id', dependentIds);
-        handleError(e10, 'deleteClient dependents client_box_orders');
-
-        // Delete form submissions for all dependents
-        const { error: depFormsErr } = await supabase
-            .from('form_submissions')
-            .delete()
-            .in('client_id', dependentIds);
-        handleError(depFormsErr, 'deleteClient dependents form_submissions');
-
-        // Delete all dependents
-        const { error: depClientsErr } = await supabase
+    const idsToArchive: string[] = [id];
+    if (!row.parent_client_id) {
+        const { data: dependents, error: depFetchErr } = await supabase
             .from('clients')
-            .delete()
-            .in('id', dependentIds);
-        handleError(depClientsErr, 'deleteClient dependents');
-    }
-
-    // Delete all upcoming orders for this client
-    const { error: upcomingErr } = await supabase
-        .from('upcoming_orders')
-        .delete()
-        .eq('client_id', id);
-    handleError(upcomingErr, 'deleteClient upcoming_orders');
-
-    // Delete meal planner data for this client (items first, then orders)
-    const { data: mpoRows } = await supabase.from('meal_planner_orders').select('id').eq('client_id', id);
-    const mpoIds = (mpoRows ?? []).map((r: { id: string }) => r.id);
-    if (mpoIds.length > 0) {
-        const { error: mpoItemsErr } = await supabase.from('meal_planner_order_items').delete().in('meal_planner_order_id', mpoIds);
-        handleError(mpoItemsErr, 'deleteClient meal_planner_order_items');
-        const { error: mpoErr } = await supabase.from('meal_planner_orders').delete().eq('client_id', id);
-        handleError(mpoErr, 'deleteClient meal_planner_orders');
-    }
-
-    // Fetch all order IDs for this client (all statuses) so we can delete child rows and avoid FK blocks
-    const { data: clientOrders } = await supabase
-        .from('orders')
-        .select('id')
-        .eq('client_id', id);
-    const orderIds = (clientOrders ?? []).map((o: { id: string }) => o.id);
-
-    if (orderIds.length > 0) {
-        // Get order_vendor_selections for these orders (order_items reference these)
-        const { data: selections } = await supabase
-            .from('order_vendor_selections')
             .select('id')
-            .in('order_id', orderIds);
-        const selectionIds = (selections ?? []).map((s: { id: string }) => s.id);
-        if (selectionIds.length > 0) {
-            const { error: orderItemsErr } = await supabase
-                .from('order_items')
-                .delete()
-                .in('vendor_selection_id', selectionIds);
-            handleError(orderItemsErr, 'deleteClient order_items');
-        }
-        const { error: boxSelErr } = await supabase
-            .from('order_box_selections')
-            .delete()
-            .in('order_id', orderIds);
-        handleError(boxSelErr, 'deleteClient order_box_selections');
-        const { error: vendorSelErr } = await supabase
-            .from('order_vendor_selections')
-            .delete()
-            .in('order_id', orderIds);
-        handleError(vendorSelErr, 'deleteClient order_vendor_selections');
+            .eq('parent_client_id', id);
+        handleError(depFetchErr, 'deleteClient dependents fetch');
+        for (const d of dependents || []) idsToArchive.push(d.id);
     }
 
-    // Delete billing_records that reference this client (or their orders)
-    const { error: billingErr } = await supabase
-        .from('billing_records')
-        .delete()
-        .eq('client_id', id);
-    handleError(billingErr, 'deleteClient billing_records');
-
-    // Delete all orders for this client (all statuses) so client row can be removed
-    const { error: ordersErr } = await supabase
-        .from('orders')
-        .delete()
-        .eq('client_id', id);
-    handleError(ordersErr, 'deleteClient orders');
-
-    // Delete other client-referencing tables so FK does not block client delete
-    const { error: deliveryHistErr } = await supabase
-        .from('delivery_history')
-        .delete()
-        .eq('client_id', id);
-    handleError(deliveryHistErr, 'deleteClient delivery_history');
-
-    const { error: orderHistErr } = await supabase
-        .from('order_history')
-        .delete()
-        .eq('client_id', id);
-    handleError(orderHistErr, 'deleteClient order_history');
-
-    const { error: navLogsErr } = await supabase
-        .from('navigator_logs')
-        .delete()
-        .eq('client_id', id);
-    handleError(navLogsErr, 'deleteClient navigator_logs');
-
-    const { error: sigErr } = await supabase
-        .from('signatures')
-        .delete()
-        .eq('client_id', id);
-    handleError(sigErr, 'deleteClient signatures');
-
-    const { error: schedErr } = await supabase
-        .from('schedules')
-        .delete()
-        .eq('client_id', id);
-    handleError(schedErr, 'deleteClient schedules');
-
-    const { error: stopsErr } = await supabase
-        .from('stops')
-        .delete()
-        .eq('client_id', id);
-    handleError(stopsErr, 'deleteClient stops');
-
-    const { error: boxOrdersErr } = await supabase
-        .from('client_box_orders')
-        .delete()
-        .eq('client_id', id);
-    handleError(boxOrdersErr, 'deleteClient client_box_orders');
-
-    // Delete form submissions for this client
-    const { error: formsErr } = await supabase
-        .from('form_submissions')
-        .delete()
-        .eq('client_id', id);
-    handleError(formsErr, 'deleteClient form_submissions');
-
-    // Delete the client
-    // Note: Client IDs are generated identifiers (e.g. CLIENT-XXX) which CAN be reused after deletion.
-    // We must ensure the local cache is synced to remove any stale data associated with this ID.
-    const { error: clientErr } = await supabase
+    const { error: updErr } = await supabase
         .from('clients')
-        .delete()
-        .eq('id', id);
-    handleError(clientErr, 'deleteClient clients');
-    revalidatePath('/clients');
+        .update({ archived_at: now, assigned_driver_id: null })
+        .in('id', idsToArchive);
+    handleError(updErr, 'deleteClient archive');
 
-    // Trigger local DB sync in background to remove deleted client data from cache
+    const { error: droErr } = await supabase.from('driver_route_order').delete().in('client_id', idsToArchive);
+    if (droErr && droErr.code !== '42P01') {
+        handleError(droErr, 'deleteClient driver_route_order');
+    }
+
+    revalidatePath('/clients');
+    revalidatePath(`/clients/${id}`);
+    for (const cid of idsToArchive) {
+        if (cid !== id) revalidatePath(`/clients/${cid}`);
+    }
+
+    const { triggerSyncInBackground } = await import('./local-db');
+    triggerSyncInBackground();
+}
+
+export async function unarchiveClient(id: string) {
+    const { error } = await supabase.from('clients').update({ archived_at: null }).eq('id', id);
+    handleError(error, 'unarchiveClient');
+    revalidatePath('/clients');
+    revalidatePath(`/clients/${id}`);
     const { triggerSyncInBackground } = await import('./local-db');
     triggerSyncInBackground();
 }
@@ -5053,7 +4913,7 @@ export async function deleteClient(id: string) {
 
 export async function generateDeliveriesForDate(dateStr: string) {
     // Fetch required data
-    const { data: clients } = await supabase.from('clients').select('*');
+    const { data: clients } = await supabase.from('clients').select('*').is('archived_at', null);
     const { data: vendors } = await supabase.from('vendors').select('*');
     const { data: boxTypes } = await supabase.from('box_types').select('*');
     const { data: existingHistory } = await supabase
@@ -9189,15 +9049,26 @@ export async function getNavigatorLogs(navigatorId: string) {
 
 // --- OPTIMIZED ACTIONS ---
 
-export async function getClientsPaginated(page: number, pageSize: number, searchQuery: string = '', filter?: 'needs-vendor', options?: { brooklynOnly?: boolean }) {
+export async function getClientsPaginated(
+    page: number,
+    pageSize: number,
+    searchQuery: string = '',
+    filter?: 'needs-vendor',
+    options?: { brooklynOnly?: boolean; archivedOnly?: boolean }
+) {
     try {
+        if (options?.archivedOnly && filter === 'needs-vendor') {
+            return { clients: [], total: 0 };
+        }
+
         // If filtering for clients needing vendor assignment, get Boxes clients whose vendor is not set
         if (filter === 'needs-vendor') {
             // First, get all clients with service_type = 'Boxes'
             const { data: allBoxesClients } = await supabase
                 .from('clients')
                 .select('id')
-                .eq('service_type', 'Boxes');
+                .eq('service_type', 'Boxes')
+                .is('archived_at', null);
 
             if (!allBoxesClients || allBoxesClients.length === 0) {
                 return { clients: [], total: 0 };
@@ -9303,7 +9174,8 @@ export async function getClientsPaginated(page: number, pageSize: number, search
             let clientsQuery = supabase
                 .from('clients')
                 .select('*', { count: 'exact' })
-                .in('id', clientIdsNeedingVendor);
+                .in('id', clientIdsNeedingVendor)
+                .is('archived_at', null);
 
             if (searchQuery) {
                 clientsQuery = clientsQuery.ilike('full_name', `%${searchQuery}%`);
@@ -9342,6 +9214,11 @@ export async function getClientsPaginated(page: number, pageSize: number, search
         const endRow = page * pageSize - 1;
 
         let baseQuery = supabase.from('clients').select('*', { count: 'exact' });
+        if (options?.archivedOnly) {
+            baseQuery = baseQuery.not('archived_at', 'is', null);
+        } else {
+            baseQuery = baseQuery.is('archived_at', null);
+        }
         if (options?.brooklynOnly) {
             baseQuery = baseQuery.eq('unite_account', 'Brooklyn');
         }
@@ -9593,7 +9470,9 @@ export async function getClientProfilePageData(clientId: string) {
             getBillingHistory(clientId),
             getUpcomingOrderForClient(clientId, caseId),
             getOrderHistory(clientId, caseId),
-            !client.parentClientId ? getDependentsByParentId(client.id) : Promise.resolve([]),
+            !client.parentClientId
+                ? getDependentsByParentId(client.id, { includeArchived: !!client.archivedAt })
+                : Promise.resolve([]),
             client.serviceType === 'Boxes' ? getClientBoxOrder(clientId) : Promise.resolve(null),
             getClientSubmissions(clientId),
             client.serviceType === 'Food' ? getClientMealPlannerData(clientId) : Promise.resolve([])
@@ -9657,7 +9536,7 @@ export async function getClientPortalPageData(clientId: string, opts?: { include
             getMenuItems(),
             getBoxTypes(),
             getCategories(),
-            getDependentsByParentId(parentId),
+            getDependentsByParentId(parentId, { includeArchived: !!client.archivedAt }),
             parentId === client.id ? Promise.resolve(client) : getClient(parentId)
         ]);
 

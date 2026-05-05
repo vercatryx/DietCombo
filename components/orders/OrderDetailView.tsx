@@ -9,9 +9,11 @@ import type { OrderDetail } from '@/lib/types-orders-billing';
 
 interface OrderDetailViewProps {
     order: OrderDetail;
+    /** When false, hides delete (e.g. Brooklyn admins). */
+    showDelete?: boolean;
 }
 
-export function OrderDetailView({ order }: OrderDetailViewProps) {
+export function OrderDetailView({ order, showDelete = true }: OrderDetailViewProps) {
     const router = useRouter();
     const [isDeleting, setIsDeleting] = useState(false);
 
@@ -143,9 +145,11 @@ export function OrderDetailView({ order }: OrderDetailViewProps) {
                         <span className={getStatusStyle(order.status)}>{formatStatus(order.status)}</span>
                     </div>
                 </div>
-                <button type="button" className={styles.deleteBtn} onClick={handleDelete} disabled={isDeleting}>
-                    {isDeleting ? <><Loader2 size={18} className="animate-spin" /> Deleting...</> : <><Trash2 size={18} /> Delete Order</>}
-                </button>
+                {showDelete && (
+                    <button type="button" className={styles.deleteBtn} onClick={handleDelete} disabled={isDeleting}>
+                        {isDeleting ? <><Loader2 size={18} className="animate-spin" /> Deleting...</> : <><Trash2 size={18} /> Delete Order</>}
+                    </button>
+                )}
             </div>
             <div className={styles.content}>
                 <div className={styles.sections}>

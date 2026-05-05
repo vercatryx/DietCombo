@@ -72,7 +72,7 @@ export function BrooklynAdminManagement() {
         <div className={styles.container}>
             <h2 className={styles.title}>Brooklyn Admins</h2>
             <p className={styles.adminDate} style={{ marginBottom: '1rem' }}>
-                These accounts can only see the Client Dashboard (Brooklyn clients), Routes (Brooklyn), and Meal Plan Edits (Brooklyn). They cannot access Orders, Billing, or Admin.
+                These accounts can only see the Client Dashboard (Brooklyn clients), Orders (Brooklyn clients only; same list as admins but cannot delete), Routes (Brooklyn), and Meal Plan Edits (Brooklyn). They cannot access Billing, Pending screenings, or general Admin.
             </p>
 
             <div className={styles.list}>

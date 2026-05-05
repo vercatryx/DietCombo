@@ -69,14 +69,15 @@
 
 .listHeader {
     display: grid;
-    grid-template-columns: 50px 40px 100px 2fr 1fr 1.5fr 1fr 1.5fr 1.5fr 40px;
+    /* Order # wide enough for 7+ digit numbers next to client names */
+    grid-template-columns: 50px 40px minmax(7.5rem, 8.5rem) minmax(0, 2fr) 1fr 1.5fr 1fr 1.5fr 1.5fr 40px;
     padding: var(--spacing-md, 1rem);
     background-color: var(--bg-surface-hover, #f0f0f0);
     border-bottom: 1px solid var(--border-color, #ddd);
     font-weight: 600;
     color: var(--text-secondary, #555);
     font-size: 0.875rem;
-    min-width: 1050px;
+    min-width: 1100px;
     gap: 1rem;
     align-items: center;
 }
@@ -84,11 +85,11 @@
 .row {
     position: relative;
     display: grid;
-    grid-template-columns: 50px 40px 100px 2fr 1fr 1.5fr 1fr 1.5fr 1.5fr 40px;
+    grid-template-columns: 50px 40px minmax(7.5rem, 8.5rem) minmax(0, 2fr) 1fr 1.5fr 1fr 1.5fr 1.5fr 40px;
     padding: var(--spacing-md, 1rem);
     border-bottom: 1px solid var(--border-color, #ddd);
     align-items: center;
-    min-width: 1050px;
+    min-width: 1100px;
     gap: 1rem;
 }
 
@@ -105,7 +106,7 @@
 }
 
 /* Keep the checkbox clickable above the overlay link */
-.row > span:first-child {
+.checkboxCell {
     position: relative;
     z-index: 3;
 }

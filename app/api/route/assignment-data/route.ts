@@ -27,6 +27,7 @@ export async function GET(req: Request) {
                 .select(
                     "id, first_name, last_name, full_name, address, apt, city, state, zip, phone_number, lat, lng, paused, delivery, assigned_driver_id, parent_client_id, service_type, status_id"
                 )
+                .is("archived_at", null)
                 .eq("paused", false)
                 .or("delivery.is.null,delivery.eq.true");
             if (brooklynOnly) {
@@ -39,7 +40,8 @@ export async function GET(req: Request) {
         const statsRows = await fetchAllRows((sb) => {
             let q = sb
                 .from("clients")
-                .select("id, parent_client_id, service_type, paused, delivery, lat, lng, status_id");
+                .select("id, parent_client_id, service_type, paused, delivery, lat, lng, status_id")
+                .is("archived_at", null);
             if (brooklynOnly) {
                 q = q.eq("unite_account", "Brooklyn");
             }

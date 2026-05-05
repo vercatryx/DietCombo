@@ -42,6 +42,41 @@
     color: var(--text-primary);
 }
 
+.nameRow {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.nameRow h2 {
+    margin: 0;
+}
+
+.deletedBadge {
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: #fecaca;
+    color: #7f1d1d;
+    border: 1px solid #f87171;
+    flex-shrink: 0;
+    line-height: 1.2;
+}
+
+.restoreBtn {
+    color: #15803d;
+    opacity: 0.85;
+}
+
+.restoreBtn:hover {
+    background-color: rgba(34, 197, 94, 0.12);
+    opacity: 1;
+}
+
 .titleSection .portalLink {
     display: block;
     font-size: 0.875rem;

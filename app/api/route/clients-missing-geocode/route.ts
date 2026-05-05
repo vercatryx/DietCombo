@@ -27,6 +27,7 @@ export async function GET() {
                 .select(
                     "id, first_name, last_name, full_name, address, apt, city, state, zip, lat, lng, parent_client_id, paused, delivery, status_id"
                 )
+                .is("archived_at", null)
                 .eq("paused", false)
                 .or("delivery.is.null,delivery.eq.true")
                 .or("lat.is.null,lng.is.null");

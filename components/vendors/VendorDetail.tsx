@@ -17,7 +17,6 @@ import {
     orderHasDeliveryProof,
     resolveOrderId,
     getClientsWhoChangedFromDefaultForDate,
-    getDefaultOrderTemplate,
 } from '@/lib/actions';
 import { ArrowLeft, Truck, Calendar, Package, CheckCircle, XCircle, Clock, User, DollarSign, ShoppingCart, Download, ChevronDown, ChevronUp, FileText, X, AlertCircle, LogOut, FileSpreadsheet, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -585,7 +584,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 return items.map((item: any) => {
                     const itemName = getFoodItemDisplayName(item);
                     const quantity = parseInt(item.quantity || 0);
-                    return `${itemName} (Qty: ${quantity})`;
+                    return `${itemName} *${quantity}`;
                 }).join('; ');
             }
             return 'No items';
@@ -613,7 +612,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
 
             if (validItemEntries.length === 0) {
                 const boxTypeName = getBoxTypeName(boxSelection.box_type_id);
-                return `Box Type: ${boxTypeName} (Quantity: ${boxSelection.quantity || 1})`;
+                const bq = boxSelection.quantity || 1;
+                return `Box Type: ${boxTypeName} *${bq}`;
             }
             const boxTypeName = getBoxTypeName(boxSelection.box_type_id);
             const itemStrings = validItemEntries.map(([itemId, quantityOrObj]: [string, any]) => {
@@ -630,9 +630,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     qty = parseInt(quantityOrObj) || 0;
                 }
 
-                return `${itemName} (Qty: ${qty})`;
+                return `${itemName} *${qty}`;
             });
-            return `Box Type: ${boxTypeName} (Box Qty: ${boxSelection.quantity || 1}); Items: ${itemStrings.join('; ')}`;
+            const boxQty = boxSelection.quantity || 1;
+            return `Box Type: ${boxTypeName} *${boxQty}; Items: ${itemStrings.join('; ')}`;
         } else if (order.service_type === 'Equipment') {
             // Equipment orders - details from equipmentSelection or notes
             let equipmentDetails = order.equipmentSelection;
@@ -1161,64 +1162,6 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const ordersNonComplexAlt = ordersForLabelsAlt.filter((o: any) => !isEditedAlt(o) && !isComplexAlt(o));
             const ordersComplexAlt = ordersForLabelsAlt.filter((o: any) => !isEditedAlt(o) && isComplexAlt(o));
 
-            // Fetch default order template for "that day" so right label can show only items changed from default
-            const defaultTemplate = await getDefaultOrderTemplate('Food');
-            const defaultQtyForVendor: Record<string, number> = {};
-            if (defaultTemplate && typeof defaultTemplate === 'object' && vendorId) {
-                const dayName = dateKey && dateKey !== 'no-date'
-                    ? new Date(dateKey + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })
-                    : null;
-                const ddo = defaultTemplate.deliveryDayOrders ?? defaultTemplate.delivery_day_orders;
-                const vsTop = defaultTemplate.vendorSelections ?? defaultTemplate.vendor_selections ?? [];
-                let vendorVs: { items?: Record<string, number> } | null = null;
-                if (ddo && typeof ddo === 'object' && dayName && (ddo as any)[dayName]) {
-                    const arr = (ddo as any)[dayName]?.vendorSelections ?? (ddo as any)[dayName]?.vendor_selections ?? [];
-                    vendorVs = Array.isArray(arr) ? arr.find((v: any) => v?.vendorId === vendorId) ?? null : null;
-                }
-                if (!vendorVs && Array.isArray(vsTop)) {
-                    vendorVs = vsTop.find((v: any) => v?.vendorId === vendorId) ?? null;
-                }
-                if (!vendorVs && ddo && typeof ddo === 'object') {
-                    const firstDay = Object.keys(ddo)[0];
-                    const arr = (ddo as any)[firstDay]?.vendorSelections ?? (ddo as any)[firstDay]?.vendor_selections ?? [];
-                    vendorVs = Array.isArray(arr) ? arr.find((v: any) => v?.vendorId === vendorId) ?? null : null;
-                }
-                if (vendorVs?.items && typeof vendorVs.items === 'object') {
-                    for (const [id, qty] of Object.entries(vendorVs.items)) {
-                        if (id != null && id !== '') defaultQtyForVendor[id] = Number(qty) || 0;
-                    }
-                }
-            }
-
-            /** Right label only: show items that differ from the default order for this vendor/day. */
-            function formatOrderedItemsChangesOnly(order: any): string {
-                if (order.service_type !== 'Food') {
-                    return formatOrderedItemsForCSVWithClient(order, clientById.get(order.client_id));
-                }
-                const orderQtyById = new Map<string, number>();
-                const orderItemById = new Map<string, any>();
-                for (const item of order.items || []) {
-                    const id = item.menu_item_id ?? item.meal_item_id;
-                    if (id != null) {
-                        orderQtyById.set(id, parseInt(item.quantity || 0));
-                        orderItemById.set(id, item);
-                    }
-                }
-                const allIds = new Set([...orderQtyById.keys(), ...Object.keys(defaultQtyForVendor)]);
-                const changedItems: any[] = [];
-                for (const id of allIds) {
-                    const orderQty = orderQtyById.get(id) ?? 0;
-                    const defaultQty = defaultQtyForVendor[id] ?? 0;
-                    if (orderQty !== defaultQty) {
-                        const existing = orderItemById.get(id);
-                        changedItems.push(existing ? { ...existing, quantity: orderQty } : { menu_item_id: id, quantity: orderQty });
-                    }
-                }
-                if (changedItems.length === 0) return 'No changes from default';
-                const filtered = { ...order, items: changedItems };
-                return formatOrderedItemsForCSVWithClient(filtered, clientById.get(order.client_id));
-            }
-
             const commonOptsAlt = {
                 getClientName: getClientNameForExportAlt,
                 getClientAddress: getClientAddressForExportAlt,
@@ -1233,8 +1176,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 vendorName: vendor?.name,
                 deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
                 getDriverInfo: getDriverInfoForOrderAlt,
-                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? '',
-                formatOrderedItemsForRightLabel: formatOrderedItemsChangesOnly
+                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
             };
             if (ordersNonComplexAlt.length > 0) {
                 await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersNonComplexAlt });
@@ -1829,22 +1771,22 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                                             <FileText size={14} /> Labels – address + order details (2 per customer)
                                                         </button>
                                                         <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport((dk, o) => exportExcelForDate(dk, o, 'breakdown'))}>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport((dk, o) => exportExcelForDate(dk, o, 'breakdown')).finally(() => setIsExporting(false)), 0); }}>
                                                                 <FileSpreadsheet size={14} /> Breakdown Excel
                                                             </button>
-                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportBreakdownPDFForDate)}>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport(exportBreakdownPDFForDate).finally(() => setIsExporting(false)), 0); }}>
                                                                 <FileText size={14} /> Breakdown PDF
                                                             </button>
                                                         </div>
                                                         <div style={{ display: 'flex', gap: '0.35rem' }}>
-                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport((dk, o) => exportExcelForDate(dk, o, 'cooking'))}>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport((dk, o) => exportExcelForDate(dk, o, 'cooking')).finally(() => setIsExporting(false)), 0); }}>
                                                                 <FileSpreadsheet size={14} /> Cooking Excel
                                                             </button>
-                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport(exportCookingPDFForDate)}>
+                                                            <button className="btn btn-secondary" style={{ flex: 1, fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport(exportCookingPDFForDate).finally(() => setIsExporting(false)), 0); }}>
                                                                 <FileText size={14} /> Cooking PDF
                                                             </button>
                                                         </div>
-                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => runExport((dk, o) => exportExcelForDate(dk, o, 'combined'))}>
+                                                        <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => runExport((dk, o) => exportExcelForDate(dk, o, 'combined')).finally(() => setIsExporting(false)), 0); }}>
                                                             <Download size={14} /> Combined Excel
                                                         </button>
                                                     </div>

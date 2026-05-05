@@ -4,7 +4,7 @@ import { useState, useEffect, Fragment, useMemo, useRef, ReactNode, forwardRef, 
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ClientProfile, ClientStatus, Navigator, Vendor, MenuItem, BoxType, ServiceType, AppSettings, DeliveryRecord, ItemCategory, ClientFullDetails, BoxQuota, ProduceVendor } from '@/lib/types';
-import { updateClient, addClient, deleteClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, saveClientMealPlannerData, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
+import { updateClient, addClient, deleteClient, unarchiveClient, updateDeliveryProof, recordClientChange, syncCurrentOrderToUpcoming, logNavigatorAction, getBoxQuotas, getRegularClients, getDependentsByParentId, addDependent, saveClientFoodOrder, saveClientMealOrder, saveClientBoxOrder, saveClientCustomOrder, getClientBoxOrder, getDefaultOrderTemplate, getDefaultApprovedMealsPerWeek, computeDefaultApprovedMealsFromTemplate, saveClientMealPlannerDataFull, saveClientMealPlannerData, getClientProfilePageData, getClientOrderEditData, getDefaultMealPlanTemplateForNewClient, isFoodOrderSameAsDefault, type MealPlannerOrderResult } from '@/lib/actions';
 import { getDefaultOrderTemplateCachedSync, getDefaultMealPlanTemplateCachedSync, getCachedDefaultOrderTemplate, getCachedDefaultMealPlanTemplateForNewClient } from '@/lib/default-order-template-cache';
 import { getSingleForm, getClientSubmissions } from '@/lib/form-actions';
 import { getClient, getStatuses, getNavigators, getVendors, getMenuItems, getBoxTypes, getSettings, getCategories, getClients, invalidateClientData, invalidateReferenceData, getActiveOrderForClient, getUpcomingOrderForClient, getOrderHistory, getClientHistory, getBillingHistory, invalidateOrderData, getRecentOrdersForClient, warmReferenceCacheFromProfile, getProduceVendors } from '@/lib/cached-data';
@@ -16,7 +16,7 @@ import {
     getAllDeliveryDatesForOrder,
     formatDeliveryDate
 } from '@/lib/order-dates';
-import { Save, ArrowLeft, Truck, Package, AlertTriangle, Upload, Trash2, Plus, Check, ClipboardList, History, CreditCard, Calendar, ChevronDown, ChevronUp, ShoppingCart, Loader2, FileText, Square, CheckSquare, Wrench, Info, PenTool, Copy, ExternalLink } from 'lucide-react';
+import { Save, ArrowLeft, Truck, Package, AlertTriangle, Upload, Trash2, Plus, Check, ClipboardList, History, CreditCard, Calendar, ChevronDown, ChevronUp, ShoppingCart, Loader2, FileText, Square, CheckSquare, Wrench, Info, PenTool, Copy, ExternalLink, RotateCcw } from 'lucide-react';
 import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
 import TextareaAutosize from 'react-textarea-autosize';
@@ -259,6 +259,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
 
     // Delete Confirmation Modal
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [restoringArchived, setRestoringArchived] = useState(false);
 
     // Dependent Creation State
     const [showAddDependentForm, setShowAddDependentForm] = useState(false);
@@ -554,7 +555,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                     setDependents(initialDependents);
                 } else if (initialData.client && !initialData.client.parentClientId) {
                     // Only fetch dependents (lightweight) instead of full loadAuxiliaryData
-                    getDependentsByParentId(initialData.client.id).then(setDependents).catch(() => setDependents([]));
+                    getDependentsByParentId(initialData.client.id, { includeArchived: !!initialData.client.archivedAt }).then(setDependents).catch(() => setDependents([]));
                 }
             }
             if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
@@ -585,7 +586,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             if (initialDependents != null) {
                 setDependents(initialDependents);
             } else if (initialData.client && !initialData.client.parentClientId) {
-                getDependentsByParentId(initialData.client.id).then(setDependents).catch(() => setDependents([]));
+                getDependentsByParentId(initialData.client.id, { includeArchived: !!initialData.client.archivedAt }).then(setDependents).catch(() => setDependents([]));
             }
             setLoading(false);
             if (!initialStatuses || !initialVendors || initialVendors.length === 0) {
@@ -1455,7 +1456,9 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         // Load dependents if this is a regular client (not a dependent)
         const clientForDependents = clientToCheck || client;
         if (clientForDependents && !clientForDependents.parentClientId) {
-            const dependentsData = await getDependentsByParentId(clientForDependents.id);
+            const dependentsData = await getDependentsByParentId(clientForDependents.id, {
+                includeArchived: !!clientForDependents.archivedAt
+            });
             setDependents(dependentsData);
         }
     }
@@ -3382,10 +3385,30 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
         }
     }
 
+    async function handleRestoreArchived() {
+        if (!clientId) return;
+        setRestoringArchived(true);
+        try {
+            await unarchiveClient(clientId);
+            const refreshed = await getClient(clientId);
+            if (refreshed) {
+                setClient(refreshed);
+                setFormData(refreshed);
+            }
+            invalidateClientData(clientId);
+            invalidateClientData();
+        } catch (err) {
+            alert(err instanceof Error ? err.message : 'Failed to restore client.');
+        } finally {
+            setRestoringArchived(false);
+        }
+    }
+
     async function handleDelete() {
         setSaving(true);
         try {
             await deleteClient(clientId);
+            invalidateClientData();
             setShowDeleteModal(false);
             if (onClose) {
                 onClose();
@@ -4688,7 +4711,28 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     <ArrowLeft size={16} /> Back
                                 </button>
                             ) : null)}
-                            <h1 className={styles.title}>{formData.fullName || (isDependent ? 'Dependent Profile' : 'Client Profile')}</h1>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <h1 className={styles.title} style={{ margin: 0 }}>
+                                    {formData.fullName || (isDependent ? 'Dependent Profile' : 'Client Profile')}
+                                </h1>
+                                {client?.archivedAt && !portalMode ? (
+                                    <span
+                                        style={{
+                                            fontSize: '0.7rem',
+                                            fontWeight: 800,
+                                            letterSpacing: '0.08em',
+                                            padding: '4px 10px',
+                                            borderRadius: '4px',
+                                            background: '#fecaca',
+                                            color: '#7f1d1d',
+                                            border: '1px solid #f87171',
+                                            flexShrink: 0,
+                                        }}
+                                    >
+                                        DELETED
+                                    </span>
+                                ) : null}
+                            </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             {!portalMode && !isDependent && (
@@ -4723,7 +4767,20 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                     )}
                                 </>
                             )}
-                            {!portalMode && (
+                            {!portalMode && client?.archivedAt && (
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => void handleRestoreArchived()}
+                                    disabled={restoringArchived}
+                                    style={{ marginRight: '8px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: '#15803d', borderColor: '#86efac' }}
+                                    title="Restore to the active client list"
+                                >
+                                    {restoringArchived ? <Loader2 size={16} className="spin" /> : <RotateCcw size={16} />}
+                                    Restore
+                                </button>
+                            )}
+                            {!portalMode && !client?.archivedAt && (
                                 <button
                                     className={`btn ${styles.deleteButton}`}
                                     onClick={() => setShowDeleteModal(true)}
@@ -4733,13 +4790,35 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                                 </button>
                             )}
                             {(!onClose || portalMode) && (
-                                <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleSave}
+                                    disabled={saving || !!client?.archivedAt}
+                                    title={client?.archivedAt ? 'Restore this client from deleted before editing.' : undefined}
+                                >
                                     <Save size={16} /> Save Changes
                                 </button>
                             )}
                         </div>
                     </div>
                 </header>
+
+                {client?.archivedAt && !portalMode && (
+                    <div
+                        style={{
+                            margin: '0 0 12px 0',
+                            padding: '10px 14px',
+                            background: '#fef9c3',
+                            border: '1px solid #eab308',
+                            borderRadius: '6px',
+                            fontSize: '0.9rem',
+                            color: '#713f12',
+                        }}
+                    >
+                        Deleted from the main client list — all records are still here. Use <strong>Restore</strong> in the header when you want them active again.
+                    </div>
+                )}
 
                 {isDependent ? (
                     // Simplified view for dependents

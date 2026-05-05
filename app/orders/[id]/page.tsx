@@ -1,4 +1,5 @@
 import { getOrderById } from '@/lib/actions-orders-billing';
+import { verifySession } from '@/lib/session';
 import { notFound } from 'next/navigation';
 import { OrderDetailView } from '@/components/orders/OrderDetailView';
 import type { Metadata } from 'next';
@@ -15,11 +16,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function OrderDetailPage({ params }: Props) {
     const { id } = await params;
+    const session = await verifySession();
 
     const order = await getOrderById(id);
     if (!order) notFound();
 
-    return <OrderDetailView order={order} />;
+    return <OrderDetailView order={order} showDelete={session?.role !== 'brooklyn_admin'} />;
 }
 
 

@@ -17,6 +17,16 @@ import { toDateStringInAppTz } from './timezone';
 
 import { supabase } from '@/lib/supabase';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
+import { verifySession } from '@/lib/session';
+
+async function fetchBrooklynClientIds(db: SupabaseClient): Promise<string[]> {
+    const { data, error } = await db.from('clients').select('id').eq('unite_account', 'Brooklyn');
+    if (error) {
+        console.error('[fetchBrooklynClientIds]', error);
+        return [];
+    }
+    return (data || []).map((r: { id: string }) => r.id);
+}
 
 // ---------------------------------------------------------------------------
 // REFERENCE DATA HELPERS (used by getOrderById and getBillingHistory)
@@ -165,15 +175,28 @@ export async function getOrdersPaginatedBilling(
     pageSize: number,
     filters?: GetOrdersBillingFilters,
 ): Promise<{ orders: any[]; total: number }> {
+    const session = await verifySession();
     const serviceRoleKey = getSupabaseDbApiKey();
     const db = serviceRoleKey
         ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, { auth: { persistSession: false } })
         : supabase;
 
+    let brooklynClientIds: string[] | null = null;
+    if (session?.role === 'brooklyn_admin') {
+        brooklynClientIds = await fetchBrooklynClientIds(db);
+        if (brooklynClientIds.length === 0) {
+            return { orders: [], total: 0 };
+        }
+    }
+
     const hasFilters =
         (filters?.search != null && filters.search.trim() !== '') ||
         (filters?.statusFilter != null && filters.statusFilter !== 'all') ||
         (filters?.creationIdFilter != null && filters.creationIdFilter.trim() !== '');
+
+    if (hasFilters && brooklynClientIds) {
+        return getOrdersWithSearchFallback(db, page, pageSize, filters, brooklynClientIds);
+    }
 
     if (hasFilters) {
         const rpcResult = await db.rpc('get_orders_billing_search', {
@@ -224,6 +247,11 @@ export async function getOrdersPaginatedBilling(
         .order('created_at', { ascending: false })
         .range(from, to);
 
+    if (brooklynClientIds) {
+        countQuery = countQuery.in('client_id', brooklynClientIds);
+        dataQuery = dataQuery.in('client_id', brooklynClientIds);
+    }
+
     if (filters?.statusFilter && filters.statusFilter !== 'all') {
         countQuery = countQuery.eq('status', filters.statusFilter);
         dataQuery = dataQuery.eq('status', filters.statusFilter);
@@ -254,7 +282,12 @@ async function getOrdersWithSearchFallback(
     page: number,
     pageSize: number,
     filters?: GetOrdersBillingFilters,
+    clientIdAllowlist?: string[],
 ): Promise<{ orders: any[]; total: number }> {
+    if (clientIdAllowlist && clientIdAllowlist.length === 0) {
+        return { orders: [], total: 0 };
+    }
+
     const search = filters?.search?.trim() || '';
     const statusFilter = filters?.statusFilter && filters.statusFilter !== 'all' ? filters.statusFilter : null;
     // creation_id skipped in fallback - column may not exist on all deployments
@@ -268,14 +301,20 @@ async function getOrdersWithSearchFallback(
             db.from('vendors').select('id').ilike('name', term),
         ]);
 
-        const clientIds = new Set((clientsRes.data || []).map((r: any) => r.id));
+        const clientIds = new Set<string>();
+        for (const r of clientsRes.data || []) {
+            const id = (r as { id: string }).id;
+            if (!clientIdAllowlist || clientIdAllowlist.includes(id)) clientIds.add(id);
+        }
         const vendorIds = new Set((vendorsRes.data || []).map((r: any) => r.id));
 
         const orderIdsByNumber = new Set<string>();
         const numericSearch = /^\d+$/.test(search);
         if (numericSearch) {
             const num = parseInt(search, 10);
-            const { data: byNum } = await db.from('orders').select('id').eq('order_number', num);
+            let numQ = db.from('orders').select('id').eq('order_number', num);
+            if (clientIdAllowlist?.length) numQ = numQ.in('client_id', clientIdAllowlist);
+            const { data: byNum } = await numQ;
             (byNum || []).forEach((r: any) => orderIdsByNumber.add(r.id));
         }
 
@@ -302,6 +341,9 @@ async function getOrdersWithSearchFallback(
     if (orderIds !== null) {
         if (orderIds.length === 0) return { orders: [], total: 0 };
         baseQuery = baseQuery.in('id', orderIds);
+    }
+    if (clientIdAllowlist?.length) {
+        baseQuery = baseQuery.in('client_id', clientIdAllowlist);
     }
     if (statusFilter) baseQuery = baseQuery.eq('status', statusFilter);
 
@@ -351,6 +393,8 @@ export async function getAllOrders(): Promise<any[]> {
 export async function getOrderById(orderId: string): Promise<OrderDetail | null> {
     if (!orderId) return null;
 
+    const session = await verifySession();
+
     let supabaseClient = supabase;
     const serviceRoleKey = getSupabaseDbApiKey();
     if (serviceRoleKey) {
@@ -369,9 +413,13 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
 
     const { data: clientData } = await supabaseClient
         .from('clients')
-        .select('id, full_name, address, email, phone_number')
+        .select('id, full_name, address, email, phone_number, unite_account')
         .eq('id', orderData.client_id)
         .single();
+
+    if (session?.role === 'brooklyn_admin' && (clientData as { unite_account?: string } | null)?.unite_account !== 'Brooklyn') {
+        return null;
+    }
 
     const [menuItems, vendors, boxTypes, equipmentList, categories, mealItems] = await Promise.all([
         getMenuItems(supabaseClient),
@@ -572,12 +620,17 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
 
 export async function deleteOrder(orderId: string): Promise<{ success: boolean; message?: string }> {
     if (!orderId) return { success: false, message: 'Order ID is required' };
+    const session = await verifySession();
+    if (session?.role === 'brooklyn_admin') {
+        return { success: false, message: 'Brooklyn admins cannot delete orders' };
+    }
     const serviceRoleKey = getSupabaseDbApiKey();
     if (!serviceRoleKey) return { success: false, message: 'Server configuration error: SUPABASE_SECRET_KEY (or legacy service role) required for delete' };
     try {
         const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey, {
             auth: { persistSession: false },
         });
+
         const { data: vendorSelections } = await supabaseAdmin
             .from('order_vendor_selections')
             .select('id')

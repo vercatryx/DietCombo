@@ -8,8 +8,9 @@ import { getOrdersPaginatedBilling, deleteOrder } from '@/lib/actions-orders-bil
 import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import styles from './OrdersList.module.css';
 
-export function OrdersList() {
+export function OrdersList({ userRole = '' }: { userRole?: string }) {
     const router = useRouter();
+    const isBrooklynAdmin = userRole === 'brooklyn_admin';
     const PAGE_SIZE_OPTIONS = [50, 100, 250, 500] as const;
     const [orders, setOrders] = useState<any[]>([]);
     const [total, setTotal] = useState(0);
@@ -236,7 +237,7 @@ export function OrdersList() {
                 <button type="button" className="btn btn-secondary" onClick={handleSelectAll} style={{ marginLeft: 'auto' }}>
                     {selectedOrders.size === filteredOrders.length && filteredOrders.length > 0 ? 'Deselect All' : 'Select All'}
                 </button>
-                {selectedOrders.size > 0 && (
+                {!isBrooklynAdmin && selectedOrders.size > 0 && (
                     <button
                         type="button"
                         className="btn btn-danger"
@@ -252,12 +253,15 @@ export function OrdersList() {
 
             <div className={styles.list}>
                 <div className={styles.listHeader}>
-                    <span style={{ width: '50px' }} />
+                    <span style={{ width: '50px' }} aria-hidden="true" />
                     <span style={{ width: '40px', fontWeight: 'bold' }}>#</span>
-                    <span style={{ width: '100px', cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('order_number')}>
+                    <span
+                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }}
+                        onClick={() => handleSort('order_number')}
+                    >
                         Order # <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
                     </span>
-                    <span style={{ flex: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('clientName')}>
+                    <span style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('clientName')}>
                         Client <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
                     </span>
                     <span style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('service_type')}>
@@ -278,10 +282,7 @@ export function OrdersList() {
                     <span style={{ width: '40px' }} />
                 </div>
                 {filteredOrders.map((order, index) => (
-                    <div
-                        key={order.id}
-                        className={styles.row}
-                    >
+                    <div key={order.id} className={styles.row}>
                         <Link
                             href={`/orders/${order.id}`}
                             className={styles.rowLinkOverlay}
@@ -290,6 +291,7 @@ export function OrdersList() {
                             <span className={styles.srOnly}>Open</span>
                         </Link>
                         <span
+                            className={styles.checkboxCell}
                             style={{ width: '50px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                             onClick={(e) => { e.stopPropagation(); handleSelectOrder(order.id); }}
                         >
@@ -299,11 +301,12 @@ export function OrdersList() {
                                 onChange={() => handleSelectOrder(order.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 style={{ cursor: 'pointer', width: 18, height: 18 }}
+                                aria-label={`Select order ${order.order_number ?? order.id}`}
                             />
                         </span>
                         <span style={{ width: '40px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{(page - 1) * pageSize + index + 1}</span>
-                        <span style={{ width: '100px', fontWeight: 600 }}>{order.order_number ?? 'N/A'}</span>
-                        <span style={{ flex: 2 }}>{order.clientName}</span>
+                        <span style={{ fontWeight: 600, minWidth: 0 }}>{order.order_number ?? 'N/A'}</span>
+                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{order.clientName}</span>
                         <span style={{ flex: 1 }}>{order.service_type}</span>
                         <span style={{ flex: 1.5, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                             {(order.vendorNames || ['Unknown']).join(', ')}

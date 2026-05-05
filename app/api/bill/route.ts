@@ -134,7 +134,12 @@ export async function GET(request: NextRequest) {
             'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill';
         const clients = await fetchAllRows<any>(
             (from, to) => {
-                let q = supabase.from('clients').select(selectClients).order('id', { ascending: true }).range(from, to);
+                let q = supabase
+                    .from('clients')
+                    .select(selectClients)
+                    .is('archived_at', null)
+                    .order('id', { ascending: true })
+                    .range(from, to);
                 if (accountFilter === 'brooklyn') {
                     q = q.eq('unite_account', 'Brooklyn');
                 } else if (accountFilter === 'regular') {
@@ -179,6 +184,7 @@ export async function GET(request: NextRequest) {
                         .from('clients')
                         .select('id, full_name, dob, cin, parent_client_id, unite_account, created_at')
                         .not('parent_client_id', 'is', null)
+                        .is('archived_at', null)
                         .order('id', { ascending: true })
                         .range(from, to),
                 1000
