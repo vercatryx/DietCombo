@@ -419,7 +419,7 @@ CREATE TABLE IF NOT EXISTS orders (
     case_id VARCHAR(255) NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
     scheduled_delivery_date DATE NULL,
-    actual_delivery_date DATE NULL,
+    actual_delivery_date TIMESTAMPTZ NULL,
     delivery_day VARCHAR(50) NULL,
     delivery_distribution JSONB NULL,
     total_value NUMERIC(10,2) NULL,

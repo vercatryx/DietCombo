@@ -6,6 +6,30 @@ import { ArrowLeft, Package, ShoppingCart, User, CreditCard, FileText, Trash2, L
 import styles from './OrderDetailView.module.css';
 import { deleteOrder } from '@/lib/actions-orders-billing';
 import type { OrderDetail } from '@/lib/types-orders-billing';
+import { inlineProxyUrlForStorageImage } from '@/lib/storage-inline-proxy-url';
+
+const ORDER_DETAIL_TZ = 'America/New_York';
+
+/** Plain calendar DATE strings (YYYY-MM-DD) stay date-only; timestamps show capture/upload time in NY. */
+function formatActualDeliveryDisplay(value: string): string {
+    const trimmed = value.trim();
+    const dateOnly = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnly) {
+        const [, y, m, d] = dateOnly;
+        return `${Number(m)}/${Number(d)}/${y}`;
+    }
+    const dt = new Date(value);
+    if (Number.isNaN(dt.getTime())) return value;
+    return dt.toLocaleString('en-US', {
+        timeZone: ORDER_DETAIL_TZ,
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+    });
+}
 
 interface OrderDetailViewProps {
     order: OrderDetail;
@@ -245,7 +269,7 @@ export function OrderDetailView({ order, showDelete = true }: OrderDetailViewPro
                             <div className={styles.infoRow}><strong>Service Type:</strong><span>{order.serviceType}</span></div>
                             {order.caseId && <div className={styles.infoRow}><strong>Case ID:</strong><span>{order.caseId}</span></div>}
                             {order.scheduledDeliveryDate && <div className={styles.infoRow}><strong>Scheduled Delivery:</strong><span>{new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}</span></div>}
-                            {order.actualDeliveryDate && <div className={styles.infoRow}><strong>Actual Delivery:</strong><span>{new Date(order.actualDeliveryDate).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}</span></div>}
+                            {order.actualDeliveryDate && <div className={styles.infoRow}><strong>Actual Delivery:</strong><span>{formatActualDeliveryDisplay(order.actualDeliveryDate)}</span></div>}
                             <div className={styles.infoRow}><strong>Total Value:</strong><span>${order.totalValue.toFixed(2)}</span></div>
                             {order.notes && <div className={styles.infoRow}><strong>Notes:</strong><span>{order.notes}</span></div>}
                             <div className={styles.infoRow}>
@@ -262,7 +286,7 @@ export function OrderDetailView({ order, showDelete = true }: OrderDetailViewPro
                                                     aria-label={`View delivery proof ${i + 1} of ${proofUrls.length}`}
                                                 >
                                                     <img
-                                                        src={url}
+                                                        src={inlineProxyUrlForStorageImage(url)}
                                                         alt={`Delivery proof ${i + 1}`}
                                                         className={styles.thumbnailImage}
                                                         loading="lazy"
@@ -346,7 +370,7 @@ export function OrderDetailView({ order, showDelete = true }: OrderDetailViewPro
                             )}
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                                src={proofUrls[lightboxIndex]}
+                                src={inlineProxyUrlForStorageImage(proofUrls[lightboxIndex])}
                                 alt=""
                                 className={styles.lightboxImg}
                             />

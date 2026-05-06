@@ -7,6 +7,7 @@ import { processDeliveryProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ImageIcon, ExternalLink } from 'lucide-react';
 import '../delivery.css';
 import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
+import { previewUrlFromScreenshotDataUrl, revokeProofPreviewUrl, revokeProofPreviewUrls } from '@/lib/proof-capture-preview';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -33,6 +34,18 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
+    const proofImagesRef = useRef<string[]>([]);
+    proofImagesRef.current = proofImages;
+
+    const clearCapturedProofs = useCallback(() => {
+        setProofImages((prev) => {
+            revokeProofPreviewUrls(prev);
+            return [];
+        });
+        setProofCapturedAt([]);
+    }, []);
+
+    useEffect(() => () => revokeProofPreviewUrls(proofImagesRef.current), []);
 
     // If we landed with UUID in URL but order has order_number, show order number in URL (e.g. /delivery/100992)
     useEffect(() => {
@@ -75,13 +88,17 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
+        const preview = await previewUrlFromScreenshotDataUrl(raw);
         const now = new Date();
-        setProofImages((prev) => [...prev, raw]);
+        setProofImages((prev) => [...prev, preview]);
         setProofCapturedAt((prev) => [...prev, now]);
     }, [webcamRef]);
 
     function removeProofAt(index: number) {
-        setProofImages((prev) => prev.filter((_, i) => i !== index));
+        setProofImages((prev) => {
+            revokeProofPreviewUrl(prev[index]);
+            return prev.filter((_, i) => i !== index);
+        });
         setProofCapturedAt((prev) => prev.filter((_, i) => i !== index));
     }
 
@@ -180,8 +197,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
 
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setStep('CAPTURE');
                         }}
                         className="btn-primary"
@@ -300,8 +316,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
 
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setStep('VERIFY');
                         }}
                         className="close-btn"
@@ -399,8 +414,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     </button>
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setStep('CAPTURE');
                         }}
                         className="btn-secondary"
@@ -470,8 +484,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     ))}
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setUploadedProofUrls([]);
                             setStep('CAPTURE');
                         }}
@@ -497,8 +510,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
             </div>
             <button
                 onClick={() => {
-                    setProofImages([]);
-                    setProofCapturedAt([]);
+                    clearCapturedProofs();
                     setStep('CAPTURE');
                 }}
                 className="btn-secondary"

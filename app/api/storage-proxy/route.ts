@@ -1,18 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-function allowedStorageHosts(): Set<string> {
-    const hosts = new Set<string>(['storage.thedietfantasy.com']);
-    for (const raw of [process.env.NEXT_PUBLIC_R2_DOMAIN, process.env.R2_PUBLIC_URL_BASE]) {
-        if (!raw?.trim()) continue;
-        try {
-            const u = new URL(raw.trim());
-            hosts.add(u.hostname);
-        } catch {
-            /* ignore invalid env */
-        }
-    }
-    return hosts;
-}
+import { allowedStorageHosts } from '@/lib/storage-inline-proxy-url';
 
 function filenameFromPath(pathname: string): string {
     const seg = pathname.split('/').filter(Boolean).pop();
@@ -26,6 +13,7 @@ function filenameFromPath(pathname: string): string {
  */
 export async function GET(req: NextRequest) {
     const urlParam = req.nextUrl.searchParams.get('url');
+    const inline = req.nextUrl.searchParams.get('inline') === '1';
     if (!urlParam?.trim()) {
         return NextResponse.json({ error: 'Missing url' }, { status: 400 });
     }
@@ -65,8 +53,13 @@ export async function GET(req: NextRequest) {
 
     const headers = new Headers();
     headers.set('Content-Type', contentType);
-    headers.set('Content-Disposition', `attachment; filename="${filename}"`);
-    headers.set('Cache-Control', 'private, max-age=300');
+    if (inline) {
+        headers.set('Content-Disposition', `inline; filename="${filename}"`);
+        headers.set('Cache-Control', 'public, max-age=300');
+    } else {
+        headers.set('Content-Disposition', `attachment; filename="${filename}"`);
+        headers.set('Cache-Control', 'private, max-age=300');
+    }
 
     const body = upstream.body;
     if (!body) {

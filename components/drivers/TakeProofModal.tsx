@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { processDeliveryProof } from '@/app/delivery/actions';
 import { Camera, CheckCircle, Upload, AlertCircle, X } from 'lucide-react';
 import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
+import { previewUrlFromScreenshotDataUrl, revokeProofPreviewUrl, revokeProofPreviewUrls } from '@/lib/proof-capture-preview';
 
 const Webcam = dynamic(
     () => import('react-webcam') as Promise<{ default: ComponentType<any> }>,
@@ -28,13 +29,28 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
     const [error, setError] = useState('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(null);
     const webcamRef = useRef<any>(null);
+    const proofImagesRef = useRef<string[]>([]);
+    proofImagesRef.current = proofImages;
 
     const orderIdentifier = stop?.orderId ?? stop?.orderNumber ?? '';
+
+    const clearCapturedProofs = useCallback(() => {
+        setProofImages((prev) => {
+            revokeProofPreviewUrls(prev);
+            return [];
+        });
+        setPreviewCapturedAt([]);
+    }, []);
+
+    useEffect(() => () => revokeProofPreviewUrls(proofImagesRef.current), []);
 
     useEffect(() => {
         if (!open || !stop) return;
         setStep('CHECK');
-        setProofImages([]);
+        setProofImages((prev) => {
+            revokeProofPreviewUrls(prev);
+            return [];
+        });
         setPreviewCapturedAt([]);
         setError('');
         setHasCamera(null);
@@ -73,13 +89,17 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot?.();
         if (!raw) return;
+        const preview = await previewUrlFromScreenshotDataUrl(raw);
         const now = new Date();
-        setProofImages((prev) => [...prev, raw]);
+        setProofImages((prev) => [...prev, preview]);
         setPreviewCapturedAt((prev) => [...prev, now]);
     }, []);
 
     function removeProofAt(index: number) {
-        setProofImages((prev) => prev.filter((_, i) => i !== index));
+        setProofImages((prev) => {
+            revokeProofPreviewUrl(prev[index]);
+            return prev.filter((_, i) => i !== index);
+        });
         setPreviewCapturedAt((prev) => prev.filter((_, i) => i !== index));
     }
 
@@ -215,7 +235,7 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                             <Upload size={20} /> Submit {proofImages.length || ''} photo{proofImages.length === 1 ? '' : 's'}
                         </button>
                         <button type="button" onClick={() => setStep('CAPTURE')} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Add more</button>
-                        <button type="button" onClick={() => { setProofImages([]); setPreviewCapturedAt([]); setStep('CAPTURE'); }} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Clear all</button>
+                        <button type="button" onClick={() => { clearCapturedProofs(); setStep('CAPTURE'); }} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Clear all</button>
                     </div>
                 </div>
             </div>
@@ -258,7 +278,7 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                         <AlertCircle size={40} style={{ color: '#f87171', marginBottom: 12 }} />
                         <h3 style={{ fontSize: '1.1rem', marginBottom: 8 }}>Upload failed</h3>
                         <p style={{ color: '#fca5a5', fontSize: 14, marginBottom: 16 }}>{error}</p>
-                        <button type="button" onClick={() => { setProofImages([]); setPreviewCapturedAt([]); setStep('CAPTURE'); setError(''); }} style={{ marginRight: 8, padding: '10px 18px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Try again</button>
+                        <button type="button" onClick={() => { clearCapturedProofs(); setStep('CAPTURE'); setError(''); }} style={{ marginRight: 8, padding: '10px 18px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Try again</button>
                         <button type="button" onClick={onClose} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#4b5563', color: '#fff', cursor: 'pointer' }}>Close</button>
                     </div>
                 </div>

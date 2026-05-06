@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import Webcam from 'react-webcam';
 import { uploadProduceProofOnly, createProduceOrderWithProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ExternalLink, ImageIcon } from 'lucide-react';
 import '../produce.css';
 import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
+import { previewUrlFromScreenshotDataUrl, revokeProofPreviewUrl, revokeProofPreviewUrls } from '@/lib/proof-capture-preview';
 
 interface ClientDetails {
     id: string;
@@ -24,17 +25,33 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const [createdOrderNumber, setCreatedOrderNumber] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const webcamRef = useRef<Webcam>(null);
+    const proofImagesRef = useRef<string[]>([]);
+    proofImagesRef.current = proofImages;
+
+    const clearCapturedProofs = useCallback(() => {
+        setProofImages((prev) => {
+            revokeProofPreviewUrls(prev);
+            return [];
+        });
+        setProofCapturedAt([]);
+    }, []);
+
+    useEffect(() => () => revokeProofPreviewUrls(proofImagesRef.current), []);
 
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
+        const preview = await previewUrlFromScreenshotDataUrl(raw);
         const now = new Date();
-        setProofImages((prev) => [...prev, raw]);
+        setProofImages((prev) => [...prev, preview]);
         setProofCapturedAt((prev) => [...prev, now]);
     }, [webcamRef]);
 
     function removeProofAt(index: number) {
-        setProofImages((prev) => prev.filter((_, i) => i !== index));
+        setProofImages((prev) => {
+            revokeProofPreviewUrl(prev[index]);
+            return prev.filter((_, i) => i !== index);
+        });
         setProofCapturedAt((prev) => prev.filter((_, i) => i !== index));
     }
 
@@ -142,8 +159,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
 
                 <button
                     onClick={() => {
-                        setProofImages([]);
-                        setProofCapturedAt([]);
+                        clearCapturedProofs();
                         setStep('CAPTURE');
                     }}
                     className="btn-primary"
@@ -234,8 +250,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
 
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setStep('VERIFY');
                         }}
                         className="close-btn"
@@ -319,8 +334,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                     </button>
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setStep('CAPTURE');
                         }}
                         className="btn-secondary"
@@ -366,8 +380,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                     <button
                         onClick={() => {
-                            setProofImages([]);
-                            setProofCapturedAt([]);
+                            clearCapturedProofs();
                             setUploadedProofUrls([]);
                             setStep('CAPTURE');
                         }}
@@ -419,8 +432,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
             </div>
             <button
                 onClick={() => {
-                    setProofImages([]);
-                    setProofCapturedAt([]);
+                    clearCapturedProofs();
                     setStep('CAPTURE');
                 }}
                 className="btn-secondary"
