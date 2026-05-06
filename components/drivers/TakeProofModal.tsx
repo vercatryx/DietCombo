@@ -5,7 +5,12 @@ import dynamic from 'next/dynamic';
 import { processDeliveryProof } from '@/app/delivery/actions';
 import { Camera, CheckCircle, Upload, AlertCircle, X } from 'lucide-react';
 import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
-import { previewUrlFromScreenshotDataUrl, revokeProofPreviewUrl, revokeProofPreviewUrls } from '@/lib/proof-capture-preview';
+import {
+    type ProofShot,
+    proofShotFromScreenshot,
+    revokeProofPreviewUrl,
+    revokeProofPreviewUrls,
+} from '@/lib/proof-capture-preview';
 
 const Webcam = dynamic(
     () => import('react-webcam') as Promise<{ default: ComponentType<any> }>,
@@ -24,34 +29,31 @@ interface TakeProofModalProps {
 
 export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModalProps) {
     const [step, setStep] = useState<Step>('CHECK');
-    const [proofImages, setProofImages] = useState<string[]>([]);
-    const [previewCapturedAt, setPreviewCapturedAt] = useState<Date[]>([]);
+    const [proofShots, setProofShots] = useState<ProofShot[]>([]);
     const [error, setError] = useState('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(null);
     const webcamRef = useRef<any>(null);
-    const proofImagesRef = useRef<string[]>([]);
-    proofImagesRef.current = proofImages;
+    const proofShotsRef = useRef<ProofShot[]>([]);
+    proofShotsRef.current = proofShots;
 
     const orderIdentifier = stop?.orderId ?? stop?.orderNumber ?? '';
 
     const clearCapturedProofs = useCallback(() => {
-        setProofImages((prev) => {
-            revokeProofPreviewUrls(prev);
+        setProofShots((prev) => {
+            revokeProofPreviewUrls(prev.map((p) => p.previewUrl));
             return [];
         });
-        setPreviewCapturedAt([]);
     }, []);
 
-    useEffect(() => () => revokeProofPreviewUrls(proofImagesRef.current), []);
+    useEffect(() => () => revokeProofPreviewUrls(proofShotsRef.current.map((p) => p.previewUrl)), []);
 
     useEffect(() => {
         if (!open || !stop) return;
         setStep('CHECK');
-        setProofImages((prev) => {
-            revokeProofPreviewUrls(prev);
+        setProofShots((prev) => {
+            revokeProofPreviewUrls(prev.map((p) => p.previewUrl));
             return [];
         });
-        setPreviewCapturedAt([]);
         setError('');
         setHasCamera(null);
     }, [open, stop?.id]);
@@ -89,29 +91,27 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot?.();
         if (!raw) return;
-        const preview = await previewUrlFromScreenshotDataUrl(raw);
-        const now = new Date();
-        setProofImages((prev) => [...prev, preview]);
-        setPreviewCapturedAt((prev) => [...prev, now]);
+        const shot = await proofShotFromScreenshot(raw);
+        if (!shot) return;
+        setProofShots((prev) => [...prev, shot]);
     }, []);
 
     function removeProofAt(index: number) {
-        setProofImages((prev) => {
-            revokeProofPreviewUrl(prev[index]);
+        setProofShots((prev) => {
+            revokeProofPreviewUrl(prev[index]?.previewUrl);
             return prev.filter((_, i) => i !== index);
         });
-        setPreviewCapturedAt((prev) => prev.filter((_, i) => i !== index));
     }
 
     const handleUpload = async () => {
-        if (proofImages.length === 0 || !stop) return;
+        if (proofShots.length === 0 || !stop) return;
         setStep('UPLOADING');
         try {
             const formData = new FormData();
-            for (let i = 0; i < proofImages.length; i++) {
-                const res = await fetch(proofImages[i]);
-                const blob = await res.blob();
-                formData.append('files', new File([blob], `delivery-proof-${i + 1}.jpg`, { type: 'image/jpeg' }));
+            for (let i = 0; i < proofShots.length; i++) {
+                const b = proofShots[i].blob;
+                const type = b.type && b.type.startsWith('image/') ? b.type : 'image/jpeg';
+                formData.append('files', new File([b], `delivery-proof-${i + 1}.jpg`, { type }));
             }
             formData.append('orderNumber', String(orderIdentifier));
             const result = await processDeliveryProof(formData);
@@ -194,17 +194,17 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
                     />
                     <div style={{ position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', padding: '8px 14px', borderRadius: 12, background: 'rgba(59, 130, 246, 0.92)', color: '#f8fafc', fontSize: 13, fontWeight: 600, zIndex: 6, pointerEvents: 'none', maxWidth: '90vw', textAlign: 'center' }}>
-                        {proofImages.length === 0
+                        {proofShots.length === 0
                             ? 'Tap shutter for each photo — as many as you need'
-                            : `${proofImages.length} saved — add more or tap Review`}
+                            : `${proofShots.length} saved — add more or tap Review`}
                     </div>
                     <button type="button" onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: 16, right: 16, width: 44, height: 44, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <X size={24} />
                     </button>
                     <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '16px 16px calc(24px + env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, background: 'linear-gradient(transparent, rgba(0,0,0,0.75))' }}>
-                        {proofImages.length > 0 && (
+                        {proofShots.length > 0 && (
                             <button type="button" onClick={() => setStep('PREVIEW')} style={{ padding: '10px 20px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.55)', color: '#f8fafc', fontWeight: 600, cursor: 'pointer', fontSize: 14 }}>
-                                Review {proofImages.length} photo{proofImages.length === 1 ? '' : 's'}
+                                Review {proofShots.length} photo{proofShots.length === 1 ? '' : 's'}
                             </button>
                         )}
                         <button type="button" onClick={capture} aria-label="Take photo" style={{ width: 72, height: 72, borderRadius: '50%', background: '#fff', border: '4px solid #d1d5db', cursor: 'pointer' }} />
@@ -219,10 +219,10 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
             <div style={{ ...modalStyle, background: '#000' }}>
                 <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', width: '100%', overflow: 'auto' }}>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, padding: 8, background: '#000' }}>
-                        {proofImages.map((src, i) => (
-                            <div key={i} style={{ position: 'relative', minHeight: '28vh' }}>
-                                <img src={src} alt={`Proof ${i + 1}`} style={{ width: '100%', maxHeight: '38vh', objectFit: 'contain' }} />
-                                {previewCapturedAt[i] ? <ProofStampPreviewOverlay capturedAt={previewCapturedAt[i]} /> : null}
+                        {proofShots.map((shot, i) => (
+                            <div key={shot.previewUrl} style={{ position: 'relative', minHeight: '28vh' }}>
+                                <img src={shot.previewUrl} alt={`Proof ${i + 1}`} style={{ width: '100%', maxHeight: '38vh', objectFit: 'contain' }} />
+                                <ProofStampPreviewOverlay capturedAt={shot.capturedAt} />
                                 <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>Photo {i + 1}</span>
                                     <button type="button" onClick={() => removeProofAt(i)} style={{ background: 'rgba(220,38,38,0.9)', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Remove</button>
@@ -231,8 +231,8 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                         ))}
                     </div>
                     <div style={{ display: 'flex', gap: 12, padding: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <button type="button" disabled={proofImages.length === 0} onClick={handleUpload} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 8, border: 'none', background: proofImages.length === 0 ? '#4b5563' : '#16a34a', color: '#fff', cursor: proofImages.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: proofImages.length === 0 ? 0.7 : 1 }}>
-                            <Upload size={20} /> Submit {proofImages.length || ''} photo{proofImages.length === 1 ? '' : 's'}
+                        <button type="button" disabled={proofShots.length === 0} onClick={handleUpload} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 8, border: 'none', background: proofShots.length === 0 ? '#4b5563' : '#16a34a', color: '#fff', cursor: proofShots.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: proofShots.length === 0 ? 0.7 : 1 }}>
+                            <Upload size={20} /> Submit {proofShots.length || ''} photo{proofShots.length === 1 ? '' : 's'}
                         </button>
                         <button type="button" onClick={() => setStep('CAPTURE')} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Add more</button>
                         <button type="button" onClick={() => { clearCapturedProofs(); setStep('CAPTURE'); }} style={{ padding: '12px 20px', borderRadius: 8, border: '1px solid #4b5563', background: '#374151', color: '#e5e7eb', cursor: 'pointer' }}>Clear all</button>

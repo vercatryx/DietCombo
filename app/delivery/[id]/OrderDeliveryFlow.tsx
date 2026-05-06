@@ -7,7 +7,12 @@ import { processDeliveryProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ImageIcon, ExternalLink } from 'lucide-react';
 import '../delivery.css';
 import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
-import { previewUrlFromScreenshotDataUrl, revokeProofPreviewUrl, revokeProofPreviewUrls } from '@/lib/proof-capture-preview';
+import {
+    type ProofShot,
+    proofShotFromScreenshot,
+    revokeProofPreviewUrl,
+    revokeProofPreviewUrls,
+} from '@/lib/proof-capture-preview';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -28,24 +33,22 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>(
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
-    const [proofImages, setProofImages] = useState<string[]>([]);
-    const [proofCapturedAt, setProofCapturedAt] = useState<Date[]>([]);
+    const [proofShots, setProofShots] = useState<ProofShot[]>([]);
     const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>([]);
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
-    const proofImagesRef = useRef<string[]>([]);
-    proofImagesRef.current = proofImages;
+    const proofShotsRef = useRef<ProofShot[]>([]);
+    proofShotsRef.current = proofShots;
 
     const clearCapturedProofs = useCallback(() => {
-        setProofImages((prev) => {
-            revokeProofPreviewUrls(prev);
+        setProofShots((prev) => {
+            revokeProofPreviewUrls(prev.map((p) => p.previewUrl));
             return [];
         });
-        setProofCapturedAt([]);
     }, []);
 
-    useEffect(() => () => revokeProofPreviewUrls(proofImagesRef.current), []);
+    useEffect(() => () => revokeProofPreviewUrls(proofShotsRef.current.map((p) => p.previewUrl)), []);
 
     // If we landed with UUID in URL but order has order_number, show order number in URL (e.g. /delivery/100992)
     useEffect(() => {
@@ -88,31 +91,30 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
-        const preview = await previewUrlFromScreenshotDataUrl(raw);
-        const now = new Date();
-        setProofImages((prev) => [...prev, preview]);
-        setProofCapturedAt((prev) => [...prev, now]);
+        const shot = await proofShotFromScreenshot(raw);
+        if (!shot) return;
+        setProofShots((prev) => [...prev, shot]);
     }, [webcamRef]);
 
     function removeProofAt(index: number) {
-        setProofImages((prev) => {
-            revokeProofPreviewUrl(prev[index]);
+        setProofShots((prev) => {
+            const url = prev[index]?.previewUrl;
+            revokeProofPreviewUrl(url);
             return prev.filter((_, i) => i !== index);
         });
-        setProofCapturedAt((prev) => prev.filter((_, i) => i !== index));
     }
 
     async function handleUpload() {
-        if (proofImages.length === 0) return;
+        if (proofShots.length === 0) return;
 
         setStep('UPLOADING');
         setError('');
 
         const formData = new FormData();
-        for (let i = 0; i < proofImages.length; i++) {
-            const res = await fetch(proofImages[i]);
-            const blob = await res.blob();
-            const file = new File([blob], `delivery-proof-${i + 1}.jpg`, { type: 'image/jpeg' });
+        for (let i = 0; i < proofShots.length; i++) {
+            const b = proofShots[i].blob;
+            const type = b.type && b.type.startsWith('image/') ? b.type : 'image/jpeg';
+            const file = new File([b], `delivery-proof-${i + 1}.jpg`, { type });
             formData.append('files', file);
         }
         formData.append('orderNumber', order.id);
@@ -309,9 +311,9 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                             pointerEvents: 'none'
                         }}
                     >
-                        {proofImages.length === 0
+                        {proofShots.length === 0
                             ? 'Tap the shutter for each photo — as many as you need'
-                            : `${proofImages.length} photo${proofImages.length === 1 ? '' : 's'} — keep shooting or open review`}
+                            : `${proofShots.length} photo${proofShots.length === 1 ? '' : 's'} — keep shooting or open review`}
                     </div>
 
                     <button
@@ -326,7 +328,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 </div>
 
                 <div className="camera-controls" style={{ flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
-                    {proofImages.length > 0 && (
+                    {proofShots.length > 0 && (
                         <button
                             type="button"
                             onClick={() => setStep('PREVIEW')}
@@ -342,7 +344,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                                 cursor: 'pointer'
                             }}
                         >
-                            Review {proofImages.length} photo{proofImages.length === 1 ? '' : 's'}
+                            Review {proofShots.length} photo{proofShots.length === 1 ? '' : 's'}
                         </button>
                     )}
                     <button
@@ -360,14 +362,14 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         return (
             <div className="camera-overlay-full">
                 <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative', overflow: 'auto', flexDirection: 'column', display: 'flex', gap: 8, padding: 8 }}>
-                    {proofImages.map((src, i) => (
-                        <div key={i} style={{ position: 'relative', flex: 1, minHeight: '28vh' }}>
+                    {proofShots.map((shot, i) => (
+                        <div key={shot.previewUrl} style={{ position: 'relative', flex: 1, minHeight: '28vh' }}>
                             <img
-                                src={src}
+                                src={shot.previewUrl}
                                 alt={`Proof ${i + 1}`}
                                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                             />
-                            {proofCapturedAt[i] ? <ProofStampPreviewOverlay capturedAt={proofCapturedAt[i]} /> : null}
+                            <ProofStampPreviewOverlay capturedAt={shot.capturedAt} />
                             <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                                 <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>
                                     Photo {i + 1}
@@ -395,14 +397,14 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 <div className="preview-actions">
                     <button
                         onClick={handleUpload}
-                        disabled={proofImages.length === 0}
+                        disabled={proofShots.length === 0}
                         className="btn-primary"
-                        style={{ backgroundColor: '#16a34a', opacity: proofImages.length === 0 ? 0.5 : 1 }}
+                        style={{ backgroundColor: '#16a34a', opacity: proofShots.length === 0 ? 0.5 : 1 }}
                     >
                         <Upload size={24} />
-                        {proofImages.length === 0
+                        {proofShots.length === 0
                             ? 'Submit photos'
-                            : `Submit ${proofImages.length} photo${proofImages.length === 1 ? '' : 's'}`}
+                            : `Submit ${proofShots.length} photo${proofShots.length === 1 ? '' : 's'}`}
                     </button>
                     <button
                         type="button"

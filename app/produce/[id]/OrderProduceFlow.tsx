@@ -6,7 +6,12 @@ import { uploadProduceProofOnly, createProduceOrderWithProof } from '../actions'
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ExternalLink, ImageIcon } from 'lucide-react';
 import '../produce.css';
 import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
-import { previewUrlFromScreenshotDataUrl, revokeProofPreviewUrl, revokeProofPreviewUrls } from '@/lib/proof-capture-preview';
+import {
+    type ProofShot,
+    proofShotFromScreenshot,
+    revokeProofPreviewUrl,
+    revokeProofPreviewUrls,
+} from '@/lib/proof-capture-preview';
 
 interface ClientDetails {
     id: string;
@@ -19,53 +24,49 @@ interface ClientDetails {
 
 export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>('VERIFY');
-    const [proofImages, setProofImages] = useState<string[]>([]);
-    const [proofCapturedAt, setProofCapturedAt] = useState<Date[]>([]);
+    const [proofShots, setProofShots] = useState<ProofShot[]>([]);
     const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>([]);
     const [createdOrderNumber, setCreatedOrderNumber] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const webcamRef = useRef<Webcam>(null);
-    const proofImagesRef = useRef<string[]>([]);
-    proofImagesRef.current = proofImages;
+    const proofShotsRef = useRef<ProofShot[]>([]);
+    proofShotsRef.current = proofShots;
 
     const clearCapturedProofs = useCallback(() => {
-        setProofImages((prev) => {
-            revokeProofPreviewUrls(prev);
+        setProofShots((prev) => {
+            revokeProofPreviewUrls(prev.map((p) => p.previewUrl));
             return [];
         });
-        setProofCapturedAt([]);
     }, []);
 
-    useEffect(() => () => revokeProofPreviewUrls(proofImagesRef.current), []);
+    useEffect(() => () => revokeProofPreviewUrls(proofShotsRef.current.map((p) => p.previewUrl)), []);
 
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
-        const preview = await previewUrlFromScreenshotDataUrl(raw);
-        const now = new Date();
-        setProofImages((prev) => [...prev, preview]);
-        setProofCapturedAt((prev) => [...prev, now]);
+        const shot = await proofShotFromScreenshot(raw);
+        if (!shot) return;
+        setProofShots((prev) => [...prev, shot]);
     }, [webcamRef]);
 
     function removeProofAt(index: number) {
-        setProofImages((prev) => {
-            revokeProofPreviewUrl(prev[index]);
+        setProofShots((prev) => {
+            revokeProofPreviewUrl(prev[index]?.previewUrl);
             return prev.filter((_, i) => i !== index);
         });
-        setProofCapturedAt((prev) => prev.filter((_, i) => i !== index));
     }
 
     async function handleUpload() {
-        if (proofImages.length === 0) return;
+        if (proofShots.length === 0) return;
 
         setStep('UPLOADING');
         setError('');
 
         const formData = new FormData();
-        for (let i = 0; i < proofImages.length; i++) {
-            const res = await fetch(proofImages[i]);
-            const blob = await res.blob();
-            const file = new File([blob], `produce-proof-${i + 1}.jpg`, { type: 'image/jpeg' });
+        for (let i = 0; i < proofShots.length; i++) {
+            const b = proofShots[i].blob;
+            const type = b.type && b.type.startsWith('image/') ? b.type : 'image/jpeg';
+            const file = new File([b], `produce-proof-${i + 1}.jpg`, { type });
             formData.append('files', file);
         }
         formData.append('clientId', client.id);
@@ -243,9 +244,9 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                             pointerEvents: 'none'
                         }}
                     >
-                        {proofImages.length === 0
+                        {proofShots.length === 0
                             ? 'Tap the shutter for each photo — as many as you need'
-                            : `${proofImages.length} photo${proofImages.length === 1 ? '' : 's'} — keep shooting or open review`}
+                            : `${proofShots.length} photo${proofShots.length === 1 ? '' : 's'} — keep shooting or open review`}
                     </div>
 
                     <button
@@ -260,7 +261,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                 </div>
 
                 <div className="camera-controls" style={{ flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
-                    {proofImages.length > 0 && (
+                    {proofShots.length > 0 && (
                         <button
                             type="button"
                             onClick={() => setStep('PREVIEW')}
@@ -276,7 +277,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                                 cursor: 'pointer'
                             }}
                         >
-                            Review {proofImages.length} photo{proofImages.length === 1 ? '' : 's'}
+                            Review {proofShots.length} photo{proofShots.length === 1 ? '' : 's'}
                         </button>
                     )}
                     <button type="button" onClick={capture} className="shutter-btn" aria-label="Take photo" />
@@ -289,10 +290,10 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
         return (
             <div className="camera-overlay-full">
                 <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative', overflow: 'auto', flexDirection: 'column', display: 'flex', gap: 8, padding: 8 }}>
-                    {proofImages.map((src, i) => (
-                        <div key={i} style={{ position: 'relative', flex: 1, minHeight: '28vh' }}>
-                            <img src={src} alt={`Proof ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                            {proofCapturedAt[i] ? <ProofStampPreviewOverlay capturedAt={proofCapturedAt[i]} /> : null}
+                    {proofShots.map((shot, i) => (
+                        <div key={shot.previewUrl} style={{ position: 'relative', flex: 1, minHeight: '28vh' }}>
+                            <img src={shot.previewUrl} alt={`Proof ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                            <ProofStampPreviewOverlay capturedAt={shot.capturedAt} />
                             <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                                 <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>
                                     Photo {i + 1}
@@ -320,14 +321,14 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                 <div className="preview-actions">
                     <button
                         onClick={handleUpload}
-                        disabled={proofImages.length === 0}
+                        disabled={proofShots.length === 0}
                         className="btn-primary"
-                        style={{ backgroundColor: '#16a34a', opacity: proofImages.length === 0 ? 0.5 : 1 }}
+                        style={{ backgroundColor: '#16a34a', opacity: proofShots.length === 0 ? 0.5 : 1 }}
                     >
                         <Upload size={24} />
-                        {proofImages.length === 0
+                        {proofShots.length === 0
                             ? 'Submit photos'
-                            : `Submit ${proofImages.length} photo${proofImages.length === 1 ? '' : 's'}`}
+                            : `Submit ${proofShots.length} photo${proofShots.length === 1 ? '' : 's'}`}
                     </button>
                     <button type="button" onClick={() => setStep('CAPTURE')} className="btn-secondary" style={{ backgroundColor: 'var(--bg-surface)' }}>
                         Add another photo
