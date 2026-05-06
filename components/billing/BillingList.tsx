@@ -7,9 +7,10 @@ import { Search, Download, ChevronDown, ChevronUp, ChevronRight, Image } from 'l
 import { getBillingRequestsByWeek, type BillingRequest } from '@/lib/actions-orders-billing';
 import { getWeekStart, getWeekOptions, getWeekRangeString } from '@/lib/utils-week';
 import styles from './BillingList.module.css';
+import { primaryProofUrl } from '@/lib/proof-of-delivery-urls';
 
 function getProofUrl(order: any): string | null {
-    return order.proof_of_delivery_url || order.proof_of_delivery_image || order.delivery_proof_url || null;
+    return primaryProofUrl(order) || order.delivery_proof_url || null;
 }
 
 export function BillingList() {

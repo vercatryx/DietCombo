@@ -343,7 +343,7 @@ model Order {
   billAmount            Decimal?  @map("bill_amount") @db.Decimal(10, 2)
   notes                 String?
   proofOfDeliveryUrl    String?   @map("proof_of_delivery_url") @db.VarChar(500)
-  proofOfDeliveryImage  String?   @map("proof_of_delivery_image") @db.VarChar(500)
+  proofOfDeliveryUrls   Json?     @map("proof_of_delivery_urls")
   orderNumber           Int?      @unique @map("order_number")
   lastUpdated           DateTime  @default(now()) @updatedAt @map("last_updated") @db.Timestamp(6)
   updatedBy             String?   @map("updated_by") @db.VarChar(255)

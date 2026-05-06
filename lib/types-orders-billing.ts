@@ -63,7 +63,10 @@ export interface OrderDetail {
     status: string;
     scheduledDeliveryDate: string | null;
     actualDeliveryDate: string | null;
+    /** First proof URL (legacy / convenience) */
     deliveryProofUrl: string;
+    /** All delivery proof image URLs in order */
+    deliveryProofUrls: string[];
     totalValue: number;
     totalItems: number | null;
     notes: string | null;

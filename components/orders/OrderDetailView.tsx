@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, ShoppingCart, User, CreditCard, FileText, Trash2, Loader2 } from 'lucide-react';
+import { ArrowLeft, Package, ShoppingCart, User, CreditCard, FileText, Trash2, Loader2, X, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import styles from './OrderDetailView.module.css';
 import { deleteOrder } from '@/lib/actions-orders-billing';
 import type { OrderDetail } from '@/lib/types-orders-billing';
@@ -16,6 +16,83 @@ interface OrderDetailViewProps {
 export function OrderDetailView({ order, showDelete = true }: OrderDetailViewProps) {
     const router = useRouter();
     const [isDeleting, setIsDeleting] = useState(false);
+    const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+    const proofUrls =
+        order.deliveryProofUrls?.length > 0
+            ? order.deliveryProofUrls
+            : order.deliveryProofUrl
+              ? [order.deliveryProofUrl]
+              : [];
+
+    useEffect(() => {
+        if (lightboxIndex === null) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prev;
+        };
+    }, [lightboxIndex]);
+
+    useEffect(() => {
+        if (lightboxIndex === null) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setLightboxIndex(null);
+            if (proofUrls.length <= 1) return;
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setLightboxIndex((i) => (i === null ? null : (i + proofUrls.length - 1) % proofUrls.length));
+            }
+            if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setLightboxIndex((i) => (i === null ? null : (i + 1) % proofUrls.length));
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [lightboxIndex, proofUrls.length]);
+
+    const downloadProof = useCallback(
+        async (url: string, index: number) => {
+            const base = `order-${order.orderNumber ?? order.id}-proof-${index + 1}`;
+            const proxyUrl = `/api/storage-proxy?url=${encodeURIComponent(url)}`;
+
+            const saveBlob = async (blob: Blob) => {
+                const ext = blob.type.includes('png')
+                    ? 'png'
+                    : blob.type.includes('webp')
+                      ? 'webp'
+                      : blob.type.includes('gif')
+                        ? 'gif'
+                        : 'jpeg';
+                const objectUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = objectUrl;
+                a.download = `${base}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(objectUrl);
+            };
+
+            try {
+                const res = await fetch(proxyUrl);
+                if (!res.ok) throw new Error('proxy failed');
+                await saveBlob(await res.blob());
+                return;
+            } catch {
+                /* try direct (works if storage sends CORS) */
+            }
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('direct failed');
+                await saveBlob(await res.blob());
+            } catch {
+                window.open(url, '_blank', 'noopener,noreferrer');
+            }
+        },
+        [order.orderNumber, order.id]
+    );
 
     const handleDelete = async () => {
         if (!window.confirm('Delete this order? This cannot be undone.')) return;
@@ -173,24 +250,30 @@ export function OrderDetailView({ order, showDelete = true }: OrderDetailViewPro
                             {order.notes && <div className={styles.infoRow}><strong>Notes:</strong><span>{order.notes}</span></div>}
                             <div className={styles.infoRow}>
                                 <strong>Delivery Proof:</strong>
-                                {order.deliveryProofUrl ? (
-                                    <a
-                                        href={order.deliveryProofUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={styles.thumbnailLink}
-                                        aria-label="Open delivery proof image in a new tab"
-                                    >
-                                        <img
-                                            src={order.deliveryProofUrl}
-                                            alt="Delivery proof"
-                                            className={styles.thumbnailImage}
-                                            loading="lazy"
-                                        />
-                                    </a>
-                                ) : (
-                                    <span className={styles.muted}>img not attached yet</span>
-                                )}
+                                <span>
+                                    {proofUrls.length > 0 ? (
+                                        <div className={styles.proofThumbGrid}>
+                                            {proofUrls.map((url, i) => (
+                                                <button
+                                                    key={`${url}-${i}`}
+                                                    type="button"
+                                                    className={styles.proofThumbBtn}
+                                                    onClick={() => setLightboxIndex(i)}
+                                                    aria-label={`View delivery proof ${i + 1} of ${proofUrls.length}`}
+                                                >
+                                                    <img
+                                                        src={url}
+                                                        alt={`Delivery proof ${i + 1}`}
+                                                        className={styles.thumbnailImage}
+                                                        loading="lazy"
+                                                    />
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <span className={styles.muted}>No proof images attached yet</span>
+                                    )}
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -205,6 +288,72 @@ export function OrderDetailView({ order, showDelete = true }: OrderDetailViewPro
                     </div>
                 </div>
             </div>
+
+            {lightboxIndex !== null && proofUrls[lightboxIndex] && (
+                <div
+                    className={styles.lightboxOverlay}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Delivery proof"
+                    onClick={() => setLightboxIndex(null)}
+                >
+                    <div className={styles.lightboxInner} onClick={(e) => e.stopPropagation()}>
+                        <div className={styles.lightboxToolbar}>
+                            <span>
+                                Proof {lightboxIndex + 1} of {proofUrls.length}
+                            </span>
+                            <div className={styles.lightboxActions}>
+                                <button
+                                    type="button"
+                                    className={styles.lightboxIconBtn}
+                                    onClick={() => downloadProof(proofUrls[lightboxIndex], lightboxIndex)}
+                                >
+                                    <Download size={18} aria-hidden />
+                                    Download
+                                </button>
+                                <button
+                                    type="button"
+                                    className={styles.lightboxCloseBtn}
+                                    onClick={() => setLightboxIndex(null)}
+                                    aria-label="Close"
+                                >
+                                    <X size={22} aria-hidden />
+                                </button>
+                            </div>
+                        </div>
+                        <div className={styles.lightboxImgWrap}>
+                            {proofUrls.length > 1 && (
+                                <>
+                                    <button
+                                        type="button"
+                                        className={`${styles.lightboxNav} ${styles.lightboxNavPrev}`}
+                                        onClick={() =>
+                                            setLightboxIndex((lightboxIndex + proofUrls.length - 1) % proofUrls.length)
+                                        }
+                                        aria-label="Previous image"
+                                    >
+                                        <ChevronLeft size={28} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`${styles.lightboxNav} ${styles.lightboxNavNext}`}
+                                        onClick={() => setLightboxIndex((lightboxIndex + 1) % proofUrls.length)}
+                                        aria-label="Next image"
+                                    >
+                                        <ChevronRight size={28} />
+                                    </button>
+                                </>
+                            )}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={proofUrls[lightboxIndex]}
+                                alt=""
+                                className={styles.lightboxImg}
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

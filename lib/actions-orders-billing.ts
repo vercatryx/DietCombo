@@ -18,6 +18,7 @@ import { toDateStringInAppTz } from './timezone';
 import { supabase } from '@/lib/supabase';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { verifySession } from '@/lib/session';
+import { primaryProofUrl, hasAnyProofUrl, orderRowProofUrls } from '@/lib/proof-of-delivery-urls';
 
 async function fetchBrooklynClientIds(db: SupabaseClient): Promise<string[]> {
     const { data, error } = await db.from('clients').select('id').eq('unite_account', 'Brooklyn');
@@ -587,7 +588,12 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
         }
     }
 
-    const proofUrl = orderData.proof_of_delivery_url || orderData.proof_of_delivery_image || orderData.delivery_proof_url || '';
+    const proofUrls = orderRowProofUrls(orderData as any);
+    const proofUrl =
+        proofUrls[0] ||
+        primaryProofUrl(orderData as any) ||
+        (orderData as any).delivery_proof_url ||
+        '';
     const lastUpdated = orderData.last_updated || orderData.updated_at;
 
     return {
@@ -604,6 +610,7 @@ export async function getOrderById(orderId: string): Promise<OrderDetail | null>
         scheduledDeliveryDate: orderData.scheduled_delivery_date,
         actualDeliveryDate: orderData.actual_delivery_date,
         deliveryProofUrl: proofUrl,
+        deliveryProofUrls: proofUrls.length > 0 ? proofUrls : proofUrl ? [proofUrl] : [],
         totalValue: (orderDetails?.totalValue != null && orderDetails.totalValue > 0) ? orderDetails.totalValue : parseFloat(orderData.total_value || 0),
         totalItems: orderData.total_items,
         notes: orderData.notes,
@@ -812,7 +819,7 @@ export async function getBillingRequestsByWeek(weekStartDate?: Date): Promise<Bi
     const successfulOrderIds = new Set(allBillingRecords.map((br: any) => br.order_id != null ? String(br.order_id) : null).filter(Boolean));
 
     const allOrders = enrichedOrdersData.map((o: any) => {
-        const hasProof = !!(o.proof_of_delivery_url || o.proof_of_delivery_image || o.delivery_proof_url);
+        const hasProof = hasAnyProofUrl(o as any) || !!(o as any).delivery_proof_url;
         const isBilled = successfulOrderIds.has(String(o.id));
         return {
             ...o,

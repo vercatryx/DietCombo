@@ -226,14 +226,11 @@ export default function DriverDetailPage() {
         const files = e.target.files;
         if (!uploadStopRef.current) return;
         if (!files || files.length === 0) return;
-        if (files.length < 2) {
-            alert('Please select two photos for delivery proof.');
+        if (files.length < 1) {
             if (fileInputRef.current) fileInputRef.current.value = '';
             uploadStopRef.current = null;
             return;
         }
-        const file = files[0];
-        const file2 = files[1];
         const stop = uploadStopRef.current;
         const orderIdentifier = stop.orderNumber ?? stop.order_number ?? stop.orderId;
         if (!orderIdentifier) return;
@@ -241,8 +238,9 @@ export default function DriverDetailPage() {
         setUploadingStopId(stop.id);
         try {
             const formData = new FormData();
-            formData.append('file', file);
-            formData.append('file2', file2);
+            for (let i = 0; i < files.length; i++) {
+                formData.append('files', files[i]);
+            }
             formData.append('orderNumber', String(orderIdentifier));
             const result = await processDeliveryProof(formData);
             if (!result.success) {
@@ -645,12 +643,12 @@ export default function DriverDetailPage() {
                                                     <button
                                                         type="button"
                                                         className={`btn btn-outline block${uploadingStopId === s.id ? " btn-loading" : ""}`}
-                                                        title="Upload two photos from gallery"
+                                                        title="Upload one or more photos from gallery"
                                                         disabled={uploadingStopId === s.id}
                                                         onClick={() => handleUploadClick(s)}
                                                     >
                                                         <Upload style={{ height: 16, width: 16 }} />
-                                                        {uploadingStopId === s.id ? "Uploading…" : "Upload 2 photos"}
+                                                        {uploadingStopId === s.id ? "Uploading…" : "Upload photos"}
                                                     </button>
                                                 </>
                                             ) : (

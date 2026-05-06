@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { OrderDeliveryFlow } from './OrderDeliveryFlow';
+import { orderRowProofUrls } from '@/lib/proof-of-delivery-urls';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import '../delivery.css';
@@ -50,7 +51,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
     // Fetch order details
     let query = supabaseAdmin
         .from('orders')
-        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url, proof_of_delivery_image');
+        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url, proof_of_delivery_urls, proof_of_delivery_image');
 
     if (isUuid) {
         query = query.eq('id', id);
@@ -98,6 +99,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
                 ...upcomingOrder,
                 // upcoming_orders doesn't have delivery proof columns; use nulls until order is created
                 proof_of_delivery_url: null,
+                proof_of_delivery_urls: [],
                 proof_of_delivery_image: null
             };
             isUpcoming = true;
@@ -137,11 +139,8 @@ export default async function OrderDeliveryPage({ params }: Props) {
         address: client?.address || 'Unknown Address',
         clientPhone: client?.phone_number?.trim() || null,
         deliveryDate: order.scheduled_delivery_date,
-        alreadyDelivered: !!(
-            order.proof_of_delivery_url
-            || (order as any).proof_of_delivery_image
-            || (order as any).delivery_proof_url
-        ),
+        alreadyDelivered:
+            orderRowProofUrls(order as any).length > 0 || !!(order as any).delivery_proof_url,
         clientSignToken: client?.sign_token || null
     };
 

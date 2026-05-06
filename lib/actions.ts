@@ -27,6 +27,7 @@ import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
 import { isProduceServiceType } from './isProduceServiceType';
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from './deliveryEligibility';
 import { mergeDietaryFlagsIntoNote, type DietaryFlags } from './dietary-preferences-note';
+import { hasAnyProofUrl, primaryProofUrl, proofPayloadForDb } from './proof-of-delivery-urls';
 
 export type { MealPlannerOrderResult } from './meal-planner-utils';
 export type { DietaryFlags } from './dietary-preferences-note';
@@ -5305,7 +5306,7 @@ export async function getOrderHistory(clientId: string, caseId?: string | null, 
                     status: orderData.status,
                     scheduledDeliveryDate: orderData.scheduled_delivery_date,
                     actualDeliveryDate: orderData.actual_delivery_date,
-                    deliveryProofUrl: orderData.proof_of_delivery_url || orderData.proof_of_delivery_image || '',
+                    deliveryProofUrl: primaryProofUrl(orderData as any) || '',
                     totalValue: parseFloat(orderData.total_value || 0),
                     totalItems: orderData.total_items,
                     notes: orderData.notes,
@@ -5489,7 +5490,7 @@ export async function getCompletedOrdersWithDeliveryProof(clientId: string) {
                 status: orderData.status,
                 scheduledDeliveryDate: orderData.scheduled_delivery_date,
                 actualDeliveryDate: orderData.actual_delivery_date,
-                deliveryProofUrl: orderData.proof_of_delivery_image || '',
+                deliveryProofUrl: primaryProofUrl(orderData as any) || '',
                 totalValue: parseFloat(orderData.total_value || 0),
                 totalItems: orderData.total_items,
                 notes: orderData.notes,
@@ -8436,7 +8437,7 @@ export async function getActiveOrderForClient(clientId: string, referenceData?: 
                 deliveryDay: orderData.delivery_day, // Include delivery_day if present
                 isUpcoming: orderData.is_upcoming || false, // Flag for upcoming orders
                 orderNumber: orderData.order_number, // Numeric Order ID
-                proofOfDelivery: orderData.proof_of_delivery_url || orderData.proof_of_delivery_image // URL to proof of delivery image (check both fields for compatibility)
+                proofOfDelivery: primaryProofUrl(orderData as any) // first proof URL (legacy + JSON array)
             };
 
             // Determine which table to query based on whether this is an upcoming order
@@ -8687,7 +8688,7 @@ export async function getRecentOrdersForClient(clientId: string, limit: number =
                 deliveryDay: orderData.delivery_day,
                 isUpcoming: false,
                 orderNumber: orderData.order_number,
-                proofOfDelivery: orderData.proof_of_delivery_image || orderData.delivery_proof_url
+                proofOfDelivery: primaryProofUrl(orderData as any) || orderData.delivery_proof_url
             };
 
             const vendorSelectionsTable = 'order_vendor_selections';
@@ -10311,12 +10312,12 @@ export async function isOrderUnderVendor(orderId: string, vendorId: string) {
 export async function orderHasDeliveryProof(orderId: string) {
     const { data, error } = await supabase
         .from('orders')
-        .select('proof_of_delivery_url, proof_of_delivery_image')
+        .select('proof_of_delivery_url, proof_of_delivery_urls, proof_of_delivery_image')
         .eq('id', orderId)
         .single();
 
     if (error || !data) return false;
-    return !!(data.proof_of_delivery_url || data.proof_of_delivery_image);
+    return hasAnyProofUrl(data as any);
 }
 
 export async function updateOrderDeliveryProof(orderId: string, proofUrl: string) {
@@ -10330,11 +10331,12 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
             return { success: false, error: 'Unauthorized: Order does not belong to this vendor' };
         }
     }
+    const proofDb = proofPayloadForDb([proofUrl]);
     // 1. Update Order Status
     const { data: order, error } = await supabase
         .from('orders')
         .update({
-            proof_of_delivery_url: proofUrl,
+            ...proofDb,
             status: 'billing_pending', // Changed from 'completed'
             actual_delivery_date: new Date().toISOString()
         })
@@ -10401,12 +10403,17 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
 export async function saveDeliveryProofUrlAndProcessOrder(
     orderId: string,
     orderType: string,
-    proofUrl: string,
-    /** Second proof image URL. Omit to leave existing value unchanged; pass null to clear. */
-    proofUrl2?: string | null
+    proofUrls: string | string[]
 ) {
+    const urls = (Array.isArray(proofUrls) ? proofUrls : [proofUrls])
+        .map((u) => String(u).trim())
+        .filter(Boolean);
+    if (urls.length === 0) {
+        return { success: false, error: 'At least one proof URL is required' };
+    }
+
     console.log(`[Process Pending Order] START saveDeliveryProofUrlAndProcessOrder for Order: "${orderId}", Type: "${orderType}"`);
-    console.log(`[Process Pending Order] Proof URL: ${proofUrl}`, proofUrl2 !== undefined ? `second: ${proofUrl2 ?? '(clear)'}` : '');
+    console.log(`[Process Pending Order] Proof URLs (${urls.length}):`, urls);
 
     const session = await getSession();
     const currentUserName = session?.name || 'Admin';
@@ -10841,16 +10848,13 @@ export async function saveDeliveryProofUrlAndProcessOrder(
     // Now update the order (from either upcoming or existing orders table) with proof URL
     // If order was just processed, it already has status 'billing_pending' and billing record created
     // Just update the proof URL and other fields
+    const proofDb = proofPayloadForDb(urls);
     const updateData: any = {
-        proof_of_delivery_url: proofUrl.trim(),
+        proof_of_delivery_urls: proofDb.proof_of_delivery_urls,
+        proof_of_delivery_url: proofDb.proof_of_delivery_url,
         updated_by: currentUserName,
         last_updated: new Date().toISOString()
     };
-
-    if (proofUrl2 !== undefined) {
-        updateData.proof_of_delivery_image =
-            proofUrl2 && String(proofUrl2).trim() ? String(proofUrl2).trim() : null;
-    }
 
     // Only update status and actual_delivery_date if order wasn't just processed
     if (!wasProcessed) {
@@ -11748,7 +11752,7 @@ export async function getOrderById(orderId: string) {
         status: orderData.status,
         scheduledDeliveryDate: orderData.scheduled_delivery_date,
         actualDeliveryDate: orderData.actual_delivery_date,
-        deliveryProofUrl: orderData.proof_of_delivery_image || '',
+        deliveryProofUrl: primaryProofUrl(orderData as any) || '',
         totalValue: parseFloat(orderData.total_value || 0),
         totalItems: orderData.total_items,
         notes: orderData.notes,
@@ -13012,10 +13016,11 @@ export async function bulkUpdateProduceProofsForVendor(
                 }
 
                 const nowIso = new Date().toISOString();
+                const proofDb = proofPayloadForDb([proofUrl]);
                 const { error: updErr } = await supabaseAdmin
                     .from('orders')
                     .update({
-                        proof_of_delivery_url: proofUrl,
+                        ...proofDb,
                         status: 'billing_pending',
                         actual_delivery_date: nowIso
                     })

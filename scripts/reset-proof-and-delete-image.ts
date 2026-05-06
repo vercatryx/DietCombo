@@ -158,6 +158,7 @@ async function main() {
   // 4) Update order row: clear proof + reset status/dates
   const updatePayload: Record<string, any> = {};
   if ('proof_of_delivery_url' in order) updatePayload.proof_of_delivery_url = null;
+  if ('proof_of_delivery_urls' in order) updatePayload.proof_of_delivery_urls = [];
   if ('proof_of_delivery_image' in order) updatePayload.proof_of_delivery_image = null;
   if ('delivery_proof_url' in order) updatePayload.delivery_proof_url = null;
   if ('actual_delivery_date' in order) updatePayload.actual_delivery_date = null;

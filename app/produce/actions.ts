@@ -12,13 +12,13 @@ import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
+import { collectImageFilesFromFormData, proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
 
 export async function processProduceProof(formData: FormData) {
-    const file = formData.get('file') as File | null;
-    const file2 = formData.get('file2') as File | null;
+    const files = collectImageFilesFromFormData(formData);
     const orderNumber = formData.get('orderNumber') as string;
-    const testUrl = formData.get('testUrl') as string | null; // Optional test URL to bypass R2
-    const testUrl2 = formData.get('testUrl2') as string | null;
+    const testUrl = formData.get('testUrl') as string | null;
+    const testUrlsMulti = formData.getAll('testUrls').filter((t): t is string => typeof t === 'string' && t.trim() !== '');
     let proofTimeIso: string | null = null;
 
     const supabaseAdmin = createClient(
@@ -26,17 +26,19 @@ export async function processProduceProof(formData: FormData) {
         getSupabaseDbApiKey()!
     );
 
-    const hasPrimaryFile = !!(file && typeof file === 'object' && 'size' in file && file.size > 0);
-    const hasSecondaryFile = !!(file2 && typeof file2 === 'object' && 'size' in file2 && file2.size > 0);
+    const testUrlList: string[] =
+        testUrlsMulti.length > 0
+            ? testUrlsMulti.map((t) => t.trim())
+            : testUrl
+              ? [String(testUrl).trim()]
+              : [];
 
-    // Allow test URL to bypass file requirement
-    if ((!hasPrimaryFile && !testUrl) || !orderNumber) {
-        console.error('[Produce Debug] processProduceProof called but missing file/testUrl or orderNumber', {
-            hasFile: hasPrimaryFile,
-            hasTestUrl: !!testUrl,
-            orderNumber
-        });
-        return { success: false, error: 'Missing file/test URL or order number' };
+    if (files.length === 0 && testUrlList.length === 0) {
+        console.error('[Produce Debug] processProduceProof: no files or test URLs', { orderNumber });
+        return { success: false, error: 'Missing image(s) or test URL(s) or order number' };
+    }
+    if (!orderNumber) {
+        return { success: false, error: 'Missing order number' };
     }
 
     try {
@@ -99,66 +101,46 @@ export async function processProduceProof(formData: FormData) {
 
         const orderId = foundOrder.id;
 
-        // 2. Handle File Upload or Test URL (optional second image)
-        let publicUrl: string;
-        let publicUrl2: string | null = null;
+        let publicUrls: string[];
 
-        if (testUrl) {
-            console.log(`[Produce Debug] Using test URL (skipping R2): ${testUrl}`);
-            publicUrl = String(testUrl).trim();
-            if (testUrl2 && String(testUrl2).trim()) {
-                publicUrl2 = String(testUrl2).trim();
-            }
-        } else if (hasPrimaryFile && file) {
-            const rawBuffer = Buffer.from(await file.arrayBuffer());
-            const { buffer, stampedAtIso, contentType, fileExtension } = await stampTimestampOnImageBuffer(
-                rawBuffer,
-                file.type || 'image/jpeg',
-                new Date()
-            );
-            proofTimeIso = stampedAtIso;
-            const timestamp = Date.now();
-            const key = `produce-proof-${orderNumber}-${timestamp}.${fileExtension}`;
-
-            await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
+        if (testUrlList.length > 0) {
+            publicUrls = testUrlList;
+        } else {
             const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
             const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
-            publicUrl = `${baseUrl}/${key}`;
+            publicUrls = [];
 
-            if (hasSecondaryFile && file2) {
-                const raw2 = Buffer.from(await file2.arrayBuffer());
-                const stamped2 = await stampTimestampOnImageBuffer(
-                    raw2,
-                    file2.type || 'image/jpeg',
+            for (let i = 0; i < files.length; i++) {
+                const f = files[i];
+                const rawBuffer = Buffer.from(await f.arrayBuffer());
+                const { buffer, stampedAtIso, contentType, fileExtension } = await stampTimestampOnImageBuffer(
+                    rawBuffer,
+                    f.type || 'image/jpeg',
                     new Date()
                 );
-                const key2 = `produce-proof-${orderNumber}-${Date.now()}-2.${stamped2.fileExtension}`;
-                await uploadFile(key2, stamped2.buffer, stamped2.contentType, process.env.R2_DELIVERY_BUCKET_NAME);
-                publicUrl2 = `${baseUrl}/${key2}`;
+                if (i === 0) proofTimeIso = stampedAtIso;
+                const key = `produce-proof-${orderNumber}-${Date.now()}-${i + 1}.${fileExtension}`;
+                await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
+                publicUrls.push(`${baseUrl}/${key}`);
             }
-        } else {
-            return { success: false, error: 'No file or test URL provided' };
         }
 
-        // 3. Update Order in Supabase
-        // For upcoming_orders, use saveDeliveryProofUrlAndProcessOrder to properly process the order
+        const proofDb = proofPayloadForDb(publicUrls);
+
         if (table === 'upcoming_orders') {
-            const result = await saveDeliveryProofUrlAndProcessOrder(orderId, 'upcoming', publicUrl, publicUrl2);
+            const result = await saveDeliveryProofUrlAndProcessOrder(orderId, 'upcoming', publicUrls);
             if (!result.success) {
                 return { success: false, error: result.error || 'Failed to process order' };
             }
             revalidatePath('/admin');
             sendDeliveryNotificationIfEnabled(supabaseAdmin, foundOrder.client_id).catch(() => {});
-            return { success: true, url: publicUrl, url2: publicUrl2 };
+            return { success: true, urls: publicUrls, url: publicUrls[0] };
         }
 
-        // For orders table, update with produce processing status.
-        // Set both actual_delivery_date and scheduled_delivery_date to proof upload date (Produce = prompt/realtime).
         const proofUploadTime = proofTimeIso ? new Date(proofTimeIso) : new Date();
         const proofUploadDateStr = toDateStringInAppTz(proofUploadTime);
         const updateData: any = {
-            proof_of_delivery_url: publicUrl,
-            proof_of_delivery_image: publicUrl2,
+            ...proofDb,
             status: 'billing_pending',
             actual_delivery_date: proofUploadTime.toISOString(),
             scheduled_delivery_date: proofUploadDateStr
@@ -232,7 +214,7 @@ export async function processProduceProof(formData: FormData) {
         const smsClientId = orderDetails?.client_id ?? foundOrder.client_id;
         sendDeliveryNotificationIfEnabled(supabaseAdmin, smsClientId).catch(() => {});
 
-        return { success: true, url: publicUrl, url2: publicUrl2 };
+        return { success: true, urls: publicUrls, url: publicUrls[0] };
     } catch (error: any) {
         console.error('Error processing produce:', error);
         return { success: false, error: error.message };
@@ -286,46 +268,32 @@ export async function getClientForProduce(clientId: string) {
  * Returns the public URL for use when creating the order.
  */
 export async function uploadProduceProofOnly(formData: FormData) {
-    const file = formData.get('file') as File | null;
-    const file2 = formData.get('file2') as File | null;
+    const files = collectImageFilesFromFormData(formData);
     const clientId = formData.get('clientId') as string;
 
-    const hasPrimaryFile = !!(file && typeof file === 'object' && 'size' in file && file.size > 0);
-    const hasSecondaryFile = !!(file2 && typeof file2 === 'object' && 'size' in file2 && file2.size > 0);
-
-    if (!hasPrimaryFile || !clientId) {
-        return { success: false, error: 'Missing file or client ID' };
+    if (files.length === 0 || !clientId) {
+        return { success: false, error: 'Missing file(s) or client ID' };
     }
 
     try {
-        const rawBuffer = Buffer.from(await file!.arrayBuffer());
-        const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
-            rawBuffer,
-            file!.type || 'image/jpeg',
-            new Date()
-        );
-        const timestamp = Date.now();
-        const key = `produce-proof-${clientId}-${timestamp}.${fileExtension}`;
-
-        await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
         const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
         const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
-        const publicUrl = `${baseUrl}/${key}`;
+        const urls: string[] = [];
 
-        let url2: string | null = null;
-        if (hasSecondaryFile && file2) {
-            const raw2 = Buffer.from(await file2.arrayBuffer());
-            const stamped2 = await stampTimestampOnImageBuffer(
-                raw2,
-                file2.type || 'image/jpeg',
+        for (let i = 0; i < files.length; i++) {
+            const f = files[i];
+            const rawBuffer = Buffer.from(await f.arrayBuffer());
+            const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
+                rawBuffer,
+                f.type || 'image/jpeg',
                 new Date()
             );
-            const key2 = `produce-proof-${clientId}-${Date.now()}-2.${stamped2.fileExtension}`;
-            await uploadFile(key2, stamped2.buffer, stamped2.contentType, process.env.R2_DELIVERY_BUCKET_NAME);
-            url2 = `${baseUrl}/${key2}`;
+            const key = `produce-proof-${clientId}-${Date.now()}-${i + 1}.${fileExtension}`;
+            await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
+            urls.push(`${baseUrl}/${key}`);
         }
 
-        return { success: true, url: publicUrl, url2 };
+        return { success: true, urls, url: urls[0] };
     } catch (error: any) {
         console.error('[Upload Produce Proof Only] Error:', error);
         return { success: false, error: error.message || 'Upload failed' };
@@ -336,17 +304,19 @@ export async function uploadProduceProofOnly(formData: FormData) {
  * Create a Produce order with delivery proof URL already set.
  * Called only after the image has been uploaded to prevent unfulfilled orders.
  */
-export async function createProduceOrderWithProof(
-    clientId: string,
-    deliveryProofUrl: string,
-    secondProofUrl?: string | null
-) {
+export async function createProduceOrderWithProof(clientId: string, proofUrls: string[]) {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         getSupabaseDbApiKey()!
     );
 
     try {
+        const urls = proofUrls.map((u) => String(u).trim()).filter(Boolean);
+        if (urls.length === 0) {
+            return { success: false, error: 'At least one proof image URL is required' };
+        }
+        const proofDb = proofPayloadForDb(urls);
+
         const { data: client, error: clientError } = await supabaseAdmin
             .from('clients')
             .select('id, full_name, address, sign_token, navigator_id')
@@ -387,8 +357,7 @@ export async function createProduceOrderWithProof(
             total_value: billAmount,
             total_items: 1,
             bill_amount: billAmount,
-            proof_of_delivery_url: deliveryProofUrl,
-            proof_of_delivery_image: secondProofUrl ?? null,
+            ...proofDb,
             actual_delivery_date: new Date().toISOString(),
             created_at: new Date().toISOString()
         };

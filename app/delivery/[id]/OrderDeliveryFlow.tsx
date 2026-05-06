@@ -27,11 +27,9 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>(
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
-    const [proofImages, setProofImages] = useState<[string | null, string | null]>([null, null]);
-    const [proofCapturedAt, setProofCapturedAt] = useState<[Date | null, Date | null]>([null, null]);
-    const [captureIndex, setCaptureIndex] = useState<0 | 1>(0);
-    const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
-    const [uploadedProofUrl2, setUploadedProofUrl2] = useState<string | null>(null);
+    const [proofImages, setProofImages] = useState<string[]>([]);
+    const [proofCapturedAt, setProofCapturedAt] = useState<Date[]>([]);
+    const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>([]);
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
@@ -78,50 +76,36 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
         const now = new Date();
-        if (captureIndex === 0) {
-            setProofImages([raw, null]);
-            setProofCapturedAt([now, null]);
-            setCaptureIndex(1);
-        } else {
-            setProofImages(([first]) => [first, raw]);
-            setProofCapturedAt(([t0]) => [t0, now]);
-            setStep('PREVIEW');
-        }
-    }, [captureIndex, webcamRef]);
+        setProofImages((prev) => [...prev, raw]);
+        setProofCapturedAt((prev) => [...prev, now]);
+    }, [webcamRef]);
+
+    function removeProofAt(index: number) {
+        setProofImages((prev) => prev.filter((_, i) => i !== index));
+        setProofCapturedAt((prev) => prev.filter((_, i) => i !== index));
+    }
 
     async function handleUpload() {
-        const [img0, img1] = proofImages;
-        if (!img0 || !img1) return;
+        if (proofImages.length === 0) return;
 
         setStep('UPLOADING');
         setError('');
 
-        const res0 = await fetch(img0);
-        const blob0 = await res0.blob();
-        const file0 = new File([blob0], "delivery-proof-1.jpg", { type: "image/jpeg" });
-
-        const res1 = await fetch(img1);
-        const blob1 = await res1.blob();
-        const file1 = new File([blob1], "delivery-proof-2.jpg", { type: "image/jpeg" });
-
         const formData = new FormData();
-        formData.append('file', file0);
-        formData.append('file2', file1);
+        for (let i = 0; i < proofImages.length; i++) {
+            const res = await fetch(proofImages[i]);
+            const blob = await res.blob();
+            const file = new File([blob], `delivery-proof-${i + 1}.jpg`, { type: 'image/jpeg' });
+            formData.append('files', file);
+        }
         formData.append('orderNumber', order.id);
-
-        console.log('[Client Debug] Calling processDeliveryProof with:', {
-            orderId: order.id,
-            fileSizes: [file0.size, file1.size],
-            orderNumber: order.orderNumber
-        });
 
         try {
             const result = await processDeliveryProof(formData);
-            console.log('[Client Debug] processDeliveryProof result:', result);
 
             if (result.success) {
-                setUploadedProofUrl((result as any)?.url ?? null);
-                setUploadedProofUrl2((result as any)?.url2 ?? null);
+                const urls = (result as any)?.urls as string[] | undefined;
+                setUploadedProofUrls(Array.isArray(urls) && urls.length > 0 ? urls : ((result as any)?.url ? [(result as any).url] : []));
                 setStep('SUCCESS');
             } else {
                 console.error('[Client Debug] Server returned error:', result.error);
@@ -196,15 +180,14 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
 
                     <button
                         onClick={() => {
-                            setProofImages([null, null]);
-                            setProofCapturedAt([null, null]);
-                            setCaptureIndex(0);
+                            setProofImages([]);
+                            setProofCapturedAt([]);
                             setStep('CAPTURE');
                         }}
                         className="btn-primary"
                     >
                     <Camera size={24} />
-                    Take photos using Camera
+                    Take delivery photos
                 </button>
             </div>
         );
@@ -310,14 +293,15 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                             pointerEvents: 'none'
                         }}
                     >
-                        {captureIndex === 0 ? 'Photo 1 of 2 — then take a second picture' : 'Photo 2 of 2 — tap shutter'}
+                        {proofImages.length === 0
+                            ? 'Tap the shutter for each photo — as many as you need'
+                            : `${proofImages.length} photo${proofImages.length === 1 ? '' : 's'} — keep shooting or open review`}
                     </div>
 
                     <button
                         onClick={() => {
-                            setProofImages([null, null]);
-                            setProofCapturedAt([null, null]);
-                            setCaptureIndex(0);
+                            setProofImages([]);
+                            setProofCapturedAt([]);
                             setStep('VERIFY');
                         }}
                         className="close-btn"
@@ -326,10 +310,31 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     </button>
                 </div>
 
-                <div className="camera-controls">
+                <div className="camera-controls" style={{ flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
+                    {proofImages.length > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => setStep('PREVIEW')}
+                            className="btn-secondary"
+                            style={{
+                                padding: '10px 18px',
+                                borderRadius: '999px',
+                                fontWeight: 600,
+                                fontSize: '0.875rem',
+                                border: '1px solid rgba(255,255,255,0.35)',
+                                background: 'rgba(0,0,0,0.55)',
+                                color: '#f8fafc',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            Review {proofImages.length} photo{proofImages.length === 1 ? '' : 's'}
+                        </button>
+                    )}
                     <button
+                        type="button"
                         onClick={capture}
                         className="shutter-btn"
+                        aria-label="Take photo"
                     />
                 </div>
             </div>
@@ -337,54 +342,71 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     }
 
     if (step === 'PREVIEW') {
-        const [img0, img1] = proofImages;
-        const [t0, t1] = proofCapturedAt;
         return (
             <div className="camera-overlay-full">
                 <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative', overflow: 'auto', flexDirection: 'column', display: 'flex', gap: 8, padding: 8 }}>
-                    {img0 && (
-                        <div style={{ position: 'relative', flex: 1, minHeight: '38vh' }}>
+                    {proofImages.map((src, i) => (
+                        <div key={i} style={{ position: 'relative', flex: 1, minHeight: '28vh' }}>
                             <img
-                                src={img0}
-                                alt="Proof 1"
+                                src={src}
+                                alt={`Proof ${i + 1}`}
                                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                             />
-                            {t0 ? <ProofStampPreviewOverlay capturedAt={t0} /> : null}
-                            <div style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>Photo 1</div>
+                            {proofCapturedAt[i] ? <ProofStampPreviewOverlay capturedAt={proofCapturedAt[i]} /> : null}
+                            <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>
+                                    Photo {i + 1}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => removeProofAt(i)}
+                                    style={{
+                                        background: 'rgba(220,38,38,0.9)',
+                                        color: '#fff',
+                                        border: 'none',
+                                        borderRadius: 8,
+                                        padding: '6px 12px',
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Remove
+                                </button>
+                            </div>
                         </div>
-                    )}
-                    {img1 && (
-                        <div style={{ position: 'relative', flex: 1, minHeight: '38vh' }}>
-                            <img
-                                src={img1}
-                                alt="Proof 2"
-                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                            />
-                            {t1 ? <ProofStampPreviewOverlay capturedAt={t1} /> : null}
-                            <div style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>Photo 2</div>
-                        </div>
-                    )}
+                    ))}
                 </div>
                 <div className="preview-actions">
                     <button
                         onClick={handleUpload}
+                        disabled={proofImages.length === 0}
                         className="btn-primary"
-                        style={{ backgroundColor: '#16a34a' }}
+                        style={{ backgroundColor: '#16a34a', opacity: proofImages.length === 0 ? 0.5 : 1 }}
                     >
                         <Upload size={24} />
-                        Submit proof (both photos)
+                        {proofImages.length === 0
+                            ? 'Submit photos'
+                            : `Submit ${proofImages.length} photo${proofImages.length === 1 ? '' : 's'}`}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setStep('CAPTURE')}
+                        className="btn-secondary"
+                        style={{ backgroundColor: 'var(--bg-surface)' }}
+                    >
+                        Add another photo
                     </button>
                     <button
                         onClick={() => {
-                            setProofImages([null, null]);
-                            setProofCapturedAt([null, null]);
-                            setCaptureIndex(0);
+                            setProofImages([]);
+                            setProofCapturedAt([]);
                             setStep('CAPTURE');
                         }}
                         className="btn-secondary"
                         style={{ backgroundColor: 'var(--bg-surface)' }}
                     >
-                        Retake all
+                        Clear all & retake
                     </button>
                 </div>
             </div>
@@ -397,7 +419,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 <div className="spinner" style={{ margin: '0 auto', width: '4rem', height: '4rem', borderTopColor: 'var(--color-primary)' }}></div>
                 <div>
                     <h3 className="text-title" style={{ fontSize: '1.25rem' }}>Uploading...</h3>
-                    <p className="text-subtitle">Saving both proof photos</p>
+                    <p className="text-subtitle">Saving proof photos…</p>
                 </div>
             </div>
         );
@@ -420,9 +442,10 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 <div className="divider" style={{ marginTop: '1rem' }} />
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {uploadedProofUrl && (
+                    {uploadedProofUrls.map((href, i) => (
                         <a
-                            href={uploadedProofUrl}
+                            key={href + i}
+                            href={href}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{
@@ -441,42 +464,15 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                             }}
                         >
                             <ImageIcon size={16} />
-                            View photo 1
+                            View photo {i + 1}
                             <ExternalLink size={14} />
                         </a>
-                    )}
-                    {uploadedProofUrl2 && (
-                        <a
-                            href={uploadedProofUrl2}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.5rem',
-                                padding: '0.75rem',
-                                background: 'rgba(34, 197, 94, 0.1)',
-                                border: '1px solid rgba(34, 197, 94, 0.3)',
-                                borderRadius: '0.5rem',
-                                color: '#4ade80',
-                                textDecoration: 'none',
-                                fontWeight: 500,
-                                fontSize: '0.875rem'
-                            }}
-                        >
-                            <ImageIcon size={16} />
-                            View photo 2
-                            <ExternalLink size={14} />
-                        </a>
-                    )}
+                    ))}
                     <button
                         onClick={() => {
-                            setProofImages([null, null]);
-                            setProofCapturedAt([null, null]);
-                            setCaptureIndex(0);
-                            setUploadedProofUrl(null);
-                            setUploadedProofUrl2(null);
+                            setProofImages([]);
+                            setProofCapturedAt([]);
+                            setUploadedProofUrls([]);
                             setStep('CAPTURE');
                         }}
                         style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 500 }}
@@ -501,9 +497,8 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
             </div>
             <button
                 onClick={() => {
-                    setProofImages([null, null]);
-                    setProofCapturedAt([null, null]);
-                    setCaptureIndex(0);
+                    setProofImages([]);
+                    setProofCapturedAt([]);
                     setStep('CAPTURE');
                 }}
                 className="btn-secondary"
