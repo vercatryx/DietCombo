@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { supabase, fetchAllRows } from "@/lib/supabase";
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
+import { isProduceServiceType } from "@/lib/isProduceServiceType";
 import { getSession } from "@/lib/session";
 
 /**
@@ -82,13 +83,14 @@ export async function GET(req: Request) {
                     hasFood(r.service_type) &&
                     (r.lat == null || r.lng == null)
             ).length,
-            /** Delivery-eligible dependants missing lat/lng (shown in Needs Geocoding tab and on map when geocoded). */
+            /** Delivery-eligible non-produce dependants missing lat/lng (routes map / Needs geocoding; produce is vendor delivery). */
             dependant_missing_geo: rows.filter(
                 (r) =>
                     r.parent_client_id != null &&
                     r.parent_client_id !== "" &&
                     (r.lat == null || r.lng == null) &&
-                    isDeliveryEligible(r)
+                    isDeliveryEligible(r) &&
+                    !isProduceServiceType(r.service_type)
             ).length,
         };
 

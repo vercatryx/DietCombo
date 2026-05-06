@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
-import { getSubmissionByToken, updateSubmissionStatus, finalizeSubmission } from '@/lib/form-actions';
+import { Great_Vibes } from 'next/font/google';
+import { getSubmissionByToken, updateSubmissionData, updateSubmissionStatus, finalizeSubmission } from '@/lib/form-actions';
 import { FormSchema } from '@/lib/form-types';
-import { CheckCircle, XCircle, Loader2, Edit, MessageSquare, User } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, Edit, MessageSquare, User, Download, PenLine, Type } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { jsPDF } from 'jspdf';
 import { PDFDocument } from 'pdf-lib';
+
+const signatureHandFont = Great_Vibes({
+    weight: '400',
+    subsets: ['latin'],
+    display: 'swap',
+});
 
 export default function VerifyOrderPage() {
     const params = useParams();
@@ -22,12 +29,37 @@ export default function VerifyOrderPage() {
     const [processing, setProcessing] = useState(false);
     const [completed, setCompleted] = useState(false);
     const [comments, setComments] = useState('');
+    /** Editable copy of submission answers (nutritionist can correct before accept/reject). */
+    const [answers, setAnswers] = useState<Record<string, string>>({});
+    const [signatureMode, setSignatureMode] = useState<'draw' | 'type'>('draw');
+    const [typedSignature, setTypedSignature] = useState('');
 
     const signatureRef = useRef<SignatureCanvas>(null);
+
+    const fieldStyle: CSSProperties = {
+        width: '100%',
+        padding: '12px',
+        borderRadius: '6px',
+        border: '1px solid var(--border-color)',
+        background: 'var(--bg-primary)',
+        color: 'var(--text-primary)',
+        fontFamily: 'inherit',
+        fontSize: '14px',
+        boxSizing: 'border-box',
+    };
 
     useEffect(() => {
         loadSubmission();
     }, [token]);
+
+    useEffect(() => {
+        if (!submission?.data || typeof submission.data !== 'object') return;
+        const next: Record<string, string> = {};
+        for (const [k, v] of Object.entries(submission.data as Record<string, unknown>)) {
+            if (v != null && v !== '') next[k] = String(v);
+        }
+        setAnswers(next);
+    }, [submission?.id]);
 
     async function loadSubmission() {
         try {
@@ -52,6 +84,35 @@ export default function VerifyOrderPage() {
         }
     }
 
+    function handleAnswerChange(questionId: string, value: string) {
+        setAnswers((prev) => {
+            const next = { ...prev, [questionId]: value };
+            const conditionalKey = `${questionId}_conditional`;
+            if (prev[questionId] !== value) {
+                delete next[conditionalKey];
+            }
+            return next;
+        });
+    }
+
+    function handleConditionalTextChange(questionId: string, value: string) {
+        setAnswers((prev) => ({
+            ...prev,
+            [`${questionId}_conditional`]: value,
+        }));
+    }
+
+    async function persistAnswersIfPending(): Promise<boolean> {
+        if (submission?.status !== 'pending') return true;
+        const saveResult = await updateSubmissionData(token, answers);
+        if (!saveResult.success) {
+            setError(saveResult.error || 'Failed to save form edits');
+            return false;
+        }
+        setSubmission({ ...submission, data: answers });
+        return true;
+    }
+
     async function handleReject() {
         if (!comments.trim()) {
             alert('Please provide a reason for rejection');
@@ -60,6 +121,8 @@ export default function VerifyOrderPage() {
 
         setProcessing(true);
         try {
+            if (!(await persistAnswersIfPending())) return;
+
             const result = await updateSubmissionStatus(token, 'rejected', undefined, comments);
             if (result.success) {
                 setCompleted(true);
@@ -74,20 +137,80 @@ export default function VerifyOrderPage() {
         }
     }
 
-    async function handleAccept() {
+    async function typedSignatureToDataURL(text: string): Promise<string> {
+        const fontFamily = signatureHandFont.style.fontFamily;
+        await document.fonts.ready;
+        try {
+            await document.fonts.load(`400 72px ${fontFamily}`);
+        } catch {
+            /* ignore */
+        }
+
+        const w = 700;
+        const h = 200;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Could not create signature image');
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#111111';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        const maxWidth = w - 48;
+        let fontSize = 72;
+        while (fontSize >= 22) {
+            ctx.font = `400 ${fontSize}px ${fontFamily}`;
+            if (ctx.measureText(text).width <= maxWidth) break;
+            fontSize -= 2;
+        }
+        ctx.font = `400 ${fontSize}px ${fontFamily}`;
+        ctx.fillText(text, w / 2, h / 2);
+
+        return canvas.toDataURL('image/png');
+    }
+
+    async function getSignaturePngDataUrl(): Promise<string | null> {
+        if (signatureMode === 'type') {
+            const t = typedSignature.trim();
+            if (!t) return null;
+            return typedSignatureToDataURL(t);
+        }
+        if (!signatureRef.current || signatureRef.current.isEmpty()) return null;
+        return signatureRef.current.toDataURL();
+    }
+
+    function handleAccept() {
+        setTypedSignature('');
+        setSignatureMode('draw');
         setShowSignature(true);
     }
 
+    useEffect(() => {
+        if (!showSignature) return;
+        const id = requestAnimationFrame(() => {
+            signatureRef.current?.clear();
+        });
+        return () => cancelAnimationFrame(id);
+    }, [showSignature]);
+
     async function handleSignAndComplete() {
-        if (!signatureRef.current || signatureRef.current.isEmpty()) {
-            alert('Please provide a signature');
+        const signatureDataUrl = await getSignaturePngDataUrl();
+        if (!signatureDataUrl) {
+            alert(
+                signatureMode === 'type'
+                    ? 'Please type your name to sign'
+                    : 'Please draw your signature in the box'
+            );
             return;
         }
 
         setProcessing(true);
         try {
-            // Get signature as data URL
-            const signatureDataUrl = signatureRef.current.toDataURL();
+            if (!(await persistAnswersIfPending())) return;
 
             // Update status with signature and comments
             const statusResult = await updateSubmissionStatus(token, 'accepted', signatureDataUrl, comments);
@@ -104,8 +227,11 @@ export default function VerifyOrderPage() {
                 throw new Error(uploadResult.error || 'Failed to upload PDF');
             }
 
+            const pdfKey =
+                'pdfUrl' in uploadResult && uploadResult.pdfUrl ? uploadResult.pdfUrl : submission.pdf_url;
+
             setCompleted(true);
-            setSubmission({ ...submission, status: 'accepted', comments });
+            setSubmission({ ...submission, status: 'accepted', comments, pdf_url: pdfKey });
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -115,7 +241,6 @@ export default function VerifyOrderPage() {
 
     async function generateSignedPDF(signatureDataUrl: string): Promise<Blob> {
         const doc = new jsPDF();
-        const answers = submission.data;
 
         let yPos = 10;
         const margin = 20;
@@ -243,6 +368,16 @@ export default function VerifyOrderPage() {
         }
     }
 
+    function openSignedPdfDownload() {
+        const key = submission?.pdf_url as string | undefined;
+        if (!key?.trim()) return;
+        const r2Domain = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
+        const url = r2Domain.startsWith('http')
+            ? `${r2Domain.replace(/\/$/, '')}/${key.replace(/^\//, '')}`
+            : `https://${r2Domain.replace(/\/$/, '')}/${key.replace(/^\//, '')}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+    }
+
     if (loading) {
         return (
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: 'var(--bg-primary)' }}>
@@ -274,6 +409,22 @@ export default function VerifyOrderPage() {
                             </p>
                         )}
                         <p>The screening form has been signed and submitted successfully.</p>
+                        {submission.pdf_url && (
+                            <button
+                                type="button"
+                                onClick={openSignedPdfDownload}
+                                className="btn btn-primary"
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    marginTop: '8px',
+                                }}
+                            >
+                                <Download size={18} />
+                                Download signed PDF
+                            </button>
+                        )}
                         {client && (
                             <div style={{ marginTop: '20px', padding: '20px', background: 'var(--bg-secondary)', borderRadius: '8px', maxWidth: '600px', width: '100%' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
@@ -386,7 +537,7 @@ export default function VerifyOrderPage() {
                             </p>
                         </div>
                     )}
-                    <p style={{ color: 'var(--text-secondary)' }}>Review the screening form details below</p>
+                    <p style={{ color: 'var(--text-secondary)' }}>Review and edit the screening form below if needed, then accept or reject.</p>
                 </div>
 
                 {/* Client Information */}
@@ -429,24 +580,64 @@ export default function VerifyOrderPage() {
                     </div>
                 )}
 
-                {/* Questions and Answers */}
+                {/* Questions and Answers (editable while pending) */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginBottom: '30px' }}>
                     {formSchema?.questions.map((q, index) => (
                         <div key={q.id} style={{ background: 'var(--bg-secondary)', padding: '20px', borderRadius: '8px' }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>
+                            <label style={{ fontWeight: 'bold', marginBottom: '12px', display: 'block' }}>
                                 {index + 1}. {q.text}
-                            </div>
-                            <div style={{ color: 'var(--text-secondary)', paddingLeft: '20px' }}>
-                                {submission.data[q.id] || '(No answer)'}
-                                {q.type === 'select' && q.conditionalTextInputs?.[submission.data[q.id]] && submission.data[`${q.id}_conditional`] && (
-                                    <div style={{ marginTop: '0.5rem', paddingLeft: '1rem', borderLeft: '2px solid var(--border-color)' }}>
-                                        <div style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginBottom: '0.25rem' }}>
-                                            Additional details:
+                            </label>
+                            <div style={{ paddingLeft: '4px' }}>
+                                {q.type === 'text' ? (
+                                    <input
+                                        type="text"
+                                        value={answers[q.id] ?? ''}
+                                        onChange={(e) => handleAnswerChange(q.id, e.target.value)}
+                                        style={fieldStyle}
+                                        placeholder="Answer"
+                                    />
+                                ) : (
+                                    <>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            {q.options?.map((opt, i) => (
+                                                <label
+                                                    key={i}
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'flex-start',
+                                                        gap: '10px',
+                                                        cursor: 'pointer',
+                                                        color: 'var(--text-secondary)',
+                                                        fontSize: '14px',
+                                                    }}
+                                                >
+                                                    <input
+                                                        type="radio"
+                                                        name={q.id}
+                                                        value={opt}
+                                                        checked={answers[q.id] === opt}
+                                                        onChange={(e) => handleAnswerChange(q.id, e.target.value)}
+                                                        style={{ marginTop: '3px' }}
+                                                    />
+                                                    <span>{opt}</span>
+                                                </label>
+                                            ))}
                                         </div>
-                                        <div style={{ fontSize: '0.875rem' }}>
-                                            {submission.data[`${q.id}_conditional`]}
-                                        </div>
-                                    </div>
+                                        {answers[q.id] && q.conditionalTextInputs?.[answers[q.id]] && (
+                                            <div style={{ marginTop: '14px' }}>
+                                                <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginBottom: '6px' }}>
+                                                    Additional details
+                                                </div>
+                                                <input
+                                                    type="text"
+                                                    value={answers[`${q.id}_conditional`] ?? ''}
+                                                    onChange={(e) => handleConditionalTextChange(q.id, e.target.value)}
+                                                    style={fieldStyle}
+                                                    placeholder="Please provide details..."
+                                                />
+                                            </div>
+                                        )}
+                                    </>
                                 )}
                             </div>
                         </div>
@@ -481,27 +672,134 @@ export default function VerifyOrderPage() {
                 {/* Signature Section */}
                 {showSignature && (
                     <div style={{ background: 'var(--bg-secondary)', padding: '30px', borderRadius: '12px', marginBottom: '30px' }}>
-                        <h2 style={{ fontSize: '20px', fontWeight: 'bold', marginBottom: '20px' }}>
+                        <h2 style={{ fontSize: '20px', fontWeight: 'bold', marginBottom: '16px' }}>
                             <Edit size={20} style={{ display: 'inline', marginRight: '8px' }} />
                             Sign to Accept
                         </h2>
-                        <div style={{ border: '2px solid var(--border-color)', borderRadius: '8px', background: 'white' }}>
-                            <SignatureCanvas
-                                ref={signatureRef}
-                                canvasProps={{
-                                    width: 700,
-                                    height: 200,
-                                    style: { width: '100%', height: '200px' }
-                                }}
-                            />
-                        </div>
-                        <button
-                            onClick={() => signatureRef.current?.clear()}
-                            className="btn btn-secondary"
-                            style={{ marginTop: '10px' }}
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '16px', marginTop: 0 }}>
+                            Draw with your trackpad or mouse, or type your name using script styling.
+                        </p>
+                        <div
+                            role="tablist"
+                            aria-label="Signature method"
+                            style={{
+                                display: 'flex',
+                                gap: '8px',
+                                marginBottom: '16px',
+                                flexWrap: 'wrap',
+                            }}
                         >
-                            Clear
-                        </button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={signatureMode === 'draw'}
+                                onClick={() => setSignatureMode('draw')}
+                                className="btn btn-secondary"
+                                style={{
+                                    flex: '1',
+                                    minWidth: '140px',
+                                    opacity: signatureMode === 'draw' ? 1 : 0.75,
+                                    border:
+                                        signatureMode === 'draw'
+                                            ? '2px solid var(--accent-primary, #3b82f6)'
+                                            : undefined,
+                                }}
+                            >
+                                <PenLine size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+                                Draw
+                            </button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={signatureMode === 'type'}
+                                onClick={() => setSignatureMode('type')}
+                                className="btn btn-secondary"
+                                style={{
+                                    flex: '1',
+                                    minWidth: '140px',
+                                    opacity: signatureMode === 'type' ? 1 : 0.75,
+                                    border:
+                                        signatureMode === 'type'
+                                            ? '2px solid var(--accent-primary, #3b82f6)'
+                                            : undefined,
+                                }}
+                            >
+                                <Type size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+                                Type name
+                            </button>
+                        </div>
+
+                        {signatureMode === 'draw' ? (
+                            <>
+                                <div style={{ border: '2px solid var(--border-color)', borderRadius: '8px', background: 'white' }}>
+                                    <SignatureCanvas
+                                        ref={signatureRef}
+                                        canvasProps={{
+                                            width: 700,
+                                            height: 200,
+                                            style: { width: '100%', height: '200px', touchAction: 'none' },
+                                        }}
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => signatureRef.current?.clear()}
+                                    className="btn btn-secondary"
+                                    style={{ marginTop: '10px' }}
+                                >
+                                    Clear drawing
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <label
+                                    htmlFor="typed-signature"
+                                    style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}
+                                >
+                                    Type your name
+                                </label>
+                                <input
+                                    id="typed-signature"
+                                    type="text"
+                                    autoComplete="name"
+                                    value={typedSignature}
+                                    onChange={(e) => setTypedSignature(e.target.value)}
+                                    placeholder="Your full name"
+                                    style={{ ...fieldStyle, marginBottom: '12px' }}
+                                />
+                                <div
+                                    style={{
+                                        border: '2px solid var(--border-color)',
+                                        borderRadius: '8px',
+                                        background: 'white',
+                                        minHeight: '200px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: '16px',
+                                        lineHeight: 1.2,
+                                        textAlign: 'center',
+                                        wordBreak: 'break-word',
+                                    }}
+                                >
+                                    {typedSignature.trim() ? (
+                                        <span
+                                            className={signatureHandFont.className}
+                                            style={{
+                                                fontSize: 'clamp(1.75rem, 5vw, 3rem)',
+                                                color: '#111',
+                                            }}
+                                        >
+                                            {typedSignature.trim()}
+                                        </span>
+                                    ) : (
+                                        <span style={{ fontSize: '14px', color: '#94a3b8', fontFamily: 'system-ui, sans-serif' }}>
+                                            Preview appears here
+                                        </span>
+                                    )}
+                                </div>
+                            </>
+                        )}
                     </div>
                 )}
 

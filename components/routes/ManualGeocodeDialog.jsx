@@ -5,7 +5,7 @@ import * as React from "react";
 import {
     Dialog, DialogTitle, DialogContent, DialogActions,
     Button, Box, Typography, Stack, TextField, LinearProgress, Chip, Collapse,
-    IconButton, List, ListItemButton, ListItemText
+    IconButton, List, ListItemButton, ListItemText, Alert,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
@@ -43,6 +43,8 @@ export default function ManualGeocodeDialog({
         const rawZip = u.zip ?? u.zip_code ?? u.postal_code ?? u.postalCode;
         const zip = (rawZip != null ? String(rawZip) : "").trim();
 
+        const pid = u.parent_client_id ?? u.parent_primary_id ?? null;
+
         return {
             id: u.id,
             name: name || "Unnamed",
@@ -50,6 +52,9 @@ export default function ManualGeocodeDialog({
             city,
             state,
             zip,
+            parent_client_id: pid != null && String(pid).trim() !== "" ? String(pid) : null,
+            parent_primary_name: u.parent_primary_name != null ? String(u.parent_primary_name) : null,
+            parent_primary_id: u.parent_primary_id != null ? String(u.parent_primary_id) : null,
             status: "pending",
             lat: null,
             lng: null,
@@ -76,26 +81,6 @@ export default function ManualGeocodeDialog({
 
     React.useEffect(() => {
         if (!open) return;
-        // DEBUG: what dialog receives and what toRow produces (browser console)
-        console.log("[ManualGeocodeDialog] open=true, usersMissing length:", usersMissing?.length);
-        if (usersMissing?.length > 0) {
-            const u = usersMissing[0];
-            console.log("[ManualGeocodeDialog] first usersMissing item keys:", Object.keys(u));
-            console.log("[ManualGeocodeDialog] first usersMissing address fields:", {
-                address: u?.address,
-                city: u?.city,
-                state: u?.state,
-                zip: u?.zip,
-            });
-            const row = toRow(u);
-            console.log("[ManualGeocodeDialog] first row after toRow:", {
-                name: row.name,
-                address: row.address,
-                city: row.city,
-                state: row.state,
-                zip: row.zip,
-            });
-        }
         setRows(usersMissing.map(toRow));
         setAutoDone(0);
     }, [open, usersMissing, toRow]);
@@ -264,9 +249,30 @@ export default function ManualGeocodeDialog({
                                 const hint = hintById[r.id];
                                 return (
                                     <Box key={r.id} sx={{ p: 1, border: "1px solid #eee", borderRadius: 1 }}>
-                                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                                            {r.name} — ID #{r.id}
-                                        </Typography>
+                                        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }} flexWrap="wrap">
+                                            <Typography variant="subtitle2">
+                                                {r.name} — ID #{r.id}
+                                            </Typography>
+                                            {r.parent_client_id ? (
+                                                <Chip size="small" label="Dependent" variant="outlined" />
+                                            ) : null}
+                                        </Stack>
+
+                                        {r.parent_client_id ? (
+                                            <Alert severity="info" sx={{ py: 0.5, mb: 1, "& .MuiAlert-message": { width: "100%" } }}>
+                                                <Typography variant="body2" component="span">
+                                                    Primary household:{" "}
+                                                    <strong>{r.parent_primary_name || "Unknown"}</strong>
+                                                    {r.parent_primary_id || r.parent_client_id
+                                                        ? ` · ID #${r.parent_primary_id || r.parent_client_id}`
+                                                        : ""}
+                                                </Typography>
+                                                <Typography variant="caption" display="block" sx={{ mt: 0.5, opacity: 0.95 }}>
+                                                    Household dependents normally inherit the primary&apos;s map coordinates automatically once the primary is geocoded.
+                                                    If this row still appears, geocode the primary first or fix an address mismatch on this profile.
+                                                </Typography>
+                                            </Alert>
+                                        ) : null}
 
                                         <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                                             <TextField size="small" label="Street (no unit)" value={r.address}

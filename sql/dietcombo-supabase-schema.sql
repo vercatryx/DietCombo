@@ -426,6 +426,7 @@ CREATE TABLE IF NOT EXISTS orders (
     total_items INTEGER NULL,
     notes TEXT NULL,
     proof_of_delivery_url VARCHAR(500) NULL,
+    proof_of_delivery_image VARCHAR(500) NULL,
     order_number INTEGER NULL UNIQUE,
     last_updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by VARCHAR(255) NULL,

@@ -223,8 +223,17 @@ export default function DriverDetailPage() {
     }
 
     async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-        const file = e.target.files?.[0];
-        if (!file || !uploadStopRef.current) return;
+        const files = e.target.files;
+        if (!uploadStopRef.current) return;
+        if (!files || files.length === 0) return;
+        if (files.length < 2) {
+            alert('Please select two photos for delivery proof.');
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            uploadStopRef.current = null;
+            return;
+        }
+        const file = files[0];
+        const file2 = files[1];
         const stop = uploadStopRef.current;
         const orderIdentifier = stop.orderNumber ?? stop.order_number ?? stop.orderId;
         if (!orderIdentifier) return;
@@ -233,6 +242,7 @@ export default function DriverDetailPage() {
         try {
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('file2', file2);
             formData.append('orderNumber', String(orderIdentifier));
             const result = await processDeliveryProof(formData);
             if (!result.success) {
@@ -635,12 +645,12 @@ export default function DriverDetailPage() {
                                                     <button
                                                         type="button"
                                                         className={`btn btn-outline block${uploadingStopId === s.id ? " btn-loading" : ""}`}
-                                                        title="Upload photo from gallery"
+                                                        title="Upload two photos from gallery"
                                                         disabled={uploadingStopId === s.id}
                                                         onClick={() => handleUploadClick(s)}
                                                     >
                                                         <Upload style={{ height: 16, width: 16 }} />
-                                                        {uploadingStopId === s.id ? "Uploading…" : "Upload photo"}
+                                                        {uploadingStopId === s.id ? "Uploading…" : "Upload 2 photos"}
                                                     </button>
                                                 </>
                                             ) : (
@@ -764,6 +774,7 @@ export default function DriverDetailPage() {
             <input
                 type="file"
                 accept="image/*"
+                multiple
                 ref={fileInputRef}
                 className="hidden-input"
                 onChange={handleFileSelect}

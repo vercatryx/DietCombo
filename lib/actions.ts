@@ -10311,12 +10311,12 @@ export async function isOrderUnderVendor(orderId: string, vendorId: string) {
 export async function orderHasDeliveryProof(orderId: string) {
     const { data, error } = await supabase
         .from('orders')
-        .select('proof_of_delivery_url')
+        .select('proof_of_delivery_url, proof_of_delivery_image')
         .eq('id', orderId)
         .single();
 
     if (error || !data) return false;
-    return !!data.proof_of_delivery_url;
+    return !!(data.proof_of_delivery_url || data.proof_of_delivery_image);
 }
 
 export async function updateOrderDeliveryProof(orderId: string, proofUrl: string) {
@@ -10401,10 +10401,12 @@ export async function updateOrderDeliveryProof(orderId: string, proofUrl: string
 export async function saveDeliveryProofUrlAndProcessOrder(
     orderId: string,
     orderType: string,
-    proofUrl: string
+    proofUrl: string,
+    /** Second proof image URL. Omit to leave existing value unchanged; pass null to clear. */
+    proofUrl2?: string | null
 ) {
     console.log(`[Process Pending Order] START saveDeliveryProofUrlAndProcessOrder for Order: "${orderId}", Type: "${orderType}"`);
-    console.log(`[Process Pending Order] Proof URL: ${proofUrl}`);
+    console.log(`[Process Pending Order] Proof URL: ${proofUrl}`, proofUrl2 !== undefined ? `second: ${proofUrl2 ?? '(clear)'}` : '');
 
     const session = await getSession();
     const currentUserName = session?.name || 'Admin';
@@ -10844,6 +10846,11 @@ export async function saveDeliveryProofUrlAndProcessOrder(
         updated_by: currentUserName,
         last_updated: new Date().toISOString()
     };
+
+    if (proofUrl2 !== undefined) {
+        updateData.proof_of_delivery_image =
+            proofUrl2 && String(proofUrl2).trim() ? String(proofUrl2).trim() : null;
+    }
 
     // Only update status and actual_delivery_date if order wasn't just processed
     if (!wasProcessed) {

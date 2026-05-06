@@ -11,9 +11,11 @@ import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
 
 export async function processDeliveryProof(formData: FormData) {
-    const file = formData.get('file') as File;
+    const file = formData.get('file') as File | null;
+    const file2 = formData.get('file2') as File | null;
     const orderNumber = formData.get('orderNumber') as string;
     const testUrl = formData.get('testUrl') as string | null; // Optional test URL to bypass R2
+    const testUrl2 = formData.get('testUrl2') as string | null;
     let proofTimeIso: string | null = null;
 
     const supabaseAdmin = createClient(
@@ -21,10 +23,13 @@ export async function processDeliveryProof(formData: FormData) {
         getSupabaseDbApiKey()!
     );
 
+    const hasPrimaryFile = !!(file && typeof file === 'object' && 'size' in file && file.size > 0);
+    const hasSecondaryFile = !!(file2 && typeof file2 === 'object' && 'size' in file2 && file2.size > 0);
+
     // Allow test URL to bypass file requirement
-    if ((!file && !testUrl) || !orderNumber) {
+    if ((!hasPrimaryFile && !testUrl) || !orderNumber) {
         console.error('[Delivery Debug] processDeliveryProof called but missing file/testUrl or orderNumber', {
-            hasFile: !!file,
+            hasFile: hasPrimaryFile,
             hasTestUrl: !!testUrl,
             orderNumber
         });
@@ -92,15 +97,17 @@ export async function processDeliveryProof(formData: FormData) {
         const orderId = foundOrder.id;
         const clientId = foundOrder.client_id;
 
-        // 2. Handle File Upload or Test URL
+        // 2. Handle File Upload or Test URL (optional second image)
         let publicUrl: string;
-        
+        let publicUrl2: string | null = null;
+
         if (testUrl) {
-            // Use test URL directly, skip R2 upload
             console.log(`[Delivery Debug] Using test URL (skipping R2): ${testUrl}`);
-            publicUrl = testUrl;
-        } else if (file) {
-            // Normal flow: Upload to R2
+            publicUrl = String(testUrl).trim();
+            if (testUrl2 && String(testUrl2).trim()) {
+                publicUrl2 = String(testUrl2).trim();
+            }
+        } else if (hasPrimaryFile && file) {
             const rawBuffer = Buffer.from(await file.arrayBuffer());
             const { buffer, stampedAtIso, contentType, fileExtension } = await stampTimestampOnImageBuffer(
                 rawBuffer,
@@ -115,6 +122,18 @@ export async function processDeliveryProof(formData: FormData) {
             const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
             const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
             publicUrl = `${baseUrl}/${key}`;
+
+            if (hasSecondaryFile && file2) {
+                const raw2 = Buffer.from(await file2.arrayBuffer());
+                const stamped2 = await stampTimestampOnImageBuffer(
+                    raw2,
+                    file2.type || 'image/jpeg',
+                    new Date()
+                );
+                const key2 = `proof-${orderNumber}-${Date.now()}-2.${stamped2.fileExtension}`;
+                await uploadFile(key2, stamped2.buffer, stamped2.contentType, process.env.R2_DELIVERY_BUCKET_NAME);
+                publicUrl2 = `${baseUrl}/${key2}`;
+            }
         } else {
             return { success: false, error: 'No file or test URL provided' };
         }
@@ -122,7 +141,7 @@ export async function processDeliveryProof(formData: FormData) {
         // 3. Update Order in Supabase
         // For upcoming_orders, use saveDeliveryProofUrlAndProcessOrder to properly process the order
         if (table === 'upcoming_orders') {
-            const result = await saveDeliveryProofUrlAndProcessOrder(orderId, 'upcoming', publicUrl);
+            const result = await saveDeliveryProofUrlAndProcessOrder(orderId, 'upcoming', publicUrl, publicUrl2);
             if (!result.success) {
                 return { success: false, error: result.error || 'Failed to process order' };
             }
@@ -130,12 +149,13 @@ export async function processDeliveryProof(formData: FormData) {
             await supabaseAdmin.from('stops').update({ proof_url: publicUrl }).eq('order_id', orderId);
             revalidatePath('/admin');
             sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
-            return { success: true, url: publicUrl };
+            return { success: true, url: publicUrl, url2: publicUrl2 };
         }
 
         // For orders table, update with billing_pending status (never 'pending' or 'delivered')
         const updateData: any = {
             proof_of_delivery_url: publicUrl,
+            proof_of_delivery_image: publicUrl2,
             status: 'billing_pending',
             // Prefer EXIF capture time when present; otherwise upload time.
             // This is "close enough" for our current definition of actual_delivery_date.
@@ -212,7 +232,7 @@ export async function processDeliveryProof(formData: FormData) {
         revalidatePath('/admin');
         sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
 
-        return { success: true, url: publicUrl };
+        return { success: true, url: publicUrl, url2: publicUrl2 };
     } catch (error: any) {
         console.error('Error processing delivery:', error);
         return { success: false, error: error.message };

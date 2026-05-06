@@ -27,9 +27,11 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const [step, setStep] = useState<'VERIFY' | 'CAPTURE' | 'PREVIEW' | 'UPLOADING' | 'SUCCESS' | 'ERROR'>(
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
-    const [imageSrc, setImageSrc] = useState<string | null>(null);
-    const [previewCapturedAt, setPreviewCapturedAt] = useState<Date | null>(null);
+    const [proofImages, setProofImages] = useState<[string | null, string | null]>([null, null]);
+    const [proofCapturedAt, setProofCapturedAt] = useState<[Date | null, Date | null]>([null, null]);
+    const [captureIndex, setCaptureIndex] = useState<0 | 1>(0);
     const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
+    const [uploadedProofUrl2, setUploadedProofUrl2] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
@@ -75,29 +77,41 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     const capture = useCallback(async () => {
         const raw = webcamRef.current?.getScreenshot();
         if (!raw) return;
-        setPreviewCapturedAt(new Date());
-        setImageSrc(raw);
-        setStep('PREVIEW');
-    }, [webcamRef]);
+        const now = new Date();
+        if (captureIndex === 0) {
+            setProofImages([raw, null]);
+            setProofCapturedAt([now, null]);
+            setCaptureIndex(1);
+        } else {
+            setProofImages(([first]) => [first, raw]);
+            setProofCapturedAt(([t0]) => [t0, now]);
+            setStep('PREVIEW');
+        }
+    }, [captureIndex, webcamRef]);
 
     async function handleUpload() {
-        if (!imageSrc) return;
+        const [img0, img1] = proofImages;
+        if (!img0 || !img1) return;
 
         setStep('UPLOADING');
         setError('');
 
-        // Convert base64 to blob
-        const res = await fetch(imageSrc);
-        const blob = await res.blob();
-        const file = new File([blob], "delivery-proof.jpg", { type: "image/jpeg" });
+        const res0 = await fetch(img0);
+        const blob0 = await res0.blob();
+        const file0 = new File([blob0], "delivery-proof-1.jpg", { type: "image/jpeg" });
+
+        const res1 = await fetch(img1);
+        const blob1 = await res1.blob();
+        const file1 = new File([blob1], "delivery-proof-2.jpg", { type: "image/jpeg" });
 
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('file', file0);
+        formData.append('file2', file1);
         formData.append('orderNumber', order.id);
 
         console.log('[Client Debug] Calling processDeliveryProof with:', {
             orderId: order.id,
-            fileSize: file.size,
+            fileSizes: [file0.size, file1.size],
             orderNumber: order.orderNumber
         });
 
@@ -107,6 +121,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
 
             if (result.success) {
                 setUploadedProofUrl((result as any)?.url ?? null);
+                setUploadedProofUrl2((result as any)?.url2 ?? null);
                 setStep('SUCCESS');
             } else {
                 console.error('[Client Debug] Server returned error:', result.error);
@@ -179,12 +194,17 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                     </div>
                 </div>
 
-                <button
-                    onClick={() => setStep('CAPTURE')}
-                    className="btn-primary"
-                >
+                    <button
+                        onClick={() => {
+                            setProofImages([null, null]);
+                            setProofCapturedAt([null, null]);
+                            setCaptureIndex(0);
+                            setStep('CAPTURE');
+                        }}
+                        className="btn-primary"
+                    >
                     <Camera size={24} />
-                    Take Photo using Camera
+                    Take photos using Camera
                 </button>
             </div>
         );
@@ -272,8 +292,34 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                         )}
                     </div>
 
+                    <div
+                        style={{
+                            position: 'absolute',
+                            top: 'calc(max(12px, env(safe-area-inset-top)) + 72px)',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            maxWidth: 'min(92vw, 420px)',
+                            padding: '8px 14px',
+                            borderRadius: '12px',
+                            background: 'rgba(59, 130, 246, 0.92)',
+                            color: '#f8fafc',
+                            fontSize: '0.8125rem',
+                            textAlign: 'center',
+                            fontWeight: 600,
+                            zIndex: 6,
+                            pointerEvents: 'none'
+                        }}
+                    >
+                        {captureIndex === 0 ? 'Photo 1 of 2 — then take a second picture' : 'Photo 2 of 2 — tap shutter'}
+                    </div>
+
                     <button
-                        onClick={() => setStep('VERIFY')}
+                        onClick={() => {
+                            setProofImages([null, null]);
+                            setProofCapturedAt([null, null]);
+                            setCaptureIndex(0);
+                            setStep('VERIFY');
+                        }}
                         className="close-btn"
                     >
                         <X size={32} />
@@ -291,19 +337,33 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
     }
 
     if (step === 'PREVIEW') {
+        const [img0, img1] = proofImages;
+        const [t0, t1] = proofCapturedAt;
         return (
             <div className="camera-overlay-full">
-                <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative' }}>
-                    {imageSrc && (
-                        <img
-                            src={imageSrc}
-                            alt="Preview"
-                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                        />
+                <div className="camera-view" style={{ backgroundColor: 'black', position: 'relative', overflow: 'auto', flexDirection: 'column', display: 'flex', gap: 8, padding: 8 }}>
+                    {img0 && (
+                        <div style={{ position: 'relative', flex: 1, minHeight: '38vh' }}>
+                            <img
+                                src={img0}
+                                alt="Proof 1"
+                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                            />
+                            {t0 ? <ProofStampPreviewOverlay capturedAt={t0} /> : null}
+                            <div style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>Photo 1</div>
+                        </div>
                     )}
-                    {previewCapturedAt ? (
-                        <ProofStampPreviewOverlay capturedAt={previewCapturedAt} />
-                    ) : null}
+                    {img1 && (
+                        <div style={{ position: 'relative', flex: 1, minHeight: '38vh' }}>
+                            <img
+                                src={img1}
+                                alt="Proof 2"
+                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                            />
+                            {t1 ? <ProofStampPreviewOverlay capturedAt={t1} /> : null}
+                            <div style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>Photo 2</div>
+                        </div>
+                    )}
                 </div>
                 <div className="preview-actions">
                     <button
@@ -312,18 +372,19 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                         style={{ backgroundColor: '#16a34a' }}
                     >
                         <Upload size={24} />
-                        Submit Proof
+                        Submit proof (both photos)
                     </button>
                     <button
                         onClick={() => {
-                            setImageSrc(null);
-                            setPreviewCapturedAt(null);
+                            setProofImages([null, null]);
+                            setProofCapturedAt([null, null]);
+                            setCaptureIndex(0);
                             setStep('CAPTURE');
                         }}
                         className="btn-secondary"
                         style={{ backgroundColor: 'var(--bg-surface)' }}
                     >
-                        Retake
+                        Retake all
                     </button>
                 </div>
             </div>
@@ -336,7 +397,7 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 <div className="spinner" style={{ margin: '0 auto', width: '4rem', height: '4rem', borderTopColor: 'var(--color-primary)' }}></div>
                 <div>
                     <h3 className="text-title" style={{ fontSize: '1.25rem' }}>Uploading...</h3>
-                    <p className="text-subtitle">Saving proof of delivery</p>
+                    <p className="text-subtitle">Saving both proof photos</p>
                 </div>
             </div>
         );
@@ -380,15 +441,47 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                             }}
                         >
                             <ImageIcon size={16} />
-                            View uploaded image
+                            View photo 1
+                            <ExternalLink size={14} />
+                        </a>
+                    )}
+                    {uploadedProofUrl2 && (
+                        <a
+                            href={uploadedProofUrl2}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.5rem',
+                                padding: '0.75rem',
+                                background: 'rgba(34, 197, 94, 0.1)',
+                                border: '1px solid rgba(34, 197, 94, 0.3)',
+                                borderRadius: '0.5rem',
+                                color: '#4ade80',
+                                textDecoration: 'none',
+                                fontWeight: 500,
+                                fontSize: '0.875rem'
+                            }}
+                        >
+                            <ImageIcon size={16} />
+                            View photo 2
                             <ExternalLink size={14} />
                         </a>
                     )}
                     <button
-                        onClick={() => setStep('CAPTURE')}
+                        onClick={() => {
+                            setProofImages([null, null]);
+                            setProofCapturedAt([null, null]);
+                            setCaptureIndex(0);
+                            setUploadedProofUrl(null);
+                            setUploadedProofUrl2(null);
+                            setStep('CAPTURE');
+                        }}
                         style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 500 }}
                     >
-                        Retake photo
+                        Retake photos
                     </button>
                     <p className="text-subtitle">You can close this window now.</p>
                 </div>
@@ -407,7 +500,12 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                 <p className="text-subtitle" style={{ color: '#f87171' }}>{error}</p>
             </div>
             <button
-                onClick={() => setStep('CAPTURE')}
+                onClick={() => {
+                    setProofImages([null, null]);
+                    setProofCapturedAt([null, null]);
+                    setCaptureIndex(0);
+                    setStep('CAPTURE');
+                }}
                 className="btn-secondary"
                 style={{ width: '100%' }}
             >

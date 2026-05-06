@@ -369,6 +369,36 @@ export async function getSubmissionByToken(token: string) {
     }
 }
 
+/** Persist screening answers while submission is still pending (e.g. nutritionist corrections on /verify-order). */
+export async function updateSubmissionData(token: string, data: Record<string, string>) {
+    try {
+        const { data: row, error: fetchError } = await supabase
+            .from('form_submissions')
+            .select('id, status')
+            .eq('token', token)
+            .single();
+
+        if (fetchError || !row) throw new Error('Submission not found');
+        if (row.status !== 'pending') {
+            return { success: false, error: 'Only pending submissions can be edited' };
+        }
+
+        const { error: updateError } = await supabase
+            .from('form_submissions')
+            .update({ data })
+            .eq('token', token);
+        if (updateError) throw updateError;
+
+        revalidatePath('/pending-screenings');
+        revalidatePath('/clients');
+
+        return { success: true };
+    } catch (error: any) {
+        console.error('Error updating submission data:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 export async function updateSubmissionStatus(token: string, status: 'accepted' | 'rejected', signatureDataUrl?: string, comments?: string) {
     try {
         let signatureUrl = null;
