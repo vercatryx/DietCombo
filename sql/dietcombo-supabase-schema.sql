@@ -8,13 +8,18 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================
 -- Helper function for updating updated_at timestamps
 -- ============================================
+-- orders / upcoming_orders use last_updated; other tables use updated_at.
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
+    IF TG_TABLE_NAME IN ('orders', 'upcoming_orders') THEN
+        NEW.last_updated := CURRENT_TIMESTAMP;
+    ELSE
+        NEW.updated_at := CURRENT_TIMESTAMP;
+    END IF;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
 -- ============================================
 -- Table: admins

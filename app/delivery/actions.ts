@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
+import { ordersRowTouch } from '@/lib/orders-row-touch';
 import { collectImageFilesFromFormData, proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
 
 export async function processDeliveryProof(formData: FormData) {
@@ -137,6 +138,7 @@ export async function processDeliveryProof(formData: FormData) {
 
         const updateData: any = {
             ...proofDb,
+            ...ordersRowTouch(),
             status: 'billing_pending',
             actual_delivery_date: proofTimeIso ?? new Date().toISOString(),
         };
@@ -145,6 +147,14 @@ export async function processDeliveryProof(formData: FormData) {
 
         if (updateError) {
             console.error('Error updating order:', updateError);
+            const msg = String(updateError.message || '');
+            if (msg.includes('updated_at') || updateError.code === '42703') {
+                return {
+                    success: false,
+                    error:
+                        'Order update blocked by a database trigger: public.orders uses last_updated, but the trigger function update_updated_at_column() still assigns NEW.updated_at. Fix it in Postgres (see sql/fix_update_updated_at_trigger_orders_last_updated.sql) or your team’s migration.',
+                };
+            }
             return { success: false, error: 'Failed to update order status' };
         }
 
