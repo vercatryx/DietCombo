@@ -27,6 +27,7 @@ import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
 import { isProduceServiceType } from './isProduceServiceType';
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from './deliveryEligibility';
 import { mergeDietaryFlagsIntoNote, type DietaryFlags } from './dietary-preferences-note';
+import { inferLegacyChangeKind, type ClientChangeKind } from './audit/clientChangeKind';
 import { hasAnyProofUrl, primaryProofUrl, proofPayloadForDb } from './proof-of-delivery-urls';
 
 export type { MealPlannerOrderResult } from './meal-planner-utils';
@@ -4447,6 +4448,13 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
 
     const newClient = mapClientFromDB(res);
 
+    await recordClientChange(
+        newClient.id,
+        `Created client "${newClient.fullName}".`,
+        undefined,
+        'client_created'
+    );
+
     // For Produce serviceType, do NOT create upcoming_orders records - only save to active_orders.
     // For other service types, sync to upcoming_orders if there's an activeOrder with a caseId.
     if (newClient.activeOrder && newClient.activeOrder.caseId && newClient.serviceType !== 'Produce') {
@@ -4536,7 +4544,14 @@ export async function addPlaceholderDependents(parentClientId: string, count: nu
         if (insertError || !res) {
             throw new Error('Failed to create dependent: ' + (insertError?.message || 'no data returned'));
         }
-        created.push(mapClientFromDB(res));
+        const mapped = mapClientFromDB(res);
+        await recordClientChange(
+            mapped.id,
+            `Created placeholder dependent "${String(i)}".`,
+            undefined,
+            'client_created'
+        );
+        created.push(mapped);
     }
 
     revalidatePath('/clients');
@@ -4640,6 +4655,13 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
     }
 
     const newDependent = mapClientFromDB(res);
+
+    await recordClientChange(
+        newDependent.id,
+        `Created dependent "${name.trim()}".`,
+        undefined,
+        'client_created'
+    );
 
     revalidatePath('/clients');
 
@@ -4913,7 +4935,7 @@ export async function deleteClient(id: string) {
                     ? `Deleted from main client list; archived ${dependentCount} dependent(s).`
                     : 'Deleted from main client list.'
                 : 'Deleted from main client list (archived with primary client).';
-        await recordClientChange(cid, summary);
+        await recordClientChange(cid, summary, undefined, 'client_deleted');
     }
 
     const nameById = new Map<string, string | null>();
@@ -4966,7 +4988,7 @@ ${emailOnFileLine}
 export async function unarchiveClient(id: string) {
     const { error } = await supabase.from('clients').update({ archived_at: null }).eq('id', id);
     handleError(error, 'unarchiveClient');
-    await recordClientChange(id, 'Restored to main client list.');
+    await recordClientChange(id, 'Restored to main client list.', undefined, 'client_restored');
     revalidatePath('/clients');
     revalidatePath(`/clients/${id}`);
     const { triggerSyncInBackground } = await import('./local-db');
@@ -5076,7 +5098,12 @@ export async function updateDeliveryProof(id: string, proofUrl: string) {
     }
 }
 
-export async function recordClientChange(clientId: string, summary: string, who?: string) {
+export async function recordClientChange(
+    clientId: string,
+    summary: string,
+    who?: string,
+    changeKind?: ClientChangeKind | null
+) {
     // Get current user from session if who is not provided
     let userName = who;
     if (!userName || userName === 'Admin') {
@@ -5086,15 +5113,17 @@ export async function recordClientChange(clientId: string, summary: string, who?
 
     try {
         const historyId = randomUUID();
-        await supabase
-            .from('order_history')
-            .insert([{
-                id: historyId,
-                client_id: clientId,
-                who: userName,
-                summary,
-                timestamp: new Date().toISOString()
-            }]);
+        const insertRow: Record<string, unknown> = {
+            id: historyId,
+            client_id: clientId,
+            who: userName,
+            summary,
+            timestamp: new Date().toISOString(),
+        };
+        if (changeKind) {
+            insertRow.change_kind = changeKind;
+        }
+        await supabase.from('order_history').insert([insertRow]);
     } catch (error) {
         console.error('Error recording audit log:', error);
     }
@@ -5106,6 +5135,7 @@ export type ClientChangeLogEntry = {
     who: string;
     summary: string;
     timestamp: string;
+    changeKind?: ClientChangeKind | null;
 };
 
 /**
@@ -5122,7 +5152,7 @@ export async function getClientChangeLog(clientId: string, limit: number = 50): 
     try {
         const { data, error } = await supabase
             .from('order_history')
-            .select('id, client_id, who, summary, timestamp')
+            .select('id, client_id, who, summary, timestamp, change_kind')
             .eq('client_id', clientId)
             .order('timestamp', { ascending: false })
             .limit(Math.max(1, Math.min(200, limit)));
@@ -5139,12 +5169,152 @@ export async function getClientChangeLog(clientId: string, limit: number = 50): 
             who: row.who,
             summary: row.summary,
             timestamp: row.timestamp,
+            changeKind: row.change_kind ?? null,
         }));
 
         return { entries };
     } catch (e) {
         console.warn('[getClientChangeLog] Unexpected error:', e);
         return { entries: [], error: e instanceof Error ? e.message : 'Failed to load change log' };
+    }
+}
+
+export type UniteAccountFilter = 'all' | 'brooklyn' | 'main';
+
+/** Filter for `listClientChangesForAdmin`. Use `paused_any` for manual + automated pauses. */
+export type AdminChangeKindFilter =
+    | 'all'
+    | ClientChangeKind
+    | 'paused_any'
+    | 'legacy_unknown';
+
+export type ListClientChangesParams = {
+    fromDate: string;
+    toDate: string;
+    changeKind?: AdminChangeKindFilter;
+    uniteAccount?: UniteAccountFilter;
+    whoContains?: string;
+    limit?: number;
+};
+
+export type AdminClientChangeRow = {
+    id: string;
+    clientId: string;
+    who: string;
+    summary: string;
+    timestamp: string;
+    changeKind: ClientChangeKind | 'legacy_unknown' | null;
+    clientFullName: string | null;
+    uniteAccountRaw: string | null;
+    uniteAccountLabel: 'Brooklyn' | 'Monsey';
+};
+
+function clientRowIsBrooklyn(uniteAccount: string | null | undefined): boolean {
+    return (uniteAccount || '').trim() === 'Brooklyn';
+}
+
+/**
+ * Admin-only: global client change log with filters. Rows come from `order_history` joined to clients for Unite account labels.
+ */
+export async function listClientChangesForAdmin(
+    params: ListClientChangesParams
+): Promise<{ rows: AdminClientChangeRow[]; error?: string }> {
+    const session = await getSession();
+    if (session?.role !== 'admin' && session?.role !== 'super-admin') {
+        throw new Error('Forbidden');
+    }
+
+    const limit = Math.min(Math.max(params.limit ?? 400, 1), 2000);
+    const fromIso = params.fromDate.includes('T') ? params.fromDate : `${params.fromDate}T00:00:00.000Z`;
+    const toIso = params.toDate.includes('T') ? params.toDate : `${params.toDate}T23:59:59.999Z`;
+
+    const rawCap = Math.min(limit * 30, 10000);
+
+    try {
+        const { data, error } = await supabase
+            .from('order_history')
+            .select('id, client_id, who, summary, timestamp, change_kind')
+            .gte('timestamp', fromIso)
+            .lte('timestamp', toIso)
+            .order('timestamp', { ascending: false })
+            .limit(rawCap);
+
+        if (error) {
+            return { rows: [], error: error.message };
+        }
+
+        const raw = data || [];
+        const clientIds = [...new Set(raw.map((r: { client_id: string }) => r.client_id).filter(Boolean))];
+        const clientMap = new Map<string, { full_name: string | null; unite_account: string | null }>();
+
+        const chunk = 200;
+        for (let i = 0; i < clientIds.length; i += chunk) {
+            const slice = clientIds.slice(i, i + chunk);
+            const { data: clients } = await supabase
+                .from('clients')
+                .select('id, full_name, unite_account')
+                .in('id', slice);
+            for (const c of clients || []) {
+                const row = c as { id: string; full_name: string | null; unite_account: string | null };
+                clientMap.set(String(row.id), {
+                    full_name: row.full_name ?? null,
+                    unite_account: row.unite_account ?? null,
+                });
+            }
+        }
+
+        let rows: AdminClientChangeRow[] = raw.map((r: Record<string, unknown>) => {
+            const cid = String(r.client_id);
+            const cl = clientMap.get(cid);
+            const storedKind = r.change_kind != null && String(r.change_kind).trim() !== ''
+                ? (String(r.change_kind) as ClientChangeKind)
+                : null;
+            const inferred = storedKind ?? inferLegacyChangeKind(String(r.summary ?? ''));
+            const ua = cl?.unite_account ?? null;
+
+            return {
+                id: String(r.id),
+                clientId: cid,
+                who: String(r.who ?? ''),
+                summary: String(r.summary ?? ''),
+                timestamp: String(r.timestamp ?? ''),
+                changeKind: inferred,
+                clientFullName: cl?.full_name ?? null,
+                uniteAccountRaw: ua,
+                uniteAccountLabel: clientRowIsBrooklyn(ua) ? 'Brooklyn' : 'Monsey',
+            };
+        });
+
+        const ck = params.changeKind ?? 'all';
+        if (ck !== 'all') {
+            rows = rows.filter((row) => {
+                const k = row.changeKind;
+                if (ck === 'paused_any') {
+                    if (k === 'client_paused' || k === 'system') return true;
+                    if (k === 'legacy_unknown' && /paused\s*:/i.test(row.summary)) return true;
+                    return false;
+                }
+                return k === ck;
+            });
+        }
+
+        const uaFilter = params.uniteAccount ?? 'all';
+        if (uaFilter === 'brooklyn') {
+            rows = rows.filter((r) => r.uniteAccountLabel === 'Brooklyn');
+        } else if (uaFilter === 'main') {
+            rows = rows.filter((r) => r.uniteAccountLabel === 'Monsey');
+        }
+
+        const whoQ = (params.whoContains || '').trim().toLowerCase();
+        if (whoQ) {
+            rows = rows.filter((r) => r.who.toLowerCase().includes(whoQ));
+        }
+
+        rows = rows.slice(0, limit);
+
+        return { rows };
+    } catch (e) {
+        return { rows: [], error: e instanceof Error ? e.message : 'Failed to load changes' };
     }
 }
 

@@ -466,10 +466,13 @@ CREATE TABLE IF NOT EXISTS order_history (
     client_id VARCHAR(36) NOT NULL,
     who VARCHAR(255) NOT NULL,
     summary TEXT NOT NULL,
-    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    change_kind VARCHAR(64) NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_order_history_client_id ON order_history(client_id);
+CREATE INDEX IF NOT EXISTS idx_order_history_change_kind ON order_history(change_kind);
+CREATE INDEX IF NOT EXISTS idx_order_history_timestamp ON order_history(timestamp DESC);
 
 -- ============================================
 -- Table: order_items

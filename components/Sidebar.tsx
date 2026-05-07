@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck, ClipboardList, ShoppingCart } from 'lucide-react';
+import { Users, ChevronLeft, ChevronRight, LogOut, Download, History, Settings, Route, Package, CalendarCheck, ClipboardList, ShoppingCart, ScrollText } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { logout } from '@/lib/auth-actions';
 import { useState, useEffect, useCallback } from 'react';
@@ -12,6 +12,7 @@ import { getNavigatorLogs } from '@/lib/actions';
 const navItems = [
     { label: 'Client Dashboard', href: '/clients', icon: Users },
     { label: 'Orders', href: '/orders', icon: ShoppingCart },
+    { label: 'Changes', href: '/admin/changes', icon: ScrollText },
     { label: 'Pending screenings', href: '/pending-screenings', icon: ClipboardList },
     { label: 'My History', href: '/navigator-history', icon: History, role: 'navigator' },
     { label: 'Downloads', href: '/vendors', icon: Download },
@@ -155,13 +156,19 @@ export function Sidebar({
                     if (item.label === 'Produce') {
                         return userRole === 'admin' || userRole === 'super-admin';
                     }
+                    if (item.label === 'Changes') {
+                        return userRole === 'admin' || userRole === 'super-admin';
+                    }
                     if ((item as any).role) {
                         return userRole === (item as any).role;
                     }
                     return true;
                 }).map((item) => {
                     const Icon = item.icon;
-                    const isActive = pathname.startsWith(item.href);
+                    const isActive =
+                        item.href === '/admin'
+                            ? pathname === '/admin' || pathname === '/admin/'
+                            : pathname.startsWith(item.href);
                     const isMyHistory = item.label === 'My History' && userRole === 'navigator';
 
                     return (

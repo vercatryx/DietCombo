@@ -25,7 +25,8 @@ import {
     getCompletedOrdersWithDeliveryProof as serverGetCompletedOrdersWithDeliveryProof,
     getBatchClientDetails,
     getSettings,
-    getCategories
+    getCategories,
+    getClient,
 } from '@/lib/actions';
 import { invalidateClientData, getProduceVendors as getCachedProduceVendors } from '@/lib/cached-data';
 import { hasNonDefaultFlags, getNonDefaultFlagLabels, clientMatchesFlagFilter, FLAGS_FILTER_OPTIONS, type FlagsFilterValue } from '@/lib/client-flags';
@@ -353,6 +354,61 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             setCurrentView(view);
         }
     }, [searchParams]);
+
+    // Deep link: /clients?shelf=<clientId> opens the same sidebar as clicking a row on the dashboard
+    useEffect(() => {
+        const shelfId = searchParams.get('shelf')?.trim();
+        if (!shelfId) return;
+
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const client = await getClient(shelfId);
+                if (cancelled) return;
+
+                const stripShelfFromUrl = () => {
+                    const qs =
+                        typeof window !== 'undefined' && window.location.search
+                            ? window.location.search.slice(1)
+                            : searchParams.toString();
+                    const params = new URLSearchParams(qs);
+                    params.delete('shelf');
+                    const q = params.toString();
+                    router.replace(q ? `/clients?${q}` : '/clients', { scroll: false });
+                };
+
+                if (!client) {
+                    stripShelfFromUrl();
+                    return;
+                }
+
+                const brooklynOnly = currentUser?.role === 'brooklyn_admin';
+                if (brooklynOnly && (client.uniteAccount || '').trim() !== 'Brooklyn') {
+                    stripShelfFromUrl();
+                    return;
+                }
+
+                setClients((prev) => (prev.some((c) => c.id === client.id) ? prev : [...prev, client]));
+
+                if (client.parentClientId) {
+                    setInfoShelfDependantId(client.id);
+                    setInfoShelfClientId(null);
+                } else {
+                    setInfoShelfClientId(client.id);
+                    setInfoShelfDependantId(null);
+                }
+
+                stripShelfFromUrl();
+            } catch (e) {
+                console.error('[ClientList] shelf query param', e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [searchParams.toString(), currentUser?.role, router]);
 
     // Load signature counts from API
     async function loadSignatureCounts() {

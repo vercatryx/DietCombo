@@ -20,7 +20,8 @@ import { getSingleForm } from '@/lib/form-actions';
 import { formatDateTimeInAppTz } from '@/lib/timezone';
 import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
-import { diffObjects, formatDiffSummary } from '@/lib/audit/clientDiff';
+import { diffObjects } from '@/lib/audit/clientDiff';
+import { inferChangeKindFromAuditDiffs } from '@/lib/audit/clientChangeKind';
 import styles from './ClientInfoShelf.module.css';
 
 interface ClientInfoShelfProps {
@@ -406,7 +407,8 @@ export function ClientInfoShelf({
             });
             if (diffs.length > 0) {
                 const summary = formatAuditSummary(diffs);
-                void recordClientChange(client.id, summary).catch((e) => {
+                const kind = inferChangeKindFromAuditDiffs(diffs);
+                void recordClientChange(client.id, summary, undefined, kind).catch((e) => {
                     console.warn('[ClientInfoShelf] Failed to record client change:', e);
                 });
             }

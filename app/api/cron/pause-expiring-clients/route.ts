@@ -5,6 +5,7 @@ export const maxDuration = 60;
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { sendEmail } from "@/lib/email";
+import { recordClientChange } from "@/lib/actions";
 
 const NOTIFY_EMAILS = [
   "stslansky@gmail.com",
@@ -266,6 +267,11 @@ export async function GET(req: Request) {
         },
         { status: 500 }
       );
+    }
+
+    const pauseSummary = `Automatically paused (authorization expiration window ${startDate}–${endDate}).`;
+    for (const cid of allIds) {
+      await recordClientChange(cid, pauseSummary, "Expiration-week cron", "system");
     }
 
     // Email who was paused (best-effort; don't fail the cron if email fails)

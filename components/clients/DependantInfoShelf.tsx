@@ -11,7 +11,8 @@ import { getProduceVendors, getClient, invalidateClientData } from '@/lib/cached
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { formatDateTimeInAppTz } from '@/lib/timezone';
-import { diffObjects, formatDiffSummary } from '@/lib/audit/clientDiff';
+import { diffObjects } from '@/lib/audit/clientDiff';
+import { inferChangeKindFromAuditDiffs } from '@/lib/audit/clientChangeKind';
 import styles from './ClientInfoShelf.module.css';
 
 interface DependantInfoShelfProps {
@@ -292,7 +293,8 @@ export function DependantInfoShelf({
             });
             if (diffs.length > 0) {
                 const summary = formatAuditSummary(diffs);
-                void recordClientChange(client.id, summary).catch((e) => {
+                const kind = inferChangeKindFromAuditDiffs(diffs);
+                void recordClientChange(client.id, summary, undefined, kind).catch((e) => {
                     console.warn('[DependantInfoShelf] Failed to record client change:', e);
                 });
             }

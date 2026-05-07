@@ -27,6 +27,7 @@ import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import MapConfirmDialog from './MapConfirmDialog';
 import { parseUniteUsUrl, composeUniteUsUrl, isMeetingExactTarget } from '@/lib/utils';
+import type { ClientChangeKind } from '@/lib/audit/clientChangeKind';
 
 
 interface Props {
@@ -4424,6 +4425,9 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
             if ((client.expirationDate || null) !== (formData.expirationDate || null)) {
                 changes.push(`Expiration Date: ${client.expirationDate || 'null'} -> ${formData.expirationDate || 'null'}`);
             }
+            if (client.paused !== formData.paused) {
+                changes.push(`Paused: ${client.paused} -> ${formData.paused}`);
+            }
 
             // Check if order configuration changed
             // For Boxes, check if boxOrders exist (caseId is optional)
@@ -4437,7 +4441,7 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 changes.push('Order configuration changed');
             }
 
-            const summary = changes.length > 0 ? changes.join(', ') : 'No functional changes detected (re-saved profile)';
+            const summary = changes.length > 0 ? changes.join('\n') : 'No functional changes detected (re-saved profile)';
 
             // Update client profile
             // We defer this call until after we've prepared the activeOrder above if needed
@@ -4470,7 +4474,15 @@ export const ClientProfileDetail = forwardRef<ClientProfileDetailHandle, Props>(
                 updateData.voucherAmount = null;
             }
 
-            await recordClientChange(clientId, summary, 'Admin');
+            let profileChangeKind: ClientChangeKind | undefined;
+            const pausedOnly = changes.length === 1 && changes[0].startsWith('Paused:');
+            if (pausedOnly) {
+                profileChangeKind = formData.paused ? 'client_paused' : 'client_unpaused';
+            } else if (changes.length > 0) {
+                profileChangeKind = 'client_updated';
+            }
+
+            await recordClientChange(clientId, summary, 'Admin', profileChangeKind);
 
             // Sync Current Order Request (skip when saveDetailsOnly - we only persist client table fields)
             const hasOrderConfigChanges = !saveDetailsOnly && JSON.stringify(orderConfig) !== JSON.stringify(originalOrderConfig);

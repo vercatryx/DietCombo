@@ -375,13 +375,16 @@ model OrderBoxSelection {
 }
 
 model OrderHistory {
-  id        String   @id @default(uuid()) @db.VarChar(36)
-  clientId  String   @map("client_id") @db.VarChar(36)
-  who       String   @db.VarChar(255)
-  summary   String
-  timestamp DateTime @default(now()) @map("timestamp") @db.Timestamp(6)
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  clientId   String   @map("client_id") @db.VarChar(36)
+  who        String   @db.VarChar(255)
+  summary    String
+  timestamp  DateTime @default(now()) @map("timestamp") @db.Timestamp(6)
+  changeKind String?  @map("change_kind") @db.VarChar(64)
 
   @@index([clientId], map: "idx_order_history_client_id")
+  @@index([changeKind], map: "idx_order_history_change_kind")
+  @@index([timestamp(sort: Desc)], map: "idx_order_history_timestamp")
   @@map("order_history")
 }
 
