@@ -74,89 +74,38 @@ async function getMealItems(supabaseClient: SupabaseClient) {
 // ORDERS LIST
 // ---------------------------------------------------------------------------
 
-/** Shared helper: enrich a page of orders with client names and vendor names. */
+/** Shared helper: enrich a page of orders with client name and delivery address. */
 async function enrichOrdersPage(
     db: SupabaseClient,
     orders: any[],
 ): Promise<any[]> {
     if (orders.length === 0) return [];
 
-    const orderIds = orders.map((o: any) => o.id);
     const clientIds = [...new Set(orders.map((o: any) => o.client_id).filter(Boolean))];
 
-    let clientsMap = new Map<string, string>();
+    const clientsMap = new Map<string, string>();
+    const clientAddressesMap = new Map<string, string>();
     if (clientIds.length > 0) {
         // Batch client fetches to avoid URL length limits (PostgREST .in() in URL can hit 414 with many IDs)
         const CLIENT_BATCH = 150;
         for (let i = 0; i < clientIds.length; i += CLIENT_BATCH) {
             const batch = clientIds.slice(i, i + CLIENT_BATCH);
-            const { data: clients } = await db.from('clients').select('id, full_name').in('id', batch);
-            if (clients) clients.forEach((c: any) => clientsMap.set(String(c.id), c.full_name || 'Unknown'));
+            const { data: clients } = await db.from('clients').select('id, full_name, address').in('id', batch);
+            if (clients)
+                clients.forEach((c: any) => {
+                    clientsMap.set(String(c.id), c.full_name || 'Unknown');
+                    const addr = c.address != null ? String(c.address).trim() : '';
+                    clientAddressesMap.set(String(c.id), addr);
+                });
         }
     }
-
-    const vendorNamesByOrderId = new Map<string, string[]>();
-    const BATCH = 200;
-    let ovsData: { order_id: string; vendor_id: string | null }[] = [];
-    let obsData: { order_id: string; vendor_id: string | null }[] = [];
-    for (let i = 0; i < orderIds.length; i += BATCH) {
-        const batch = orderIds.slice(i, i + BATCH);
-        const [ovsRes, obsRes] = await Promise.all([
-            db.from('order_vendor_selections').select('order_id, vendor_id').in('order_id', batch),
-            db.from('order_box_selections').select('order_id, vendor_id').in('order_id', batch),
-        ]);
-        ovsData = ovsData.concat(ovsRes.data || []);
-        obsData = obsData.concat(obsRes.data || []);
-    }
-
-    const allVendorIds = new Set<string>();
-    ovsData.forEach((r: any) => r.vendor_id && allVendorIds.add(r.vendor_id));
-    obsData.forEach((r: any) => r.vendor_id && allVendorIds.add(r.vendor_id));
-    orders.forEach((o: any) => {
-        if (o.service_type === 'Equipment' && o.notes) {
-            try {
-                const notes = typeof o.notes === 'string' ? JSON.parse(o.notes) : o.notes;
-                const vid = notes?.vendorId ?? notes?.vendor_id;
-                if (vid) allVendorIds.add(vid);
-            } catch (_) {}
-        }
-    });
-
-    const vendorById = new Map<string, string>();
-    if (allVendorIds.size > 0) {
-        const vendorIdsArray = Array.from(allVendorIds);
-        const VENDOR_BATCH = 150;
-        for (let i = 0; i < vendorIdsArray.length; i += VENDOR_BATCH) {
-            const batch = vendorIdsArray.slice(i, i + VENDOR_BATCH);
-            const { data: vendors } = await db.from('vendors').select('id, name').in('id', batch);
-            (vendors || []).forEach((v: any) => vendorById.set(v.id, v.name));
-        }
-    }
-
-    const addVendor = (orderId: string, vendorId: string | null) => {
-        if (!orderId) return;
-        const name = vendorId ? vendorById.get(vendorId) ?? 'Unknown' : 'Unknown';
-        const existing = vendorNamesByOrderId.get(orderId) || [];
-        if (!existing.includes(name)) existing.push(name);
-        vendorNamesByOrderId.set(orderId, existing);
-    };
-    ovsData.forEach((r: any) => addVendor(r.order_id, r.vendor_id));
-    obsData.forEach((r: any) => addVendor(r.order_id, r.vendor_id));
-    orders.forEach((o: any) => {
-        if (o.service_type === 'Equipment' && o.notes) {
-            try {
-                const notes = typeof o.notes === 'string' ? JSON.parse(o.notes) : o.notes;
-                addVendor(o.id, notes?.vendorId ?? notes?.vendor_id);
-            } catch (_) {}
-        }
-    });
 
     return orders.map((o: any) => ({
         ...o,
         clientName: clientsMap.get(String(o.client_id)) || 'Unknown',
+        clientAddress: clientAddressesMap.get(String(o.client_id)) ?? '',
         status: o.status || 'pending',
         scheduled_delivery_date: o.scheduled_delivery_date || null,
-        vendorNames: (vendorNamesByOrderId.get(o.id) || ['Unknown']).sort(),
     }));
 }
 

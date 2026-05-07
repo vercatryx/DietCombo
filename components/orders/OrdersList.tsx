@@ -74,9 +74,9 @@ export function OrdersList({ userRole = '' }: { userRole?: string }) {
         } else if (sortConfig.key === 'order_number') {
             aVal = Number(a.order_number ?? 0);
             bVal = Number(b.order_number ?? 0);
-        } else if (sortConfig.key === 'vendors') {
-            aVal = (a.vendorNames || []).join(', ') || '';
-            bVal = (b.vendorNames || []).join(', ') || '';
+        } else if (sortConfig.key === 'clientAddress') {
+            aVal = (a.clientAddress || '').toLowerCase();
+            bVal = (b.clientAddress || '').toLowerCase();
         }
         if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
         if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
@@ -267,8 +267,8 @@ export function OrdersList({ userRole = '' }: { userRole?: string }) {
                     <span style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('service_type')}>
                         Service <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
                     </span>
-                    <span style={{ flex: 1.5, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('vendors')}>
-                        Vendors <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
+                    <span style={{ flex: 1.5, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('clientAddress')}>
+                        Address <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
                     </span>
                     <span style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', minWidth: 0 }} onClick={() => handleSort('items')}>
                         Items <ArrowUpDown size={14} style={{ marginLeft: 4 }} />
@@ -308,8 +308,19 @@ export function OrdersList({ userRole = '' }: { userRole?: string }) {
                         <span style={{ fontWeight: 600, minWidth: 0 }}>{order.order_number ?? 'N/A'}</span>
                         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{order.clientName}</span>
                         <span style={{ flex: 1 }}>{order.service_type}</span>
-                        <span style={{ flex: 1.5, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {(order.vendorNames || ['Unknown']).join(', ')}
+                        <span
+                            style={{
+                                flex: 1.5,
+                                fontSize: '0.85rem',
+                                color: 'var(--text-secondary)',
+                                minWidth: 0,
+                                whiteSpace: 'normal',
+                                wordBreak: 'break-word',
+                                lineHeight: 1.35,
+                            }}
+                            title={order.clientAddress || undefined}
+                        >
+                            {order.clientAddress?.trim() ? order.clientAddress : '—'}
                         </span>
                         <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
                             {order.total_items != null ? `${order.total_items} item(s)` : '-'}
