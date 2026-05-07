@@ -4437,6 +4437,8 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         voucher_amount: isProduceServiceType(data.serviceType) ? (data.voucherAmount?.trim() || null) : null,
         unite_account: payload.unite_account ?? null
     };
+    // Omit when unset so environments without a migrated `produce_vendor_id` column still work (PostgREST rejects unknown columns even for null).
+    if (!insertPayload.produce_vendor_id) delete insertPayload.produce_vendor_id;
     
     const { data: res, error: insertError } = await supabase
         .from('clients')
@@ -4530,12 +4532,14 @@ export async function addPlaceholderDependents(parentClientId: string, count: nu
             client_id_external: null,
             case_id_external: null,
             unite_account: parent.uniteAccount ?? null,
-            produce_vendor_id: isProduceServiceType(serviceType) ? (parent.produceVendorId ?? null) : null,
             voucher_amount: null,
             billings: null,
             visits: null,
             sign_token: null
         };
+        if (isProduceServiceType(serviceType) && parent.produceVendorId) {
+            insertPayload.produce_vendor_id = parent.produceVendorId;
+        }
 
         const { data: res, error: insertError } = await supabase
             .from('clients')
@@ -4643,9 +4647,10 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
         lat: payload.lat,
         lng: payload.lng,
         geocoded_at: payload.geocoded_at,
-        produce_vendor_id: (isProduceServiceType(serviceType) && produceVendorId) ? produceVendorId : null,
         voucher_amount: null
     };
+    const pvId = isProduceServiceType(serviceType) && produceVendorId ? produceVendorId : null;
+    if (pvId) insertPayload.produce_vendor_id = pvId;
     const { data: res, error: insertError } = await supabase
         .from('clients')
         .insert([insertPayload])
@@ -4802,7 +4807,10 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     if (data.billings !== undefined) payload.billings = data.billings ? JSON.stringify(data.billings) : null;
     if (data.visits !== undefined) payload.visits = data.visits ? JSON.stringify(data.visits) : null;
     if (data.signToken !== undefined) payload.sign_token = data.signToken || null;
-    if (data.produceVendorId !== undefined) payload.produce_vendor_id = data.produceVendorId || null;
+    // Only send when non-null so DBs without `produce_vendor_id` still accept updates (unknown columns fail even for null).
+    if (data.produceVendorId !== undefined && data.produceVendorId) {
+        payload.produce_vendor_id = data.produceVendorId;
+    }
     if (data.uniteAccount !== undefined) payload.unite_account = data.uniteAccount || null;
     if (data.history !== undefined) payload.history = data.history || null;
 
@@ -4821,14 +4829,35 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     
     let updatedRow: any = null;
     if (Object.keys(dbPayload).length > 0) {
-        const { data, error } = await supabase
-            .from('clients')
-            .update(dbPayload)
-            .eq('id', id)
-            .select()
-            .single();
-        handleError(error, 'updateClient');
-        updatedRow = data;
+        let attemptPayload: Record<string, unknown> = { ...dbPayload };
+        for (let attempt = 0; attempt < 16; attempt++) {
+            const { data, error } = await supabase
+                .from('clients')
+                .update(attemptPayload)
+                .eq('id', id)
+                .select()
+                .single();
+            if (!error) {
+                updatedRow = data;
+                break;
+            }
+            const code = (error as { code?: string }).code;
+            const msg = error.message || '';
+            // PostgREST: unknown column in PATCH body — retry without that key (older DBs missing migrations).
+            if (code === 'PGRST204') {
+                const m = /Could not find the '([^']+)' column/.exec(msg);
+                const col = m?.[1];
+                if (col && Object.prototype.hasOwnProperty.call(attemptPayload, col)) {
+                    delete attemptPayload[col];
+                    if (Object.keys(attemptPayload).length === 0) {
+                        updatedRow = null;
+                        break;
+                    }
+                    continue;
+                }
+            }
+            handleError(error, 'updateClient');
+        }
     }
 
     // syncCurrentOrderToUpcoming is a no-op (order data lives in clients.upcoming_order only).
