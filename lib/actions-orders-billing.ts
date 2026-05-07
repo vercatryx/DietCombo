@@ -297,13 +297,18 @@ async function getOrdersWithSearchFallback(
 
     if (search) {
         const term = `%${search}%`;
-        const [clientsRes, vendorsRes] = await Promise.all([
+        const [clientsRes, clientsByAddressRes, vendorsRes] = await Promise.all([
             db.from('clients').select('id').ilike('full_name', term),
+            db.from('clients').select('id').ilike('address', term),
             db.from('vendors').select('id').ilike('name', term),
         ]);
 
         const clientIds = new Set<string>();
         for (const r of clientsRes.data || []) {
+            const id = (r as { id: string }).id;
+            if (!clientIdAllowlist || clientIdAllowlist.includes(id)) clientIds.add(id);
+        }
+        for (const r of clientsByAddressRes.data || []) {
             const id = (r as { id: string }).id;
             if (!clientIdAllowlist || clientIdAllowlist.includes(id)) clientIds.add(id);
         }

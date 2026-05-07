@@ -182,7 +182,7 @@ export function OrdersList({ userRole = '' }: { userRole?: string }) {
                         <Search size={18} className={styles.searchIcon} />
                         <input
                             className="input"
-                            placeholder="Search by client, order # or vendor…"
+                            placeholder="Search by client, address, order # or vendor…"
                             style={{ paddingLeft: '2.5rem', width: '300px' }}
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
