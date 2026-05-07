@@ -208,21 +208,27 @@ export async function login(prevState: any, formData: FormData) {
     }
 
     try {
+        const loginNorm = normalizeAdminUsername(loginInput);
+
         // 1. Check Env Super Admin
         const envUser = process.env.ADMIN_USERNAME;
         const envPass = process.env.ADMIN_PASSWORD;
 
-        if (envUser && envPass && loginInput === envUser && password === envPass) {
+        if (envUser && envPass && loginNorm === normalizeAdminUsername(envUser) && password === envPass) {
             await createSession('super-admin', 'Admin', 'super-admin');
             redirect('/');
         }
 
-        // 2. Check Database Admins
-        const { data: admin } = await supabase
+        // 2. Check Database Admins (flexible username match)
+        const { data: adminsList, error: adminsLoginError } = await supabase
             .from('admins')
-            .select('id, username, password, name, role')
-            .eq('username', loginInput)
-            .maybeSingle();
+            .select('id, username, password, name, role');
+
+        if (adminsLoginError) {
+            console.error('Login admin fetch:', adminsLoginError);
+        }
+
+        const admin = adminsList?.find((a) => a.username && normalizeAdminUsername(a.username) === loginNorm);
 
         if (admin) {
             const isMatch = await verifyPassword(password, admin.password);
@@ -307,6 +313,16 @@ function normalizeEmail(email: string): string {
     return email.replace(/\s+/g, '').toLowerCase();
 }
 
+/** Admin login identifiers: ignore outer/extra spaces and case; email-shaped values use normalizeEmail. */
+function normalizeAdminUsername(input: string): string {
+    const t = input.trim();
+    if (!t) return '';
+    if (t.includes('@')) {
+        return normalizeEmail(t);
+    }
+    return t.replace(/\s+/g, ' ').toLowerCase();
+}
+
 /** DB lookup key for passwordless_codes.email (normalized email or `sms:+E164`). */
 function toOtpStorageKey(raw: string): string | null {
     const t = raw.trim();
@@ -386,15 +402,17 @@ async function collectIdentityMatches(identifier: string): Promise<{
     const matches: IdentityMatch[] = [];
 
     const envUser = process.env.ADMIN_USERNAME;
-    if (envUser && originalTrimmed === envUser) {
+    const normForAdmin = normalizeAdminUsername(originalTrimmed);
+    if (envUser && normForAdmin && normForAdmin === normalizeAdminUsername(envUser)) {
         matches.push({ type: 'admin' });
     }
 
-    const { data: admins, error: adminsError } = await supabase.from('admins').select('id').eq('username', originalTrimmed);
+    const { data: admins, error: adminsError } = await supabase.from('admins').select('id, username');
     if (adminsError) {
         console.error('[collectIdentityMatches] Error querying admins:', adminsError);
     } else if (admins && admins.length > 0) {
-        matches.push(...admins.map((a) => ({ type: 'admin' as const, id: a.id })));
+        const adminMatches = admins.filter((a) => a.username && normalizeAdminUsername(a.username) === normForAdmin);
+        matches.push(...adminMatches.map((a) => ({ type: 'admin' as const, id: a.id })));
     }
 
     const { data: vendorsData, error: vendorsError } = await supabase
@@ -535,7 +553,7 @@ async function completeLoginFromMatch(match: IdentityMatch & { id?: string }, em
     const trimmedEmail = emailForEnvCheck.trim();
 
     if (match.type === 'admin') {
-        if (!match.id && envUser && trimmedEmail === envUser) {
+        if (!match.id && envUser && normalizeAdminUsername(trimmedEmail) === normalizeAdminUsername(envUser)) {
             await createSession('super-admin', 'Admin', 'super-admin');
             redirect('/');
         } else if (match.id) {
