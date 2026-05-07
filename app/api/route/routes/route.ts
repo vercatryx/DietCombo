@@ -96,17 +96,25 @@ export async function GET(req: Request) {
                     serverLog.push(
                         `[route/routes] rpc=get_routes_for_date ok (${ms}ms) routes=${coerced.routes.length} unrouted=${coerced.unrouted.length}`
                     );
-                    return NextResponse.json(
-                        {
-                            routes: coerced.routes,
-                            unrouted: coerced.unrouted,
-                            usersWithoutStops: [],
-                            _serverLog: serverLog,
-                        },
-                        { headers: { "Cache-Control": "no-store" } }
+                    // If both are empty, do not return — stale/wrong RPC definitions on Supabase often yield []
+                    // while the JS hydrator below still has correct drivers + stops. Returning early made /routes look blank.
+                    if (coerced.routes.length > 0 || coerced.unrouted.length > 0) {
+                        return NextResponse.json(
+                            {
+                                routes: coerced.routes,
+                                unrouted: coerced.unrouted,
+                                usersWithoutStops: [],
+                                _serverLog: serverLog,
+                            },
+                            { headers: { "Cache-Control": "no-store" } }
+                        );
+                    }
+                    serverLog.push(
+                        `[route/routes] rpc=get_routes_for_date returned empty routes+unrouted — using JS fallback`
                     );
+                } else {
+                    serverLog.push(`[route/routes] rpc=get_routes_for_date returned unparseable payload; using fallback path`);
                 }
-                serverLog.push(`[route/routes] rpc=get_routes_for_date returned unparseable payload; using fallback path`);
             } else if (rpcRes.error) {
                 serverLog.push(`[route/routes] rpc=get_routes_for_date failed: ${rpcRes.error.message}`);
                 console.error("[route/routes] RPC get_routes_for_date failed:", rpcRes.error);
@@ -1369,9 +1377,18 @@ export async function GET(req: Request) {
             { headers: { "Cache-Control": "no-store" } }
         );
     } catch (e: any) {
+        const msg = e?.message || String(e);
         console.error("routes GET error", e);
-        // Return empty set so UI doesn't crash
-        return NextResponse.json({ routes: [], unrouted: [] }, { status: 200 });
+        // Still 200 so the page renders; include hint for Network tab / logs (silent empty was mistaken for "no data")
+        return NextResponse.json(
+            {
+                routes: [],
+                unrouted: [],
+                usersWithoutStops: [],
+                _routesApiError: msg,
+            },
+            { status: 200 }
+        );
     }
 }
 

@@ -28,6 +28,7 @@ import { exportRouteLabelsPDF } from "@/utils/pdfRouteLabels";
 import { DateFilter } from "@/components/routes/DateFilter";
 import { LoadingIndicator } from "@/components/ui/LoadingIndicator";
 import { fetchDrivers } from "@/lib/api";
+import { isProduceServiceType } from "@/lib/isProduceServiceType";
 import styles from './routes.module.css';
 
 /* =================== helpers / palette =================== */
@@ -43,6 +44,11 @@ const nameOf = (u: any = {}) => {
     const addr = `${u.address ?? ""}${u.apt ? " " + u.apt : ""}`.trim();
     return addr || "Unnamed";
 };
+
+/** Matches /api/route/routes?exclude_produce=1 — produce-only rows are not shown on the drivers map. */
+function clientEligibleForRoutesMap(c: any) {
+    return !isProduceServiceType(c.service_type ?? c.serviceType);
+}
 
 /* ========= complex detection (unchanged) ========= */
 const toBool = (v: any) => {
@@ -598,6 +604,80 @@ export default function RoutesPage() {
         });
     }, [assignmentData?.drivers, ordersViewClients]);
 
+    /**
+     * When /api/route/routes returns [] (RPC mismatch, schema drift, empty stops for date), the map used to show
+     * nothing because mapDrivers is derived only from `routes`. Assignment-data still has geocoded clients — use it
+     * so the map matches what users see in Client Assignment.
+     */
+    const mapDriversFromAssignment = React.useMemo(() => {
+        const drivers = assignmentData?.drivers || [];
+        const clients = assignmentData?.clients || [];
+        return drivers.map((d, i) => {
+            const driverId = String(d.id);
+            const color = d.color || palette[i % palette.length];
+            const stops = clients
+                .filter(clientEligibleForRoutesMap)
+                .filter((c: any) => String(c.assigned_driver_id || c.assignedDriverId || "") === driverId)
+                .filter((c: any) => c.lat != null && c.lng != null && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng)))
+                .map((c: any, idx: number) => ({
+                    id: c.id,
+                    userId: c.id,
+                    name: nameOf(c),
+                    first: c.first ?? null,
+                    last: c.last ?? null,
+                    firstName: c.first ?? null,
+                    lastName: c.last ?? null,
+                    first_name: c.first ?? null,
+                    last_name: c.last ?? null,
+                    fullName: nameOf(c),
+                    full_name: nameOf(c),
+                    address: `${c.address ?? ""}${c.apt ? " " + c.apt : ""}`.trim(),
+                    phone: c.phone ?? "",
+                    city: c.city ?? "",
+                    state: c.state ?? "",
+                    zip: c.zip ?? "",
+                    lat: Number(c.lat),
+                    lng: Number(c.lng),
+                    __driverId: driverId,
+                    __driverName: d.name || `Driver ${i}`,
+                    assigned_driver_id: driverId,
+                    __driverColor: color,
+                    __stopIndex: idx,
+                    orderId: null,
+                    orderDate: null,
+                    deliveryDate: null,
+                    orderStatus: null,
+                    completed: false,
+                    dislikes: "",
+                }));
+            return { id: driverId, driverId, name: d.name || `Driver ${i}`, color, polygon: [], stops };
+        });
+    }, [assignmentData?.drivers, assignmentData?.clients]);
+
+    const unroutedPinsFromAssignment = React.useMemo(() => {
+        return (assignmentData?.clients || [])
+            .filter(clientEligibleForRoutesMap)
+            .filter((c: any) => !(c.assigned_driver_id || c.assignedDriverId))
+            .filter((c: any) => c.lat != null && c.lng != null && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng)))
+            .map((c: any) => ({
+                id: c.id,
+                userId: c.id,
+                name: nameOf(c),
+                first: c.first,
+                last: c.last,
+                address: c.address ?? "",
+                lat: Number(c.lat),
+                lng: Number(c.lng),
+                assigned_driver_id: null,
+                __driverColor: "#666",
+            }));
+    }, [assignmentData?.clients]);
+
+    const assignmentFallbackMapPins = React.useMemo(() => {
+        const assigned = mapDriversFromAssignment.reduce((n, r) => n + (r.stops?.length ?? 0), 0);
+        return assigned + unroutedPinsFromAssignment.length;
+    }, [mapDriversFromAssignment, unroutedPinsFromAssignment]);
+
     // Debug: log Orders View stop counts per driver
     React.useEffect(() => {
         if (activeTab === "map" && mapDriversOrdersView?.length > 0) {
@@ -1032,13 +1112,51 @@ export default function RoutesPage() {
                             {(() => {
                                 const Component = DriversMapLeaflet as any;
                                 const useOrdersViewData = activeTab === "map" && ordersForDate?.client_ids != null;
-                                // Use mapDrivers (from routes API / driver_route_order) whenever we have routes so route lines show correct order and update after Reorganize
-                                const mapDriversForMap = routes.length > 0 ? mapDrivers : (useOrdersViewData ? mapDriversOrdersView : mapDrivers);
-                                const dataSource = routes.length > 0 ? "mapDrivers (routes API)" : (useOrdersViewData ? "mapDriversOrdersView (orders-for-date)" : "mapDrivers");
-                                console.log("[RoutesPage] map data source:", dataSource, "routes.length:", routes.length, "useOrdersViewData:", useOrdersViewData, "stops total:", mapDriversForMap?.reduce((n: number, r: any) => n + (r.stops?.length ?? 0), 0));
+                                const useAssignmentMapFallback =
+                                    activeTab === "map" &&
+                                    routes.length === 0 &&
+                                    !useOrdersViewData &&
+                                    assignmentFallbackMapPins > 0;
+
+                                let mapDriversForMap: any[] = mapDrivers;
+                                let unroutedForMap: any[] = enrichedUnrouted;
+                                let dataSource = "mapDrivers";
+
+                                if (routes.length > 0) {
+                                    mapDriversForMap = mapDrivers;
+                                    unroutedForMap = enrichedUnrouted;
+                                    dataSource = "mapDrivers (routes API)";
+                                } else if (useOrdersViewData) {
+                                    mapDriversForMap = mapDriversOrdersView;
+                                    unroutedForMap = enrichedUnroutedOrdersView;
+                                    dataSource = "mapDriversOrdersView (orders-for-date)";
+                                } else if (useAssignmentMapFallback) {
+                                    mapDriversForMap = mapDriversFromAssignment;
+                                    unroutedForMap = unroutedPinsFromAssignment;
+                                    dataSource = "mapDriversFromAssignment (assignment-data fallback)";
+                                } else {
+                                    mapDriversForMap = mapDrivers;
+                                    unroutedForMap = enrichedUnrouted;
+                                    dataSource = "mapDrivers (routes API empty)";
+                                }
+
+                                console.log(
+                                    "[RoutesPage] map data source:",
+                                    dataSource,
+                                    "routes.length:",
+                                    routes.length,
+                                    "useOrdersViewData:",
+                                    useOrdersViewData,
+                                    "assignmentFallback:",
+                                    useAssignmentMapFallback,
+                                    "stops total:",
+                                    mapDriversForMap?.reduce((n: number, r: any) => n + (r.stops?.length ?? 0), 0),
+                                    "unrouted pins:",
+                                    unroutedForMap?.length ?? 0
+                                );
                                 return <Component
                                     drivers={mapDriversForMap}
-                                    unrouted={useOrdersViewData ? enrichedUnroutedOrdersView : enrichedUnrouted}
+                                    unrouted={unroutedForMap}
                                     onReassign={handleReassign}
                                     onRenameDriver={handleRenameDriver}
                                     busy={busy}
