@@ -713,7 +713,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        link.remove();
         URL.revokeObjectURL(url);
         } finally {
             setIsExporting(false);
@@ -786,7 +786,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        link.remove();
         URL.revokeObjectURL(url);
         } finally {
             setIsExporting(false);
@@ -868,7 +868,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        link.remove();
         URL.revokeObjectURL(link.href);
     }
 

@@ -119,7 +119,7 @@ export function NavigatorManagement() {
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
-            document.body.removeChild(link);
+            link.remove();
         } catch (error) {
             console.error('Error downloading logs:', error);
             alert('Failed to download logs.');

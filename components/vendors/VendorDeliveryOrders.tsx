@@ -407,7 +407,7 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        link.remove();
         URL.revokeObjectURL(url);
         } finally {
             setIsExporting(false);

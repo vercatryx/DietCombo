@@ -90,7 +90,7 @@ export default function MapConfirmDialog({
             document.head.appendChild(link);
 
             return () => {
-                document.head.removeChild(link);
+                link.remove();
             };
         }
     }, []);
