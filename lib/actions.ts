@@ -28,6 +28,8 @@ import { isProduceServiceType } from './isProduceServiceType';
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from './deliveryEligibility';
 import { mergeDietaryFlagsIntoNote, type DietaryFlags } from './dietary-preferences-note';
 import { inferLegacyChangeKind, type ClientChangeKind } from './audit/clientChangeKind';
+import type { ChangeDisplayTag } from './audit/clientChangeTags';
+import { inferAdminChangeTags } from './audit/clientChangeTags';
 import { hasAnyProofUrl, primaryProofUrl, proofPayloadForDb } from './proof-of-delivery-urls';
 
 export type { MealPlannerOrderResult } from './meal-planner-utils';
@@ -5181,19 +5183,16 @@ export async function getClientChangeLog(clientId: string, limit: number = 50): 
 
 export type UniteAccountFilter = 'all' | 'brooklyn' | 'main';
 
-/** Filter for `listClientChangesForAdmin`. Use `paused_any` for manual + automated pauses. */
-export type AdminChangeKindFilter =
-    | 'all'
-    | ClientChangeKind
-    | 'paused_any'
-    | 'legacy_unknown';
+export type { ChangeDisplayTag } from './audit/clientChangeTags';
 
 export type ListClientChangesParams = {
     fromDate: string;
     toDate: string;
-    changeKind?: AdminChangeKindFilter;
+    /** Any selected tag matches the row (OR). Empty or omitted = no tag filter. */
+    tagFilters?: ChangeDisplayTag[];
+    /** Any selected actor matches (OR). Empty or omitted = no actor filter. */
+    whoFilters?: string[];
     uniteAccount?: UniteAccountFilter;
-    whoContains?: string;
     limit?: number;
 };
 
@@ -5204,6 +5203,8 @@ export type AdminClientChangeRow = {
     summary: string;
     timestamp: string;
     changeKind: ClientChangeKind | 'legacy_unknown' | null;
+    /** Derived categories for filters and display (a row may have several). */
+    tags: ChangeDisplayTag[];
     clientFullName: string | null;
     uniteAccountRaw: string | null;
     uniteAccountLabel: 'Brooklyn' | 'Monsey';
@@ -5218,7 +5219,7 @@ function clientRowIsBrooklyn(uniteAccount: string | null | undefined): boolean {
  */
 export async function listClientChangesForAdmin(
     params: ListClientChangesParams
-): Promise<{ rows: AdminClientChangeRow[]; error?: string }> {
+): Promise<{ rows: AdminClientChangeRow[]; actorsInRange: string[]; error?: string }> {
     const session = await getSession();
     if (session?.role !== 'admin' && session?.role !== 'super-admin') {
         throw new Error('Forbidden');
@@ -5240,10 +5241,14 @@ export async function listClientChangesForAdmin(
             .limit(rawCap);
 
         if (error) {
-            return { rows: [], error: error.message };
+            return { rows: [], actorsInRange: [], error: error.message };
         }
 
         const raw = data || [];
+        const actorsInRange = [
+            ...new Set(raw.map((r: { who?: string }) => String(r.who ?? '').trim()).filter(Boolean)),
+        ].sort((a, b) => a.localeCompare(b));
+
         const clientIds = [...new Set(raw.map((r: { client_id: string }) => r.client_id).filter(Boolean))];
         const clientMap = new Map<string, { full_name: string | null; unite_account: string | null }>();
 
@@ -5271,31 +5276,31 @@ export async function listClientChangesForAdmin(
                 : null;
             const inferred = storedKind ?? inferLegacyChangeKind(String(r.summary ?? ''));
             const ua = cl?.unite_account ?? null;
+            const summaryStr = String(r.summary ?? '');
+            const tags = inferAdminChangeTags({ changeKind: inferred, summary: summaryStr });
 
             return {
                 id: String(r.id),
                 clientId: cid,
                 who: String(r.who ?? ''),
-                summary: String(r.summary ?? ''),
+                summary: summaryStr,
                 timestamp: String(r.timestamp ?? ''),
                 changeKind: inferred,
+                tags,
                 clientFullName: cl?.full_name ?? null,
                 uniteAccountRaw: ua,
                 uniteAccountLabel: clientRowIsBrooklyn(ua) ? 'Brooklyn' : 'Monsey',
             };
         });
 
-        const ck = params.changeKind ?? 'all';
-        if (ck !== 'all') {
-            rows = rows.filter((row) => {
-                const k = row.changeKind;
-                if (ck === 'paused_any') {
-                    if (k === 'client_paused' || k === 'system') return true;
-                    if (k === 'legacy_unknown' && /paused\s*:/i.test(row.summary)) return true;
-                    return false;
-                }
-                return k === ck;
-            });
+        const tagFilters = params.tagFilters?.filter(Boolean) ?? [];
+        if (tagFilters.length > 0) {
+            rows = rows.filter((row) => tagFilters.some((tf) => row.tags.includes(tf)));
+        }
+
+        const whoFilters = params.whoFilters?.filter((w) => w.trim().length > 0) ?? [];
+        if (whoFilters.length > 0) {
+            rows = rows.filter((row) => whoFilters.includes(row.who));
         }
 
         const uaFilter = params.uniteAccount ?? 'all';
@@ -5305,16 +5310,11 @@ export async function listClientChangesForAdmin(
             rows = rows.filter((r) => r.uniteAccountLabel === 'Monsey');
         }
 
-        const whoQ = (params.whoContains || '').trim().toLowerCase();
-        if (whoQ) {
-            rows = rows.filter((r) => r.who.toLowerCase().includes(whoQ));
-        }
-
         rows = rows.slice(0, limit);
 
-        return { rows };
+        return { rows, actorsInRange };
     } catch (e) {
-        return { rows: [], error: e instanceof Error ? e.message : 'Failed to load changes' };
+        return { rows: [], actorsInRange: [], error: e instanceof Error ? e.message : 'Failed to load changes' };
     }
 }
 
