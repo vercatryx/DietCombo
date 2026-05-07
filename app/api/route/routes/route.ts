@@ -21,6 +21,43 @@ function toNum(v: unknown): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Normalize get_routes_for_date RPC payloads. PostgREST / supabase-js may return jsonb as a JSON string,
+ * or nested under the function name; jsonb arrays can surface as objects with numeric keys in edge cases.
+ * Without this, Array.isArray(payload.routes) fails and the API returns empty routes despite a successful RPC.
+ */
+function coerceRoutesPayloadFromRpc(raw: unknown): { routes: any[]; unrouted: any[] } | null {
+    if (raw === undefined || raw === null) return null;
+    let v: unknown = raw;
+    if (typeof v === "string") {
+        try {
+            v = JSON.parse(v);
+        } catch {
+            return null;
+        }
+    }
+    if (Array.isArray(v)) return null;
+    if (typeof v !== "object" || v === null) return null;
+    let o = v as Record<string, unknown>;
+    if (
+        o.routes === undefined &&
+        o.unrouted === undefined &&
+        typeof (o as any).get_routes_for_date === "object" &&
+        (o as any).get_routes_for_date !== null
+    ) {
+        o = (o as any).get_routes_for_date as Record<string, unknown>;
+    }
+    const asArr = (x: unknown): any[] => {
+        if (Array.isArray(x)) return x;
+        if (x != null && typeof x === "object") return Object.values(x as Record<string, unknown>);
+        return [];
+    };
+    return {
+        routes: asArr(o.routes),
+        unrouted: asArr(o.unrouted),
+    };
+}
+
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
@@ -52,16 +89,24 @@ export async function GET(req: Request) {
                 p_exclude_produce: excludeProduce,
             });
 
-            if (!rpcRes.error && rpcRes.data) {
-                const payload = rpcRes.data as any;
-                const routes = Array.isArray(payload?.routes) ? payload.routes : [];
-                const unrouted = Array.isArray(payload?.unrouted) ? payload.unrouted : [];
-                const ms = Date.now() - tRpc0;
-                serverLog.push(`[route/routes] rpc=get_routes_for_date ok (${ms}ms) routes=${routes.length} unrouted=${unrouted.length}`);
-                return NextResponse.json(
-                    { routes, unrouted, usersWithoutStops: [], _serverLog: serverLog },
-                    { headers: { "Cache-Control": "no-store" } }
-                );
+            if (!rpcRes.error && rpcRes.data != null) {
+                const coerced = coerceRoutesPayloadFromRpc(rpcRes.data);
+                if (coerced) {
+                    const ms = Date.now() - tRpc0;
+                    serverLog.push(
+                        `[route/routes] rpc=get_routes_for_date ok (${ms}ms) routes=${coerced.routes.length} unrouted=${coerced.unrouted.length}`
+                    );
+                    return NextResponse.json(
+                        {
+                            routes: coerced.routes,
+                            unrouted: coerced.unrouted,
+                            usersWithoutStops: [],
+                            _serverLog: serverLog,
+                        },
+                        { headers: { "Cache-Control": "no-store" } }
+                    );
+                }
+                serverLog.push(`[route/routes] rpc=get_routes_for_date returned unparseable payload; using fallback path`);
             } else if (rpcRes.error) {
                 serverLog.push(`[route/routes] rpc=get_routes_for_date failed: ${rpcRes.error.message}`);
                 console.error("[route/routes] RPC get_routes_for_date failed:", rpcRes.error);
