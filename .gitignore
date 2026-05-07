@@ -71,6 +71,5 @@ scripts/verify-env.js
 
 /lib/generated/prisma
 backup/backup.json
-backup/
-/backup
+# Secrets only in backup/.env (see backup/.gitignore); tracked files are templates + README.
 
