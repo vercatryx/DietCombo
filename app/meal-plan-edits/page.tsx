@@ -104,8 +104,18 @@ export default function MealPlanEditsPage() {
     const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
     const margin = 14;
+    const bottom = pageH - 16;
     let y = 18;
+
+    const itemX = margin + 4;
+    const qtyX = margin + 118;
+    const mealsX = margin + 142;
+    const rowH = 5.5;
+    const sectionGap = 6;
+    /** Section title + ITEM/QTY/MEALS sub-header + rule */
+    const sectionHeaderH = 14;
 
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
@@ -115,37 +125,67 @@ export default function MealPlanEditsPage() {
     doc.setFont('helvetica', 'normal');
     doc.text(selectedDate ? formatDateLong(selectedDate) : '', margin, y);
     doc.text(`${edits.length} client${edits.length !== 1 ? 's' : ''} changed`, pageW - margin, y, { align: 'right' });
-    y += 8;
+    y += 10;
 
-    const colX = [margin, margin + 72, margin + 130, margin + 150];
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'bold');
-    doc.text('CLIENT', colX[0], y);
-    doc.text('ITEM', colX[1], y);
-    doc.text('QTY', colX[2], y);
-    doc.text('MEALS', colX[3], y);
-    y += 1;
-    doc.setDrawColor(200);
-    doc.line(margin, y, pageW - margin, y);
-    y += 4;
+    const drawClientSectionHeader = (clientName: string, continued: boolean) => {
+      const title = continued ? `${clientName} (continued)` : clientName;
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text(String(title).slice(0, 70), margin, y);
+      y += 5;
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('ITEM', itemX, y);
+      doc.text('QTY', qtyX, y);
+      doc.text('MEALS', mealsX, y);
+      y += 1;
+      doc.setDrawColor(200);
+      doc.line(margin, y, pageW - margin, y);
+      y += 4;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+    };
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    const rows = buildExportRows();
-    for (const row of rows) {
-      if (y > doc.internal.pageSize.getHeight() - 16) {
-        doc.addPage();
-        y = 18;
+    for (const entry of edits) {
+      const visibleItems = entry.items.filter((i) => i.quantity > 0);
+      const rows: { Item: string; Qty: number | string; Meals: number | string }[] =
+        visibleItems.length === 0
+          ? [{ Item: '(no items)', Qty: 0, Meals: '—' }]
+          : visibleItems.map((item) => ({
+              Item: item.name,
+              Qty: item.quantity,
+              Meals: item.value != null ? item.quantity * item.value : '—',
+            }));
+
+      let continuation = false;
+      const ensureSectionHeader = () => {
+        if (y + sectionHeaderH + rowH > bottom) {
+          doc.addPage();
+          y = 18;
+        }
+        drawClientSectionHeader(entry.clientName, continuation);
+        continuation = false;
+      };
+
+      ensureSectionHeader();
+
+      for (const row of rows) {
+        if (y + rowH > bottom) {
+          doc.addPage();
+          y = 18;
+          continuation = true;
+          ensureSectionHeader();
+        }
+        doc.text(String(row.Item).slice(0, 44), itemX, y);
+        doc.text(String(row.Qty), qtyX, y);
+        doc.text(String(row.Meals), mealsX, y);
+        y += rowH;
       }
-      doc.text(String(row.Client).slice(0, 36), colX[0], y);
-      doc.text(String(row.Item).slice(0, 30), colX[1], y);
-      doc.text(String(row.Qty), colX[2], y);
-      doc.text(String(row.Meals), colX[3], y);
-      y += 5.5;
+      y += sectionGap;
     }
 
     doc.save(`meal-plan-edits-${selectedDate}.pdf`);
-  }, [buildExportRows, selectedDate, edits.length]);
+  }, [selectedDate, edits]);
 
   return (
     <div className={styles.page}>
