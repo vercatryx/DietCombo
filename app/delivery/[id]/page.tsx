@@ -51,7 +51,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
     // Fetch order details
     let query = supabaseAdmin
         .from('orders')
-        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url, proof_of_delivery_urls, proof_of_delivery_image');
+        .select('id, order_number, client_id, scheduled_delivery_date, proof_of_delivery_url, proof_of_delivery_urls');
 
     if (isUuid) {
         query = query.eq('id', id);
@@ -100,7 +100,6 @@ export default async function OrderDeliveryPage({ params }: Props) {
                 // upcoming_orders doesn't have delivery proof columns; use nulls until order is created
                 proof_of_delivery_url: null,
                 proof_of_delivery_urls: [],
-                proof_of_delivery_image: null
             };
             isUpcoming = true;
         }
