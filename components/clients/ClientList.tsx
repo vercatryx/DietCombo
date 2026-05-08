@@ -6,6 +6,7 @@ import { DependantInfoShelf } from './DependantInfoShelf';
 
 import { useState, useEffect, useRef, useMemo, ReactElement, type CSSProperties, type ReactNode } from 'react';
 import { ClientProfile, ClientStatus, Navigator, Vendor, BoxType, ClientFullDetails, MenuItem, AppSettings, ItemCategory, ServiceType, ProduceVendor } from '@/lib/types';
+import { isProduceServiceType } from '@/lib/isProduceServiceType';
 import {
     getClientsPaginated,
     searchClientsForDashboard,
@@ -999,6 +1000,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         return true;
     }
 
+    /** Produce service but missing or invalid produce_vendor_id (incl. orphan UUIDs). */
+    function clientMissingProduceVendor(c: ClientProfile): boolean {
+        if (!isProduceServiceType(c.serviceType)) return false;
+        const pid = c.produceVendorId;
+        if (pid == null || String(pid).trim() === '') return true;
+        return !produceVendors.some((pv) => pv.id === pid);
+    }
+
     const baseFilteredClients = clients.filter(c => {
         const searchLower = committedSearch.toLowerCase();
         const matchesSearch =
@@ -1065,16 +1074,21 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         // Filter by Screening Status
         const matchesScreeningFilter = !screeningFilter || (c.screeningStatus || 'not_started') === screeningFilter;
 
-        // Filter by Service Type: "Food" = non-Produce, "Produce" = all Produce, "Produce:<id>" = specific vendor
+        // Filter by Service Type: "Food" = non-Produce, "Produce" = all Produce, "Produce:unassigned" = Produce without vendor, "Produce:<id>" = specific vendor
         let matchesServiceTypeFilter = true;
         if (serviceTypeFilter) {
             if (serviceTypeFilter.startsWith('Produce:')) {
-                const pvId = serviceTypeFilter.slice('Produce:'.length);
-                matchesServiceTypeFilter = c.serviceType === 'Produce' && c.produceVendorId === pvId;
+                const pvKey = serviceTypeFilter.slice('Produce:'.length);
+                if (pvKey === 'unassigned') {
+                    matchesServiceTypeFilter = clientMissingProduceVendor(c);
+                } else {
+                    matchesServiceTypeFilter =
+                        isProduceServiceType(c.serviceType) && c.produceVendorId === pvKey;
+                }
             } else if (serviceTypeFilter === 'Produce') {
-                matchesServiceTypeFilter = c.serviceType === 'Produce';
+                matchesServiceTypeFilter = isProduceServiceType(c.serviceType);
             } else {
-                matchesServiceTypeFilter = c.serviceType !== 'Produce';
+                matchesServiceTypeFilter = !isProduceServiceType(c.serviceType);
             }
         }
 
@@ -1113,9 +1127,23 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     // Helper function to compare clients based on sort column
     function compareClients(a: ClientProfile, b: ClientProfile): number {
-        // Always sort clients needing vendor assignment to the top
-        const aNeedsVendor = a.serviceType === 'Boxes' && (!a.activeOrder || (a.activeOrder.serviceType === 'Boxes' && !a.activeOrder.vendorId && !boxTypes.find(bt => bt.id === a.activeOrder?.boxTypeId)?.vendorId));
-        const bNeedsVendor = b.serviceType === 'Boxes' && (!b.activeOrder || (b.activeOrder.serviceType === 'Boxes' && !b.activeOrder.vendorId && !boxTypes.find(bt => bt.id === b.activeOrder?.boxTypeId)?.vendorId));
+        // Sort clients needing vendor assignment to the top (Boxes or Produce without vendor)
+        const aNeedsBoxVendor =
+            a.serviceType === 'Boxes' &&
+            (!a.activeOrder ||
+                (a.activeOrder.serviceType === 'Boxes' &&
+                    !a.activeOrder.vendorId &&
+                    !boxTypes.find((bt) => bt.id === a.activeOrder?.boxTypeId)?.vendorId));
+        const bNeedsBoxVendor =
+            b.serviceType === 'Boxes' &&
+            (!b.activeOrder ||
+                (b.activeOrder.serviceType === 'Boxes' &&
+                    !b.activeOrder.vendorId &&
+                    !boxTypes.find((bt) => bt.id === b.activeOrder?.boxTypeId)?.vendorId));
+        const aNeedsProduceVendor = clientMissingProduceVendor(a);
+        const bNeedsProduceVendor = clientMissingProduceVendor(b);
+        const aNeedsVendor = aNeedsBoxVendor || aNeedsProduceVendor;
+        const bNeedsVendor = bNeedsBoxVendor || bNeedsProduceVendor;
 
         if (aNeedsVendor !== bNeedsVendor) {
             return aNeedsVendor ? -1 : 1; // Clients needing vendor come first
@@ -1204,11 +1232,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                     comparison = nameA.localeCompare(nameB);
                 }
                 break;
-            case 'clientType':
-                const pvNameA = a.serviceType === 'Produce' ? (produceVendors.find(pv => pv.id === a.produceVendorId)?.name ?? 'Produce') : 'Food';
-                const pvNameB = b.serviceType === 'Produce' ? (produceVendors.find(pv => pv.id === b.produceVendorId)?.name ?? 'Produce') : 'Food';
-                comparison = pvNameA.localeCompare(pvNameB);
+            case 'clientType': {
+                const typeLabel = (cl: ClientProfile) => {
+                    if (!isProduceServiceType(cl.serviceType)) return 'Food';
+                    return produceVendors.find((pv) => pv.id === cl.produceVendorId)?.name ?? 'Produce';
+                };
+                comparison = typeLabel(a).localeCompare(typeLabel(b));
                 break;
+            }
             case 'flags':
                 const nonDefaultA = hasNonDefaultFlags(a) ? 1 : 0;
                 const nonDefaultB = hasNonDefaultFlags(b) ? 1 : 0;
@@ -2800,7 +2831,7 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 position: 'absolute', top: '100%', left: 0, marginTop: '4px',
                                 backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)',
                                 borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
-                                zIndex: 1000, minWidth: '140px'
+                                zIndex: 1000, minWidth: '200px'
                             }}>
                                 <div onClick={() => { setServiceTypeFilter(null); setOpenFilterMenu(null); }}
                                     style={{
@@ -2825,6 +2856,14 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                         fontWeight: serviceTypeFilter === 'Produce' ? 600 : 400
                                     }}>
                                     All Produce
+                                </div>
+                                <div onClick={() => { setServiceTypeFilter('Produce:unassigned'); setOpenFilterMenu(null); }}
+                                    style={{
+                                        padding: '8px 12px', cursor: 'pointer',
+                                        backgroundColor: serviceTypeFilter === 'Produce:unassigned' ? 'var(--bg-surface-hover)' : 'transparent',
+                                        fontWeight: serviceTypeFilter === 'Produce:unassigned' ? 600 : 400
+                                    }}>
+                                    Produce — no vendor
                                 </div>
                                 {produceVendors.filter(pv => pv.isActive).map(pv => (
                                     <div key={pv.id} onClick={() => { setServiceTypeFilter(`Produce:${pv.id}`); setOpenFilterMenu(null); }}
@@ -3128,8 +3167,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             <TableCell index={2} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 {isDependent ? '-' : <SignCell client={client} />}
                             </TableCell>
-                            <TableCell index={3} title={client.serviceType === 'Produce' ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}` : client.serviceType} style={{ fontSize: '0.9rem' }}>
-                                {client.serviceType === 'Produce' ? (() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? pv.name : 'Produce'; })() : 'Food'}
+                            <TableCell index={3} title={isProduceServiceType(client.serviceType) ? `Produce${(() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? ` - ${pv.name}` : ''; })()}` : client.serviceType} style={{ fontSize: '0.9rem' }}>
+                                {isProduceServiceType(client.serviceType) ? (() => { const pv = produceVendors.find(v => v.id === client.produceVendorId); return pv ? pv.name : 'Produce'; })() : 'Food'}
                             </TableCell>
                             <TableCell index={4} title={isDependent ? '' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : 'All default')} style={{ fontSize: '0.85rem', color: hasNonDefaultFlags(client) ? 'var(--color-primary)' : 'var(--text-tertiary)' }}>
                                 {isDependent ? '-' : (hasNonDefaultFlags(client) ? getNonDefaultFlagLabels(client).join(', ') : '—')}
@@ -3204,7 +3243,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                             datasetMode === 'empty' && !committedSearch.trim()
                                 ? 'Enter a search and press Enter or click Search, or load all clients.'
                                 : flagsFilter !== 'all' ? `No clients with "${FLAGS_FILTER_OPTIONS.find(o => o.value === flagsFilter)?.label ?? flagsFilter}".` :
-                                    serviceTypeFilter ? `No clients with type "${serviceTypeFilter}".` :
+                                    serviceTypeFilter ? (
+                                            serviceTypeFilter === 'Produce:unassigned'
+                                                ? 'No Produce clients missing a vendor assignment.'
+                                                : `No clients with type "${serviceTypeFilter}".`
+                                        ) :
                                         needsVendorFilter ? 'No clients with box orders needing vendor assignment.' :
                                             currentView === 'ineligible' ? 'No ineligible clients found.' :
                                                 currentView === 'eligible' ? 'No eligible clients found.' :
