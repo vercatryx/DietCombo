@@ -6,7 +6,6 @@ import Webcam from 'react-webcam';
 import { processDeliveryProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ImageIcon, ExternalLink } from 'lucide-react';
 import '../delivery.css';
-import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
 import {
     type ProofShot,
     proofShotFromScreenshot,
@@ -369,7 +368,6 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                                 alt={`Proof ${i + 1}`}
                                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                             />
-                            <ProofStampPreviewOverlay capturedAt={shot.capturedAt} />
                             <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                                 <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>
                                     Photo {i + 1}
@@ -394,6 +392,9 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
                         </div>
                     ))}
                 </div>
+                <p style={{ color: '#9ca3af', fontSize: '0.8125rem', textAlign: 'center', padding: '0 16px 8px', margin: 0, lineHeight: 1.45 }}>
+                    Timestamp text is added on our servers when you submit (from EXIF capture time when available).
+                </p>
                 <div className="preview-actions">
                     <button
                         onClick={handleUpload}

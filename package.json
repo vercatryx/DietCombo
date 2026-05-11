@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "drivers-expo:start": "npm --prefix apps/drivers-expo run start",
+    "drivers-expo:tunnel": "npm --prefix apps/drivers-expo run start:tunnel",
+    "drivers-expo:tunnel:clean": "npm --prefix apps/drivers-expo run start:tunnel:clean",
+    "drivers-expo:metro-free": "npx kill-port 8081 8101",
+    "drivers-expo:eas-init": "npm --prefix apps/drivers-expo run eas-init",
+    "drivers-expo:eas-update": "npm --prefix apps/drivers-expo run eas-update:production",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -31,6 +37,7 @@
     "import-brooklyn-clients-to-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/import-brooklyn-clients-to-parent.ts",
     "diagnose-produce-vendor-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-produce-vendor-client.ts",
     "diagnose-id-in-routes": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-id-in-routes.ts",
+    "diagnose-client-routes-by-name": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-client-routes-by-name.ts",
     "diagnose-id-in-routes-prisma": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-id-in-routes-prisma.ts"
   },
   "dependencies": {

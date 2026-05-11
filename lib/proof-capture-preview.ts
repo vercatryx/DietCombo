@@ -9,7 +9,6 @@
 export type ProofShot = {
     blob: Blob;
     previewUrl: string;
-    capturedAt: Date;
 };
 
 export function revokeProofPreviewUrl(url: string | undefined | null): void {
@@ -43,6 +42,5 @@ export async function proofShotFromScreenshot(dataUrl: string): Promise<ProofSho
     return {
         blob,
         previewUrl: URL.createObjectURL(blob),
-        capturedAt: new Date(),
     };
 }

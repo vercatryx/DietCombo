@@ -4,7 +4,6 @@ import { useState, useRef, useCallback, useEffect, type ComponentType } from 're
 import dynamic from 'next/dynamic';
 import { processDeliveryProof } from '@/app/delivery/actions';
 import { Camera, CheckCircle, Upload, AlertCircle, X } from 'lucide-react';
-import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
 import {
     type ProofShot,
     proofShotFromScreenshot,
@@ -122,7 +121,8 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                 onSuccess(list);
                 setStep('SUCCESS');
             } else {
-                setError(result.error || 'Upload failed');
+                const msg = !result.success ? result.error || 'Upload failed' : 'Upload failed';
+                setError(msg);
                 setStep('ERROR');
             }
         } catch (err: any) {
@@ -222,7 +222,6 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                         {proofShots.map((shot, i) => (
                             <div key={shot.previewUrl} style={{ position: 'relative', minHeight: '28vh' }}>
                                 <img src={shot.previewUrl} alt={`Proof ${i + 1}`} style={{ width: '100%', maxHeight: '38vh', objectFit: 'contain' }} />
-                                <ProofStampPreviewOverlay capturedAt={shot.capturedAt} />
                                 <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>Photo {i + 1}</span>
                                     <button type="button" onClick={() => removeProofAt(i)} style={{ background: 'rgba(220,38,38,0.9)', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Remove</button>
@@ -230,6 +229,9 @@ export function TakeProofModal({ open, onClose, stop, onSuccess }: TakeProofModa
                             </div>
                         ))}
                     </div>
+                    <p style={{ color: '#9ca3af', fontSize: 12, textAlign: 'center', padding: '4px 16px 0', margin: 0, lineHeight: 1.4 }}>
+                        Timestamp text is added on our servers when you submit (from EXIF capture time when available).
+                    </p>
                     <div style={{ display: 'flex', gap: 12, padding: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
                         <button type="button" disabled={proofShots.length === 0} onClick={handleUpload} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 8, border: 'none', background: proofShots.length === 0 ? '#4b5563' : '#16a34a', color: '#fff', cursor: proofShots.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: proofShots.length === 0 ? 0.7 : 1 }}>
                             <Upload size={20} /> Submit {proofShots.length || ''} photo{proofShots.length === 1 ? '' : 's'}

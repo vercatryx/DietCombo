@@ -59,8 +59,17 @@ export function proofPayloadForDb(urls: string[]): {
     };
 }
 
+/**
+ * Minimal FormData shape used by proof uploads. Structural typing avoids collisions between
+ * Web `Request.formData()` and `@types/node` FormData during `next build`.
+ */
+export type ProofUploadFormData = {
+    get(name: string): FormDataEntryValue | null;
+    getAll(name: string): FormDataEntryValue[];
+};
+
 /** Read image files from FormData: repeated key "files", plus legacy single "file". */
-export function collectImageFilesFromFormData(formData: FormData): File[] {
+export function collectImageFilesFromFormData(formData: ProofUploadFormData): File[] {
     const multi = formData.getAll('files');
     const out: File[] = [];
     for (const entry of multi) {

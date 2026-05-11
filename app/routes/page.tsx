@@ -400,7 +400,7 @@ export default function RoutesPage() {
     /* ============================================================
      *  SAVE-CURRENT RUN (active run overwrite)
      * ============================================================ */
-    const saveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+    const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const saveCurrentRun = React.useCallback((immediate = false) => {
         const doPost = async () => {
             try {

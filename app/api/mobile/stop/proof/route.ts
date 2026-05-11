@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { uploadFile } from "@/lib/storage";
 import { stampTimestampOnImageBuffer } from "@/lib/stampTimestampOnImageBuffer";
+import type { ProofUploadFormData } from "@/lib/proof-of-delivery-urls";
 
 export const runtime = 'nodejs';
 
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
     let mimeType: string;
 
     if (contentType.includes("multipart/form-data")) {
-        const formData = await req.formData();
+        const formData = (await req.formData()) as unknown as ProofUploadFormData;
         const stopIdParam = formData.get("stopId");
         const file = formData.get("file") as File | null;
 

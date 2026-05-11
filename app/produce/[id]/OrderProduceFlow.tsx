@@ -5,7 +5,6 @@ import Webcam from 'react-webcam';
 import { uploadProduceProofOnly, createProduceOrderWithProof } from '../actions';
 import { Camera, CheckCircle, Upload, AlertCircle, MapPin, Phone, X, ExternalLink, ImageIcon } from 'lucide-react';
 import '../produce.css';
-import { ProofStampPreviewOverlay } from '@/components/proof/ProofStampPreviewOverlay';
 import {
     type ProofShot,
     proofShotFromScreenshot,
@@ -293,7 +292,6 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                     {proofShots.map((shot, i) => (
                         <div key={shot.previewUrl} style={{ position: 'relative', flex: 1, minHeight: '28vh' }}>
                             <img src={shot.previewUrl} alt={`Proof ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                            <ProofStampPreviewOverlay capturedAt={shot.capturedAt} />
                             <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                                 <span style={{ background: 'rgba(0,0,0,0.65)', color: '#fff', padding: '4px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600 }}>
                                     Photo {i + 1}
@@ -318,6 +316,9 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                         </div>
                     ))}
                 </div>
+                <p style={{ color: '#9ca3af', fontSize: '0.8125rem', textAlign: 'center', padding: '0 16px 8px', margin: 0, lineHeight: 1.45 }}>
+                    Timestamp text is added on our servers when you submit (from EXIF capture time when available).
+                </p>
                 <div className="preview-actions">
                     <button
                         onClick={handleUpload}

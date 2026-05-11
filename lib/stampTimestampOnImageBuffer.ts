@@ -1,6 +1,32 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { createRequire } from 'module';
+import { existsSync, readFileSync } from 'fs';
+import { dirname, join } from 'path';
 import sharp from 'sharp';
+
+const require = createRequire(import.meta.url);
+
+/**
+ * Sharp SVG compositing uses librsvg, which loads Fontconfig for generic/fallback font names.
+ * On macOS, FONTCONFIG_FILE is sometimes unset or empty, which yields:
+ * "Fontconfig error: Cannot load default config file: No such file: (null)"
+ * Point at a real fonts.conf when one exists; embedded @font-face handles the actual glyphs.
+ */
+function ensureFontconfigEnv(): void {
+    const existing = process.env.FONTCONFIG_FILE;
+    if (existing && existing.trim() !== '') return;
+    const candidates =
+        process.platform === 'darwin'
+            ? ['/opt/homebrew/etc/fonts/fonts.conf', '/usr/local/etc/fonts/fonts.conf', '/etc/fonts/fonts.conf']
+            : ['/etc/fonts/fonts.conf', '/usr/share/fontconfig/fonts.conf'];
+    for (const p of candidates) {
+        if (existsSync(p)) {
+            process.env.FONTCONFIG_FILE = p;
+            return;
+        }
+    }
+}
+
+ensureFontconfigEnv();
 import * as exifr from 'exifr';
 import { formatProofStampText } from '@/lib/formatProofStampText';
 
@@ -26,14 +52,19 @@ function escapeXml(text: string): string {
 /** Latin 600 — embedded so SVG text renders on hosts without fontconfig (e.g. many serverless images). */
 let cachedInterLatin600Woff2Base64: string | null | undefined;
 
+function interLatin600Woff2Path(): string {
+  try {
+    const pkgJson = require.resolve('@fontsource/inter/package.json');
+    return join(dirname(pkgJson), 'files/inter-latin-600-normal.woff2');
+  } catch {
+    return join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2');
+  }
+}
+
 function getProofStampFontFaceCss(): string {
   if (cachedInterLatin600Woff2Base64 === undefined) {
     try {
-      const fontPath = join(
-        process.cwd(),
-        'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2'
-      );
-      cachedInterLatin600Woff2Base64 = readFileSync(fontPath).toString('base64');
+      cachedInterLatin600Woff2Base64 = readFileSync(interLatin600Woff2Path()).toString('base64');
     } catch {
       cachedInterLatin600Woff2Base64 = null;
     }
@@ -181,7 +212,8 @@ async function stampOntoDecodedBuffer(
           <style type="text/css">
             <![CDATA[
               ${fontCss}
-              .proof-stamp-text { font-family: 'ProofStamp', 'DejaVu Sans', sans-serif; }
+              /* Only ProofStamp (embedded WOFF2) — DejaVu/sans-serif trigger fontconfig on many hosts */
+              .proof-stamp-text { font-family: 'ProofStamp'; }
             ]]>
           </style>
         </defs>
