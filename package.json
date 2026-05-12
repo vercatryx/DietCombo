@@ -32,6 +32,7 @@
     "verify-meal-plan-mar9-acai": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-meal-plan-mar9-acai.ts",
     "fix-order-items-remove-item-and-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/fix-order-items-remove-item-and-doubles.ts",
     "test-telnyx-sms": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-telnyx-sms.ts",
+    "test-smtp": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/test-smtp.ts",
     "dump-db-schema": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/dump-db-schema.ts",
     "copy-admins-to-brooklyn": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/copy-admins-to-brooklyn-db.ts",
     "import-brooklyn-clients-to-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/import-brooklyn-clients-to-parent.ts",

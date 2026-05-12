@@ -5,10 +5,10 @@
  *
  * - Order list: only orders NOT already marked billing_successful.
  * - Proof URLs:
- *   - If ?date=YYYY-MM-DD is provided (week start), first try to use up to 2 proof URLs from orders whose
- *     delivery date falls within that 7-day window (date..date+6, inclusive).
- *   - If none exist in the window, fall back to the 2 most recent proof URLs across all orders.
- *   - If still none, uses sign_token signature PDF.
+ *   - Prefer the parent’s signature PDF when `sign_token` is set (`/api/signatures/{token}/pdf`).
+ *   - Otherwise (no sign_token), use up to 2 photo proofs from orders: prefer orders whose delivery date
+ *     falls within the 7-day window (?date through date+6); if none in-window, use the 2 most recent
+ *     proofs across all orders.
  * - Unite Us `url`: parent client's case_id_external / client_id_external only (not copied from orders).
  *
  * GET /api/bill
@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
         const billEndDate = billDateEnd(billDate);
         const accountFilter = parseAccountFilter(request);
 
-        // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof fallback)
+        // 1. Fetch ALL clients (incl. UniteUs fields and sign_token for signature proof when present)
         const selectClients =
             'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill';
         const clients = await fetchAllRows<any>(
@@ -260,7 +260,8 @@ export async function GET(request: NextRequest) {
 
         // Per household:
         // - Order list: only orders NOT billing_successful (already billed are excluded).
-        // - Proof URLs: prefer proofs within the requested week; fall back to most recent overall.
+        // - Proof URLs (assembled later): signature PDF when parent has sign_token; else order photos
+        //   (week window first, then most recent).
         const orderNumbersByHousehold: Record<string, string[]> = {};
         const proofURLsByHousehold: Record<string, string[]> = {};
         for (const householdId of Object.keys(ordersByHousehold)) {
@@ -300,11 +301,13 @@ export async function GET(request: NextRequest) {
             const amount = AMOUNT_PER_PERSON * totalPeople;
 
             let orderNumbers = orderNumbersByHousehold[pid] ?? [];
-            let proofURLs = proofURLsByHousehold[pid] ?? [];
-            if (proofURLs.length === 0 && parent.sign_token) {
+            let proofURLs: string[];
+            if (parent.sign_token) {
                 proofURLs = [
                     `${baseUrl}/api/signatures/${encodeURIComponent(String(parent.sign_token))}/pdf?start=${billDate}&end=${billEndDate}&delivery=${billDate}`,
                 ];
+            } else {
+                proofURLs = proofURLsByHousehold[pid] ?? [];
             }
 
             const contactId = parent.client_id_external || pid;

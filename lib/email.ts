@@ -10,7 +10,7 @@ import nodemailer from 'nodemailer';
  *   SMTP_PORT       - e.g. 465 (SSL) or 587 (TLS)
  *   SMTP_SECURE     - "true" for port 465, "false" for 587
  *   SMTP_USER       - sender email (login)
- *   SMTP_PASS       - sender password or app password
+ *   SMTP_PASS       - sender password or app password (spaces are stripped for Gmail app passwords)
  *   SMTP_FROM_NAME  - (optional) display name, e.g. "Diet Fantasy"
  */
 
@@ -26,7 +26,7 @@ function getTransporter(): { transporter: nodemailer.Transporter; from: string }
     const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587;
     const secure = process.env.SMTP_SECURE === 'true' || port === 465;
     const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
+    const pass = process.env.SMTP_PASS?.replace(/\s+/g, '');
     const fromName = process.env.SMTP_FROM_NAME || 'Diet Fantasy';
 
     if (!host || !user || !pass) {
