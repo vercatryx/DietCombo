@@ -118,10 +118,15 @@
   white-space: nowrap;
 }
 
-.exportBtn:hover {
+.exportBtn:hover:not(:disabled) {
   background: var(--bg-surface);
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px rgba(var(--color-primary-rgb, 59, 130, 246), 0.15);
+}
+
+.exportBtn:disabled {
+  cursor: wait;
+  opacity: 0.75;
 }
 
 .listCount {
@@ -208,6 +213,11 @@
 
 .clientLink:hover {
   text-decoration: underline;
+}
+
+.dependentsSuffix {
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .deliveryDate {

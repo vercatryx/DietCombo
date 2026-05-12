@@ -8,6 +8,7 @@ export type MealPlanEditEntry = {
   clientName: string;
   scheduledDeliveryDate: string;
   items: { id: string; name: string; quantity: number; value: number | null }[];
+  foodDependentNames: string[];
 };
 
 export type MealPlannerOrderDisplayItem = {

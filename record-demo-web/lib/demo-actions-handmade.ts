@@ -22,6 +22,7 @@ type MealPlanEditEntry = {
   clientName: string;
   scheduledDeliveryDate: string;
   items: { id: string; name: string; quantity: number; value: number | null }[];
+  foodDependentNames: string[];
 };
 import type { MealPlannerOrderResult } from '../../lib/meal-planner-utils';
 import {
@@ -147,6 +148,7 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
       clientName: c.fullName,
       scheduledDeliveryDate: dateOnly,
       items,
+      foodDependentNames: [],
     });
   }
   return result.sort((a, b) => a.clientName.localeCompare(b.clientName));

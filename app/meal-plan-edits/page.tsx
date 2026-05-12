@@ -20,6 +20,7 @@ export default function MealPlanEditsPage() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [edits, setEdits] = useState<MealPlanEditEntry[]>([]);
   const [loadingEdits, setLoadingEdits] = useState(false);
+  const [pdfExporting, setPdfExporting] = useState(false);
   const [editCounts, setEditCounts] = useState<Record<string, number>>({});
 
   const year = calendarMonth.getFullYear();
@@ -101,6 +102,8 @@ export default function MealPlanEditsPage() {
   }, [buildExportRows, buildCookingSheetRows, selectedDate]);
 
   const exportToPdf = useCallback(async () => {
+    setPdfExporting(true);
+    try {
     const { jsPDF } = await import('jspdf');
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = doc.internal.pageSize.getWidth();
@@ -109,13 +112,45 @@ export default function MealPlanEditsPage() {
     const bottom = pageH - 16;
     let y = 18;
 
-    const itemX = margin + 4;
+    /** Inset client panel stroke from page margin */
+    const boxHInset = 3.5;
+    const boxLeft = margin + boxHInset;
+    const boxW = pageW - 2 * margin - 2 * boxHInset;
+    /** Padding inside the stroke before titles / table / totals */
+    const boxInnerPadX = 4;
+    const boxInnerPadYTop = 4.5;
+    const boxInnerPadYBottom = 4.5;
+    const contentLeft = boxLeft + boxInnerPadX;
+    const contentRight = boxLeft + boxW - boxInnerPadX;
+    const itemX = contentLeft;
     const qtyX = margin + 118;
     const mealsX = margin + 142;
-    const rowH = 5.5;
-    const sectionGap = 6;
+    const itemColW = qtyX - itemX - 6;
+    const fontBody = 9;
+    /** Baseline step between wrapped lines (9pt Helvetica needs ~≥5.2mm to avoid overlap). */
+    const lineHeight = 5.8;
+    const rowPadTop = 4;
+    const rowPadBottom = 4;
+    const gapAfterRow = 2;
+    const gapBetweenClients = 9;
     /** Section title + ITEM/QTY/MEALS sub-header + rule */
     const sectionHeaderH = 14;
+    const totalLineH = 6.5;
+
+    const clientHeading = (entry: MealPlanEditEntry) => {
+      const dep =
+        entry.foodDependentNames.length > 0
+          ? ` (${entry.foodDependentNames.join(', ')})`
+          : '';
+      return `${entry.clientName}${dep}`;
+    };
+
+    const strokeClientBox = (top: number, bottomY: number) => {
+      if (bottomY - top < 4) return;
+      doc.setDrawColor(135, 138, 148);
+      doc.setLineWidth(0.35);
+      doc.rect(boxLeft, top, boxW, bottomY - top, 'S');
+    };
 
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
@@ -127,11 +162,11 @@ export default function MealPlanEditsPage() {
     doc.text(`${edits.length} client${edits.length !== 1 ? 's' : ''} changed`, pageW - margin, y, { align: 'right' });
     y += 10;
 
-    const drawClientSectionHeader = (clientName: string, continued: boolean) => {
-      const title = continued ? `${clientName} (continued)` : clientName;
+    const drawClientSectionHeader = (entry: MealPlanEditEntry) => {
+      const title = clientHeading(entry);
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
-      doc.text(String(title).slice(0, 70), margin, y);
+      doc.text(title.slice(0, 80), contentLeft, y);
       y += 5;
       doc.setFontSize(8);
       doc.setFont('helvetica', 'bold');
@@ -140,13 +175,35 @@ export default function MealPlanEditsPage() {
       doc.text('MEALS', mealsX, y);
       y += 1;
       doc.setDrawColor(200);
-      doc.line(margin, y, pageW - margin, y);
+      doc.line(contentLeft, y, contentRight, y);
       y += 4;
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
+      doc.setFontSize(fontBody);
     };
 
+    const measureClientBlockHeight = (
+      rows: { Item: string; Qty: number | string; Meals: number | string }[],
+    ) => {
+      doc.setFontSize(fontBody);
+      doc.setFont('helvetica', 'normal');
+      let h = boxInnerPadYTop + sectionHeaderH;
+      for (const row of rows) {
+        const lines = doc.splitTextToSize(String(row.Item), itemColW);
+        const textSpan = (lines.length - 1) * lineHeight;
+        h += textSpan + rowPadBottom + gapAfterRow;
+      }
+      h += totalLineH + boxInnerPadYBottom;
+      return h;
+    };
+
+    let isFirstClient = true;
+
     for (const entry of edits) {
+      if (!isFirstClient) {
+        y += gapBetweenClients;
+      }
+      isFirstClient = false;
+
       const visibleItems = entry.items.filter((i) => i.quantity > 0);
       const rows: { Item: string; Qty: number | string; Meals: number | string }[] =
         visibleItems.length === 0
@@ -157,34 +214,65 @@ export default function MealPlanEditsPage() {
               Meals: item.value != null ? item.quantity * item.value : '—',
             }));
 
-      let continuation = false;
-      const ensureSectionHeader = () => {
-        if (y + sectionHeaderH + rowH > bottom) {
-          doc.addPage();
-          y = 18;
-        }
-        drawClientSectionHeader(entry.clientName, continuation);
-        continuation = false;
-      };
-
-      ensureSectionHeader();
-
-      for (const row of rows) {
-        if (y + rowH > bottom) {
-          doc.addPage();
-          y = 18;
-          continuation = true;
-          ensureSectionHeader();
-        }
-        doc.text(String(row.Item).slice(0, 44), itemX, y);
-        doc.text(String(row.Qty), qtyX, y);
-        doc.text(String(row.Meals), mealsX, y);
-        y += rowH;
+      const blockHeight = measureClientBlockHeight(rows);
+      if (y + blockHeight > bottom) {
+        doc.addPage();
+        y = 18;
       }
-      y += sectionGap;
+
+      const boxSegTop = y;
+      y += boxInnerPadYTop;
+      drawClientSectionHeader(entry);
+
+      let rowStripe = 0;
+      for (const row of rows) {
+        doc.setFontSize(fontBody);
+        doc.setFont('helvetica', 'normal');
+        const lines = doc.splitTextToSize(String(row.Item), itemColW);
+        const textSpan = (lines.length - 1) * lineHeight;
+
+        const rowVisualBottom = y + textSpan + rowPadBottom;
+
+        const alt = rowStripe % 2 === 1;
+        rowStripe += 1;
+        const bandTop = y - rowPadTop;
+        const bandH = rowPadTop + textSpan + rowPadBottom;
+        doc.setFillColor(alt ? 236 : 255, alt ? 237 : 255, alt ? 239 : 255);
+        doc.rect(contentLeft, bandTop, contentRight - contentLeft, bandH, 'F');
+        doc.setTextColor(0, 0, 0);
+
+        for (let li = 0; li < lines.length; li++) {
+          doc.text(lines[li], itemX, y + li * lineHeight);
+        }
+
+        const qtyBaseline =
+          lines.length > 1 ? y + textSpan / 2 : y;
+        doc.text(String(row.Qty), qtyX, qtyBaseline);
+        doc.text(String(row.Meals), mealsX, qtyBaseline);
+
+        y = rowVisualBottom + gapAfterRow;
+      }
+
+      const totalMeals = visibleItems.reduce(
+        (sum, i) => sum + Number(i.quantity) * Number(i.value ?? 0),
+        0,
+      );
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text(`Total meals: ${totalMeals}`, itemX, y + 4);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(fontBody);
+      y += totalLineH;
+      strokeClientBox(boxSegTop, y + boxInnerPadYBottom);
+      y += boxInnerPadYBottom;
     }
 
     doc.save(`meal-plan-edits-${selectedDate}.pdf`);
+    } catch (err) {
+      console.error('Meal plan edits PDF export failed:', err);
+    } finally {
+      setPdfExporting(false);
+    }
   }, [selectedDate, edits]);
 
   return (
@@ -291,9 +379,20 @@ export default function MealPlanEditsPage() {
                       <FileSpreadsheet size={16} />
                       Excel
                     </button>
-                    <button type="button" className={styles.exportBtn} onClick={exportToPdf} title="Export to PDF">
-                      <FileText size={16} />
-                      PDF
+                    <button
+                      type="button"
+                      className={styles.exportBtn}
+                      onClick={exportToPdf}
+                      disabled={pdfExporting}
+                      title={pdfExporting ? 'Generating PDF…' : 'Export to PDF'}
+                      aria-busy={pdfExporting}
+                    >
+                      {pdfExporting ? (
+                        <Loader2 size={16} className={styles.spinner} aria-hidden />
+                      ) : (
+                        <FileText size={16} aria-hidden />
+                      )}
+                      {pdfExporting ? 'Generating…' : 'PDF'}
                     </button>
                   </div>
                 )}
@@ -313,6 +412,12 @@ export default function MealPlanEditsPage() {
                         <User size={18} aria-hidden />
                         <Link href={`/clients/${entry.clientId}`} className={styles.clientLink}>
                           {entry.clientName}
+                          {entry.foodDependentNames.length > 0 ? (
+                            <span className={styles.dependentsSuffix}>
+                              {' '}
+                              ({entry.foodDependentNames.join(', ')})
+                            </span>
+                          ) : null}
                         </Link>
                       </div>
                       {entry.items.length > 0 ? (

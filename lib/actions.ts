@@ -2231,6 +2231,8 @@ export type MealPlanEditEntry = {
     clientName: string;
     scheduledDeliveryDate: string;
     items: { id: string; name: string; quantity: number; value: number | null }[];
+    /** Food-service dependents (household) for this parent client; empty if none. */
+    foodDependentNames: string[];
 };
 
 /**
@@ -2285,10 +2287,44 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
                 clientId: c.id,
                 clientName: (c.full_name ?? 'Unknown').trim() || 'Unknown',
                 scheduledDeliveryDate: dateOnly,
-                items
+                items,
+                foodDependentNames: [],
             });
         }
-        return result.sort((a, b) => a.clientName.localeCompare(b.clientName));
+
+        const clientIds = result.map((r) => r.clientId);
+        const depsByParent = new Map<string, string[]>();
+        if (clientIds.length > 0) {
+            let depQuery = supabaseClient
+                .from('clients')
+                .select('parent_client_id, full_name, service_type')
+                .in('parent_client_id', clientIds)
+                .eq('service_type', 'Food')
+                .is('archived_at', null);
+            if (brooklynOnly) {
+                depQuery = depQuery.eq('unite_account', 'Brooklyn');
+            }
+            const { data: depRows, error: depErr } = await depQuery;
+            if (!depErr && depRows) {
+                for (const d of depRows as { parent_client_id: string | null; full_name: string | null }[]) {
+                    const pid = d.parent_client_id != null ? String(d.parent_client_id) : '';
+                    if (!pid) continue;
+                    const name = (d.full_name ?? 'Unknown').trim() || 'Unknown';
+                    if (!depsByParent.has(pid)) depsByParent.set(pid, []);
+                    depsByParent.get(pid)!.push(name);
+                }
+                for (const names of depsByParent.values()) {
+                    names.sort((a, b) => a.localeCompare(b));
+                }
+            }
+        }
+
+        return result
+            .map((r) => ({
+                ...r,
+                foodDependentNames: depsByParent.get(r.clientId) ?? [],
+            }))
+            .sort((a, b) => a.clientName.localeCompare(b.clientName));
     } catch (error) {
         console.error('Error fetching meal plan edits by delivery date:', error);
         return [];

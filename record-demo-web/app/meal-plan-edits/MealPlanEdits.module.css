@@ -210,6 +210,11 @@
   text-decoration: underline;
 }
 
+.dependentsSuffix {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 .deliveryDate {
   font-size: 0.85rem;
   color: var(--text-secondary);
