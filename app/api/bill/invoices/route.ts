@@ -1,10 +1,10 @@
 /**
  * Same household list as GET /api/bill (query: ?date=, ?account=), but each row’s `proofURLs`
- * is always exactly one URL pointing at the customer site’s client invoice PDF for that parent
- * and the calendar month containing ?date=.
+ * is always exactly one URL pointing at the customer site’s client invoice PDF for that parent.
+ * `from` and `to` match the same 7-day window as `date` and `endDate` on each row (?date= through +6 days).
  *
  * GET /api/bill/invoices
- * proofURLs[0] = {CUSTOMER_ORIGIN}/api/client-invoice-pdf?clientId={parentId}&from={monthStart}&to={monthEnd}
+ * proofURLs[0] = {CUSTOMER_ORIGIN}/api/client-invoice-pdf?clientId={parentId}&from={date}&to={endDate}
  *
  * CUSTOMER_ORIGIN: NEXT_PUBLIC_CUSTOMER_APP_URL or NEXT_PUBLIC_CUSTOMER_URL, else http://customer.thedietfantasy.com
  * No auth required.

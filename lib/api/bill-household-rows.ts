@@ -98,27 +98,16 @@ async function fetchAllRows<T = any>(build: (from: number, to: number) => any, p
 
 export type BillProofStrategy = 'signatureOrOrderProofs' | 'customerInvoicePdf';
 
-/** First and last calendar day (UTC) of the month containing `isoDate` (YYYY-MM-DD). */
-export function calendarMonthBoundsFromIsoDate(isoDate: string): { from: string; to: string } {
-    const [ys, ms] = isoDate.split('-');
-    const y = Number(ys);
-    const m = Number(ms);
-    const from = `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-01`;
-    const end = new Date(Date.UTC(y, m, 0));
-    const to = end.toISOString().slice(0, 10);
-    return { from, to };
-}
-
-function customerInvoicePdfProofUrl(parentId: string, billDate: string): string {
+/** Same `from` / `to` as the billing row’s `date` / `endDate` (7-day window inclusive). */
+function customerInvoicePdfProofUrl(parentId: string, billDate: string, billEndDate: string): string {
     const origin =
         process.env.NEXT_PUBLIC_CUSTOMER_APP_URL?.replace(/\/$/, '') ||
         process.env.NEXT_PUBLIC_CUSTOMER_URL?.replace(/\/$/, '') ||
         'http://customer.thedietfantasy.com';
-    const { from, to } = calendarMonthBoundsFromIsoDate(billDate);
     const u = new URL('/api/client-invoice-pdf', origin.endsWith('/') ? origin.slice(0, -1) : origin);
     u.searchParams.set('clientId', parentId);
-    u.searchParams.set('from', from);
-    u.searchParams.set('to', to);
+    u.searchParams.set('from', billDate);
+    u.searchParams.set('to', billEndDate);
     return u.toString();
 }
 
@@ -320,7 +309,7 @@ export async function getBillHouseholdRows(
 
         let proofURLs: string[];
         if (proofStrategy === 'customerInvoicePdf') {
-            proofURLs = [customerInvoicePdfProofUrl(pid, billDate)];
+            proofURLs = [customerInvoicePdfProofUrl(pid, billDate, billEndDate)];
         } else if (parent.sign_token) {
             proofURLs = [
                 `${baseUrl}/api/signatures/${encodeURIComponent(String(parent.sign_token))}/pdf?start=${billDate}&end=${billEndDate}&delivery=${billDate}`,
