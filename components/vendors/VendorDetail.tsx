@@ -1807,11 +1807,44 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                             {isLoadingMore ? (
                                                 <><Loader2 size={16} className="animate-spin" /> Loading...</>
                                             ) : (
-                                                <><ChevronDown size={16} /> Show More ({totalDates - dateSummaries.length} older dates)</>
+                                                <><ChevronDown size={16} /> Show older dates ({totalDates - dateSummaries.length})</>
                                             )}
                                         </button>
                                     </div>
                                 )}
+                            </div>
+                        );
+                    }
+
+                    if (useSummaryMode && dateSummaries.length === 0 && totalDates > 0) {
+                        const olderCount = totalDates - dateSummaries.length;
+                        return (
+                            <div className={styles.ordersList}>
+                                <p
+                                    style={{
+                                        margin: '0 0 1rem',
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.95rem',
+                                        lineHeight: 1.5,
+                                    }}
+                                >
+                                    No delivery dates on or after {getYesterdayCutoff()}. There {olderCount === 1 ? 'is' : 'are'}{' '}
+                                    {olderCount} older {olderCount === 1 ? 'date' : 'dates'} — load the full list to see them.
+                                </p>
+                                <div style={{ display: 'flex', justifyContent: 'center', padding: '0.5rem 0 1rem' }}>
+                                    <button
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '0.875rem', padding: '0.5rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                                        disabled={isLoadingMore}
+                                        onClick={loadMoreDates}
+                                    >
+                                        {isLoadingMore ? (
+                                            <><Loader2 size={16} className="animate-spin" /> Loading...</>
+                                        ) : (
+                                            <><ChevronDown size={16} /> Show older dates ({olderCount})</>
+                                        )}
+                                    </button>
+                                </div>
                             </div>
                         );
                     }
