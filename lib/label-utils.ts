@@ -30,6 +30,12 @@ interface LabelGenerationOptions {
     formatOrderedItemsForRightLabel?: (order: Order) => string;
     /** When true, do not start a new page when the driver changes (used for small edited-mealplan PDFs) */
     skipDriverPageBreak?: boolean;
+    /**
+     * When set, receives the generated PDF blob instead of triggering an automatic `<a download>` click.
+     * Browsers often block downloads that follow long async work without a fresh user gesture; queue the
+     * blob and start the save from a real button click (see vendor export UIs).
+     */
+    offerDownload?: (blob: Blob, filename: string) => void | Promise<void>;
 }
 
 /** Line height factor for a given font size (inches per pt). Matches pdfRouteLabels behavior. */
@@ -84,7 +90,8 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
         getDriverInfo,
         getNotes,
         filenameSuffix,
-        skipDriverPageBreak
+        skipDriverPageBreak,
+        offerDownload
     } = options;
 
     if (orders.length === 0) {
@@ -337,6 +344,10 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
     filename += (filenameSuffix ?? '') + '.pdf';
 
     const blob = doc.output('blob');
+    if (offerDownload) {
+        await Promise.resolve(offerDownload(blob, filename));
+        return;
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -360,7 +371,8 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
         deliveryDate,
         getDriverInfo,
         getNotes,
-        formatOrderedItemsForRightLabel
+        formatOrderedItemsForRightLabel,
+        offerDownload
     } = options;
 
     if (orders.length === 0) {
@@ -582,6 +594,10 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
     filename += '.pdf';
 
     const blob = doc.output('blob');
+    if (offerDownload) {
+        await Promise.resolve(offerDownload(blob, filename));
+        return;
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -602,8 +618,10 @@ export function generateTablePDF(options: {
     checkboxMarker?: string;
     /** Optional second table rendered on a new page (e.g. "Clients who changed from default") */
     secondTable?: { title: string; rows: string[][] };
+    /** Same as {@link LabelGenerationOptions.offerDownload} for PDF table exports after long async work */
+    offerDownload?: (blob: Blob, filename: string) => void;
 }): void {
-    const { title, rows, filename: baseFilename, columnWidths, lineRowMarker, checkboxMarker, secondTable } = options;
+    const { title, rows, filename: baseFilename, columnWidths, lineRowMarker, checkboxMarker, secondTable, offerDownload } = options;
     if (!rows || rows.length === 0) {
         alert('No data to export');
         return;
@@ -709,6 +727,10 @@ export function generateTablePDF(options: {
 
     const filename = baseFilename.endsWith('.pdf') ? baseFilename : `${baseFilename}.pdf`;
     const blob = doc.output('blob');
+    if (offerDownload) {
+        offerDownload(blob, filename);
+        return;
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

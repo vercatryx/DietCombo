@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
@@ -69,6 +69,40 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     }
 
     const [isExporting, setIsExporting] = useState(false);
+
+    /** Browsers often block `<a download>` clicks that run after long async work; queue blobs and save from a real click. */
+    const [pendingBlobDownloads, setPendingBlobDownloads] = useState<{ id: string; blob: Blob; filename: string }[]>([]);
+    const pendingBlobDownloadsRef = useRef(pendingBlobDownloads);
+    pendingBlobDownloadsRef.current = pendingBlobDownloads;
+
+    function queueBlobDownloads(files: { blob: Blob; filename: string }[]) {
+        if (files.length === 0) return;
+        const idBase = `${Date.now()}`;
+        setPendingBlobDownloads((prev) => [
+            ...prev,
+            ...files.map((f, i) => ({ id: `${idBase}-${i}`, blob: f.blob, filename: f.filename })),
+        ]);
+    }
+
+    function savePendingBlobDownload(id: string) {
+        // Do not trigger download inside a setState updater — React Strict Mode runs that updater twice in dev (double download).
+        const entry = pendingBlobDownloadsRef.current.find((x) => x.id === id);
+        if (!entry) return;
+        const url = URL.createObjectURL(entry.blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = entry.filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        setPendingBlobDownloads((prev) => prev.filter((x) => x.id !== id));
+    }
+
+    function dismissPendingBlobDownloads() {
+        setPendingBlobDownloads([]);
+    }
 
     // CSV Import Progress State
     const [importProgress, setImportProgress] = useState<{
@@ -704,17 +738,9 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             ...rows.map(row => row.map(escapeCSV).join(','))
         ].join('\n');
 
-        // Create blob and download
+        // Create blob and queue download (gesture-safe after long async)
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        link.setAttribute('href', url);
-        link.setAttribute('download', `${vendor?.name || 'vendor'}_orders_${getTodayInAppTz()}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        queueBlobDownloads([{ blob, filename: `${vendor?.name || 'vendor'}_orders_${getTodayInAppTz()}.csv` }]);
         } finally {
             setIsExporting(false);
         }
@@ -774,20 +800,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             ...rows.map(row => row.map(escapeCSV).join(','))
         ].join('\n');
 
-        // Create blob and download
+        // Create blob and queue download (gesture-safe after long async)
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
         const formattedDate = dateKey === 'no-date'
             ? 'no_delivery_date'
             : formatDate(dateKey).replace(/\s/g, '_');
-        link.setAttribute('href', url);
-        link.setAttribute('download', `${vendor?.name || 'vendor'}_orders_${formattedDate}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        queueBlobDownloads([{ blob, filename: `${vendor?.name || 'vendor'}_orders_${formattedDate}.csv` }]);
         } finally {
             setIsExporting(false);
         }
@@ -862,14 +880,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     function downloadExcelWorkbook(wb: XLSX.WorkBook, filename: string) {
         const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
         const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = filename;
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(link.href);
+        queueBlobDownloads([{ blob, filename }]);
     }
 
     async function exportExcelForDate(dateKey: string, dateOrders: any[], which: 'breakdown' | 'cooking' | 'combined') {
@@ -968,14 +979,19 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         };
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}_breakdown`;
+        const pdfBatch: { blob: Blob; filename: string }[] = [];
         generateTablePDF({
             title: `Client Breakdown – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
             rows: buildClientBreakdownSheet(sortedOrders, getClientNameForExport, getClientAddressForExport, getDriverStop),
             filename: `${baseName}.pdf`,
             columnWidths: [7, 9, 38, 14, 18, 14],
             lineRowMarker: BREAKDOWN_LINE,
-            checkboxMarker: BREAKDOWN_CHECK
+            checkboxMarker: BREAKDOWN_CHECK,
+            offerDownload: (blob, filename) => {
+                pdfBatch.push({ blob, filename });
+            },
         });
+        if (pdfBatch.length > 0) queueBlobDownloads(pdfBatch);
         } finally {
             setIsExporting(false);
         }
@@ -997,6 +1013,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             : [['Client Name'], ['(None)']];
         const suffix = getDateSuffix(dateKey);
         const baseName = `${vendor?.name || 'vendor'}_orders_${suffix}_cooking`;
+        const pdfBatch: { blob: Blob; filename: string }[] = [];
         generateTablePDF({
             title: `Cooking List – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
             rows: buildCookingListSheet(sortedOrders),
@@ -1005,8 +1022,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             secondTable: {
                 title: `Clients who changed from default – ${dateKey === 'no-date' ? 'No Delivery Date' : formatDate(dateKey)}`,
                 rows: changedRows
-            }
+            },
+            offerDownload: (blob, filename) => {
+                pdfBatch.push({ blob, filename });
+            },
         });
+        if (pdfBatch.length > 0) queueBlobDownloads(pdfBatch);
         } finally {
             setIsExporting(false);
         }
@@ -1015,10 +1036,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     async function exportLabelsPDFForDate(dateKey: string, dateOrders: any[]) {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
+            setIsExporting(false);
             return;
         }
         flushSync(() => setIsExporting(true));
         try {
+        const labelDownloadBatch: { blob: Blob; filename: string }[] = [];
+        const offerLabelDownload = (blob: Blob, filename: string) => {
+            labelDownloadBatch.push({ blob, filename });
+        };
         // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
         // Use API route when we have a date to avoid server-action response size/serialization issues with items
         let freshOrders: any[];
@@ -1027,7 +1053,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         } else {
             const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateKey)}`, { credentials: 'include' });
             if (!res.ok) throw new Error('Failed to fetch orders for export');
-            freshOrders = await res.json();
+            const raw = await res.json();
+            if (!Array.isArray(raw)) {
+                const msg = (raw as { error?: string })?.error;
+                throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading orders for export');
+            }
+            freshOrders = raw;
         }
         if (freshOrders.length === 0) {
             alert('No orders to export for this date');
@@ -1046,6 +1077,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             seenClientDate.add(key);
             return true;
         });
+        if (ordersForLabels.length === 0) {
+            alert('No orders to include on labels for this date.');
+            return;
+        }
         // Labels: one per actual order only. Do not add synthetic rows for dependants without orders.
         const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
         const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
@@ -1084,7 +1119,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             vendorName: vendor?.name,
             deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
             getDriverInfo: getDriverInfoForOrder,
-            getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+            getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? '',
+            offerDownload: offerLabelDownload,
         };
         if (ordersNonComplex.length > 0) {
             await generateLabelsPDF({ ...commonOpts, orders: ordersNonComplex });
@@ -1095,6 +1131,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         if (ordersEdited.length > 0) {
             await generateLabelsPDF({ ...commonOpts, orders: ordersEdited, filenameSuffix: '_edited', skipDriverPageBreak: true });
         }
+        if (labelDownloadBatch.length > 0) {
+            queueBlobDownloads(labelDownloadBatch);
+        }
+        } catch (e) {
+            console.error(e);
+            alert(e instanceof Error ? e.message : 'Label export failed');
         } finally {
             setIsExporting(false);
         }
@@ -1104,10 +1146,15 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
     async function exportLabelsPDFForDateAlt(dateKey: string, dateOrders: any[]) {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
+            setIsExporting(false);
             return;
         }
         flushSync(() => setIsExporting(true));
         try {
+            const labelDownloadBatchAlt: { blob: Blob; filename: string }[] = [];
+            const offerLabelDownloadAlt = (blob: Blob, filename: string) => {
+                labelDownloadBatchAlt.push({ blob, filename });
+            };
             // Re-fetch full orders for this date (use API to avoid server-action serialization issues with items)
             let freshOrdersAlt: any[];
             if (dateKey === 'no-date') {
@@ -1115,7 +1162,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             } else {
                 const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateKey)}`, { credentials: 'include' });
                 if (!res.ok) throw new Error('Failed to fetch orders for export');
-                freshOrdersAlt = await res.json();
+                const raw = await res.json();
+                if (!Array.isArray(raw)) {
+                    const msg = (raw as { error?: string })?.error;
+                    throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading orders for export');
+                }
+                freshOrdersAlt = raw;
             }
             if (freshOrdersAlt.length === 0) {
                 alert('No orders to export for this date');
@@ -1132,6 +1184,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 seenClientDateAlt.add(key);
                 return true;
             });
+            if (ordersForLabelsAlt.length === 0) {
+                alert('No orders to include on labels for this date.');
+                return;
+            }
             const deliveryDateForStopNum = dateKey === 'no-date' ? null : dateKey;
             const clientIdToStopNumber = deliveryDateForStopNum ? await getStopNumbersForDeliveryDate(deliveryDateForStopNum) : {};
             const getClientNameForExportAlt = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
@@ -1176,7 +1232,8 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 vendorName: vendor?.name,
                 deliveryDate: dateKey === 'no-date' ? undefined : dateKey,
                 getDriverInfo: getDriverInfoForOrderAlt,
-                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+                getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? '',
+                offerDownload: offerLabelDownloadAlt,
             };
             if (ordersNonComplexAlt.length > 0) {
                 await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersNonComplexAlt });
@@ -1187,6 +1244,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             if (ordersEditedAlt.length > 0) {
                 await generateLabelsPDFTwoPerCustomer({ ...commonOptsAlt, orders: ordersEditedAlt, filenameSuffix: '_edited', skipDriverPageBreak: true });
             }
+            if (labelDownloadBatchAlt.length > 0) {
+                queueBlobDownloads(labelDownloadBatchAlt);
+            }
+        } catch (e) {
+            console.error(e);
+            alert(e instanceof Error ? e.message : 'Label export failed');
         } finally {
             setIsExporting(false);
         }
@@ -1897,10 +1960,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                             </span>
                                             <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDate(dateKey, dateOrders), 0); }}>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { void exportLabelsPDFForDate(dateKey, dateOrders); }}>
                                                         <FileText size={14} /> Download Labels
                                                     </button>
-                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDateAlt(dateKey, dateOrders), 0); }}>
+                                                    <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { void exportLabelsPDFForDateAlt(dateKey, dateOrders); }}>
                                                         <FileText size={14} /> Labels – address + order details (2 per customer)
                                                     </button>
                                                     <div style={{ display: 'flex', gap: '0.35rem' }}>
@@ -1959,10 +2022,10 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                                         </span>
                                         <span style={{ flex: '1.5 1 150px', minWidth: 0 }}>
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', width: '100%', maxWidth: 320 }}>
-                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDate('no-date', noDate), 0); }}>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { void exportLabelsPDFForDate('no-date', noDate); }}>
                                                     <FileText size={14} /> Download Labels
                                                 </button>
-                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { setIsExporting(true); setTimeout(() => exportLabelsPDFForDateAlt('no-date', noDate), 0); }}>
+                                                <button className="btn btn-secondary" style={{ width: '100%', fontSize: '0.75rem', padding: '0.35rem 0.5rem' }} disabled={isExporting} onClick={() => { void exportLabelsPDFForDateAlt('no-date', noDate); }}>
                                                     <FileText size={14} /> Labels – address + order details (2 per customer)
                                                 </button>
                                                 <div style={{ display: 'flex', gap: '0.35rem' }}>
@@ -2002,6 +2065,41 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                             <Loader2 className="animate-spin" size={40} style={{ color: 'var(--color-primary)' }} />
                             <p style={{ margin: 0, fontWeight: 600, color: 'var(--text-primary)' }}>Generating file...</p>
                             <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Please wait</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Prepared files: browsers block programmatic download after long async exports — save from an explicit click */}
+            {pendingBlobDownloads.length > 0 && (
+                <div className={styles.importModalOverlay} style={{ pointerEvents: 'auto' }}>
+                    <div className={styles.importModal} style={{ maxWidth: 400 }}>
+                        <div className={styles.importModalHeader}>
+                            <h3>Files ready</h3>
+                            <button
+                                type="button"
+                                className={styles.closeButton}
+                                onClick={dismissPendingBlobDownloads}
+                                aria-label="Dismiss"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className={styles.importModalContent} style={{ gap: '0.75rem' }}>
+                            <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                Tap download for each file. Automatic saves are often blocked after large exports finish.
+                            </p>
+                            {pendingBlobDownloads.map((item) => (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    className="btn btn-primary"
+                                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}
+                                    onClick={() => savePendingBlobDownload(item.id)}
+                                >
+                                    <Download size={18} /> Download {item.filename}
+                                </button>
+                            ))}
                         </div>
                     </div>
                 </div>

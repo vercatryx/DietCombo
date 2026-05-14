@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { Vendor, ClientProfile, MenuItem, BoxType, ItemCategory } from '@/lib/types';
@@ -34,6 +34,38 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
     const [proofUrls, setProofUrls] = useState<Record<string, string>>({});
     const [isSaving, setIsSaving] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+    const [pendingBlobDownloads, setPendingBlobDownloads] = useState<{ id: string; blob: Blob; filename: string }[]>([]);
+    const pendingBlobDownloadsRef = useRef(pendingBlobDownloads);
+    pendingBlobDownloadsRef.current = pendingBlobDownloads;
+
+    function queueBlobDownloads(files: { blob: Blob; filename: string }[]) {
+        if (files.length === 0) return;
+        const idBase = `${Date.now()}`;
+        setPendingBlobDownloads((prev) => [
+            ...prev,
+            ...files.map((f, i) => ({ id: `${idBase}-${i}`, blob: f.blob, filename: f.filename })),
+        ]);
+    }
+
+    function savePendingBlobDownload(id: string) {
+        const entry = pendingBlobDownloadsRef.current.find((x) => x.id === id);
+        if (!entry) return;
+        const url = URL.createObjectURL(entry.blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = entry.filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        setPendingBlobDownloads((prev) => prev.filter((x) => x.id !== id));
+    }
+
+    function dismissPendingBlobDownloads() {
+        setPendingBlobDownloads([]);
+    }
+
     const [displayOrders, setDisplayOrders] = useState<any[]>([]); // Sorted by driver + stop (matches export)
     const [summaryModal, setSummaryModal] = useState<{
         show: boolean;
@@ -421,10 +453,19 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         }
         flushSync(() => setIsExporting(true));
         try {
+        const labelDownloadBatch: { blob: Blob; filename: string }[] = [];
+        const offerLabelDownload = (blob: Blob, filename: string) => {
+            labelDownloadBatch.push({ blob, filename });
+        };
         // Re-fetch full orders via API so items are included (avoids server-action serialization issues)
         const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(deliveryDate)}`, { credentials: 'include' });
         if (!res.ok) throw new Error('Failed to fetch orders for export');
-        const freshOrders = await res.json();
+        const raw = await res.json();
+        if (!Array.isArray(raw)) {
+            const msg = (raw as { error?: string })?.error;
+            throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading orders for export');
+        }
+        const freshOrders = raw;
         if (freshOrders.length === 0) {
             alert('No orders to export');
             return;
@@ -440,6 +481,10 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
             seenClientDate.add(key);
             return true;
         });
+        if (ordersForLabels.length === 0) {
+            alert('No orders to include on labels for this date.');
+            return;
+        }
         const clientIdToStopNumber = deliveryDate ? await getStopNumbersForDeliveryDate(deliveryDate) : {};
         const getClientNameForExport = (clientId: string) => clientById.get(clientId)?.fullName || 'Unknown Client';
         const getClientAddressForExport = (clientId: string) => {
@@ -472,7 +517,8 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                     ...(stopNumber != null && { stopNumber })
                 };
             },
-            getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? ''
+            getNotes: (clientId: string) => clientById.get(clientId)?.dislikes ?? '',
+            offerDownload: offerLabelDownload,
         };
         if (ordersNonComplex.length > 0) {
             await generateLabelsPDF({ ...commonOpts, orders: ordersNonComplex });
@@ -483,6 +529,12 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
         if (ordersEdited.length > 0) {
             await generateLabelsPDF({ ...commonOpts, orders: ordersEdited, filenameSuffix: '_edited', skipDriverPageBreak: true });
         }
+        if (labelDownloadBatch.length > 0) {
+            queueBlobDownloads(labelDownloadBatch);
+        }
+        } catch (e) {
+            console.error(e);
+            alert(e instanceof Error ? e.message : 'Label export failed');
         } finally {
             setIsExporting(false);
         }
@@ -1710,6 +1762,40 @@ export function VendorDeliveryOrders({ vendorId, deliveryDate, isVendorView }: P
                             <Loader2 className="animate-spin" size={40} style={{ color: 'var(--color-primary)' }} />
                             <p style={{ margin: 0, fontWeight: 600, color: 'var(--text-primary)' }}>Generating file...</p>
                             <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Please wait</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {pendingBlobDownloads.length > 0 && (
+                <div className={styles.importModalOverlay} style={{ pointerEvents: 'auto' }}>
+                    <div className={styles.importModal} style={{ maxWidth: 400 }}>
+                        <div className={styles.importModalHeader}>
+                            <h3>Files ready</h3>
+                            <button
+                                type="button"
+                                className={styles.closeButton}
+                                onClick={dismissPendingBlobDownloads}
+                                aria-label="Dismiss"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className={styles.importModalContent} style={{ gap: '0.75rem' }}>
+                            <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                Tap download for each file. Automatic saves are often blocked after large exports finish.
+                            </p>
+                            {pendingBlobDownloads.map((item) => (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    className="btn btn-primary"
+                                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}
+                                    onClick={() => savePendingBlobDownload(item.id)}
+                                >
+                                    <Download size={18} /> Download {item.filename}
+                                </button>
+                            ))}
                         </div>
                     </div>
                 </div>
