@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "name": "dietcombo (web)",
+      "path": "."
+    },
+    {
+      "name": "drivers-expo",
+      "path": "apps/drivers-expo"
+    }
+  ],
+  "settings": {}
+}
