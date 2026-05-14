@@ -3,7 +3,7 @@ import { decrypt } from '@/lib/session';
 import { mergeSupabaseCookies, updateSession } from '@/utils/supabase/middleware';
 
 // Protected (admin) routes — require auth; unauthenticated users redirect to /login
-const protectedRoutes = ['/admin', '/clients', '/billing', '/vendors', '/orders', '/routes', '/forms', '/'];
+const protectedRoutes = ['/admin', '/clients', '/billing', '/vendors', '/orders', '/routes', '/forms', '/invoice', '/'];
 // Vendor portal only (singular): /vendor and /vendor/... — NOT /vendors (admin list)
 const isVendorPortalRoute = (path: string) => path === '/vendor' || path.startsWith('/vendor/');
 
@@ -65,7 +65,8 @@ export default async function middleware(request: NextRequest) {
         path.startsWith('/orders') ||
         path.startsWith('/routes') ||
         path.startsWith('/meal-plan-edits') ||
-        path.startsWith('/admin/client-portal');
+        path.startsWith('/admin/client-portal') ||
+        path.startsWith('/invoice');
       if (!allowed) {
         return redirectWithSb(new URL('/clients', request.url));
       }
@@ -104,7 +105,8 @@ export default async function middleware(request: NextRequest) {
         path.startsWith('/client-portal') ||
         path.startsWith('/navigator-history') ||
         path.startsWith('/orders') ||
-        path.startsWith('/vendors')
+        path.startsWith('/vendors') ||
+        path.startsWith('/invoice')
       ) {
         return supabaseRes;
       }
