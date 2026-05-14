@@ -8,7 +8,7 @@ import { sendEmail } from "@/lib/email";
 import { recordClientChange } from "@/lib/actions";
 
 const NOTIFY_EMAILS = [
-  "stslansky@gmail.com",
+  "dietfantasybilling@gmail.com",
   "customersupport@thedietfantasy.com",
   
 ];

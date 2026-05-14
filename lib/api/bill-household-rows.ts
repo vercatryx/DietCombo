@@ -1,5 +1,14 @@
 /**
  * Shared implementation for GET /api/bill and GET /api/bill/invoices.
+ *
+ * `orderNumbers` per household only includes orders whose effective delivery date (actual if set,
+ * else scheduled) falls in the billing window [date, endDate], excluding billing_successful.
+ * Photo proof selection still may use orders outside that window as a fallback when none in-window
+ * have proofs.
+ *
+ * Optional `onlyreal=1` (or true/yes): return only households that have at least one order with an
+ * effective delivery date in that window (any status). Default is all billable parents regardless
+ * of in-window orders.
  */
 
 import { NextRequest } from 'next/server';
@@ -54,6 +63,13 @@ export function parseAccountFilter(request: NextRequest): AccountFilter {
     const raw = (url.searchParams.get('account') || '').trim().toLowerCase();
     if (raw === 'regular' || raw === 'brooklyn') return raw;
     return 'both';
+}
+
+/** When true, only households with ≥1 order whose effective delivery falls in [date, endDate]. */
+export function parseOnlyRealFromRequest(request: NextRequest): boolean {
+    const url = request.nextUrl ?? new URL(request.url);
+    const raw = (url.searchParams.get('onlyreal') || '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
 /** End date for 7-day billing window (start through end inclusive: start + 6 days). */
@@ -151,6 +167,7 @@ export async function getBillHouseholdRows(
     const billDate = parseBillDateFromRequest(request) ?? BILL_DATE_DEFAULT;
     const billEndDate = billDateEnd(billDate);
     const accountFilter = parseAccountFilter(request);
+    const onlyReal = parseOnlyRealFromRequest(request);
 
     const selectClients =
         'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill';
@@ -274,11 +291,25 @@ export async function getBillHouseholdRows(
         }
     }
 
+    const billableClientIdsForRows = onlyReal
+        ? billableClientIds.filter((pid) => {
+              const list = ordersByHousehold[pid] ?? [];
+              return list.some((o: any) => {
+                  const iso = orderISODate(o);
+                  return iso.length >= 10 && isISODateInRangeInclusive(iso, billDate, billEndDate);
+              });
+          })
+        : billableClientIds;
+
     const orderNumbersByHousehold: Record<string, string[]> = {};
     const proofURLsByHousehold: Record<string, string[]> = {};
     for (const householdId of Object.keys(ordersByHousehold)) {
         const list = ordersByHousehold[householdId] as any[];
-        const ordersForList = list.filter((o: any) => String(o.status || '').toLowerCase() !== BILLING_SUCCESSFUL);
+        const ordersForList = list.filter((o: any) => {
+            if (String(o.status || '').toLowerCase() === BILLING_SUCCESSFUL) return false;
+            const iso = orderISODate(o);
+            return iso.length >= 10 && isISODateInRangeInclusive(iso, billDate, billEndDate);
+        });
         orderNumbersByHousehold[householdId] = ordersForList.map((o: any) => String(o.order_number ?? ''));
 
         const sortedByDate = [...list].sort((a: any, b: any) => {
@@ -298,7 +329,7 @@ export async function getBillHouseholdRows(
             .map((o: any) => String(o.proof_of_delivery_url).trim());
     }
 
-    return billableClientIds.map((parentId) => {
+    return billableClientIdsForRows.map((parentId) => {
         const pid = parentId;
         const parent = parentMap[parentId] || {};
         const deps = dependentsByParent[pid] || [];

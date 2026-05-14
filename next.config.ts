@@ -6,7 +6,8 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: '4mb', // Vendor page can return many orders with items; default 1MB was truncating
+      // Aggregate vendor + large order payloads exceed 4MB; keep bounded but usable (default is 1MB).
+      bodySizeLimit: '32mb',
     },
   },
 };
