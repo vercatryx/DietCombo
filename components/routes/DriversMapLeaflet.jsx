@@ -1206,7 +1206,7 @@ export default function DriversMapLeaflet({
             if (!ll) {
                 if (row.__noCoords) {
                     window.alert(
-                        "This client has no geolocation, so they do not appear as a pin on the Client Assignment map. Others can still show pins if their address is geocoded. Use Needs geocoding, or open the Map tab to see route stops (which use delivery coordinates)."
+                        "This client has no geolocation, so they do not appear as a pin on the Client Assignment map. Others can still show pins if their address is geocoded. Use Manual Geocoding at the bottom of the Routes page, or open the Map tab to see route stops (which use delivery coordinates)."
                     );
                 }
                 return;

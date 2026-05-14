@@ -53,7 +53,7 @@ export interface ClientStatsForRoutes {
     total_produce: number;
     primary_paused_or_delivery_off: number;
     primary_food_missing_geo: number;
-    /** Delivery-eligible dependants missing lat/lng (shown in Needs Geocoding tab). */
+    /** Delivery-eligible dependants missing valid lat/lng (Manual Geocoding list). */
     dependant_missing_geo?: number;
 }
 
@@ -447,7 +447,7 @@ export default function ClientDriverAssignment({
                                         ? ' (primaries only).'
                                         : ` (${dependantMissingGeo} dependant${dependantMissingGeo !== 1 ? 's' : ''}).`
                                 }
-                                {' '}Use &quot;Needs geocoding&quot; to fix.
+                                {' '}Use <strong>Manual Geocoding</strong> at the bottom of the page to fix.
                             </Typography>
                         )}
                     </>

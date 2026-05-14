@@ -227,6 +227,10 @@ export default function RoutesPage() {
 
     const hasRoutes = routes.length > 0;
 
+    const missingGeoStatsTotal =
+        (assignmentData?.stats?.primary_food_missing_geo ?? 0) +
+        (assignmentData?.stats?.dependant_missing_geo ?? 0);
+
     const loadRoutes = React.useCallback(async () => {
         setBusy(true);
         try {
@@ -1289,9 +1293,11 @@ export default function RoutesPage() {
                 flexWrap: 'wrap',
                 alignItems: 'center'
             }}>
-                {missingBatch.length > 0 && (
+                {(missingBatch.length > 0 || missingGeoStatsTotal > 0) && (
                     <Typography variant="body2" sx={{ mr: "auto", opacity: 0.8 }}>
-                        {missingBatch.length} customer{missingBatch.length === 1 ? "" : "s"} are not geocoded.
+                        {missingBatch.length > 0
+                            ? `${missingBatch.length} customer${missingBatch.length === 1 ? "" : "s"} are not geocoded.`
+                            : `${missingGeoStatsTotal} customer${missingGeoStatsTotal === 1 ? "" : "s"} need geocoding.`}
                         <Button
                             size="small"
                             sx={{ ml: 1 }}
@@ -1311,7 +1317,15 @@ export default function RoutesPage() {
                                         if (withAddr.length === 0) {
                                             console.warn("[RoutesPage] All", list.length, "clients from API have empty address/city/state/zip. These values come from the clients table – fill address fields in the DB for them to appear here.");
                                         }
+                                    } else {
+                                        alert(
+                                            "No clients were returned for Manual Geocoding. Try refreshing the page, or check that affected clients are delivery-eligible with a food service type (not produce-only)."
+                                        );
+                                        return;
                                     }
+                                } else {
+                                    alert("Could not load the geocoding list. Please try again.");
+                                    return;
                                 }
                                 setManualOpen(true);
                             }}

@@ -3,7 +3,8 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { supabase, fetchAllRows } from "@/lib/supabase";
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
-import { isProduceServiceType } from "@/lib/isProduceServiceType";
+import { hasValidGeo } from "@/lib/dependantParentGeoSync";
+import { isProduceOnlyServiceType } from "@/lib/isProduceServiceType";
 import { getSession } from "@/lib/session";
 
 /**
@@ -61,7 +62,7 @@ export async function GET(req: Request) {
         }[];
         const hasFood = (st: string | null) => (st ?? "").toLowerCase().includes("food");
         const hasProduce = (st: string | null) => (st ?? "").toLowerCase().includes("produce");
-        const isProduceOnly = (st: string | null) => (st ?? "").trim().toLowerCase() === "produce";
+        const isProduceOnly = isProduceOnlyServiceType;
         const isDeliveryEligible = (r: typeof rows[0]) =>
             !isExcludedFromDeliveries(r.paused, r.status_id, statusAllowMap) && (r.delivery !== false);
         const stats = {
@@ -77,20 +78,24 @@ export async function GET(req: Request) {
                         isExcludedFromDeliveries(false, r.status_id, statusAllowMap)) &&
                     !isProduceOnly(r.service_type)
             ).length,
+            /** Primaries on the food assignment map who still need valid lat/lng (matches Manual Geocoding list). */
             primary_food_missing_geo: rows.filter(
                 (r) =>
                     !r.parent_client_id &&
                     hasFood(r.service_type) &&
-                    (r.lat == null || r.lng == null)
+                    !isProduceOnly(r.service_type) &&
+                    isDeliveryEligible(r) &&
+                    !hasValidGeo(r.lat, r.lng)
             ).length,
-            /** Delivery-eligible non-produce dependants missing lat/lng (routes map / Needs geocoding; produce is vendor delivery). */
+            /** Delivery-eligible dependants on the food map missing valid lat/lng (produce-only excluded). */
             dependant_missing_geo: rows.filter(
                 (r) =>
                     r.parent_client_id != null &&
                     r.parent_client_id !== "" &&
-                    (r.lat == null || r.lng == null) &&
                     isDeliveryEligible(r) &&
-                    !isProduceServiceType(r.service_type)
+                    hasFood(r.service_type) &&
+                    !isProduceOnly(r.service_type) &&
+                    !hasValidGeo(r.lat, r.lng)
             ).length,
         };
 

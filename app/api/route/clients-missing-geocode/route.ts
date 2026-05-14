@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { fetchAllRows, supabase } from "@/lib/supabase";
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from "@/lib/deliveryEligibility";
 import { hasValidGeo, syncDependantGeoFromParents } from "@/lib/dependantParentGeoSync";
-import { isProduceServiceType } from "@/lib/isProduceServiceType";
+import { isProduceOnlyServiceType } from "@/lib/isProduceServiceType";
 import { getSession } from "@/lib/session";
 
 /**
@@ -13,7 +13,8 @@ import { getSession } from "@/lib/session";
  * Same filters as assignment: not paused, status allows deliveries, delivery true or null.
  * Brooklyn admins: only clients with unite_account = 'Brooklyn'.
  *
- * Produce clients (service_type includes Produce, same as driver routes) are omitted — they are not route stops.
+ * Produce-only clients (service_type exactly "Produce") are omitted — they are not food route stops.
+ * Clients with "Food,Produce" are included; food pins still need coordinates.
  *
  * Before querying, runs `syncDependantGeoFromParents` (same as POST /api/route/sync-dependant-geo-from-parent)
  * so dependants who should inherit the parent's lat/lng receive it in the DB first — Manual Geocoding should
@@ -66,7 +67,8 @@ export async function GET() {
         const eligibleRows = (rawRows || []).filter((c: Record<string, unknown>) => {
             const paused = c.paused === true;
             const sid = c.status_id != null ? String(c.status_id) : null;
-            if (isProduceServiceType(c.service_type as string | null | undefined)) return false;
+            // Match Client Assignment map: hide produce-only; "Food,Produce" still needs geocoding for food pins.
+            if (isProduceOnlyServiceType(c.service_type as string | null | undefined)) return false;
             return (
                 !isExcludedFromDeliveries(paused, sid, statusAllowMap) &&
                 (c.delivery === undefined || c.delivery === null || c.delivery === true)
