@@ -9,6 +9,10 @@
  * Optional `onlyreal=1` (or true/yes): return only households that have at least one order with an
  * effective delivery date in that window (any status). Default is all billable parents regardless
  * of in-window orders.
+ *
+ * Archived (“deleted”) clients: households are still included when the parent or a dependant has
+ * an order whose effective delivery falls in the billing window, even if those client rows are
+ * archived. Dependants are loaded for billing parents without excluding archived rows.
  */
 
 import { NextRequest } from 'next/server';
@@ -70,6 +74,64 @@ export function parseOnlyRealFromRequest(request: NextRequest): boolean {
     const url = request.nextUrl ?? new URL(request.url);
     const raw = (url.searchParams.get('onlyreal') || '').trim().toLowerCase();
     return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+function clientMatchesAccountFilter(clientRow: any, accountFilter: AccountFilter): boolean {
+    const ua = clientRow?.unite_account;
+    if (accountFilter === 'brooklyn') return ua === 'Brooklyn';
+    if (accountFilter === 'regular') return ua === 'Regular' || ua == null || String(ua).trim() === '';
+    return true;
+}
+
+/** Load clients by id (including archived) and chase parent_client_id until roots are in the map. */
+async function fetchClientsGraphFromIds(
+    seedIds: string[],
+    select: string,
+    logPrefix: string,
+): Promise<Map<string, any>> {
+    const map = new Map<string, any>();
+    const pending = new Set(
+        seedIds.map((id) => String(id).trim()).filter((id) => id.length > 0 && id !== 'null' && id !== 'undefined'),
+    );
+    while (pending.size > 0) {
+        const batch = [...pending].slice(0, 100);
+        for (const id of batch) pending.delete(id);
+        const { data, error } = await supabase.from('clients').select(select).in('id', batch);
+        if (error) {
+            console.error(`${logPrefix} fetch clients by id`, error);
+            continue;
+        }
+        for (const row of (data || []) as any[]) {
+            const id = String(row.id);
+            if (map.has(id)) continue;
+            map.set(id, row);
+            const pid = row.parent_client_id;
+            if (pid != null && pid !== '' && !map.has(String(pid))) {
+                pending.add(String(pid));
+            }
+        }
+    }
+    return map;
+}
+
+/** Orders that may fall in [billDate, billEndDate] on actual or scheduled (superset); filter with orderISODate. */
+async function fetchOrderRowsNearBillingWindow(
+    billDate: string,
+    billEndDate: string,
+    cols: string,
+    logPrefix: string,
+): Promise<any[]> {
+    const orClause = `and(actual_delivery_date.gte.${billDate},actual_delivery_date.lte.${billEndDate}),and(scheduled_delivery_date.gte.${billDate},scheduled_delivery_date.lte.${billEndDate})`;
+    try {
+        return await fetchAllRows<any>(
+            (from, to) =>
+                supabase.from('orders').select(cols).or(orClause).order('id', { ascending: true }).range(from, to),
+            1000,
+        );
+    } catch (e: any) {
+        console.error(`${logPrefix} billing-window orders discovery`, e);
+        return [];
+    }
 }
 
 /** End date for 7-day billing window (start through end inclusive: start + 6 days). */
@@ -169,6 +231,8 @@ export async function getBillHouseholdRows(
     const accountFilter = parseAccountFilter(request);
     const onlyReal = parseOnlyRealFromRequest(request);
 
+    const COLS = 'id, order_number, actual_delivery_date, scheduled_delivery_date, proof_of_delivery_url, client_id, status';
+
     const selectClients =
         'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill';
     const clients = await fetchAllRows<any>(
@@ -189,18 +253,53 @@ export async function getBillHouseholdRows(
         1000
     );
 
-    if (!clients || clients.length === 0) {
-        return [];
-    }
-
     const clientMap: Record<string, any> = {};
-    (clients as any[]).forEach((c: any) => {
+    (clients as any[] || []).forEach((c: any) => {
         clientMap[String(c.id)] = c;
     });
 
-    const billableClientIds = (clients as any[])
+    const activeBillableParentIds = (clients as any[])
         .filter((c) => c.parent_client_id == null && c.bill !== false)
         .map((c) => String(c.id));
+    const activeBillableSet = new Set(activeBillableParentIds);
+
+    const supplementBillableParentIds = new Set<string>();
+    const approxWindowOrders = await fetchOrderRowsNearBillingWindow(billDate, billEndDate, COLS, logPrefix);
+    const inWindowDiscoveryOrders = approxWindowOrders.filter((o: any) => {
+        const iso = orderISODate(o);
+        return iso.length >= 10 && isISODateInRangeInclusive(iso, billDate, billEndDate);
+    });
+
+    const orderClientIds = [
+        ...new Set(inWindowDiscoveryOrders.map((o: any) => String(o.client_id)).filter((id) => id && id !== 'null')),
+    ];
+    if (orderClientIds.length > 0) {
+        const discoveryMap = await fetchClientsGraphFromIds(orderClientIds, selectClients, logPrefix);
+        for (const [id, row] of discoveryMap) {
+            clientMap[id] = row;
+        }
+
+        for (const o of inWindowDiscoveryOrders) {
+            const cid = String(o.client_id);
+            const row = clientMap[cid];
+            if (!row) continue;
+            const root =
+                row.parent_client_id != null && row.parent_client_id !== ''
+                    ? String(row.parent_client_id)
+                    : String(row.id);
+            const parentRow = clientMap[root];
+            if (!parentRow || parentRow.parent_client_id != null) continue;
+            if (parentRow.bill === false) continue;
+            if (!clientMatchesAccountFilter(parentRow, accountFilter)) continue;
+            if (activeBillableSet.has(root)) continue;
+            supplementBillableParentIds.add(root);
+        }
+    }
+
+    const billableClientIds = [
+        ...activeBillableParentIds,
+        ...[...supplementBillableParentIds].filter((id) => !activeBillableSet.has(id)),
+    ];
 
     if (billableClientIds.length === 0) {
         return [];
@@ -212,18 +311,20 @@ export async function getBillHouseholdRows(
     });
 
     let dependents: any[] = [];
+    const PARENT_ID_BATCH = 80;
     try {
-        dependents = await fetchAllRows<any>(
-            (from, to) =>
-                supabase
-                    .from('clients')
-                    .select('id, full_name, dob, cin, parent_client_id, unite_account, created_at')
-                    .not('parent_client_id', 'is', null)
-                    .is('archived_at', null)
-                    .order('id', { ascending: true })
-                    .range(from, to),
-            1000
-        );
+        for (let i = 0; i < billableClientIds.length; i += PARENT_ID_BATCH) {
+            const pidChunk = billableClientIds.slice(i, i + PARENT_ID_BATCH);
+            const { data: depChunk, error: depErr } = await supabase
+                .from('clients')
+                .select('id, full_name, dob, cin, parent_client_id, unite_account, created_at')
+                .in('parent_client_id', pidChunk);
+            if (depErr) {
+                console.error(`${logPrefix} Error fetching dependents:`, depErr);
+                continue;
+            }
+            dependents = dependents.concat(depChunk || []);
+        }
     } catch (dependentsError: any) {
         console.error(`${logPrefix} Error fetching dependents:`, dependentsError);
         dependents = [];
@@ -249,7 +350,6 @@ export async function getBillHouseholdRows(
         (id) => id && id !== 'null' && id !== 'undefined' && id.length > 0
     );
 
-    const COLS = 'id, order_number, actual_delivery_date, scheduled_delivery_date, proof_of_delivery_url, client_id, status';
     let ordersList: any[] = [];
     if (allClientIdsArray.length > 0) {
         const BATCH = 80;

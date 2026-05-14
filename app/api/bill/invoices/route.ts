@@ -9,7 +9,7 @@
  * `orderNumbers` on each row includes only orders whose effective delivery date falls in the 7-day
  * window (?date through +6), excluding billing_successful (same rule as GET /api/bill).
  *
- * CUSTOMER_ORIGIN: NEXT_PUBLIC_CUSTOMER_APP_URL or NEXT_PUBLIC_CUSTOMER_URL, else http://customer.thedietfantasy.com
+ * Archived parents or dependants with deliveries in the window are included; see GET /api/bill.
  * No auth required.
  */
 
