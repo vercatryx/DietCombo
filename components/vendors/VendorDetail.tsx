@@ -1033,6 +1033,36 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         }
     }
 
+    /** Same as orders API for a date or no-date; avoids server-action transport for large payloads (Vercel). */
+    async function fetchOrdersForLabelExport(dateKey: string): Promise<any[]> {
+        const dateParam = dateKey === 'no-date' ? 'no-date' : dateKey;
+        const res = await fetch(
+            `/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateParam)}`,
+            { credentials: 'include' }
+        );
+        if (!res.ok) throw new Error('Failed to fetch orders for export');
+        const raw = await res.json();
+        if (!Array.isArray(raw)) {
+            const msg = (raw as { error?: string })?.error;
+            throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading orders for export');
+        }
+        return raw;
+    }
+
+    /** Full clients + route driver merge via JSON API (not server actions) so label export works on hosted builds. */
+    async function fetchMergedClientsForLabelExport(): Promise<ClientProfile[]> {
+        const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/clients-for-export`, {
+            credentials: 'include',
+        });
+        if (!res.ok) throw new Error('Failed to fetch clients for export');
+        const raw = await res.json();
+        if (!Array.isArray(raw)) {
+            const msg = (raw as { error?: string })?.error;
+            throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading clients for export');
+        }
+        return raw as ClientProfile[];
+    }
+
     async function exportLabelsPDFForDate(dateKey: string, dateOrders: any[]) {
         if (dateOrders.length === 0) {
             alert('No orders to export for this date');
@@ -1045,28 +1075,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
         const offerLabelDownload = (blob: Blob, filename: string) => {
             labelDownloadBatch.push({ blob, filename });
         };
-        // Re-fetch full orders for this date so labels always have complete order data (items, boxSelection, etc.)
-        // Use API route when we have a date to avoid server-action response size/serialization issues with items
-        let freshOrders: any[];
-        if (dateKey === 'no-date') {
-            freshOrders = (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date);
-        } else {
-            const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateKey)}`, { credentials: 'include' });
-            if (!res.ok) throw new Error('Failed to fetch orders for export');
-            const raw = await res.json();
-            if (!Array.isArray(raw)) {
-                const msg = (raw as { error?: string })?.error;
-                throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading orders for export');
-            }
-            freshOrders = raw;
-        }
+        const freshOrders = await fetchOrdersForLabelExport(dateKey);
         if (freshOrders.length === 0) {
             alert('No orders to export for this date');
             return;
         }
-        // Use getClientsUnlimited to bypass 1000-row limit and avoid "Unknown Client" on exports
-        const clientsForExport = await getClientsUnlimited();
-        const clientsMerged = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+        const clientsMerged = await fetchMergedClientsForLabelExport();
         const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrders, clientsMerged);
         const clientById = new Map(clientsMerged.map(c => [c.id, c]));
         // One label per client per date: dedupe in case DB has duplicate orders for same client+date (e.g. from prior dependant-creation logic).
@@ -1105,7 +1119,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                 ...(stopNumber != null && { stopNumber })
             };
         };
-        const editedClientIds = getEditedClientIdsIncludingDependents(clientsForExport, dateKey);
+        const editedClientIds = getEditedClientIdsIncludingDependents(clientsMerged, dateKey);
         const isEdited = (order: any) => editedClientIds.has(order.client_id);
         const isComplex = (order: any) => !!(clientById.get(order.client_id)?.complex);
         const ordersEdited = ordersForLabels.filter((o: any) => isEdited(o));
@@ -1155,26 +1169,12 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
             const offerLabelDownloadAlt = (blob: Blob, filename: string) => {
                 labelDownloadBatchAlt.push({ blob, filename });
             };
-            // Re-fetch full orders for this date (use API to avoid server-action serialization issues with items)
-            let freshOrdersAlt: any[];
-            if (dateKey === 'no-date') {
-                freshOrdersAlt = (await getOrdersByVendor(vendorId)).filter((o: any) => !o.scheduled_delivery_date);
-            } else {
-                const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/orders?date=${encodeURIComponent(dateKey)}`, { credentials: 'include' });
-                if (!res.ok) throw new Error('Failed to fetch orders for export');
-                const raw = await res.json();
-                if (!Array.isArray(raw)) {
-                    const msg = (raw as { error?: string })?.error;
-                    throw new Error(typeof msg === 'string' && msg ? msg : 'Unexpected response when loading orders for export');
-                }
-                freshOrdersAlt = raw;
-            }
+            const freshOrdersAlt = await fetchOrdersForLabelExport(dateKey);
             if (freshOrdersAlt.length === 0) {
                 alert('No orders to export for this date');
                 return;
             }
-            const clientsForExport = await getClientsUnlimited();
-            const clientsMergedAlt = await mergeRouteAssignedDriverIntoClients(clientsForExport);
+            const clientsMergedAlt = await fetchMergedClientsForLabelExport();
             const { sortedOrders, driverIdToNumber, driverIdToColor } = await getSortedOrdersForDate(dateKey, freshOrdersAlt, clientsMergedAlt);
             const clientById = new Map(clientsMergedAlt.map(c => [c.id, c]));
             const seenClientDateAlt = new Set<string>();
@@ -1211,7 +1211,7 @@ export function VendorDetail({ vendorId, isVendorView, vendor: initialVendor, in
                     ...(stopNumber != null && { stopNumber })
                 };
             };
-            const editedClientIdsAlt = getEditedClientIdsIncludingDependents(clientsForExport, dateKey);
+            const editedClientIdsAlt = getEditedClientIdsIncludingDependents(clientsMergedAlt, dateKey);
             const isEditedAlt = (order: any) => editedClientIdsAlt.has(order.client_id);
             const isComplexAlt = (order: any) => !!(clientById.get(order.client_id)?.complex);
             const ordersEditedAlt = ordersForLabelsAlt.filter((o: any) => isEditedAlt(o));
