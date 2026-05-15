@@ -10,6 +10,13 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '32mb',
     },
   },
+  /**
+   * Proof-of-delivery stamps read `lib/fonts/*.woff2` at runtime (Sharp SVG). Without this,
+   * Vercel's serverless trace can omit that folder so @font-face is empty and glyphs show as boxes.
+   */
+  outputFileTracingIncludes: {
+    "/**": ["./lib/fonts/**/*"],
+  },
 };
 
 export default nextConfig;

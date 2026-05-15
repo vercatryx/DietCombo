@@ -51,42 +51,58 @@ function escapeXml(text: string): string {
 
 /**
  * Latin 600 — embedded for consistent branding when Sharp/librsvg loads the face.
- * Many serverless bundles omit `node_modules/@fontsource/inter/files/*` from the trace, and
- * some librsvg builds ignore @font-face; we always list system fallbacks on `.proof-stamp-text`.
+ * Vercel/serverless output file tracing often omits `node_modules/@fontsource/inter/files/*`,
+ * so we ship the same woff2 under `lib/fonts/` (see next.config `outputFileTracingIncludes`)
+ * and try that path first. Some librsvg builds ignore @font-face; we still list system fallbacks.
  */
 let cachedInterLatin600FontB64: { woff2: string | null; woff: string | null } | undefined;
 
-function interLatin600FontPaths(): { woff2: string; woff: string } {
+/** Prefer repo-bundled font (always on disk in prod) then @fontsource in node_modules. */
+function interLatin600Woff2Candidates(): string[] {
+  const out: string[] = [join(process.cwd(), 'lib/fonts/inter-latin-600-normal.woff2')];
   try {
     const pkgJson = require.resolve('@fontsource/inter/package.json');
-    const dir = join(dirname(pkgJson), 'files');
-    return {
-      woff2: join(dir, 'inter-latin-600-normal.woff2'),
-      woff: join(dir, 'inter-latin-600-normal.woff'),
-    };
+    out.push(join(dirname(pkgJson), 'files', 'inter-latin-600-normal.woff2'));
   } catch {
-    const dir = join(process.cwd(), 'node_modules/@fontsource/inter/files');
-    return {
-      woff2: join(dir, 'inter-latin-600-normal.woff2'),
-      woff: join(dir, 'inter-latin-600-normal.woff'),
-    };
+    out.push(join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2'));
   }
+  return out;
+}
+
+function interLatin600WoffCandidates(): string[] {
+  const out: string[] = [];
+  try {
+    const pkgJson = require.resolve('@fontsource/inter/package.json');
+    out.push(join(dirname(pkgJson), 'files', 'inter-latin-600-normal.woff'));
+  } catch {
+    out.push(join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff'));
+  }
+  return out;
 }
 
 function getProofStampFontFaceCss(): string {
   if (cachedInterLatin600FontB64 === undefined) {
-    const { woff2, woff } = interLatin600FontPaths();
     let b2: string | null = null;
     let bw: string | null = null;
-    try {
-      b2 = readFileSync(woff2).toString('base64');
-    } catch {
-      /* file missing from deployment trace, etc. */
+    for (const p of interLatin600Woff2Candidates()) {
+      try {
+        if (existsSync(p)) {
+          b2 = readFileSync(p).toString('base64');
+          break;
+        }
+      } catch {
+        /* try next candidate */
+      }
     }
-    try {
-      bw = readFileSync(woff).toString('base64');
-    } catch {
-      /* same */
+    for (const p of interLatin600WoffCandidates()) {
+      try {
+        if (existsSync(p)) {
+          bw = readFileSync(p).toString('base64');
+          break;
+        }
+      } catch {
+        /* try next candidate */
+      }
     }
     cachedInterLatin600FontB64 = { woff2: b2, woff: bw };
   }
