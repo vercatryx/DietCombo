@@ -265,3 +265,14 @@ export function easternWallClockToUtcInstant(dateKey: string, hh: number, mm: nu
   }
   return new Date(t + ms);
 }
+
+/**
+ * Format stored `scheduled_delivery_date` for order UIs (Postgres DATE or ISO from Supabase).
+ * `new Date("YYYY-MM-DD")` parses as UTC midnight and often shows the **previous** calendar day in Eastern;
+ * this treats values as America/New_York wall-calendar dates (see {@link toCalendarDateKeyInAppTz}).
+ */
+export function formatScheduledDeliveryDateForOrdersUi(raw: string | null | undefined): string {
+  const key = toCalendarDateKeyInAppTz(raw ?? null);
+  if (!key) return '—';
+  return formatInAppTz(easternWallClockToUtcInstant(key, 12, 0, 0, 0));
+}

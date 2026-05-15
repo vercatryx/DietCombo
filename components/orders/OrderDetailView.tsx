@@ -7,6 +7,7 @@ import styles from './OrderDetailView.module.css';
 import { deleteOrder } from '@/lib/actions-orders-billing';
 import type { OrderDetail } from '@/lib/types-orders-billing';
 import { inlineProxyUrlForStorageImage } from '@/lib/storage-inline-proxy-url';
+import { formatScheduledDeliveryDateForOrdersUi } from '@/lib/timezone';
 
 const ORDER_DETAIL_TZ = 'America/New_York';
 
@@ -268,7 +269,12 @@ export function OrderDetailView({ order, showDelete = true }: OrderDetailViewPro
                         <div className={styles.sectionContent}>
                             <div className={styles.infoRow}><strong>Service Type:</strong><span>{order.serviceType}</span></div>
                             {order.caseId && <div className={styles.infoRow}><strong>Case ID:</strong><span>{order.caseId}</span></div>}
-                            {order.scheduledDeliveryDate && <div className={styles.infoRow}><strong>Scheduled Delivery:</strong><span>{new Date(order.scheduledDeliveryDate).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}</span></div>}
+                            {order.scheduledDeliveryDate && (
+                                <div className={styles.infoRow}>
+                                    <strong>Scheduled Delivery:</strong>
+                                    <span>{formatScheduledDeliveryDateForOrdersUi(order.scheduledDeliveryDate)}</span>
+                                </div>
+                            )}
                             {order.actualDeliveryDate && <div className={styles.infoRow}><strong>Actual Delivery:</strong><span>{formatActualDeliveryDisplay(order.actualDeliveryDate)}</span></div>}
                             <div className={styles.infoRow}><strong>Total Value:</strong><span>${order.totalValue.toFixed(2)}</span></div>
                             {order.notes && <div className={styles.infoRow}><strong>Notes:</strong><span>{order.notes}</span></div>}

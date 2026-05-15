@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Search, ChevronRight, ArrowUpDown, Trash2, Loader2, ChevronLeft } from 'lucide-react';
 import { getOrdersPaginatedBilling, deleteOrder } from '@/lib/actions-orders-billing';
+import { toCalendarDateKeyInAppTz, formatScheduledDeliveryDateForOrdersUi } from '@/lib/timezone';
 import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import styles from './OrdersList.module.css';
 
@@ -69,8 +70,8 @@ export function OrdersList({ userRole = '' }: { userRole?: string }) {
             aVal = a.total_items ?? 0;
             bVal = b.total_items ?? 0;
         } else if (sortConfig.key === 'deliveryDate') {
-            aVal = new Date(a.scheduled_delivery_date || 0).getTime();
-            bVal = new Date(b.scheduled_delivery_date || 0).getTime();
+            aVal = toCalendarDateKeyInAppTz(a.scheduled_delivery_date) || '';
+            bVal = toCalendarDateKeyInAppTz(b.scheduled_delivery_date) || '';
         } else if (sortConfig.key === 'order_number') {
             aVal = Number(a.order_number ?? 0);
             bVal = Number(b.order_number ?? 0);
@@ -329,7 +330,9 @@ export function OrdersList({ userRole = '' }: { userRole?: string }) {
                             <span className={getStatusStyle(order.status)}>{formatStatus(order.status)}</span>
                         </span>
                         <span style={{ flex: 1.5, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {order.scheduled_delivery_date ? new Date(order.scheduled_delivery_date).toLocaleDateString('en-US', { timeZone: 'America/New_York' }) : '-'}
+                            {order.scheduled_delivery_date
+                                ? formatScheduledDeliveryDateForOrdersUi(order.scheduled_delivery_date)
+                                : '-'}
                         </span>
                         <span style={{ width: '40px' }}><ChevronRight size={16} /></span>
                     </div>

@@ -13180,26 +13180,13 @@ async function getProduceVendorByTokenForBulk(supabaseAdmin: SupabaseClient, ven
     return data as { id: string; name: string; token: string; is_active: boolean };
 }
 
-async function resolveProduceScheduledDeliveryDateKeyForRosterWeek(
-    supabaseAdmin: SupabaseClient,
-    rosterWeekStartSundayKey: string
-): Promise<string> {
-    const defaultVendorId = await getDefaultVendorId();
-    if (!defaultVendorId) return rosterWeekStartSundayKey;
-    const { data: v } = await supabaseAdmin
-        .from('vendors')
-        .select('delivery_days')
-        .eq('id', defaultVendorId)
-        .maybeSingle();
-    const raw = v?.delivery_days;
-    let days: string[] = [];
-    try {
-        days = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw || [];
-    } catch {
-        days = [];
-    }
-    const first = days[0] ?? null;
-    return firstDeliveryDayDateKeyInRosterWeek(rosterWeekStartSundayKey, first);
+/**
+ * Produce weekly orders are always dated to the **Monday** of the roster week (America/New_York),
+ * same as produce scan/label copy (`getProduceVerifyWeekMondayLabel`). Do not derive this from the
+ * default meal vendor's `delivery_days` — that is often Tue/Wed and mis-keys bulk cron orders.
+ */
+function resolveProduceScheduledDeliveryDateKeyForRosterWeek(rosterWeekStartSundayKey: string): string {
+    return firstDeliveryDayDateKeyInRosterWeek(rosterWeekStartSundayKey, 'Monday');
 }
 
 /**
@@ -13274,7 +13261,7 @@ export async function ensureWeeklyProduceOrdersFromCron(options?: EnsureWeeklyPr
             manualRosterOverride = true;
         }
 
-        const dateKey = await resolveProduceScheduledDeliveryDateKeyForRosterWeek(supabaseAdmin, rosterSun);
+        const dateKey = resolveProduceScheduledDeliveryDateKeyForRosterWeek(rosterSun);
 
         const defaultTemplate = await getDefaultOrderTemplate('Produce');
         const billAmount = defaultTemplate?.billAmount || 0;
