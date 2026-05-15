@@ -20,7 +20,20 @@ import { SettingsManagement } from '@/components/admin/SettingsManagement';
 import { ProduceVendorManagement } from '@/components/admin/ProduceVendorManagement';
 import { BrooklynAdminManagement } from '@/components/admin/BrooklynAdminManagement';
 import { SmsUsageReport } from '@/components/admin/SmsUsageReport';
-type Tab = 'vendors' | 'statuses' | 'boxes' | 'navigators' | 'nutritionists' | 'admins' | 'brooklyn-admins' | 'form' | 'meals' | 'settings' | 'template' | 'produce-vendors' | 'sms-usage';
+type Tab =
+    | 'vendors'
+    | 'statuses'
+    | 'boxes'
+    | 'navigators'
+    | 'nutritionists'
+    | 'admins'
+    | 'brooklyn-admins'
+    | 'form'
+    | 'meals'
+    | 'settings'
+    | 'template'
+    | 'produce-vendors'
+    | 'sms-usage';
 
 export default function AdminPage() {
     const [activeTab, setActiveTab] = useState<Tab>('template');

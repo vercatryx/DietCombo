@@ -1,14 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ClientProfile, MenuItem, BoxType, ProduceVendor } from '@/lib/types';
 import { getMenuItems, getBoxTypes, getProduceVendors, getStatuses } from '@/lib/cached-data';
-import { Package, FileText, Search, User, AlertTriangle, PlusCircle, X, Download } from 'lucide-react';
+import { Package, FileText, Search, User, AlertTriangle, X, Download, ChevronDown, Loader2 } from 'lucide-react';
 import { generateLabelsPDF } from '@/lib/label-utils';
 import { formatFullAddress } from '@/lib/addressHelpers';
 import {
-    bulkCreateProduceOrdersForVendor,
     bulkUpdateProduceProofsForVendor,
     getClientNamesByIds,
     getClientsUnlimited,
@@ -19,21 +18,30 @@ import {
 } from '@/lib/actions';
 import { isProduceServiceType } from '@/lib/isProduceServiceType';
 import { isExcludedFromDeliveries } from '@/lib/deliveryEligibility';
-import { getRosterWeekEndSaturdayDateKey, getRosterWeekStartSundayDateKey } from '@/lib/produce-roster-week';
+import {
+    addCalendarDaysAppTz,
+    getProduceOrderRosterWeekSundayKey,
+    getRosterWeekEndSaturdayDateKey
+} from '@/lib/produce-roster-week';
 import * as XLSX from 'xlsx';
+import { easternWallClockToUtcInstant } from '@/lib/timezone';
 import styles from './VendorDetail.module.css';
 
-type CreatedProduceOrderRow = {
-    clientId: string;
-    clientName: string;
-    address: string;
-    city: string;
-    state: string;
-    zip: string;
-    phone: string;
-    orderNumber: number;
-    deliveryDate: string;
-};
+function formatProduceRosterRangeEastern(sunKey: string, satKey: string): string {
+    try {
+        const opts: Intl.DateTimeFormatOptions = {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            timeZone: 'America/New_York'
+        };
+        const a = easternWallClockToUtcInstant(sunKey, 12, 0, 0, 0);
+        const b = easternWallClockToUtcInstant(satKey, 12, 0, 0, 0);
+        return `${a.toLocaleDateString('en-US', opts)} – ${b.toLocaleDateString('en-US', opts)}`;
+    } catch {
+        return `${sunKey} – ${satKey}`;
+    }
+}
 
 export function ProduceDetail() {
     const router = useRouter();
@@ -51,12 +59,6 @@ export function ProduceDetail() {
     const [tokenVendor, setTokenVendor] = useState<ProduceVendor | null>(null);
     const [invalidToken, setInvalidToken] = useState(false);
 
-    const [showCreateOrdersModal, setShowCreateOrdersModal] = useState(false);
-    const [deliveryDate, setDeliveryDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
-    const [isCreatingOrders, setIsCreatingOrders] = useState(false);
-    const [createOrdersError, setCreateOrdersError] = useState<string>('');
-    const [lastCreatedOrders, setLastCreatedOrders] = useState<CreatedProduceOrderRow[] | null>(null);
-
     const [showUploadExcelModal, setShowUploadExcelModal] = useState(false);
     const [uploadExcelError, setUploadExcelError] = useState<string>('');
     const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
@@ -68,8 +70,17 @@ export function ProduceDetail() {
     /** Parent / guardian names not present in allClients (token view loads a subset only). */
     const [extraClientNames, setExtraClientNames] = useState<Record<string, string>>({});
 
-    /** Newest pending Produce order per client id (roster week), for label QR and order #. */
-    const [pendingOrderByClientId, setPendingOrderByClientId] = useState<Record<string, ProducePendingOrderLabelInfo>>({});
+    /** Newest pending Produce order per client: [0] = same roster week as weekly cron default; [1] = following week (cron ?nextWeek=1). */
+    const [pendingOrderByClientIdThisWeek, setPendingOrderByClientIdThisWeek] = useState<
+        Record<string, ProducePendingOrderLabelInfo>
+    >({});
+    const [pendingOrderByClientIdNextWeek, setPendingOrderByClientIdNextWeek] = useState<
+        Record<string, ProducePendingOrderLabelInfo>
+    >({});
+    const [labelsWeekMenuOpen, setLabelsWeekMenuOpen] = useState(false);
+    const labelsSplitRef = useRef<HTMLDivElement>(null);
+    /** Active label export: shows progress on the download control. */
+    const [labelsExporting, setLabelsExporting] = useState<null | { week: 'this' | 'next'; phase: 'lookup' | 'pdf' }>(null);
 
     function getLastName(name: string): string {
         const trimmed = (name || '').trim();
@@ -77,6 +88,17 @@ export function ProduceDetail() {
         const parts = trimmed.split(/\s+/);
         return parts[parts.length - 1] || '';
     }
+
+    useEffect(() => {
+        if (!labelsWeekMenuOpen) return;
+        const onDocMouseDown = (e: MouseEvent) => {
+            if (labelsSplitRef.current && !labelsSplitRef.current.contains(e.target as Node)) {
+                setLabelsWeekMenuOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', onDocMouseDown);
+        return () => document.removeEventListener('mousedown', onDocMouseDown);
+    }, [labelsWeekMenuOpen]);
 
     useEffect(() => {
         loadData();
@@ -159,14 +181,28 @@ export function ProduceDetail() {
             }
 
             if (produceClientsList.length > 0) {
-                const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+                // Match weekly produce cron: getProduceOrderRosterWeekSundayKey (not plain calendar "this week").
+                const activeProduceRosterSun = getProduceOrderRosterWeekSundayKey(new Date());
+                const followingProduceRosterSun = addCalendarDaysAppTz(activeProduceRosterSun, 7);
                 const clientIds = produceClientsList.map(c => c.id);
-                const pending = tokenTrim
-                    ? await getProducePendingOrderNumbersForVendorToken(tokenTrim, clientIds, rosterSun)
-                    : await getProducePendingOrderInfoForClientIds(clientIds, rosterSun);
-                setPendingOrderByClientId(pending);
+                if (tokenTrim) {
+                    const [pendingThis, pendingNext] = await Promise.all([
+                        getProducePendingOrderNumbersForVendorToken(tokenTrim, clientIds, activeProduceRosterSun),
+                        getProducePendingOrderNumbersForVendorToken(tokenTrim, clientIds, followingProduceRosterSun)
+                    ]);
+                    setPendingOrderByClientIdThisWeek(pendingThis);
+                    setPendingOrderByClientIdNextWeek(pendingNext);
+                } else {
+                    const [pendingThis, pendingNext] = await Promise.all([
+                        getProducePendingOrderInfoForClientIds(clientIds, activeProduceRosterSun),
+                        getProducePendingOrderInfoForClientIds(clientIds, followingProduceRosterSun)
+                    ]);
+                    setPendingOrderByClientIdThisWeek(pendingThis);
+                    setPendingOrderByClientIdNextWeek(pendingNext);
+                }
             } else {
-                setPendingOrderByClientId({});
+                setPendingOrderByClientIdThisWeek({});
+                setPendingOrderByClientIdNextWeek({});
             }
 
             setProduceClients(produceClientsList);
@@ -230,101 +266,79 @@ export function ProduceDetail() {
         return matchesSearch && matchesVendorFilter;
     });
 
-    async function exportLabelsPDF() {
+    async function exportLabelsPDF(week: 'this' | 'next') {
         if (filteredClients.length === 0) {
-            alert('No clients to export');
+            alert('No clients to export. Clear search or vendor filters if you expected clients here.');
             return;
         }
 
-        const clientOrders = filteredClients
-            .map(client => {
-                const info = pendingOrderByClientId[client.id];
-                if (!info?.orderId) return null;
-                const rawNum = info.orderNumber;
-                const orderNumber =
-                    rawNum != null && String(rawNum).trim() !== '' ? String(rawNum).trim() : undefined;
-                return {
-                    id: info.orderId,
-                    client_id: client.id,
-                    ...(orderNumber !== undefined ? { orderNumber } : {}),
-                    service_type: 'Produce' as const
-                };
-            })
-            .filter((o): o is NonNullable<typeof o> => o != null);
+        const tokenTrim = (token || '').trim();
+        const rosterSun =
+            week === 'this'
+                ? getProduceOrderRosterWeekSundayKey(new Date())
+                : addCalendarDaysAppTz(getProduceOrderRosterWeekSundayKey(new Date()), 7);
+        const rosterSat = getRosterWeekEndSaturdayDateKey(rosterSun);
+        const rangeStr = formatProduceRosterRangeEastern(rosterSun, rosterSat);
 
-        if (clientOrders.length === 0) {
-            alert(
-                'No pending Produce orders for the current roster week for these clients. Create orders (or wait until pending orders exist) before downloading labels — the QR must link to a real order.'
-            );
+        const clientIdsAll = produceClients.map(c => c.id);
+        if (clientIdsAll.length === 0) {
+            alert('No produce clients loaded.');
             return;
         }
 
-        const vendorLabel = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce';
-
-        await generateLabelsPDF({
-            orders: clientOrders,
-            getClientName: (clientId: string) => getClientName(clientId),
-            getClientAddress: (clientId: string) => getClientAddress(clientId),
-            formatOrderedItemsForCSV: () => 'Produce Client',
-            formatDate: () => '',
-            vendorName: vendorLabel
-        });
-    }
-
-    function downloadCreatedOrdersExcel(rows: CreatedProduceOrderRow[], exportDeliveryDate: string) {
-        const sorted = [...rows].sort((a, b) => {
-            const byLast = getLastName(a.clientName).localeCompare(getLastName(b.clientName), undefined, { sensitivity: 'base' });
-            if (byLast !== 0) return byLast;
-            return a.clientName.localeCompare(b.clientName, undefined, { sensitivity: 'base' });
-        });
-
-        const sheetRows = sorted.map(r => ({
-            'Order Number': r.orderNumber,
-            'Name': r.clientName,
-            'Address': r.address,
-            'City': r.city,
-            'State': r.state,
-            'Zip': r.zip,
-            'Phone': r.phone,
-            'Delivery Date': r.deliveryDate || exportDeliveryDate
-        }));
-
-        const ws = XLSX.utils.json_to_sheet(sheetRows, { header: ['Order Number', 'Name', 'Address', 'City', 'State', 'Zip', 'Phone', 'Delivery Date'] });
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Orders');
-        XLSX.writeFile(wb, `produce-orders-${exportDeliveryDate}.xlsx`);
-    }
-
-    async function handleCreateOrders() {
-        setCreateOrdersError('');
-        if (!deliveryDate) {
-            setCreateOrdersError('Delivery Date is required.');
-            return;
-        }
-        if (!token) {
-            setCreateOrdersError('Missing vendor token.');
-            return;
-        }
-        if (filteredClients.length === 0) {
-            setCreateOrdersError('No clients to create orders for.');
-            return;
-        }
-
-        setIsCreatingOrders(true);
+        setLabelsWeekMenuOpen(false);
+        setLabelsExporting({ week, phase: 'lookup' });
         try {
-            const clientIds = filteredClients.map(c => c.id);
-            const res = await bulkCreateProduceOrdersForVendor(clientIds, deliveryDate, token);
-            if (!res.success) {
-                setCreateOrdersError(res.error || 'Failed to create orders');
+            let pendingMap: Record<string, ProducePendingOrderLabelInfo>;
+            try {
+                if (tokenTrim) {
+                    pendingMap = await getProducePendingOrderNumbersForVendorToken(tokenTrim, clientIdsAll, rosterSun);
+                } else {
+                    pendingMap = await getProducePendingOrderInfoForClientIds(clientIdsAll, rosterSun);
+                }
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                alert(`Could not look up Produce orders: ${msg}`);
                 return;
             }
 
-            setLastCreatedOrders(res.orders || []);
-            downloadCreatedOrdersExcel(res.orders || [], deliveryDate);
-        } catch (e: any) {
-            setCreateOrdersError(e?.message || 'Failed to create orders');
+            const clientOrders = filteredClients
+                .map(client => {
+                    const info = pendingMap[client.id];
+                    if (!info?.orderId) return null;
+                    const rawNum = info.orderNumber;
+                    const orderNumber =
+                        rawNum != null && String(rawNum).trim() !== '' ? String(rawNum).trim() : undefined;
+                    return {
+                        id: info.orderId,
+                        client_id: client.id,
+                        ...(orderNumber !== undefined ? { orderNumber } : {}),
+                        service_type: 'Produce' as const
+                    };
+                })
+                .filter((o): o is NonNullable<typeof o> => o != null);
+
+            if (clientOrders.length === 0) {
+                alert(
+                    `No Produce orders found for ${rangeStr} (Eastern), among the clients on this list. Only clients with a Produce order scheduled in that week get a label row. Try the other download option if your orders fall in the adjacent week.`
+                );
+                return;
+            }
+
+            const vendorLabel = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce';
+
+            setLabelsExporting({ week, phase: 'pdf' });
+            await generateLabelsPDF({
+                orders: clientOrders,
+                getClientName: (clientId: string) => getClientName(clientId),
+                getClientAddress: (clientId: string) => getClientAddress(clientId),
+                formatOrderedItemsForCSV: () => 'Produce Client',
+                formatDate: () => '',
+                vendorName: vendorLabel,
+                filenameSuffix: week === 'next' ? '_next_week' : undefined
+            });
         } finally {
-            setIsCreatingOrders(false);
+            setLabelsExporting(null);
         }
     }
 
@@ -446,11 +460,29 @@ export function ProduceDetail() {
     }
 
     const pageTitle = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce Clients';
-    const rosterSun = getRosterWeekStartSundayDateKey(new Date());
-    const rosterSat = getRosterWeekEndSaturdayDateKey(rosterSun);
+    const activeProduceRosterSun = getProduceOrderRosterWeekSundayKey(new Date());
+    const activeProduceRosterSat = getRosterWeekEndSaturdayDateKey(activeProduceRosterSun);
     const subtitle = isExternalView
-        ? `Clients assigned to ${tokenVendor!.name}. Roster week ${rosterSun}–${rosterSat} (Eastern). New produce enrollments or vendor changes after the prior Friday 11:59 PM ET appear next week.`
+        ? `Clients assigned to ${tokenVendor!.name}. Active produce order roster week ${activeProduceRosterSun}–${activeProduceRosterSat} (Eastern; matches weekly cron). New produce enrollments or vendor changes after the prior Friday 11:59 PM ET appear next week.`
         : 'Clients and dependants with Service Type: Produce';
+
+    const labelExportBusy = labelsExporting != null;
+    const mainLabelButtonContent = !labelsExporting ? (
+        <>
+            <FileText size={20} />
+            Download Labels
+        </>
+    ) : labelsExporting.week === 'this' ? (
+        <>
+            <Loader2 size={20} className="animate-spin" style={{ flexShrink: 0 }} />
+            {labelsExporting.phase === 'lookup' ? 'Looking up orders…' : 'Generating PDF…'}
+        </>
+    ) : (
+        <>
+            <Loader2 size={20} className="animate-spin" style={{ flexShrink: 0 }} />
+            {labelsExporting.phase === 'lookup' ? 'Looking up next week…' : 'Generating PDF (next week)…'}
+        </>
+    );
 
     return (
         <div className={styles.container}>
@@ -461,18 +493,6 @@ export function ProduceDetail() {
                         {pageTitle}
                     </h1>
                     <div style={{ display: 'flex', gap: '1rem' }}>
-                        {isExternalView && (
-                            <button
-                                className="btn btn-primary"
-                                onClick={() => {
-                                    setCreateOrdersError('');
-                                    setShowCreateOrdersModal(true);
-                                }}
-                                style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                            >
-                                <PlusCircle size={20} /> Create Orders
-                            </button>
-                        )}
                         {isExternalView && (
                             <>
                                 <input
@@ -500,87 +520,102 @@ export function ProduceDetail() {
                                 </button>
                             </>
                         )}
-                        <button
-                            className="btn btn-secondary"
-                            onClick={exportLabelsPDF}
-                            style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        <div
+                            ref={labelsSplitRef}
+                            style={{
+                                position: 'relative',
+                                display: 'inline-flex',
+                                alignItems: 'stretch',
+                                opacity: labelExportBusy ? 0.92 : 1
+                            }}
+                            aria-busy={labelExportBusy}
                         >
-                            <FileText size={20} /> Download Labels
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {showCreateOrdersModal && (
-                <div className={styles.importModalOverlay} onClick={() => !isCreatingOrders && setShowCreateOrdersModal(false)}>
-                    <div className={styles.importModal} onClick={e => e.stopPropagation()}>
-                        <div className={styles.importModalHeader}>
-                            <h3>Create Produce Orders</h3>
                             <button
-                                className={styles.closeButton}
-                                onClick={() => !isCreatingOrders && setShowCreateOrdersModal(false)}
-                                aria-label="Close"
+                                type="button"
+                                className="btn btn-secondary"
+                                disabled={labelExportBusy}
+                                onClick={() => void exportLabelsPDF('this')}
+                                style={{
+                                    padding: '0.75rem 1.25rem',
+                                    fontSize: '1rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    borderRadius: 'var(--radius-md) 0 0 var(--radius-md)',
+                                    borderRight: '1px solid var(--border-color)',
+                                    minWidth: labelExportBusy ? '11.5rem' : undefined,
+                                    justifyContent: 'flex-start'
+                                }}
                             >
-                                <X size={20} />
+                                {mainLabelButtonContent}
                             </button>
-                        </div>
-                        <div className={styles.importModalContent}>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                                <label style={{ fontWeight: 600 }}>Delivery Date</label>
-                                <input
-                                    className="input"
-                                    type="date"
-                                    value={deliveryDate}
-                                    onChange={e => setDeliveryDate(e.target.value)}
-                                    disabled={isCreatingOrders}
-                                />
-                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                    This will create 1 Produce order per client in the current list ({filteredClients.length}).
-                                </div>
-                            </div>
-
-                            {createOrdersError && (
-                                <div style={{ color: '#ef4444', fontWeight: 600 }}>{createOrdersError}</div>
-                            )}
-
-                            {lastCreatedOrders && (
-                                <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
-                                    <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
-                                        Created {lastCreatedOrders.length} orders
-                                    </div>
-                                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                                        The Excel file should have downloaded automatically.
-                                    </div>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                disabled={labelExportBusy}
+                                aria-label="More label download options"
+                                aria-expanded={labelsWeekMenuOpen}
+                                aria-haspopup="menu"
+                                onClick={() => !labelExportBusy && setLabelsWeekMenuOpen(o => !o)}
+                                style={{
+                                    padding: '0 0.65rem',
+                                    minWidth: '2.5rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    borderRadius: '0 var(--radius-md) var(--radius-md) 0'
+                                }}
+                            >
+                                <ChevronDown size={18} />
+                            </button>
+                            {labelsWeekMenuOpen && !labelExportBusy && (
+                                <div
+                                    role="menu"
+                                    style={{
+                                        position: 'absolute',
+                                        right: 0,
+                                        top: '100%',
+                                        marginTop: 4,
+                                        zIndex: 50,
+                                        minWidth: '12.5rem',
+                                        backgroundColor: 'var(--bg-surface)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: 'var(--radius-md)',
+                                        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                                        overflow: 'hidden'
+                                    }}
+                                >
                                     <button
-                                        className="btn btn-secondary"
-                                        style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                                        onClick={() => downloadCreatedOrdersExcel(lastCreatedOrders, deliveryDate)}
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => {
+                                            void exportLabelsPDF('next');
+                                        }}
+                                        style={{
+                                            width: '100%',
+                                            textAlign: 'left',
+                                            padding: '0.65rem 1rem',
+                                            fontSize: '0.95rem',
+                                            border: 'none',
+                                            background: 'transparent',
+                                            cursor: 'pointer',
+                                            color: 'var(--text-primary)'
+                                        }}
+                                        onMouseEnter={e => {
+                                            e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
+                                        }}
+                                        onMouseLeave={e => {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                        }}
                                     >
-                                        <Download size={18} /> Re-download Excel
+                                        Download next week
                                     </button>
                                 </div>
                             )}
-
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                                <button
-                                    className="btn btn-secondary"
-                                    disabled={isCreatingOrders}
-                                    onClick={() => setShowCreateOrdersModal(false)}
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    className="btn btn-primary"
-                                    disabled={isCreatingOrders}
-                                    onClick={handleCreateOrders}
-                                >
-                                    {isCreatingOrders ? 'Creating…' : 'Create Orders'}
-                                </button>
-                            </div>
                         </div>
                     </div>
                 </div>
-            )}
+            </div>
 
             {showUploadExcelModal && (
                 <div className={styles.importModalOverlay} onClick={() => !isProcessingExcel && setShowUploadExcelModal(false)}>

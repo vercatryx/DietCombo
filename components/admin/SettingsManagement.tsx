@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { getSettings, updateSettings } from '@/lib/actions';
 import { AppSettings } from '@/lib/types';
 import { getTodayInAppTz } from '@/lib/timezone';
+import { ManualProduceOrderManagement } from '@/components/admin/ManualProduceOrderManagement';
 import styles from './SettingsManagement.module.css';
 
 const DELETE_CONFIRM_CLICKS = 5;
@@ -305,6 +306,17 @@ export function SettingsManagement() {
                             {deleteResult.message}
                         </div>
                     )}
+                </div>
+
+                <div className={styles.actionCard} style={{ marginTop: '1.5rem' }}>
+                    <h4 className={styles.sectionTitle}>Manual produce order</h4>
+                    <p className={styles.actionDescription}>
+                        Schedule one Produce order for a client on a chosen delivery date (Eastern). Uses the same
+                        default Produce billing as weekly automation. Roster enrollment timing is not enforced here
+                        (for one-offs); the client must still have Produce in service type, an assigned produce vendor,
+                        and a delivery-allowed status.
+                    </p>
+                    <ManualProduceOrderManagement />
                 </div>
             </div>
         </div>
