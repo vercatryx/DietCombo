@@ -10,6 +10,7 @@ import {
   getProduceOrderRosterWeekSundayKey,
   isEligibleForRosterWeek,
   firstDeliveryDayDateKeyInRosterWeek,
+  isRosterWeekSundayDateKeyInAppTz,
 } from './produce-roster-week';
 import { easternWallClockToUtcInstant } from './timezone';
 
@@ -49,5 +50,8 @@ const cutEnd = new Date(getRosterCutoffInstantIsoForWeek(rosterSun)).getTime();
 eq(isEligibleForRosterWeek(new Date(cutEnd - 60_000).toISOString(), rosterSun), true);
 eq(isEligibleForRosterWeek(new Date(cutEnd + 60_000).toISOString(), rosterSun), false);
 eq(isEligibleForRosterWeek(null, rosterSun), false);
+
+eq(isRosterWeekSundayDateKeyInAppTz('2026-05-17'), true);
+eq(isRosterWeekSundayDateKeyInAppTz('2026-05-18'), false);
 
 console.log('produce-roster-week tests passed');

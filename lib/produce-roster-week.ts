@@ -102,6 +102,13 @@ export function firstDeliveryDayDateKeyInRosterWeek(
   return rosterWeekStartSundayKey;
 }
 
+/** True if `dateKey` is a Sunday on the America/New_York calendar (roster weeks start Sunday). */
+export function isRosterWeekSundayDateKeyInAppTz(dateKey: string): boolean {
+  if (!DATE_KEY.test(String(dateKey).trim())) return false;
+  const k = String(dateKey).trim().slice(0, 10);
+  return getWeekdayOfDateInAppTz(k) === 0;
+}
+
 /** True if dateKey (YYYY-MM-DD) lies in the roster week starting rosterSunday (inclusive). */
 export function isDateKeyInRosterWeek(dateKey: string | null | undefined, rosterWeekStartSundayKey: string): boolean {
   if (!dateKey || !DATE_KEY.test(String(dateKey).slice(0, 10))) return false;

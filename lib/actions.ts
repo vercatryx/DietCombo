@@ -26,7 +26,15 @@ import { prepareMealPlannerDataForUpdate, mealPlannerDateOnly, mealPlannerCutoff
 import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
 import { isProduceServiceType } from './isProduceServiceType';
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from './deliveryEligibility';
-import { getRosterWeekStartSundayDateKey, getRosterWeekStartSundayForCalendarDateKey, isEligibleForRosterWeek, getProduceOrderRosterWeekSundayKey, firstDeliveryDayDateKeyInRosterWeek, isDateKeyInRosterWeek } from './produce-roster-week';
+import {
+    getRosterWeekStartSundayDateKey,
+    getRosterWeekStartSundayForCalendarDateKey,
+    isEligibleForRosterWeek,
+    getProduceOrderRosterWeekSundayKey,
+    firstDeliveryDayDateKeyInRosterWeek,
+    isDateKeyInRosterWeek,
+    isRosterWeekSundayDateKeyInAppTz,
+} from './produce-roster-week';
 import { mergeDietaryFlagsIntoNote, type DietaryFlags } from './dietary-preferences-note';
 import { inferLegacyChangeKind, type ClientChangeKind } from './audit/clientChangeKind';
 import type { ChangeDisplayTag } from './audit/clientChangeTags';
@@ -13206,7 +13214,15 @@ export type WeeklyProduceCronVendorSummary = {
     insertError?: string;
 };
 
-export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
+export type EnsureWeeklyProduceCronOptions = {
+    /**
+     * Create orders for this roster week (Sunday YYYY-MM-DD in America/New_York) instead of
+     * {@link getProduceOrderRosterWeekSundayKey} for "now". Used for manual / next-week runs.
+     */
+    rosterWeekSundayOverride?: string;
+};
+
+export async function ensureWeeklyProduceOrdersFromCron(options?: EnsureWeeklyProduceCronOptions): Promise<{
     success: boolean;
     rosterWeekSunday: string;
     scheduledDeliveryDate: string;
@@ -13217,6 +13233,10 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
     vendorSummaries?: WeeklyProduceCronVendorSummary[];
     /** Plain-language hint when the job succeeded but inserted nothing. */
     hint?: string;
+    /** When the job used `rosterWeekSundayOverride` instead of automatic week selection. */
+    manualRosterOverride?: boolean;
+    /** Automatic target week for "now" (only set when a manual override was applied). */
+    automatedRosterWeekSundayWouldBe?: string;
 }> {
     try {
         if (!getSupabaseDbApiKey()) {
@@ -13230,7 +13250,30 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
             };
         }
         const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
-        const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
+
+        const automatedRoster = getProduceOrderRosterWeekSundayKey(new Date());
+        let rosterSun = automatedRoster;
+        let manualRosterOverride = false;
+
+        if (options?.rosterWeekSundayOverride != null && String(options.rosterWeekSundayOverride).trim() !== '') {
+            const raw = String(options.rosterWeekSundayOverride).trim().slice(0, 10);
+            if (!isRosterWeekSundayDateKeyInAppTz(raw)) {
+                return {
+                    success: false,
+                    rosterWeekSunday: '',
+                    scheduledDeliveryDate: '',
+                    vendorsProcessed: 0,
+                    ordersCreated: 0,
+                    error:
+                        'rosterWeekSundayOverride must be a Sunday calendar date in America/New_York (YYYY-MM-DD).',
+                    manualRosterOverride: true,
+                    automatedRosterWeekSundayWouldBe: automatedRoster,
+                };
+            }
+            rosterSun = raw;
+            manualRosterOverride = true;
+        }
+
         const dateKey = await resolveProduceScheduledDeliveryDateKeyForRosterWeek(supabaseAdmin, rosterSun);
 
         const defaultTemplate = await getDefaultOrderTemplate('Produce');
@@ -13378,6 +13421,9 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
             ordersCreated: totalCreated,
             vendorSummaries,
             hint,
+            ...(manualRosterOverride
+                ? { manualRosterOverride: true, automatedRosterWeekSundayWouldBe: automatedRoster }
+                : {}),
         };
     } catch (e: any) {
         return {
