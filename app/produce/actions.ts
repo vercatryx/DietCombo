@@ -7,14 +7,20 @@ import { saveDeliveryProofUrlAndProcessOrder, getDefaultOrderTemplate, getDefaul
 import { roundCurrency } from '@/lib/utils';
 import { getNextOccurrence } from '@/lib/order-dates';
 import { getCurrentTime } from '@/lib/time';
-import { getTodayDateInAppTzAsReference, getTodayInAppTz, toDateStringInAppTz } from '@/lib/timezone';
+import {
+    APP_TIMEZONE,
+    easternWallClockToUtcInstant,
+    formatInAppTz,
+    getTodayDateInAppTzAsReference,
+    toDateStringInAppTz,
+} from '@/lib/timezone';
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
 import { ordersRowTouch } from '@/lib/orders-row-touch';
 import { collectImageFilesFromFormData, proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
-import { getRosterWeekStartSundayDateKey, isDateKeyInRosterWeek } from '@/lib/produce-roster-week';
+import { addCalendarDaysAppTz, getRosterWeekStartSundayDateKey, isDateKeyInRosterWeek } from '@/lib/produce-roster-week';
 
 async function applyProduceProofToOrderRow(
     supabaseAdmin: any,
@@ -262,7 +268,8 @@ export async function processProduceProof(formData: FormData) {
 
 /**
  * Load client info for the produce flow (no order created).
- * Used to show client details and allow image upload before creating the order.
+ * `deliveryDateLabel` is the Monday of the current roster week — context before any proof exists.
+ * Order timing after upload uses the proof submit time (see uploadProduceProofOnly / createProduceOrderWithProof).
  */
 export async function getClientForProduce(clientId: string) {
     const supabaseAdmin = createClient(
@@ -283,22 +290,15 @@ export async function getClientForProduce(clientId: string) {
         }
 
         const rosterSun = getRosterWeekStartSundayDateKey(new Date());
-        const { data: pendingRows } = await supabaseAdmin
-            .from('orders')
-            .select('scheduled_delivery_date')
-            .eq('client_id', clientId)
-            .eq('service_type', 'Produce')
-            .eq('status', 'pending')
-            .order('created_at', { ascending: false })
-            .limit(20);
-
-        const pending = (pendingRows || []).find((o) =>
-            isDateKeyInRosterWeek(String(o.scheduled_delivery_date ?? '').slice(0, 10), rosterSun)
-        );
-
-        const deliveryDateLabel = pending?.scheduled_delivery_date
-            ? String(pending.scheduled_delivery_date).slice(0, 10)
-            : getTodayInAppTz();
+        const mondayKey = addCalendarDaysAppTz(rosterSun, 1);
+        const mondayAnchor = easternWallClockToUtcInstant(mondayKey, 12, 0, 0, 0);
+        const deliveryDateLabel = formatInAppTz(mondayAnchor, {
+            timeZone: APP_TIMEZONE,
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+        });
 
         return {
             success: true,
@@ -333,6 +333,9 @@ export async function uploadProduceProofOnly(formData: FormData) {
         const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
         const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
         const urls: string[] = [];
+        /** Single instant for this submit — used for order `actual_delivery_date` (not EXIF on the file). */
+        const uploadTime = new Date();
+        const proofCapturedAtIso = uploadTime.toISOString();
 
         for (let i = 0; i < files.length; i++) {
             const f = files[i];
@@ -340,14 +343,14 @@ export async function uploadProduceProofOnly(formData: FormData) {
             const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
                 rawBuffer,
                 f.type || 'image/jpeg',
-                new Date()
+                uploadTime
             );
             const key = `produce-proof-${clientId}-${Date.now()}-${i + 1}.${fileExtension}`;
             await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
             urls.push(`${baseUrl}/${key}`);
         }
 
-        return { success: true, urls, url: urls[0] };
+        return { success: true, urls, url: urls[0], proofCapturedAtIso };
     } catch (error: any) {
         console.error('[Upload Produce Proof Only] Error:', error);
         return { success: false, error: error.message || 'Upload failed' };
@@ -358,7 +361,11 @@ export async function uploadProduceProofOnly(formData: FormData) {
  * Create a Produce order with delivery proof URL already set.
  * Called only after the image has been uploaded to prevent unfulfilled orders.
  */
-export async function createProduceOrderWithProof(clientId: string, proofUrls: string[]) {
+export async function createProduceOrderWithProof(
+    clientId: string,
+    proofUrls: string[],
+    proofCapturedAtIso?: string | null
+) {
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         getSupabaseDbApiKey()!
@@ -402,7 +409,14 @@ export async function createProduceOrderWithProof(clientId: string, proofUrls: s
             };
         }
 
-        const fin = await applyProduceProofToOrderRow(supabaseAdmin, pending.id, urls, { keepScheduledDate: true });
+        const proofTime =
+            proofCapturedAtIso && !Number.isNaN(Date.parse(proofCapturedAtIso))
+                ? new Date(proofCapturedAtIso)
+                : new Date();
+        const fin = await applyProduceProofToOrderRow(supabaseAdmin, pending.id, urls, {
+            keepScheduledDate: true,
+            proofTime,
+        });
         if (!fin.success) {
             return { success: false, error: fin.error || 'Failed to update produce order' };
         }

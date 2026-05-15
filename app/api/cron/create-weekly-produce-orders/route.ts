@@ -9,7 +9,8 @@ import { ensureWeeklyProduceOrdersFromCron } from "@/lib/actions";
  * Creates pending Produce orders for the active roster week (Sunday–Saturday, America/New_York)
  * after the weekly Friday 11:59:59 PM ET enrollment cutoff. Idempotent per (client, scheduled_delivery_date).
  *
- * Vercel cron: two UTC triggers around end-of-Friday Eastern (EST vs EDT). Safe to run twice.
+ * Vercel cron: one weekly run (e.g. Saturday 07:15 UTC) after Friday 11:59:59 PM Eastern in both
+ * EST and EDT. The job is idempotent if invoked more than once.
  */
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;

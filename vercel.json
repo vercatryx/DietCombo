@@ -6,11 +6,7 @@
     },
     {
       "path": "/api/cron/create-weekly-produce-orders",
-      "schedule": "59 3 * * 6"
-    },
-    {
-      "path": "/api/cron/create-weekly-produce-orders",
-      "schedule": "59 4 * * 6"
+      "schedule": "15 7 * * 6"
     }
   ]
 }

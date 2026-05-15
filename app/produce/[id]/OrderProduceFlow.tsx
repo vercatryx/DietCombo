@@ -11,6 +11,7 @@ import {
     revokeProofPreviewUrl,
     revokeProofPreviewUrls,
 } from '@/lib/proof-capture-preview';
+import { formatDateTimeInAppTz } from '@/lib/timezone';
 
 interface ClientDetails {
     id: string;
@@ -26,6 +27,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const [proofShots, setProofShots] = useState<ProofShot[]>([]);
     const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>([]);
     const [createdOrderNumber, setCreatedOrderNumber] = useState<string | null>(null);
+    const [proofDeliveredAtLabel, setProofDeliveredAtLabel] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const webcamRef = useRef<Webcam>(null);
     const proofShotsRef = useRef<ProofShot[]>([]);
@@ -78,7 +80,11 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                 return;
             }
 
-            const createResult = await createProduceOrderWithProof(client.id, uploadResult.urls);
+            const createResult = await createProduceOrderWithProof(
+                client.id,
+                uploadResult.urls,
+                uploadResult.proofCapturedAtIso ?? null
+            );
             if (!createResult.success || !createResult.order) {
                 setError(createResult.error || 'Failed to create order');
                 setStep('ERROR');
@@ -87,6 +93,9 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
 
             setUploadedProofUrls(uploadResult.urls);
             setCreatedOrderNumber(createResult.order.orderNumber);
+            setProofDeliveredAtLabel(
+                uploadResult.proofCapturedAtIso ? formatDateTimeInAppTz(uploadResult.proofCapturedAtIso) : null
+            );
             setStep('SUCCESS');
         } catch (err: any) {
             setError(err?.message || 'Network or Server Error occurred');
@@ -105,7 +114,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                         {client.full_name}
                     </h2>
                     <p className="text-subtitle">
-                        Scheduled: {new Date(client.deliveryDateLabel).toLocaleDateString('en-US', { timeZone: 'America/New_York' })}
+                        Before you upload proof, this week&apos;s produce roster starts {client.deliveryDateLabel}.
                     </p>
                 </div>
 
@@ -373,6 +382,11 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                         <p className="text-subtitle" style={{ color: '#4ade80', fontSize: '1.125rem' }}>Order #{createdOrderNumber}</p>
                     )}
                     <p className="text-subtitle" style={{ marginTop: '1rem' }}>Proof has been securely saved and order created.</p>
+                    {proofDeliveredAtLabel && (
+                        <p className="text-subtitle" style={{ marginTop: '0.5rem', opacity: 0.9 }}>
+                            Proof submitted (Eastern): {proofDeliveredAtLabel}
+                        </p>
+                    )}
                 </div>
 
 
@@ -384,6 +398,7 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                         onClick={() => {
                             clearCapturedProofs();
                             setUploadedProofUrls([]);
+                            setProofDeliveredAtLabel(null);
                             setStep('CAPTURE');
                         }}
                         style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 500 }}
