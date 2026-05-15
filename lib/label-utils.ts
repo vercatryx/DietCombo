@@ -309,7 +309,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
 
         // 4. Driver number above QR, then QR (top-right with margin)
         try {
-            const produceUrl = `${origin}/produce/${order.client_id}`;
+            const deliveryUrl = `${origin}/delivery/${order.orderNumber != null && String(order.orderNumber).trim() !== '' ? String(order.orderNumber) : order.id}`;
             const driverOrOrderText = driverInfo
                 ? (driverInfo.stopNumber != null
                     ? `${driverInfo.driverNumber}.${driverInfo.stopNumber}`
@@ -323,7 +323,7 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
             doc.text(driverOrOrderText, qrZoneX + qrZoneWidth / 2, labelY + PROPS.padding + 0.12, { align: 'center' });
             resetColor();
 
-            const qrDataUrl = await QRCode.toDataURL(produceUrl, {
+            const qrDataUrl = await QRCode.toDataURL(deliveryUrl, {
                 errorCorrectionLevel: 'M',
                 margin: 0,
                 width: 280
@@ -510,7 +510,7 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
 
         // Left: Above QR show "0.1" (driver.stop) or order number only
         try {
-            const produceUrl = `${origin}/produce/${order.client_id}`;
+            const deliveryUrl = `${origin}/delivery/${order.orderNumber != null && String(order.orderNumber).trim() !== '' ? String(order.orderNumber) : order.id}`;
             const driverOrOrderText = driverInfo
                 ? (driverInfo.stopNumber != null ? `${driverInfo.driverNumber}.${driverInfo.stopNumber}` : String(driverInfo.driverNumber))
                 : `#${order.orderNumber || order.id.slice(0, 6)}`;
@@ -519,7 +519,7 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
             setDriverColor();
             doc.text(driverOrOrderText, qrZoneX + qrZoneWidth / 2, labelY + PROPS.padding + 0.12, { align: 'center' });
             resetColor();
-            const qrDataUrl = await QRCode.toDataURL(produceUrl, { errorCorrectionLevel: 'M', margin: 0, width: 280 });
+            const qrDataUrl = await QRCode.toDataURL(deliveryUrl, { errorCorrectionLevel: 'M', margin: 0, width: 280 });
             doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
         } catch (e) {
             console.error('QR generation failed', e);

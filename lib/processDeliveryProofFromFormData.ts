@@ -13,20 +13,24 @@ import {
     proofPayloadForDb,
     type ProofUploadFormData,
 } from '@/lib/proof-of-delivery-urls';
+import { applyProduceProofToOrderRow } from '@/app/produce/actions';
+import { isProduceServiceType } from '@/lib/isProduceServiceType';
 
 export type ProcessDeliveryProofResult =
     | { success: true; urls: string[]; url: string }
     | { success: false; error: string };
 
+type FoundOrder = { id: string; client_id: string; service_type: string | null };
+
 /**
  * Shared implementation for delivery proof uploads (web server action + POST /api/delivery/proof).
+ * Produce orders use the same upload path but finalize via `applyProduceProofToOrderRow` (scheduled date preserved).
  */
 export async function processDeliveryProofFromFormData(formData: ProofUploadFormData): Promise<ProcessDeliveryProofResult> {
     const files = collectImageFilesFromFormData(formData);
     const orderNumber = formData.get('orderNumber') as string;
     const testUrl = formData.get('testUrl') as string | null;
     const testUrlsMulti = formData.getAll('testUrls').filter((t): t is string => typeof t === 'string' && t.trim() !== '');
-    let proofTimeIso: string | null = null;
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
 
@@ -47,25 +51,25 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
 
     try {
         let table: 'orders' | 'upcoming_orders' = 'orders';
-        let foundOrder: { id: string; client_id: string } | null = null;
+        let foundOrder: FoundOrder | null = null;
 
         const { data: orderData } = await supabaseAdmin
             .from('orders')
-            .select('id, client_id')
+            .select('id, client_id, service_type')
             .eq('order_number', orderNumber)
             .maybeSingle();
 
-        foundOrder = orderData;
+        foundOrder = orderData as FoundOrder | null;
 
         if (!foundOrder) {
             const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
             if (uuidRegex.test(orderNumber)) {
                 const { data: orderById } = await supabaseAdmin
                     .from('orders')
-                    .select('id, client_id')
+                    .select('id, client_id, service_type')
                     .eq('id', orderNumber)
                     .maybeSingle();
-                foundOrder = orderById;
+                foundOrder = orderById as FoundOrder | null;
             }
         }
 
@@ -74,21 +78,21 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
 
             const { data: upcomingOrder } = await supabaseAdmin
                 .from('upcoming_orders')
-                .select('id, client_id')
+                .select('id, client_id, service_type')
                 .eq('order_number', orderNumber)
                 .maybeSingle();
 
-            foundOrder = upcomingOrder;
+            foundOrder = upcomingOrder as FoundOrder | null;
 
             if (!foundOrder) {
                 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
                 if (uuidRegex.test(orderNumber)) {
                     const { data: upcomingById } = await supabaseAdmin
                         .from('upcoming_orders')
-                        .select('id, client_id')
+                        .select('id, client_id, service_type')
                         .eq('id', orderNumber)
                         .maybeSingle();
-                    foundOrder = upcomingById;
+                    foundOrder = upcomingById as FoundOrder | null;
                 }
             }
         }
@@ -100,6 +104,8 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
 
         const orderId = foundOrder.id;
         const clientId = foundOrder.client_id;
+        /** One instant per submit — image stamps and `actual_delivery_date` for non-produce orders. */
+        const uploadTime = new Date();
 
         let publicUrls: string[];
 
@@ -113,12 +119,11 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
             for (let i = 0; i < files.length; i++) {
                 const f = files[i];
                 const rawBuffer = Buffer.from(await f.arrayBuffer());
-                const { buffer, stampedAtIso, contentType, fileExtension } = await stampTimestampOnImageBuffer(
+                const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
                     rawBuffer,
                     f.type || 'image/jpeg',
-                    new Date()
+                    uploadTime
                 );
-                if (i === 0) proofTimeIso = stampedAtIso;
                 const key = `proof-${orderNumber}-${Date.now()}-${i + 1}.${fileExtension}`;
                 await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
                 publicUrls.push(`${baseUrl}/${key}`);
@@ -142,11 +147,27 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
             };
         }
 
+        if (isProduceServiceType(foundOrder.service_type)) {
+            const fin = await applyProduceProofToOrderRow(supabaseAdmin, orderId, publicUrls, {
+                keepScheduledDate: true,
+                proofTime: uploadTime,
+            });
+            if (!fin.success) {
+                return { success: false, error: fin.error || 'Failed to update produce order' };
+            }
+            await supabaseAdmin.from('stops').update({ proof_url: proofDb.proof_of_delivery_url }).eq('order_id', orderId);
+            return {
+                success: true,
+                urls: publicUrls,
+                url: publicUrls[0],
+            };
+        }
+
         const updateData = {
             ...proofDb,
             ...ordersRowTouch(),
             status: 'billing_pending',
-            actual_delivery_date: proofTimeIso ?? new Date().toISOString(),
+            actual_delivery_date: uploadTime.toISOString(),
         };
 
         const { error: updateError } = await supabaseAdmin.from('orders').update(updateData).eq('id', orderId);
@@ -158,7 +179,7 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
                 return {
                     success: false,
                     error:
-                        'Order update blocked by a database trigger: public.orders uses last_updated, but the trigger function update_updated_at_column() still assigns NEW.updated_at. Fix it in Postgres (see sql/fix_update_updated_at_trigger_orders_last_updated.sql) or your team’s migration.',
+                        'Order update blocked by a database trigger: public.orders uses last_updated, but the trigger function update_updated_at_column() still assigns NEW.updated_at. Fix it in Postgres (see sql/fix_update_updated_at_trigger_orders_last_updated.sql) or your team\'s migration.',
                 };
             }
             return { success: false, error: 'Failed to update order status' };
@@ -168,7 +189,7 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
 
         const { data: orderDetails } = await supabaseAdmin
             .from('orders')
-            .select('client_id, total_value, actual_delivery_date')
+            .select('client_id, total_value, bill_amount, actual_delivery_date, order_number')
             .eq('id', orderId)
             .single();
 
@@ -186,13 +207,14 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
                 .maybeSingle();
 
             if (!existingBilling) {
+                const billingAmount = orderDetails.bill_amount ?? orderDetails.total_value ?? 0;
                 await supabaseAdmin.from('billing_records').insert([
                     {
                         id: randomUUID(),
                         client_id: orderDetails.client_id,
                         order_id: orderId,
                         status: 'pending',
-                        amount: orderDetails.total_value || 0,
+                        amount: billingAmount,
                         navigator: client?.navigator_id || null,
                         remarks: 'Auto-generated upon proof upload',
                     },
@@ -218,6 +240,13 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
         }
 
         revalidatePath('/admin');
+        revalidatePath('/orders');
+        revalidatePath(`/orders/${orderId}`);
+        revalidatePath(`/delivery/${orderId}`);
+        revalidatePath(`/delivery/${encodeURIComponent(orderNumber)}`);
+        if (orderDetails?.order_number != null && String(orderDetails.order_number).trim() !== '') {
+            revalidatePath(`/delivery/${String(orderDetails.order_number)}`);
+        }
         sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
 
         return {

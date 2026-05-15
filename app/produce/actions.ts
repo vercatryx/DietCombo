@@ -1,6 +1,5 @@
 'use server';
 
-import { uploadFile } from '@/lib/storage';
 import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
 import { saveDeliveryProofUrlAndProcessOrder, getDefaultOrderTemplate, getDefaultVendorId } from '@/lib/actions';
@@ -17,16 +16,16 @@ import {
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
-import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
 import { ordersRowTouch } from '@/lib/orders-row-touch';
-import { collectImageFilesFromFormData, proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
+import { proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
 import {
     addCalendarDaysAppTz,
     getProduceOrderRosterWeekSundayKey,
     isDateKeyInRosterWeek,
 } from '@/lib/produce-roster-week';
+import { isProduceServiceType } from '@/lib/isProduceServiceType';
 
-async function applyProduceProofToOrderRow(
+export async function applyProduceProofToOrderRow(
     supabaseAdmin: any,
     orderId: string,
     proofUrls: string[],
@@ -139,147 +138,170 @@ async function applyProduceProofToOrderRow(
     return { success: true, clientId: orderDetails?.client_id };
 }
 
-export async function processProduceProof(formData: FormData) {
-    const files = collectImageFilesFromFormData(formData);
-    const orderNumber = formData.get('orderNumber') as string;
-    const testUrl = formData.get('testUrl') as string | null;
-    const testUrlsMulti = formData.getAll('testUrls').filter((t): t is string => typeof t === 'string' && t.trim() !== '');
-    let proofTimeIso: string | null = null;
+async function getProduceVerifyWeekMondayLabel(): Promise<string> {
+    const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
+    const mondayKey = addCalendarDaysAppTz(rosterSun, 1);
+    const mondayAnchor = easternWallClockToUtcInstant(mondayKey, 12, 0, 0, 0);
+    return formatInAppTz(mondayAnchor, {
+        timeZone: APP_TIMEZONE,
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+    });
+}
+
+const SCAN_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve legacy `/produce/[scanId]` links to a **Driver Delivery** path segment:
+ * `/delivery/{segment}` where `segment` is the Produce order number when possible, else order UUID.
+ * Accepts Produce **order id**, **order #**, or legacy **client id** (only when a matching pending Produce order exists).
+ */
+export async function getProduceScanContext(scanId: string): Promise<{
+    success: boolean;
+    /** Pass to `redirect(\`/delivery/${encodeURIComponent(segment)}\`)`. */
+    deliveryPathSegment?: string;
+    clientName?: string;
+    error?: string;
+}> {
+    const trimmed = String(scanId ?? '').trim();
+    if (!trimmed) {
+        return { success: false, error: 'Missing id' };
+    }
 
     const supabaseAdmin = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         getSupabaseDbApiKey()!
     );
 
-    const testUrlList: string[] =
-        testUrlsMulti.length > 0
-            ? testUrlsMulti.map((t) => t.trim())
-            : testUrl
-              ? [String(testUrl).trim()]
-              : [];
+    const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
 
-    if (files.length === 0 && testUrlList.length === 0) {
-        console.error('[Produce Debug] processProduceProof: no files or test URLs', { orderNumber });
-        return { success: false, error: 'Missing image(s) or test URL(s) or order number' };
-    }
-    if (!orderNumber) {
-        return { success: false, error: 'Missing order number' };
-    }
+    const buildClientPayload = async (clientId: string) => {
+        const { data: client, error: clientError } = await supabaseAdmin
+            .from('clients')
+            .select('full_name')
+            .eq('id', clientId)
+            .single();
+        if (clientError || !client) return { ok: false as const, error: 'Client not found' };
+        return { ok: true as const, client: { full_name: client.full_name || 'Client' } };
+    };
+
+    const attachOrderIfProducePending = async (ord: {
+        id: string;
+        client_id: string;
+        service_type: string;
+        status: string;
+        scheduled_delivery_date: unknown;
+        order_number?: unknown;
+    }) => {
+        if (!isProduceServiceType(ord.service_type)) {
+            return { success: false, error: 'This link is not for a Produce order.' };
+        }
+        if (String(ord.status).toLowerCase() !== 'pending') {
+            return { success: false, error: 'This produce order is not awaiting proof (it may already be processed).' };
+        }
+        const dk = String(ord.scheduled_delivery_date ?? '').slice(0, 10);
+        if (!isDateKeyInRosterWeek(dk, rosterSun)) {
+            return {
+                success: false,
+                error: "This produce order is not for the current delivery week. Use the current week's label or contact support.",
+            };
+        }
+        const built = await buildClientPayload(ord.client_id);
+        if (!built.ok) return { success: false, error: built.error };
+        const seg =
+            ord.order_number != null && String(ord.order_number).trim() !== ''
+                ? String(ord.order_number)
+                : ord.id;
+        return { success: true, deliveryPathSegment: seg, clientName: built.client.full_name };
+    };
 
     try {
-        // 1. Verify Order matches
-        let table: 'orders' | 'upcoming_orders' = 'orders';
-        let foundOrder: { id: string; client_id: string } | null = null;
-
-        // Try finding in orders
-        const { data: orderData } = await supabaseAdmin
-            .from('orders')
-            .select('id, client_id')
-            .eq('order_number', orderNumber)
-            .maybeSingle();
-
-        foundOrder = orderData;
-
-        // If not found by number, try ID
-        if (!foundOrder) {
-            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-            if (uuidRegex.test(orderNumber)) {
-                const { data: orderById } = await supabaseAdmin
-                    .from('orders')
-                    .select('id, client_id')
-                    .eq('id', orderNumber)
-                    .maybeSingle();
-                foundOrder = orderById;
-            }
-        }
-
-        // If still not found, try UPCOMING orders
-        if (!foundOrder) {
-            table = 'upcoming_orders';
-
-            const { data: upcomingOrder } = await supabaseAdmin
-                .from('upcoming_orders')
-                .select('id, client_id')
-                .eq('order_number', orderNumber)
+        if (SCAN_UUID_RE.test(trimmed)) {
+            const { data: ord, error: ordErr } = await supabaseAdmin
+                .from('orders')
+                .select('id, client_id, service_type, status, scheduled_delivery_date, order_number')
+                .eq('id', trimmed)
                 .maybeSingle();
-
-            foundOrder = upcomingOrder;
-
-            // Try ID for upcoming if number failed
-            if (!foundOrder) {
-                const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-                if (uuidRegex.test(orderNumber)) {
-                    const { data: upcomingById } = await supabaseAdmin
-                        .from('upcoming_orders')
-                        .select('id, client_id')
-                        .eq('id', orderNumber)
-                        .maybeSingle();
-                    foundOrder = upcomingById;
-                }
+            if (ordErr) {
+                console.error('[getProduceScanContext] order lookup', ordErr);
+                return { success: false, error: 'Failed to look up order' };
             }
-        }
-
-        if (!foundOrder) {
-            console.error(`[Produce Debug] Order not found for OrderNumber: "${orderNumber}" in orders or upcoming_orders`);
-            return { success: false, error: 'Order not found' };
-        }
-
-        const orderId = foundOrder.id;
-
-        let publicUrls: string[];
-
-        if (testUrlList.length > 0) {
-            publicUrls = testUrlList;
-        } else {
-            const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
-            const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
-            publicUrls = [];
-
-            for (let i = 0; i < files.length; i++) {
-                const f = files[i];
-                const rawBuffer = Buffer.from(await f.arrayBuffer());
-                const { buffer, stampedAtIso, contentType, fileExtension } = await stampTimestampOnImageBuffer(
-                    rawBuffer,
-                    f.type || 'image/jpeg',
-                    new Date()
-                );
-                if (i === 0) proofTimeIso = stampedAtIso;
-                const key = `produce-proof-${orderNumber}-${Date.now()}-${i + 1}.${fileExtension}`;
-                await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
-                publicUrls.push(`${baseUrl}/${key}`);
+            if (ord) {
+                return attachOrderIfProducePending(ord);
             }
-        }
-
-        if (table === 'upcoming_orders') {
-            const result = await saveDeliveryProofUrlAndProcessOrder(orderId, 'upcoming', publicUrls);
-            if (!result.success) {
-                return { success: false, error: result.error || 'Failed to process order' };
+            const legacy = await getClientForProduce(trimmed);
+            if (!legacy.success || !legacy.client) {
+                return { success: false, error: legacy.error || 'Client not found' };
             }
-            revalidatePath('/admin');
-            sendDeliveryNotificationIfEnabled(supabaseAdmin, foundOrder.client_id).catch(() => {});
-            return { success: true, urls: publicUrls, url: publicUrls[0] };
+            const { data: prows } = await supabaseAdmin
+                .from('orders')
+                .select('id, order_number, scheduled_delivery_date, service_type')
+                .eq('client_id', trimmed)
+                .eq('status', 'pending')
+                .order('created_at', { ascending: false })
+                .limit(25);
+            const pend = (prows || []).find(
+                (o) =>
+                    isProduceServiceType(o.service_type) &&
+                    isDateKeyInRosterWeek(String(o.scheduled_delivery_date ?? '').slice(0, 10), rosterSun)
+            );
+            if (!pend) {
+                return {
+                    success: false,
+                    error:
+                        'No pending Produce order for this client this week. Use Driver Delivery and enter the order number from the label.',
+                };
+            }
+            const seg =
+                pend.order_number != null && String(pend.order_number).trim() !== ''
+                    ? String(pend.order_number)
+                    : pend.id;
+            return { success: true, deliveryPathSegment: seg, clientName: legacy.client.full_name };
         }
 
-        const proofUploadTime = proofTimeIso ? new Date(proofTimeIso) : new Date();
-        const fin = await applyProduceProofToOrderRow(supabaseAdmin, orderId, publicUrls, {
-            keepScheduledDate: false,
-            proofTime: proofUploadTime
-        });
-        if (!fin.success) {
-            return { success: false, error: fin.error || 'Failed to update order' };
+        if (/^\d+$/.test(trimmed)) {
+            const n = parseInt(trimmed, 10);
+            const { data: rows, error: numErr } = await supabaseAdmin
+                .from('orders')
+                .select('id, client_id, service_type, status, scheduled_delivery_date, order_number')
+                .eq('order_number', n)
+                .eq('status', 'pending')
+                .order('created_at', { ascending: false })
+                .limit(25);
+            if (numErr) {
+                console.error('[getProduceScanContext] order number lookup', numErr);
+                return { success: false, error: 'Failed to look up order number' };
+            }
+            const match = (rows || []).find(
+                (o) =>
+                    isProduceServiceType(o.service_type) &&
+                    isDateKeyInRosterWeek(String(o.scheduled_delivery_date ?? '').slice(0, 10), rosterSun)
+            );
+            if (match) {
+                return attachOrderIfProducePending(match);
+            }
+            return {
+                success: false,
+                error: `No pending Produce order #${n} for the current delivery week. Check the order number or use the QR on this week's label.`,
+            };
         }
 
-        return { success: true, urls: publicUrls, url: publicUrls[0] };
-    } catch (error: any) {
-        console.error('Error processing produce:', error);
-        return { success: false, error: error.message };
+        return {
+            success: false,
+            error: 'Invalid link. Use the QR on the label (order link) or a valid client id.',
+        };
+    } catch (e: any) {
+        console.error('[getProduceScanContext]', e);
+        return { success: false, error: e?.message || 'Failed to load produce scan context' };
     }
 }
 
 /**
  * Load client info for the produce flow (no order created).
  * `deliveryDateLabel` is the Monday of the current roster week — context before any proof exists.
- * Order timing after upload uses the proof submit time (see uploadProduceProofOnly / createProduceOrderWithProof).
+ * Proof timing after upload is handled by the shared Driver Delivery flow (`processDeliveryProofFromFormData`).
  */
 export async function getClientForProduce(clientId: string) {
     const supabaseAdmin = createClient(
@@ -299,16 +321,7 @@ export async function getClientForProduce(clientId: string) {
             return { success: false, error: 'Client not found' };
         }
 
-        const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
-        const mondayKey = addCalendarDaysAppTz(rosterSun, 1);
-        const mondayAnchor = easternWallClockToUtcInstant(mondayKey, 12, 0, 0, 0);
-        const deliveryDateLabel = formatInAppTz(mondayAnchor, {
-            timeZone: APP_TIMEZONE,
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-            year: 'numeric',
-        });
+        const deliveryDateLabel = await getProduceVerifyWeekMondayLabel();
 
         return {
             success: true,
@@ -328,131 +341,8 @@ export async function getClientForProduce(clientId: string) {
 }
 
 /**
- * Upload produce proof image only (no order required).
- * Returns the public URL for use when creating the order.
- */
-export async function uploadProduceProofOnly(formData: FormData) {
-    const files = collectImageFilesFromFormData(formData);
-    const clientId = formData.get('clientId') as string;
-
-    if (files.length === 0 || !clientId) {
-        return { success: false, error: 'Missing file(s) or client ID' };
-    }
-
-    try {
-        const publicUrlBase = process.env.NEXT_PUBLIC_R2_DOMAIN || 'https://storage.thedietfantasy.com';
-        const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
-        const urls: string[] = [];
-        /** Single instant for this submit — used for order `actual_delivery_date` (not EXIF on the file). */
-        const uploadTime = new Date();
-        const proofCapturedAtIso = uploadTime.toISOString();
-
-        for (let i = 0; i < files.length; i++) {
-            const f = files[i];
-            const rawBuffer = Buffer.from(await f.arrayBuffer());
-            const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
-                rawBuffer,
-                f.type || 'image/jpeg',
-                uploadTime
-            );
-            const key = `produce-proof-${clientId}-${Date.now()}-${i + 1}.${fileExtension}`;
-            await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
-            urls.push(`${baseUrl}/${key}`);
-        }
-
-        return { success: true, urls, url: urls[0], proofCapturedAtIso };
-    } catch (error: any) {
-        console.error('[Upload Produce Proof Only] Error:', error);
-        return { success: false, error: error.message || 'Upload failed' };
-    }
-}
-
-/**
- * Create a Produce order with delivery proof URL already set.
- * Called only after the image has been uploaded to prevent unfulfilled orders.
- */
-export async function createProduceOrderWithProof(
-    clientId: string,
-    proofUrls: string[],
-    proofCapturedAtIso?: string | null
-) {
-    const supabaseAdmin = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        getSupabaseDbApiKey()!
-    );
-
-    try {
-        const urls = proofUrls.map((u) => String(u).trim()).filter(Boolean);
-        if (urls.length === 0) {
-            return { success: false, error: 'At least one proof image URL is required' };
-        }
-
-        const { data: client, error: clientError } = await supabaseAdmin
-            .from('clients')
-            .select('id, full_name, address, sign_token, navigator_id')
-            .eq('id', clientId)
-            .single();
-
-        if (clientError || !client) {
-            return { success: false, error: 'Client not found' };
-        }
-
-        /** Same roster Sunday as weekly cron / `getProduceOrderRosterWeekSundayKey` (not calendar-week Sunday). */
-        const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
-        const { data: pendingRows } = await supabaseAdmin
-            .from('orders')
-            .select('id, order_number, scheduled_delivery_date')
-            .eq('client_id', clientId)
-            .eq('service_type', 'Produce')
-            .eq('status', 'pending')
-            .order('created_at', { ascending: false })
-            .limit(20);
-
-        const pending = (pendingRows || []).find((o) =>
-            isDateKeyInRosterWeek(String(o.scheduled_delivery_date ?? '').slice(0, 10), rosterSun)
-        );
-
-        if (!pending) {
-            return {
-                success: false,
-                error:
-                    'No weekly produce order was found for this client. Orders are created automatically after each week\'s cutoff. Please contact support if you need help.'
-            };
-        }
-
-        const proofTime =
-            proofCapturedAtIso && !Number.isNaN(Date.parse(proofCapturedAtIso))
-                ? new Date(proofCapturedAtIso)
-                : new Date();
-        const fin = await applyProduceProofToOrderRow(supabaseAdmin, pending.id, urls, {
-            keepScheduledDate: true,
-            proofTime,
-        });
-        if (!fin.success) {
-            return { success: false, error: fin.error || 'Failed to update produce order' };
-        }
-
-        return {
-            success: true,
-            order: {
-                id: pending.id,
-                orderNumber: pending.order_number,
-                clientName: client.full_name,
-                address: client.address || 'Unknown Address',
-                deliveryDate: String(pending.scheduled_delivery_date ?? '').slice(0, 10),
-                alreadyDelivered: true,
-                clientSignToken: client.sign_token || null
-            }
-        };
-    } catch (error: any) {
-        console.error('[Create Produce Order With Proof] Error:', error);
-        return { success: false, error: error.message || 'Failed to create produce order' };
-    }
-}
-
-/**
  * Create a new Produce order for a client (legacy: creates order upfront without proof).
- * Prefer getClientForProduce + uploadProduceProofOnly + createProduceOrderWithProof to avoid unfulfilled orders.
+ * Prefer weekly auto-orders plus Driver Delivery proof upload so orders are not left pending without proof.
  */
 export async function createProduceOrder(clientId: string) {
     const supabaseAdmin = createClient(

@@ -12,7 +12,7 @@ export default function ProduceManualEntryPage() {
     function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         if (orderNum.trim()) {
-            router.push(`/produce/${orderNum.trim()}`);
+            router.push(`/delivery/${encodeURIComponent(orderNum.trim())}`);
         }
     }
 
@@ -25,7 +25,9 @@ export default function ProduceManualEntryPage() {
                             <Package size={40} />
                         </div>
                         <h1 className="text-title">Produce Order Processing</h1>
-                        <p className="text-subtitle" style={{ marginTop: '0.5rem' }}>Enter Client ID to process produce order.</p>
+                        <p className="text-subtitle" style={{ marginTop: '0.5rem' }}>
+                            Scan the label QR, or enter your Produce order number or order id (legacy: client id). You will use the same Driver Delivery page as other orders.
+                        </p>
                     </div>
 
                     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -34,7 +36,7 @@ export default function ProduceManualEntryPage() {
                                 type="text"
                                 value={orderNum}
                                 onChange={(e) => setOrderNum(e.target.value)}
-                                placeholder="Enter Client ID"
+                                placeholder="Order #, order id, or client id"
                                 style={{
                                     width: '100%',
                                     backgroundColor: 'var(--bg-panel)',
