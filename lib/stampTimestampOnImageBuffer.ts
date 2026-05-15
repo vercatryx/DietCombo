@@ -1,121 +1,30 @@
 import { createRequire } from 'module';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import sharp from 'sharp';
+import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
+import * as exifr from 'exifr';
+import { formatProofStampText } from '@/lib/formatProofStampText';
 
 const require = createRequire(import.meta.url);
 
-/**
- * Sharp SVG compositing uses librsvg, which loads Fontconfig for generic/fallback font names.
- * On macOS, FONTCONFIG_FILE is sometimes unset or empty, which yields:
- * "Fontconfig error: Cannot load default config file: No such file: (null)"
- * Point at a real fonts.conf when one exists; embedded @font-face handles the actual glyphs.
- */
-function ensureFontconfigEnv(): void {
-    const existing = process.env.FONTCONFIG_FILE;
-    if (existing && existing.trim() !== '') return;
-    const candidates =
-        process.platform === 'darwin'
-            ? ['/opt/homebrew/etc/fonts/fonts.conf', '/usr/local/etc/fonts/fonts.conf', '/etc/fonts/fonts.conf']
-            : ['/etc/fonts/fonts.conf', '/usr/share/fontconfig/fonts.conf'];
-    for (const p of candidates) {
-        if (existsSync(p)) {
-            process.env.FONTCONFIG_FILE = p;
-            return;
-        }
-    }
-}
-
-ensureFontconfigEnv();
-import * as exifr from 'exifr';
-import { formatProofStampText } from '@/lib/formatProofStampText';
+const PROOF_STAMP_FAMILY = 'ProofStampInter';
 
 export type StampTimestampResult = {
   buffer: Buffer;
   stampedAtIso: string;
   source: 'exif' | 'upload_time';
-  /** MIME type of `buffer` bytes (stamped output is always jpeg or png). */
   contentType: string;
-  /** Filename suffix without dot (e.g. jpg, png). */
   fileExtension: string;
 };
 
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * Latin 600 — embedded for consistent branding when Sharp/librsvg loads the face.
- * Vercel/serverless output file tracing often omits `node_modules/@fontsource/inter/files/*`,
- * so we ship the same woff2 under `lib/fonts/` (see next.config `outputFileTracingIncludes`)
- * and try that path first. Some librsvg builds ignore @font-face; we still list system fallbacks.
- */
-let cachedInterLatin600FontB64: { woff2: string | null; woff: string | null } | undefined;
-
-/** Prefer repo-bundled font (always on disk in prod) then @fontsource in node_modules. */
-function interLatin600Woff2Candidates(): string[] {
-  const out: string[] = [join(process.cwd(), 'lib/fonts/inter-latin-600-normal.woff2')];
-  try {
-    const pkgJson = require.resolve('@fontsource/inter/package.json');
-    out.push(join(dirname(pkgJson), 'files', 'inter-latin-600-normal.woff2'));
-  } catch {
-    out.push(join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2'));
-  }
-  return out;
-}
-
-function interLatin600WoffCandidates(): string[] {
-  const out: string[] = [];
-  try {
-    const pkgJson = require.resolve('@fontsource/inter/package.json');
-    out.push(join(dirname(pkgJson), 'files', 'inter-latin-600-normal.woff'));
-  } catch {
-    out.push(join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff'));
-  }
-  return out;
-}
-
-function getProofStampFontFaceCss(): string {
-  if (cachedInterLatin600FontB64 === undefined) {
-    let b2: string | null = null;
-    let bw: string | null = null;
-    for (const p of interLatin600Woff2Candidates()) {
-      try {
-        if (existsSync(p)) {
-          b2 = readFileSync(p).toString('base64');
-          break;
-        }
-      } catch {
-        /* try next candidate */
-      }
-    }
-    for (const p of interLatin600WoffCandidates()) {
-      try {
-        if (existsSync(p)) {
-          bw = readFileSync(p).toString('base64');
-          break;
-        }
-      } catch {
-        /* try next candidate */
-      }
-    }
-    cachedInterLatin600FontB64 = { woff2: b2, woff: bw };
-  }
-  const { woff2, woff } = cachedInterLatin600FontB64;
-  if (!woff2 && !woff) return '';
-  const src = [
-    woff2 ? `url('data:font/woff2;base64,${woff2}') format('woff2')` : '',
-    woff ? `url('data:font/woff;base64,${woff}') format('woff')` : '',
-  ]
-    .filter(Boolean)
-    .join(',');
-  return `@font-face{font-family:'ProofStamp';src:${src};font-weight:600;font-style:normal;}`;
-}
+/** Same fields as used when compositing; shared with async `after()` jobs. */
+export type ProofStampMeta = {
+  stampDate: Date;
+  stampedAtIso: string;
+  source: 'exif' | 'upload_time';
+};
 
 function stampedOutputMeta(mimeType: string): Pick<StampTimestampResult, 'contentType' | 'fileExtension'> {
   const lower = (mimeType || '').toLowerCase();
@@ -125,7 +34,6 @@ function stampedOutputMeta(mimeType: string): Pick<StampTimestampResult, 'conten
   return { contentType: 'image/jpeg', fileExtension: 'jpg' };
 }
 
-/** When we skip stamping and return the original buffer, metadata must match actual bytes. */
 function passthroughMeta(mimeType: string): Pick<StampTimestampResult, 'contentType' | 'fileExtension'> {
   const lower = (mimeType || '').toLowerCase();
   if (lower.includes('png')) return { contentType: 'image/png', fileExtension: 'png' };
@@ -136,7 +44,41 @@ function passthroughMeta(mimeType: string): Pick<StampTimestampResult, 'contentT
   return { contentType: 'image/jpeg', fileExtension: 'jpg' };
 }
 
-/** Approximate rendered width for the stamped label (Inter 600; avoids a full-width pill). */
+/** Prefer font next to this module, then cwd (Vercel), then @fontsource. */
+function interLatin600Woff2Candidates(): string[] {
+  const fromModule = join(dirname(fileURLToPath(import.meta.url)), 'fonts', 'inter-latin-600-normal.woff2');
+  const out: string[] = [
+    fromModule,
+    join(process.cwd(), 'lib/fonts/inter-latin-600-normal.woff2'),
+  ];
+  try {
+    const pkgJson = require.resolve('@fontsource/inter/package.json');
+    out.push(join(dirname(pkgJson), 'files', 'inter-latin-600-normal.woff2'));
+  } catch {
+    out.push(join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2'));
+  }
+  return out;
+}
+
+let proofFontRegistrationAttempted = false;
+
+function proofStampFontFamilyOrFallback(): string {
+  if (!proofFontRegistrationAttempted) {
+    proofFontRegistrationAttempted = true;
+    for (const p of interLatin600Woff2Candidates()) {
+      if (!existsSync(p)) continue;
+      try {
+        GlobalFonts.registerFromPath(p, PROOF_STAMP_FAMILY);
+        break;
+      } catch (e) {
+        console.warn('[proof stamp] GlobalFonts.registerFromPath failed', p, e);
+      }
+    }
+  }
+  return GlobalFonts.has(PROOF_STAMP_FAMILY) ? PROOF_STAMP_FAMILY : 'sans-serif';
+}
+
+/** Approximate rendered width for the stamped label (layout only). */
 function estimateProofStampTextWidthPx(label: string, fontSize: number): number {
   let em = 0;
   for (const ch of label) {
@@ -153,11 +95,8 @@ function estimateProofStampTextWidthPx(label: string, fontSize: number): number 
 async function readExifTimestamp(buffer: Buffer): Promise<Date | null> {
   try {
     const data: any = await exifr.parse(buffer, {
-      // Try to keep this fast and targeted.
       tiff: true,
       exif: true,
-      // Some cameras store timezone offset tags; if present exifr will apply it to Date fields.
-      // If not present, Date fields are still useful but represent a "local wall time" without a known timezone.
       translateKeys: false,
     });
 
@@ -171,7 +110,6 @@ async function readExifTimestamp(buffer: Buffer): Promise<Date | null> {
     if (!candidate) return null;
     if (candidate instanceof Date && !Number.isNaN(candidate.getTime())) return candidate;
 
-    // Some EXIF parsers can emit strings like "2026:04:30 09:17:12"
     if (typeof candidate === 'string') {
       const m = candidate.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
       if (m) {
@@ -194,177 +132,146 @@ async function readExifTimestamp(buffer: Buffer): Promise<Date | null> {
   }
 }
 
-type StampInfo = {
-  stampDate: Date;
-  stampedAtIso: string;
-  source: StampTimestampResult['source'];
-};
+type StampInfo = ProofStampMeta;
 
 /**
- * Decode through Sharp once (JPEG out) so metadata/composite works for HEIC, odd JPEGs,
- * and buffers where metadata() reports 0×0 until full decode.
+ * EXIF capture time (if any) + upload instant metadata for the pill text.
+ * Call on the **original** upload bytes before normalizing to JPEG (EXIF may be stripped).
  */
-async function decodeForStamping(input: Buffer): Promise<Buffer | null> {
+export async function resolveProofStampMeta(
+  rawBuffer: Buffer,
+  uploadTime: Date = new Date()
+): Promise<ProofStampMeta> {
+  const exifDate = await readExifTimestamp(rawBuffer);
+  const stampDate = exifDate ?? uploadTime;
+  return {
+    stampDate,
+    stampedAtIso: stampDate.toISOString(),
+    source: exifDate ? 'exif' : 'upload_time',
+  };
+}
+
+/**
+ * Auto-orient and encode as JPEG for storage + stamping (single Sharp decode path).
+ */
+export async function normalizeProofImageToJpeg(rawBuffer: Buffer): Promise<Buffer | null> {
   try {
-    return await sharp(input, { failOn: 'none' }).rotate().jpeg({ quality: 92 }).toBuffer();
+    return await sharp(rawBuffer, { failOn: 'none' }).rotate().jpeg({ quality: 92 }).toBuffer();
   } catch {
     return null;
   }
 }
 
-async function stampOntoDecodedBuffer(
-  input: Buffer,
-  mimeType: string,
-  stampInfo: StampInfo,
-  triedDecodeFallback: boolean
-): Promise<StampTimestampResult | null> {
+/**
+ * Skia canvas text + Sharp composite (no librsvg SVG text — reliable on Vercel).
+ * `jpegBuffer` must already be oriented (e.g. from `normalizeProofImageToJpeg`).
+ */
+export async function stampPreparedJpeg(jpegBuffer: Buffer, meta: ProofStampMeta): Promise<Buffer | null> {
+  const stampInfo: StampInfo = meta;
+  try {
+    return await compositeStampOntoJpegBuffer(jpegBuffer, stampInfo);
+  } catch (e) {
+    console.warn('[proof stamp] stampPreparedJpeg failed', e);
+    return null;
+  }
+}
+
+async function compositeStampOntoJpegBuffer(jpegBuffer: Buffer, stampInfo: StampInfo): Promise<Buffer | null> {
   const { stampDate, stampedAtIso, source } = stampInfo;
 
-  const image = sharp(input, { failOn: 'none' }).rotate();
+  const image = sharp(jpegBuffer, { failOn: 'none' });
   const imageMeta = await image.metadata();
   const width = imageMeta.width ?? 0;
   const height = imageMeta.height ?? 0;
-
-  if (!width || !height) {
-    if (!triedDecodeFallback) {
-      const decoded = await decodeForStamping(input);
-      if (decoded) {
-        return stampOntoDecodedBuffer(decoded, 'image/jpeg', stampInfo, true);
-      }
-    }
-    return null;
-  }
+  if (!width || !height) return null;
 
   const minDim = Math.min(width, height);
   const fontSize = Math.max(14, Math.min(34, Math.round(minDim * 0.035)));
   const pad = Math.max(10, Math.round(fontSize * 0.75));
   const boxH = Math.round(fontSize * 1.7);
-
-  const stampLabelRaw = formatProofStampText(stampDate);
-  const text = escapeXml(stampLabelRaw);
-  const fontCss = getProofStampFontFaceCss();
-
+  const label = formatProofStampText(stampDate);
   const pillPadX = Math.round(fontSize * 0.65);
-  const innerTextW = estimateProofStampTextWidthPx(stampLabelRaw, fontSize);
+  const innerTextW = estimateProofStampTextWidthPx(label, fontSize);
   const pillW = Math.min(width - pad * 2, innerTextW + pillPadX * 2);
   const pillX = width - pad - pillW;
-  const textX = width - pad - pillPadX;
+  const pillY = height - boxH - pad;
 
-  const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-        <defs>
-          <style type="text/css">
-            <![CDATA[
-              ${fontCss}
-              /*
-               * ProofStamp when embedded bytes are bundled; otherwise librsvg/Pango resolves the
-               * first available system sans (Linux images often ship DejaVu or Liberation).
-               */
-              .proof-stamp-text {
-                font-family: 'ProofStamp', 'DejaVu Sans', 'Liberation Sans', 'Helvetica Neue', Helvetica, Arial, ui-sans-serif, sans-serif;
-              }
-            ]]>
-          </style>
-        </defs>
-        <g>
-          <rect
-            x="${pillX}"
-            y="${height - boxH - pad}"
-            width="${pillW}"
-            height="${boxH}"
-            rx="${Math.round(fontSize * 0.6)}"
-            ry="${Math.round(fontSize * 0.6)}"
-            fill="rgba(0,0,0,0.55)"
-          />
-          <text
-            class="proof-stamp-text"
-            font-size="${fontSize}"
-            font-weight="600"
-            fill="rgba(255,255,255,0.95)"
-            x="${textX}"
-            y="${height - pad - Math.round(boxH / 2)}"
-            text-anchor="end"
-          ><tspan dy="0.35em">${text}</tspan></text>
-        </g>
-      </svg>
-    `;
+  const overlay = createCanvas(pillW, boxH);
+  const ctx = overlay.getContext('2d');
+  const r = Math.round(fontSize * 0.6);
+  ctx.beginPath();
+  ctx.roundRect(0, 0, pillW, boxH, r);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fill();
 
-  const composited = image.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]);
+  const family = proofStampFontFamilyOrFallback();
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.font = `600 ${fontSize}px ${family}`;
+  ctx.fillText(label, pillW - pillPadX, boxH / 2);
 
-  const lower = (mimeType || '').toLowerCase();
-  const outputMeta = stampedOutputMeta(mimeType);
-  if (lower.includes('png')) {
-    return {
-      buffer: await composited.png().toBuffer(),
-      stampedAtIso,
-      source,
-      ...outputMeta
-    };
-  }
+  const overlayPng = overlay.toBuffer('image/png');
 
-  return {
-    buffer: await composited.jpeg({ quality: 92 }).toBuffer(),
-    stampedAtIso,
-    source,
-    ...outputMeta
-  };
+  return await image
+    .composite([{ input: overlayPng, left: pillX, top: pillY }])
+    .jpeg({ quality: 92 })
+    .toBuffer();
 }
 
 /**
- * Server-side stamping:
- * - Reads EXIF DateTimeOriginal/CreateDate when available
- * - Falls back to upload time
- * - Draws a bottom-right timestamp pill onto the image
- *
- * Order lifecycle (produce vs delivery) does not matter — all callers share this.
- * If the first pass cannot read dimensions or composite fails, we retry once after
- * decoding to JPEG so gallery/HEIC uploads match webcam JPEG behavior.
+ * Server-side stamping (synchronous path): read EXIF from original, normalize to JPEG, Skia text pill.
+ * Prefer `normalizeProofImageToJpeg` + `stampPreparedJpeg` + `after()` for faster uploads.
  */
 export async function stampTimestampOnImageBuffer(
   input: Buffer,
   mimeType: string,
   uploadTime: Date = new Date()
 ): Promise<StampTimestampResult> {
-  const exifDate = await readExifTimestamp(input);
-  const stampDate = exifDate ?? uploadTime;
-  const source: StampTimestampResult['source'] = exifDate ? 'exif' : 'upload_time';
-  const stampedAtIso = stampDate.toISOString();
-  const stampInfo: StampInfo = { stampDate, stampedAtIso, source };
+  const meta = await resolveProofStampMeta(input, uploadTime);
+  const { stampedAtIso, source } = meta;
 
   try {
-    const ok = await stampOntoDecodedBuffer(input, mimeType, stampInfo, false);
-    if (ok) return ok;
+    const decoded = await normalizeProofImageToJpeg(input);
+    if (!decoded) {
+      console.warn('[proof stamp] Could not decode to JPEG; uploading original image.', { mimeType });
+      return {
+        buffer: input,
+        stampedAtIso,
+        source,
+        ...passthroughMeta(mimeType),
+      };
+    }
 
-    console.warn('[proof stamp] Could not stamp after decode fallback; uploading original image.', {
-      mimeType
+    const out = await compositeStampOntoJpegBuffer(decoded, meta);
+    if (!out) {
+      console.warn('[proof stamp] Composite failed; uploading normalized JPEG without stamp.', { mimeType });
+      return {
+        buffer: decoded,
+        stampedAtIso,
+        source,
+        contentType: 'image/jpeg',
+        fileExtension: 'jpg',
+      };
+    }
+
+    return {
+      buffer: out,
+      stampedAtIso,
+      source,
+      contentType: 'image/jpeg',
+      fileExtension: 'jpg',
+    };
+  } catch (e) {
+    console.warn('[proof stamp] Server-side timestamp stamping failed; uploading original image.', {
+      mimeType,
+      err: e,
     });
     return {
       buffer: input,
       stampedAtIso,
       source,
-      ...passthroughMeta(mimeType)
-    };
-  } catch (e) {
-    try {
-      const decoded = await decodeForStamping(input);
-      if (decoded) {
-        const retry = await stampOntoDecodedBuffer(decoded, 'image/jpeg', stampInfo, true);
-        if (retry) return retry;
-      }
-    } catch {
-      /* fall through */
-    }
-
-    console.warn(
-      '[proof stamp] Server-side timestamp stamping failed; uploading original image.',
-      { mimeType, err: e }
-    );
-    return {
-      buffer: input,
-      stampedAtIso,
-      source,
-      ...passthroughMeta(mimeType)
+      ...passthroughMeta(mimeType),
     };
   }
 }
-

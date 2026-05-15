@@ -1,10 +1,15 @@
 // app/api/mobile/stop/proof/route.ts
 // POST: upload proof image for a stop (multipart file or JSON with dataUrl from camera).
 // Updates stops.proof_url and returns the public URL.
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { uploadFile } from "@/lib/storage";
-import { stampTimestampOnImageBuffer } from "@/lib/stampTimestampOnImageBuffer";
+import {
+    normalizeProofImageToJpeg,
+    resolveProofStampMeta,
+    stampPreparedJpeg,
+    stampTimestampOnImageBuffer,
+} from "@/lib/stampTimestampOnImageBuffer";
 import type { ProofUploadFormData } from "@/lib/proof-of-delivery-urls";
 
 export const runtime = 'nodejs';
@@ -82,21 +87,48 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: "Upload not configured" }, { status: 500 });
     }
 
-    // Stamp timestamp onto the image (prefer EXIF capture time; fall back to upload time).
-    const stamped = await stampTimestampOnImageBuffer(buffer, mimeType || "image/jpeg", new Date());
-    buffer = stamped.buffer;
-    // Note: we don't currently persist stampedAt/source for stops; the stamp itself is the record.
+    const uploadTime = new Date();
+    const meta = await resolveProofStampMeta(buffer, uploadTime);
+    const prepared = await normalizeProofImageToJpeg(buffer);
 
-    const key = `stop-proof-${stopId}-${Date.now()}.${stamped.fileExtension}`;
+    let key: string;
+    let uploadBody: Buffer;
+    let uploadContentType: string;
+
+    if (prepared) {
+        key = `stop-proof-${stopId}-${Date.now()}.jpg`;
+        uploadBody = prepared;
+        uploadContentType = "image/jpeg";
+    } else {
+        const stamped = await stampTimestampOnImageBuffer(buffer, mimeType || "image/jpeg", uploadTime);
+        key = `stop-proof-${stopId}-${Date.now()}.${stamped.fileExtension}`;
+        uploadBody = stamped.buffer;
+        uploadContentType = stamped.contentType;
+    }
 
     try {
-        await uploadFile(key, buffer, stamped.contentType, R2_DELIVERY_BUCKET);
+        await uploadFile(key, uploadBody, uploadContentType, R2_DELIVERY_BUCKET);
     } catch (err) {
         console.error("[mobile/stop/proof] Upload error:", err);
         return NextResponse.json({ ok: false, error: "Upload failed" }, { status: 500 });
     }
 
     const publicUrl = getPublicUrl(key);
+
+    if (prepared) {
+        const bucket = R2_DELIVERY_BUCKET;
+        const jpeg = prepared;
+        after(async () => {
+            try {
+                const stamped = await stampPreparedJpeg(jpeg, meta);
+                if (stamped && bucket) {
+                    await uploadFile(key, stamped, "image/jpeg", bucket);
+                }
+            } catch (e) {
+                console.error("[mobile/stop/proof] async stamp failed", key, e);
+            }
+        });
+    }
 
     const { error } = await supabase.from("stops").update({ proof_url: publicUrl }).eq("id", stopId);
     if (error) {

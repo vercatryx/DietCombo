@@ -1,12 +1,19 @@
 import { uploadFile } from '@/lib/storage';
 import { createClient } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
+import { after } from 'next/server';
 import { saveDeliveryProofUrlAndProcessOrder } from '@/lib/actions';
 import { roundCurrency } from '@/lib/utils';
 import { randomUUID } from 'crypto';
 import { getSupabaseDbApiKey } from '@/lib/supabase-env';
 import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
-import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
+import {
+    normalizeProofImageToJpeg,
+    resolveProofStampMeta,
+    stampPreparedJpeg,
+    stampTimestampOnImageBuffer,
+    type ProofStampMeta,
+} from '@/lib/stampTimestampOnImageBuffer';
 import { ordersRowTouch } from '@/lib/orders-row-touch';
 import {
     collectImageFilesFromFormData,
@@ -116,17 +123,49 @@ export async function processDeliveryProofFromFormData(formData: ProofUploadForm
             const baseUrl = publicUrlBase.endsWith('/') ? publicUrlBase.slice(0, -1) : publicUrlBase;
             publicUrls = [];
 
+            const deliveryBucket = process.env.R2_DELIVERY_BUCKET_NAME;
+            const batchTs = Date.now();
+            const stampAfterJobs: { key: string; jpeg: Buffer; meta: ProofStampMeta }[] = [];
+
             for (let i = 0; i < files.length; i++) {
                 const f = files[i];
                 const rawBuffer = Buffer.from(await f.arrayBuffer());
-                const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
-                    rawBuffer,
-                    f.type || 'image/jpeg',
-                    uploadTime
-                );
-                const key = `proof-${orderNumber}-${Date.now()}-${i + 1}.${fileExtension}`;
-                await uploadFile(key, buffer, contentType, process.env.R2_DELIVERY_BUCKET_NAME);
+                const mime = f.type || 'image/jpeg';
+                const meta = await resolveProofStampMeta(rawBuffer, uploadTime);
+                const prepared = await normalizeProofImageToJpeg(rawBuffer);
+
+                if (!prepared || !deliveryBucket) {
+                    const { buffer, contentType, fileExtension } = await stampTimestampOnImageBuffer(
+                        rawBuffer,
+                        mime,
+                        uploadTime
+                    );
+                    const key = `proof-${orderNumber}-${batchTs}-${i + 1}.${fileExtension}`;
+                    await uploadFile(key, buffer, contentType, deliveryBucket);
+                    publicUrls.push(`${baseUrl}/${key}`);
+                    continue;
+                }
+
+                const key = `proof-${orderNumber}-${batchTs}-${i + 1}.jpg`;
+                await uploadFile(key, prepared, 'image/jpeg', deliveryBucket);
                 publicUrls.push(`${baseUrl}/${key}`);
+                stampAfterJobs.push({ key, jpeg: prepared, meta });
+            }
+
+            if (stampAfterJobs.length > 0 && deliveryBucket) {
+                const bucket = deliveryBucket;
+                after(async () => {
+                    for (const job of stampAfterJobs) {
+                        try {
+                            const stamped = await stampPreparedJpeg(job.jpeg, job.meta);
+                            if (stamped) {
+                                await uploadFile(job.key, stamped, 'image/jpeg', bucket);
+                            }
+                        } catch (e) {
+                            console.error('[proof stamp after] failed', job.key, e);
+                        }
+                    }
+                });
             }
         }
 

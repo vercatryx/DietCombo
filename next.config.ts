@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  /** Native addon; Turbopack must not try to bundle the `.node` binary. */
+  serverExternalPackages: ["@napi-rs/canvas"],
   turbopack: {
     root: process.cwd(),
   },
