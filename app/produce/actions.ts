@@ -20,7 +20,11 @@ import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
 import { ordersRowTouch } from '@/lib/orders-row-touch';
 import { collectImageFilesFromFormData, proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
-import { addCalendarDaysAppTz, getRosterWeekStartSundayDateKey, isDateKeyInRosterWeek } from '@/lib/produce-roster-week';
+import {
+    addCalendarDaysAppTz,
+    getProduceOrderRosterWeekSundayKey,
+    isDateKeyInRosterWeek,
+} from '@/lib/produce-roster-week';
 
 async function applyProduceProofToOrderRow(
     supabaseAdmin: any,
@@ -122,6 +126,8 @@ async function applyProduceProofToOrderRow(
     }
 
     revalidatePath('/admin');
+    revalidatePath('/orders');
+    revalidatePath(`/orders/${orderId}`);
     const smsClientId = orderDetails?.client_id;
     if (smsClientId) {
         sendDeliveryNotificationIfEnabled(supabaseAdmin, smsClientId).catch(() => {});
@@ -289,7 +295,7 @@ export async function getClientForProduce(clientId: string) {
             return { success: false, error: 'Client not found' };
         }
 
-        const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+        const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
         const mondayKey = addCalendarDaysAppTz(rosterSun, 1);
         const mondayAnchor = easternWallClockToUtcInstant(mondayKey, 12, 0, 0, 0);
         const deliveryDateLabel = formatInAppTz(mondayAnchor, {
@@ -387,7 +393,8 @@ export async function createProduceOrderWithProof(
             return { success: false, error: 'Client not found' };
         }
 
-        const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+        /** Same roster Sunday as weekly cron / `getProduceOrderRosterWeekSundayKey` (not calendar-week Sunday). */
+        const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
         const { data: pendingRows } = await supabaseAdmin
             .from('orders')
             .select('id, order_number, scheduled_delivery_date')

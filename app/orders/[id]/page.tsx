@@ -4,6 +4,9 @@ import { notFound } from 'next/navigation';
 import { OrderDetailView } from '@/components/orders/OrderDetailView';
 import type { Metadata } from 'next';
 
+/** Always read fresh order row after proof upload / status changes (avoid stale RSC cache). */
+export const dynamic = 'force-dynamic';
+
 type Props = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
