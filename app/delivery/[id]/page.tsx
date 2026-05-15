@@ -6,6 +6,9 @@ import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import '../delivery.css';
 
+/** Driver delivery page must reflect latest proof URLs after produce upload. */
+export const dynamic = 'force-dynamic';
+
 type Props = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -131,6 +134,7 @@ export default async function OrderDeliveryPage({ params }: Props) {
         .eq('id', order.client_id)
         .single();
 
+    const proofUrls = orderRowProofUrls(order as any);
     const orderDetails = {
         id: order.id,
         orderNumber: order.order_number,
@@ -139,7 +143,8 @@ export default async function OrderDeliveryPage({ params }: Props) {
         clientPhone: client?.phone_number?.trim() || null,
         deliveryDate: order.scheduled_delivery_date,
         alreadyDelivered:
-            orderRowProofUrls(order as any).length > 0 || !!(order as any).delivery_proof_url,
+            proofUrls.length > 0 || !!(order as any).delivery_proof_url,
+        proofUrls,
         clientSignToken: client?.sign_token || null
     };
 

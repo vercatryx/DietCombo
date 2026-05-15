@@ -75,7 +75,7 @@ async function applyProduceProofToOrderRow(
 
     const { data: orderDetails } = await supabaseAdmin
         .from('orders')
-        .select('client_id, total_value, bill_amount, actual_delivery_date')
+        .select('client_id, total_value, bill_amount, actual_delivery_date, order_number')
         .eq('id', orderId)
         .single();
 
@@ -128,6 +128,10 @@ async function applyProduceProofToOrderRow(
     revalidatePath('/admin');
     revalidatePath('/orders');
     revalidatePath(`/orders/${orderId}`);
+    revalidatePath(`/delivery/${orderId}`);
+    if (orderDetails?.order_number != null && orderDetails.order_number !== '') {
+        revalidatePath(`/delivery/${String(orderDetails.order_number)}`);
+    }
     const smsClientId = orderDetails?.client_id;
     if (smsClientId) {
         sendDeliveryNotificationIfEnabled(supabaseAdmin, smsClientId).catch(() => {});

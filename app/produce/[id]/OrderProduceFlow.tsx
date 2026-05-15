@@ -27,7 +27,6 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
     const [proofShots, setProofShots] = useState<ProofShot[]>([]);
     const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>([]);
     const [createdOrderNumber, setCreatedOrderNumber] = useState<string | null>(null);
-    const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
     const [proofDeliveredAtLabel, setProofDeliveredAtLabel] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const webcamRef = useRef<Webcam>(null);
@@ -94,7 +93,6 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
 
             setUploadedProofUrls(uploadResult.urls);
             setCreatedOrderNumber(createResult.order.orderNumber != null ? String(createResult.order.orderNumber) : null);
-            setCreatedOrderId(createResult.order.id);
             setProofDeliveredAtLabel(
                 uploadResult.proofCapturedAtIso ? formatDateTimeInAppTz(uploadResult.proofCapturedAtIso) : null
             );
@@ -384,14 +382,6 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                         <p className="text-subtitle" style={{ color: '#4ade80', fontSize: '1.125rem' }}>Order #{createdOrderNumber}</p>
                     )}
                     <p className="text-subtitle" style={{ marginTop: '1rem' }}>Proof has been securely saved and order created.</p>
-                    {createdOrderId && (
-                        <p className="text-subtitle" style={{ marginTop: '0.75rem' }}>
-                            <a href={`/orders/${createdOrderId}`} style={{ color: '#60a5fa', textDecoration: 'underline', fontWeight: 600 }}>
-                                Open this order in Orders
-                            </a>{' '}
-                            <span style={{ opacity: 0.85 }}>(use this link if another order page still looks outdated)</span>
-                        </p>
-                    )}
                     {proofDeliveredAtLabel && (
                         <p className="text-subtitle" style={{ marginTop: '0.5rem', opacity: 0.9 }}>
                             Proof submitted (Eastern): {proofDeliveredAtLabel}
@@ -407,7 +397,6 @@ export function OrderProduceFlow({ client }: { client: ClientDetails }) {
                             clearCapturedProofs();
                             setUploadedProofUrls([]);
                             setProofDeliveredAtLabel(null);
-                            setCreatedOrderId(null);
                             setStep('CAPTURE');
                         }}
                         style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 500 }}

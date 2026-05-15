@@ -17,12 +17,14 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 interface OrderDetails {
     id: string;
-    orderNumber: string;
+    orderNumber: string | number;
     clientName: string;
     address: string;
     clientPhone?: string | null;
     deliveryDate: string;
     alreadyDelivered: boolean;
+    /** Proof images already stored (e.g. from /produce flow) so SUCCESS step can show links. */
+    proofUrls?: string[];
     clientSignToken?: string | null;
 }
 
@@ -33,7 +35,9 @@ export function OrderDeliveryFlow({ order }: { order: OrderDetails }) {
         order.alreadyDelivered ? 'SUCCESS' : 'CAPTURE'
     );
     const [proofShots, setProofShots] = useState<ProofShot[]>([]);
-    const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>([]);
+    const [uploadedProofUrls, setUploadedProofUrls] = useState<string[]>(() =>
+        Array.isArray(order.proofUrls) && order.proofUrls.length > 0 ? order.proofUrls : []
+    );
     const [error, setError] = useState<string>('');
     const [hasCamera, setHasCamera] = useState<boolean | null>(step === 'CAPTURE' ? null : true);
     const webcamRef = useRef<Webcam>(null);
