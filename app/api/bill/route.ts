@@ -19,8 +19,7 @@
  *   ?account=regular|brooklyn|both  – filter by unite_account (default: both)
  *   ?onlyreal=1       – only households with ≥1 order (effective delivery) in the 7-day window
  * Excludes parent clients with clients.bill === false (same as app “no billing” / bill unchecked).
- * Archived (“deleted”) parents or dependants still appear when they have an order in that window;
- * dependant rows include archived clients.
+ * Archived clients are never included (parents or dependants), regardless of orders.
  * Each entry includes createdAt (ISO 8601) for the parent client and each dependant.
  * No auth required.
  *

@@ -13062,14 +13062,74 @@ export async function getProduceClientsForVendorToken(vendorToken: string): Prom
     );
 }
 
+/** Newest pending Produce order per client in roster week (for label QR / order #). */
+export type ProducePendingOrderLabelInfo = {
+    orderNumber: string | number | null;
+    orderId: string;
+};
+
+function buildProducePendingOrderLabelInfoMap(
+    orders: Array<{
+        client_id: string;
+        order_number: string | number | null;
+        id: string;
+        scheduled_delivery_date: string | null;
+    }>,
+    rosterSun: string
+): Record<string, ProducePendingOrderLabelInfo> {
+    const out: Record<string, ProducePendingOrderLabelInfo> = {};
+    for (const row of orders || []) {
+        const cid = row.client_id as string;
+        if (out[cid] != null) continue;
+        const dk = String(row.scheduled_delivery_date ?? '').slice(0, 10);
+        if (!isDateKeyInRosterWeek(dk, rosterSun)) continue;
+        out[cid] = {
+            orderNumber: row.order_number ?? null,
+            orderId: row.id as string,
+        };
+    }
+    return out;
+}
+
 /**
- * Pending Produce order numbers for label export (token must match vendor). One row per client (newest pending in roster week).
+ * Pending Produce orders for label export (admin). One row per client (newest pending in roster week).
+ */
+export async function getProducePendingOrderInfoForClientIds(
+    clientIds: string[],
+    rosterSundayKey?: string
+): Promise<Record<string, ProducePendingOrderLabelInfo>> {
+    const session = await getSession();
+    if (!session || session.role !== 'admin') {
+        console.error('Unauthorized access to getProducePendingOrderInfoForClientIds');
+        return {};
+    }
+
+    const ids = [...new Set(clientIds.map((id) => (id || '').trim()).filter(Boolean))];
+    if (ids.length === 0) return {};
+
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
+    const rosterSun = rosterSundayKey ?? getRosterWeekStartSundayDateKey(new Date());
+
+    const { data: orders, error: oErr } = await supabaseAdmin
+        .from('orders')
+        .select('client_id, order_number, id, scheduled_delivery_date, created_at')
+        .in('client_id', ids)
+        .eq('service_type', 'Produce')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+    if (oErr) return {};
+
+    return buildProducePendingOrderLabelInfoMap(orders || [], rosterSun);
+}
+
+/**
+ * Pending Produce orders for label export (token must match vendor). One row per client (newest pending in roster week).
  */
 export async function getProducePendingOrderNumbersForVendorToken(
     vendorToken: string,
     clientIds: string[],
     rosterSundayKey?: string
-): Promise<Record<string, string | number>> {
+): Promise<Record<string, ProducePendingOrderLabelInfo>> {
     const trimmed = (vendorToken || '').trim();
     if (!trimmed || !clientIds?.length) return {};
 
@@ -13095,22 +13155,14 @@ export async function getProducePendingOrderNumbersForVendorToken(
 
     const { data: orders, error: oErr } = await supabaseAdmin
         .from('orders')
-        .select('client_id, order_number, scheduled_delivery_date, created_at')
+        .select('client_id, order_number, id, scheduled_delivery_date, created_at')
         .in('client_id', allowedIds)
         .eq('service_type', 'Produce')
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
     if (oErr) return {};
 
-    const out: Record<string, string | number> = {};
-    for (const row of orders || []) {
-        const cid = row.client_id as string;
-        if (out[cid] != null) continue;
-        const dk = String(row.scheduled_delivery_date ?? '').slice(0, 10);
-        if (!isDateKeyInRosterWeek(dk, rosterSun)) continue;
-        out[cid] = row.order_number as string | number;
-    }
-    return out;
+    return buildProducePendingOrderLabelInfoMap(orders || [], rosterSun);
 }
 
 export async function createProduceVendor(name: string): Promise<ProduceVendor> {

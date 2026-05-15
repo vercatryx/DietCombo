@@ -9,7 +9,7 @@
  * `orderNumbers` on each row includes only orders whose effective delivery date falls in the 7-day
  * window (?date through +6), excluding billing_successful (same rule as GET /api/bill).
  *
- * Archived parents or dependants with deliveries in the window are included; see GET /api/bill.
+ * Archived clients are never included (same as GET /api/bill).
  * No auth required.
  */
 

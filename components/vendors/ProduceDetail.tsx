@@ -13,7 +13,9 @@ import {
     getClientNamesByIds,
     getClientsUnlimited,
     getProduceClientsForVendorToken,
-    getProducePendingOrderNumbersForVendorToken
+    getProducePendingOrderInfoForClientIds,
+    getProducePendingOrderNumbersForVendorToken,
+    type ProducePendingOrderLabelInfo
 } from '@/lib/actions';
 import { isProduceServiceType } from '@/lib/isProduceServiceType';
 import { isExcludedFromDeliveries } from '@/lib/deliveryEligibility';
@@ -66,8 +68,8 @@ export function ProduceDetail() {
     /** Parent / guardian names not present in allClients (token view loads a subset only). */
     const [extraClientNames, setExtraClientNames] = useState<Record<string, string>>({});
 
-    /** Pending weekly Produce order numbers by client id (vendor token view only). */
-    const [pendingOrderByClientId, setPendingOrderByClientId] = useState<Record<string, string | number>>({});
+    /** Newest pending Produce order per client id (roster week), for label QR and order #. */
+    const [pendingOrderByClientId, setPendingOrderByClientId] = useState<Record<string, ProducePendingOrderLabelInfo>>({});
 
     function getLastName(name: string): string {
         const trimmed = (name || '').trim();
@@ -156,13 +158,12 @@ export function ProduceDetail() {
                 setExtraClientNames({});
             }
 
-            if (tokenTrim && produceClientsList.length > 0) {
+            if (produceClientsList.length > 0) {
                 const rosterSun = getRosterWeekStartSundayDateKey(new Date());
-                const pending = await getProducePendingOrderNumbersForVendorToken(
-                    tokenTrim,
-                    produceClientsList.map(c => c.id),
-                    rosterSun
-                );
+                const clientIds = produceClientsList.map(c => c.id);
+                const pending = tokenTrim
+                    ? await getProducePendingOrderNumbersForVendorToken(tokenTrim, clientIds, rosterSun)
+                    : await getProducePendingOrderInfoForClientIds(clientIds, rosterSun);
                 setPendingOrderByClientId(pending);
             } else {
                 setPendingOrderByClientId({});
@@ -235,12 +236,28 @@ export function ProduceDetail() {
             return;
         }
 
-        const clientOrders = filteredClients.map(client => ({
-            id: client.id,
-            client_id: client.id,
-            orderNumber: String(pendingOrderByClientId[client.id] ?? client.id.slice(0, 8)),
-            service_type: 'Produce'
-        }));
+        const clientOrders = filteredClients
+            .map(client => {
+                const info = pendingOrderByClientId[client.id];
+                if (!info?.orderId) return null;
+                const rawNum = info.orderNumber;
+                const orderNumber =
+                    rawNum != null && String(rawNum).trim() !== '' ? String(rawNum).trim() : undefined;
+                return {
+                    id: info.orderId,
+                    client_id: client.id,
+                    ...(orderNumber !== undefined ? { orderNumber } : {}),
+                    service_type: 'Produce' as const
+                };
+            })
+            .filter((o): o is NonNullable<typeof o> => o != null);
+
+        if (clientOrders.length === 0) {
+            alert(
+                'No pending Produce orders for the current roster week for these clients. Create orders (or wait until pending orders exist) before downloading labels — the QR must link to a real order.'
+            );
+            return;
+        }
 
         const vendorLabel = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce';
 

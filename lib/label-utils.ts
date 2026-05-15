@@ -4,6 +4,8 @@ import QRCode from 'qrcode';
 interface Order {
     id: string;
     orderNumber?: string;
+    /** DB field when caller passes raw row shape */
+    order_number?: string | number | null;
     client_id: string;
     service_type?: string;
     items?: any[];
@@ -40,6 +42,22 @@ interface LabelGenerationOptions {
 
 /** Line height factor for a given font size (inches per pt). Matches pdfRouteLabels behavior. */
 const lineHeightFromFont = (pt: number) => Math.max(0.14, pt * 0.017);
+
+/** Path segment for `/delivery/{segment}`: prefer order #, then snake_case field, then order row id. */
+function deliveryUrlPathSegment(order: Order): string {
+    const camel = order.orderNumber != null && String(order.orderNumber).trim() !== '' ? String(order.orderNumber).trim() : '';
+    if (camel) return camel;
+    const snake =
+        order.order_number != null && String(order.order_number).trim() !== '' ? String(order.order_number).trim() : '';
+    if (snake) return snake;
+    return order.id;
+}
+
+function orderNumberDisplayForLabel(order: Order): string {
+    const n = order.orderNumber ?? order.order_number;
+    if (n != null && String(n).trim() !== '') return String(n).trim();
+    return order.id.slice(0, 6);
+}
 
 /**
  * Draw notes text, shrinking font from maxFont down to minFont until it fits in the available height.
@@ -309,12 +327,12 @@ export async function generateLabelsPDF(options: LabelGenerationOptions): Promis
 
         // 4. Driver number above QR, then QR (top-right with margin)
         try {
-            const deliveryUrl = `${origin}/delivery/${order.orderNumber != null && String(order.orderNumber).trim() !== '' ? String(order.orderNumber) : order.id}`;
+            const deliveryUrl = `${origin}/delivery/${encodeURIComponent(deliveryUrlPathSegment(order))}`;
             const driverOrOrderText = driverInfo
                 ? (driverInfo.stopNumber != null
                     ? `${driverInfo.driverNumber}.${driverInfo.stopNumber}`
                     : String(driverInfo.driverNumber))
-                : `#${order.orderNumber || order.id.slice(0, 6)}`;
+                : `#${orderNumberDisplayForLabel(order)}`;
 
             // Driver number on top of QR (centered in QR zone)
             doc.setFontSize(10);
@@ -510,10 +528,10 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
 
         // Left: Above QR show "0.1" (driver.stop) or order number only
         try {
-            const deliveryUrl = `${origin}/delivery/${order.orderNumber != null && String(order.orderNumber).trim() !== '' ? String(order.orderNumber) : order.id}`;
+            const deliveryUrl = `${origin}/delivery/${encodeURIComponent(deliveryUrlPathSegment(order))}`;
             const driverOrOrderText = driverInfo
                 ? (driverInfo.stopNumber != null ? `${driverInfo.driverNumber}.${driverInfo.stopNumber}` : String(driverInfo.driverNumber))
-                : `#${order.orderNumber || order.id.slice(0, 6)}`;
+                : `#${orderNumberDisplayForLabel(order)}`;
             doc.setFontSize(10);
             doc.setFont('helvetica', 'bold');
             setDriverColor();
@@ -547,7 +565,7 @@ export async function generateLabelsPDFTwoPerCustomer(options: LabelGenerationOp
             : driverInfo != null
                 ? ` ${driverInfo.driverNumber}`
                 : '';
-        const rightOrderNumSuffix = ` #${order.orderNumber || order.id.slice(0, 6)}`;
+        const rightOrderNumSuffix = ` #${orderNumberDisplayForLabel(order)}`;
         const rightNameLine1 = clientName + rightDriverStopSuffix + rightOrderNumSuffix;
         const rightNameLines = doc.splitTextToSize(rightNameLine1, rightTextZoneWidth);
         const rightNameShow = rightNameLines.slice(0, Math.min(2, rightNameLines.length));

@@ -10,9 +10,9 @@
  * effective delivery date in that window (any status). Default is all billable parents regardless
  * of in-window orders.
  *
- * Archived (“deleted”) clients: households are still included when the parent or a dependant has
- * an order whose effective delivery falls in the billing window, even if those client rows are
- * archived. Dependants are loaded for billing parents without excluding archived rows.
+ * Archived (“deleted”) clients are never included in billing: not as parents, not as dependants,
+ * and orders tied only to archived client rows are not used (no supplement from those orders, no
+ * head-count or amount for archived dependants).
  */
 
 import { NextRequest } from 'next/server';
@@ -74,6 +74,12 @@ export function parseOnlyRealFromRequest(request: NextRequest): boolean {
     const url = request.nextUrl ?? new URL(request.url);
     const raw = (url.searchParams.get('onlyreal') || '').trim().toLowerCase();
     return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+function rowHasArchivedAt(row: { archived_at?: string | null } | null | undefined): boolean {
+    const a = row?.archived_at;
+    if (a == null) return false;
+    return String(a).trim().length > 0;
 }
 
 function clientMatchesAccountFilter(clientRow: any, accountFilter: AccountFilter): boolean {
@@ -234,7 +240,7 @@ export async function getBillHouseholdRows(
     const COLS = 'id, order_number, actual_delivery_date, scheduled_delivery_date, proof_of_delivery_url, client_id, status';
 
     const selectClients =
-        'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill';
+        'id, full_name, parent_client_id, service_type, case_id_external, client_id_external, sign_token, unite_account, created_at, bill, archived_at';
     const clients = await fetchAllRows<any>(
         (from, to) => {
             let q = supabase
@@ -283,6 +289,7 @@ export async function getBillHouseholdRows(
             const cid = String(o.client_id);
             const row = clientMap[cid];
             if (!row) continue;
+            if (rowHasArchivedAt(row)) continue;
             const root =
                 row.parent_client_id != null && row.parent_client_id !== ''
                     ? String(row.parent_client_id)
@@ -290,6 +297,7 @@ export async function getBillHouseholdRows(
             const parentRow = clientMap[root];
             if (!parentRow || parentRow.parent_client_id != null) continue;
             if (parentRow.bill === false) continue;
+            if (rowHasArchivedAt(parentRow)) continue;
             if (!clientMatchesAccountFilter(parentRow, accountFilter)) continue;
             if (activeBillableSet.has(root)) continue;
             supplementBillableParentIds.add(root);
@@ -318,7 +326,8 @@ export async function getBillHouseholdRows(
             const { data: depChunk, error: depErr } = await supabase
                 .from('clients')
                 .select('id, full_name, dob, cin, parent_client_id, unite_account, created_at')
-                .in('parent_client_id', pidChunk);
+                .in('parent_client_id', pidChunk)
+                .is('archived_at', null);
             if (depErr) {
                 console.error(`${logPrefix} Error fetching dependents:`, depErr);
                 continue;
