@@ -14,6 +14,114 @@ import { sendDeliveryNotificationIfEnabled } from '@/lib/delivery-notification';
 import { stampTimestampOnImageBuffer } from '@/lib/stampTimestampOnImageBuffer';
 import { ordersRowTouch } from '@/lib/orders-row-touch';
 import { collectImageFilesFromFormData, proofPayloadForDb } from '@/lib/proof-of-delivery-urls';
+import { getRosterWeekStartSundayDateKey, isDateKeyInRosterWeek } from '@/lib/produce-roster-week';
+
+async function applyProduceProofToOrderRow(
+    supabaseAdmin: any,
+    orderId: string,
+    proofUrls: string[],
+    options: { keepScheduledDate: boolean; proofTime?: Date }
+): Promise<{ success: boolean; error?: string; clientId?: string }> {
+    const urls = proofUrls.map((u) => String(u).trim()).filter(Boolean);
+    if (urls.length === 0) return { success: false, error: 'At least one proof image URL is required' };
+
+    const proofDb = proofPayloadForDb(urls);
+    const proofUploadTime = options.proofTime ?? new Date();
+    const proofUploadDateStr = toDateStringInAppTz(proofUploadTime);
+
+    let scheduledDeliveryDateStr = proofUploadDateStr;
+    if (options.keepScheduledDate) {
+        const { data: ord } = await supabaseAdmin
+            .from('orders')
+            .select('scheduled_delivery_date')
+            .eq('id', orderId)
+            .maybeSingle();
+        const ex = ord?.scheduled_delivery_date;
+        if (ex) scheduledDeliveryDateStr = String(ex).slice(0, 10);
+    }
+
+    const updateData: any = {
+        ...proofDb,
+        ...ordersRowTouch(),
+        status: 'billing_pending',
+        actual_delivery_date: proofUploadTime.toISOString(),
+        scheduled_delivery_date: scheduledDeliveryDateStr
+    };
+
+    const { error: updateError } = await supabaseAdmin.from('orders').update(updateData).eq('id', orderId);
+
+    if (updateError) {
+        console.error('Error updating order:', updateError);
+        const msg = String(updateError.message || '');
+        if (msg.includes('updated_at') || updateError.code === '42703') {
+            return {
+                success: false,
+                error:
+                    'Order update blocked by a database trigger: public.orders uses last_updated, but the trigger function update_updated_at_column() still assigns NEW.updated_at. Fix it in Postgres (see sql/fix_update_updated_at_trigger_orders_last_updated.sql) or your team\'s migration.'
+            };
+        }
+        return { success: false, error: 'Failed to update order status' };
+    }
+
+    const { data: orderDetails } = await supabaseAdmin
+        .from('orders')
+        .select('client_id, total_value, bill_amount, actual_delivery_date')
+        .eq('id', orderId)
+        .single();
+
+    if (orderDetails) {
+        const { data: client } = await supabaseAdmin
+            .from('clients')
+            .select('navigator_id, full_name, authorized_amount')
+            .eq('id', orderDetails.client_id)
+            .single();
+
+        const { data: existingBilling } = await supabaseAdmin
+            .from('billing_records')
+            .select('id')
+            .eq('order_id', orderId)
+            .maybeSingle();
+
+        if (!existingBilling) {
+            const billingAmount = orderDetails.bill_amount ?? orderDetails.total_value ?? 0;
+            await supabaseAdmin.from('billing_records').insert([
+                {
+                    id: randomUUID(),
+                    client_id: orderDetails.client_id,
+                    order_id: orderId,
+                    status: 'pending',
+                    amount: billingAmount,
+                    navigator: client?.navigator_id || null,
+                    remarks: 'Auto-generated upon produce proof upload'
+                }
+            ]);
+        }
+
+        if (!existingBilling && client) {
+            const currentAmount = client.authorized_amount ?? 0;
+            const orderAmount = orderDetails.total_value || 0;
+            const newAuthorizedAmount = roundCurrency(currentAmount - orderAmount);
+
+            const { error: deductionError } = await supabaseAdmin
+                .from('clients')
+                .update({ authorized_amount: newAuthorizedAmount })
+                .eq('id', orderDetails.client_id);
+
+            if (deductionError) {
+                console.error('[Produce Proof] Error updating authorized_amount:', deductionError);
+            }
+        } else if (!client) {
+            console.warn('[Produce Proof] Client not found. Skipping deduction.');
+        }
+    }
+
+    revalidatePath('/admin');
+    const smsClientId = orderDetails?.client_id;
+    if (smsClientId) {
+        sendDeliveryNotificationIfEnabled(supabaseAdmin, smsClientId).catch(() => {});
+    }
+    return { success: true, clientId: orderDetails?.client_id };
+}
 
 export async function processProduceProof(formData: FormData) {
     const files = collectImageFilesFromFormData(formData);
@@ -126,8 +234,6 @@ export async function processProduceProof(formData: FormData) {
             }
         }
 
-        const proofDb = proofPayloadForDb(publicUrls);
-
         if (table === 'upcoming_orders') {
             const result = await saveDeliveryProofUrlAndProcessOrder(orderId, 'upcoming', publicUrls);
             if (!result.success) {
@@ -139,90 +245,13 @@ export async function processProduceProof(formData: FormData) {
         }
 
         const proofUploadTime = proofTimeIso ? new Date(proofTimeIso) : new Date();
-        const proofUploadDateStr = toDateStringInAppTz(proofUploadTime);
-        const updateData: any = {
-            ...proofDb,
-            ...ordersRowTouch(),
-            status: 'billing_pending',
-            actual_delivery_date: proofUploadTime.toISOString(),
-            scheduled_delivery_date: proofUploadDateStr
-        };
-
-        const { error: updateError } = await supabaseAdmin
-            .from('orders')
-            .update(updateData)
-            .eq('id', orderId);
-
-        if (updateError) {
-            console.error('Error updating order:', updateError);
-            const msg = String(updateError.message || '');
-            if (msg.includes('updated_at') || updateError.code === '42703') {
-                return {
-                    success: false,
-                    error:
-                        'Order update blocked by a database trigger: public.orders uses last_updated, but the trigger function update_updated_at_column() still assigns NEW.updated_at. Fix it in Postgres (see sql/fix_update_updated_at_trigger_orders_last_updated.sql) or your team’s migration.',
-                };
-            }
-            return { success: false, error: 'Failed to update order status' };
+        const fin = await applyProduceProofToOrderRow(supabaseAdmin, orderId, publicUrls, {
+            keepScheduledDate: false,
+            proofTime: proofUploadTime
+        });
+        if (!fin.success) {
+            return { success: false, error: fin.error || 'Failed to update order' };
         }
-
-        // Create billing record if it doesn't exist (similar to updateOrderDeliveryProof)
-        const { data: orderDetails } = await supabaseAdmin
-            .from('orders')
-            .select('client_id, total_value, bill_amount, actual_delivery_date')
-            .eq('id', orderId)
-            .single();
-
-        if (orderDetails) {
-            const { data: client } = await supabaseAdmin
-                .from('clients')
-                .select('navigator_id, full_name, authorized_amount')
-                .eq('id', orderDetails.client_id)
-                .single();
-
-            const { data: existingBilling } = await supabaseAdmin
-                .from('billing_records')
-                .select('id')
-                .eq('order_id', orderId)
-                .maybeSingle();
-
-            if (!existingBilling) {
-                // Use bill_amount if available, otherwise fall back to total_value
-                const billingAmount = orderDetails.bill_amount ?? orderDetails.total_value ?? 0;
-                await supabaseAdmin.from('billing_records').insert([{
-                    id: randomUUID(),
-                    client_id: orderDetails.client_id,
-                    order_id: orderId,
-                    status: 'pending',
-                    amount: billingAmount,
-                    navigator: client?.navigator_id || null,
-                    remarks: 'Auto-generated upon produce proof upload'
-                }]);
-            }
-
-            if (!existingBilling && client) {
-                // Treat null/undefined as 0 and allow negative result
-                const currentAmount = client.authorized_amount ?? 0;
-                const orderAmount = orderDetails.total_value || 0;
-                const newAuthorizedAmount = roundCurrency(currentAmount - orderAmount);
-
-                const { error: deductionError } = await supabaseAdmin
-                    .from('clients')
-                    .update({ authorized_amount: newAuthorizedAmount })
-                    .eq('id', orderDetails.client_id);
-
-                if (deductionError) {
-                    console.error('[Produce Proof] Error updating authorized_amount:', deductionError);
-                }
-            } else {
-                if (!client) console.warn('[Produce Proof] Client not found. Skipping deduction.');
-            }
-        }
-
-        revalidatePath('/admin'); // Revalidate admin views
-
-        const smsClientId = orderDetails?.client_id ?? foundOrder.client_id;
-        sendDeliveryNotificationIfEnabled(supabaseAdmin, smsClientId).catch(() => {});
 
         return { success: true, urls: publicUrls, url: publicUrls[0] };
     } catch (error: any) {
@@ -253,8 +282,23 @@ export async function getClientForProduce(clientId: string) {
             return { success: false, error: 'Client not found' };
         }
 
-        // Produce is prompt/realtime delivery: show today's date as scheduled (not vendor delivery days)
-        const deliveryDateLabel = getTodayInAppTz();
+        const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+        const { data: pendingRows } = await supabaseAdmin
+            .from('orders')
+            .select('scheduled_delivery_date')
+            .eq('client_id', clientId)
+            .eq('service_type', 'Produce')
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false })
+            .limit(20);
+
+        const pending = (pendingRows || []).find((o) =>
+            isDateKeyInRosterWeek(String(o.scheduled_delivery_date ?? '').slice(0, 10), rosterSun)
+        );
+
+        const deliveryDateLabel = pending?.scheduled_delivery_date
+            ? String(pending.scheduled_delivery_date).slice(0, 10)
+            : getTodayInAppTz();
 
         return {
             success: true,
@@ -325,7 +369,6 @@ export async function createProduceOrderWithProof(clientId: string, proofUrls: s
         if (urls.length === 0) {
             return { success: false, error: 'At least one proof image URL is required' };
         }
-        const proofDb = proofPayloadForDb(urls);
 
         const { data: client, error: clientError } = await supabaseAdmin
             .from('clients')
@@ -337,115 +380,41 @@ export async function createProduceOrderWithProof(clientId: string, proofUrls: s
             return { success: false, error: 'Client not found' };
         }
 
-        const defaultTemplate = await getDefaultOrderTemplate('Produce');
-        const billAmount = defaultTemplate?.billAmount || 0;
-        if (!billAmount || billAmount <= 0) {
-            return { success: false, error: 'Default bill amount not configured. Please set it in Admin Control > Default Order Template > Produce.' };
-        }
-
-        const defaultVendorId = await getDefaultVendorId();
-        const { data: vendors } = await supabaseAdmin
-            .from('vendors')
-            .select('id, name, delivery_days, is_default')
-            .eq('is_active', true)
-            .order('is_default', { ascending: false });
-
-        const mainVendor = vendors?.find(v => v.is_default === true) || vendors?.[0];
-        // Delivery date = date when proof image is uploaded (today in app timezone)
-        const deliveryDateStr = getTodayInAppTz();
-
-        const { generateUniqueOrderNumber } = await import('@/lib/actions');
-        const finalOrderNumber = await generateUniqueOrderNumber(supabaseAdmin);
-        const orderId = randomUUID();
-        const orderData: any = {
-            id: orderId,
-            client_id: clientId,
-            service_type: 'Produce',
-            order_number: finalOrderNumber,
-            scheduled_delivery_date: deliveryDateStr,
-            status: 'billing_pending',
-            total_value: billAmount,
-            total_items: 1,
-            bill_amount: billAmount,
-            ...proofDb,
-            actual_delivery_date: new Date().toISOString(),
-            created_at: new Date().toISOString()
-        };
-        if (defaultVendorId) orderData.vendor_id = defaultVendorId;
-
-        const { data: newOrder, error: insertError } = await supabaseAdmin
+        const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+        const { data: pendingRows } = await supabaseAdmin
             .from('orders')
-            .insert([orderData])
-            .select()
-            .single();
+            .select('id, order_number, scheduled_delivery_date')
+            .eq('client_id', clientId)
+            .eq('service_type', 'Produce')
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false })
+            .limit(20);
 
-        if (insertError || !newOrder) {
-            const errorMessage = insertError?.message || insertError?.details || insertError?.hint || 'Failed to create order';
-            return { success: false, error: errorMessage };
+        const pending = (pendingRows || []).find((o) =>
+            isDateKeyInRosterWeek(String(o.scheduled_delivery_date ?? '').slice(0, 10), rosterSun)
+        );
+
+        if (!pending) {
+            return {
+                success: false,
+                error:
+                    'No weekly produce order was found for this client. Orders are created automatically after each week\'s cutoff. Please contact support if you need help.'
+            };
         }
 
-        if (mainVendor) {
-            const vsId = randomUUID();
-            await supabaseAdmin
-                .from('order_vendor_selections')
-                .insert([{ id: vsId, order_id: orderId, vendor_id: mainVendor.id }]);
+        const fin = await applyProduceProofToOrderRow(supabaseAdmin, pending.id, urls, { keepScheduledDate: true });
+        if (!fin.success) {
+            return { success: false, error: fin.error || 'Failed to update produce order' };
         }
-
-        const { data: orderDetails } = await supabaseAdmin
-            .from('orders')
-            .select('client_id, total_value, bill_amount, actual_delivery_date')
-            .eq('id', orderId)
-            .single();
-
-        if (orderDetails) {
-            const { data: clientRow } = await supabaseAdmin
-                .from('clients')
-                .select('navigator_id, full_name, authorized_amount')
-                .eq('id', orderDetails.client_id)
-                .single();
-
-            const { data: existingBilling } = await supabaseAdmin
-                .from('billing_records')
-                .select('id')
-                .eq('order_id', orderId)
-                .maybeSingle();
-
-            if (!existingBilling) {
-                const billingAmount = orderDetails.bill_amount ?? orderDetails.total_value ?? 0;
-                await supabaseAdmin.from('billing_records').insert([{
-                    id: randomUUID(),
-                    client_id: orderDetails.client_id,
-                    order_id: orderId,
-                    status: 'pending',
-                    amount: billingAmount,
-                    navigator: clientRow?.navigator_id || null,
-                    remarks: 'Auto-generated upon produce proof upload'
-                }]);
-            }
-
-            if (!existingBilling && clientRow) {
-                const currentAmount = clientRow.authorized_amount ?? 0;
-                const orderAmount = orderDetails.total_value || 0;
-                const newAuthorizedAmount = roundCurrency(currentAmount - orderAmount);
-                await supabaseAdmin
-                    .from('clients')
-                    .update({ authorized_amount: newAuthorizedAmount })
-                    .eq('id', orderDetails.client_id);
-            }
-        }
-
-        revalidatePath('/admin');
-
-        sendDeliveryNotificationIfEnabled(supabaseAdmin, clientId).catch(() => {});
 
         return {
             success: true,
             order: {
-                id: newOrder.id,
-                orderNumber: newOrder.order_number,
+                id: pending.id,
+                orderNumber: pending.order_number,
                 clientName: client.full_name,
                 address: client.address || 'Unknown Address',
-                deliveryDate: newOrder.scheduled_delivery_date,
+                deliveryDate: String(pending.scheduled_delivery_date ?? '').slice(0, 10),
                 alreadyDelivered: true,
                 clientSignToken: client.sign_token || null
             }

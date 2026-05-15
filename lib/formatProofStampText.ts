@@ -10,7 +10,9 @@ export function sanitizeProofStampDisplayText(s: string): string {
   return s
     .replace(/\u202f/g, ' ')
     .replace(/\u00a0/g, ' ')
-    .replace(/[\u2000-\u200a]/g, ' ');
+    .replace(/[\u2000-\u200a]/g, ' ')
+    // Bidi / format controls: ICU can emit these; librsvg often renders them as missing-glyph boxes.
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
 }
 
 export type FormatProofStampOptions = {

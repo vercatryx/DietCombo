@@ -26,6 +26,7 @@ import { prepareMealPlannerDataForUpdate, mealPlannerDateOnly, mealPlannerCutoff
 import { isFoodOrMealHouseholdMember } from './meal-dependant-portal-login';
 import { isProduceServiceType } from './isProduceServiceType';
 import { fetchStatusDeliveriesAllowedMap, isExcludedFromDeliveries } from './deliveryEligibility';
+import { getRosterWeekStartSundayDateKey, getRosterWeekStartSundayForCalendarDateKey, isEligibleForRosterWeek, getProduceOrderRosterWeekSundayKey, firstDeliveryDayDateKeyInRosterWeek, isDateKeyInRosterWeek } from './produce-roster-week';
 import { mergeDietaryFlagsIntoNote, type DietaryFlags } from './dietary-preferences-note';
 import { inferLegacyChangeKind, type ClientChangeKind } from './audit/clientChangeKind';
 import type { ChangeDisplayTag } from './audit/clientChangeTags';
@@ -4177,6 +4178,7 @@ function mapClientFromDB(c: any): ClientProfile {
         signToken: c.sign_token || null,
         assignedDriverId: c.assigned_driver_id || null,
         produceVendorId: c.produce_vendor_id || null,
+        produceRosterEffectiveAt: c.produce_roster_effective_at ?? null,
         mealPlannerData: c.meal_planner_data ?? null,
         uniteAccount: c.unite_account || null,
         history: c.history || null,
@@ -4473,6 +4475,9 @@ export async function addClient(data: Omit<ClientProfile, 'id' | 'createdAt' | '
         voucher_amount: isProduceServiceType(data.serviceType) ? (data.voucherAmount?.trim() || null) : null,
         unite_account: payload.unite_account ?? null
     };
+    if (isProduceServiceType(data.serviceType)) {
+        insertPayload.produce_roster_effective_at = new Date().toISOString();
+    }
     // Omit when unset so environments without a migrated `produce_vendor_id` column still work (PostgREST rejects unknown columns even for null).
     if (!insertPayload.produce_vendor_id) delete insertPayload.produce_vendor_id;
     
@@ -4575,6 +4580,9 @@ export async function addPlaceholderDependents(parentClientId: string, count: nu
         };
         if (isProduceServiceType(serviceType) && parent.produceVendorId) {
             insertPayload.produce_vendor_id = parent.produceVendorId;
+        }
+        if (isProduceServiceType(serviceType)) {
+            (insertPayload as Record<string, unknown>).produce_roster_effective_at = new Date().toISOString();
         }
 
         const { data: res, error: insertError } = await supabase
@@ -4687,6 +4695,9 @@ export async function addDependent(name: string, parentClientId: string, dob?: s
     };
     const pvId = isProduceServiceType(serviceType) && produceVendorId ? produceVendorId : null;
     if (pvId) insertPayload.produce_vendor_id = pvId;
+    if (isProduceServiceType(serviceType)) {
+        insertPayload.produce_roster_effective_at = new Date().toISOString();
+    }
     const { data: res, error: insertError } = await supabase
         .from('clients')
         .insert([insertPayload])
@@ -4770,10 +4781,25 @@ export async function getDependentsByParentId(parentClientId: string, options?: 
     }
 }
 
+function shouldStampProduceRosterEffectiveAt(
+    existing: { service_type?: string | null; produce_vendor_id?: string | null },
+    data: Partial<ClientProfile>
+): boolean {
+    const oldSt = (existing.service_type || 'Food') as string;
+    const newSt = (data.serviceType ?? oldSt) as string;
+    const oldPv = existing.produce_vendor_id ?? null;
+    const newPv = data.produceVendorId !== undefined ? data.produceVendorId || null : oldPv;
+    const wasProduce = isProduceServiceType(oldSt);
+    const nowProduce = isProduceServiceType(newSt);
+    if (!nowProduce) return false;
+    if (!wasProduce) return true;
+    return String(oldPv ?? '') !== String(newPv ?? '');
+}
+
 export async function updateClient(id: string, data: Partial<ClientProfile>, options?: { skipOrderSync?: boolean }) {
     const { data: existingRow, error: existingErr } = await supabase
         .from('clients')
-        .select('archived_at')
+        .select('archived_at, service_type, produce_vendor_id, produce_roster_effective_at')
         .eq('id', id)
         .maybeSingle();
     handleError(existingErr, 'updateClient precheck');
@@ -4849,6 +4875,14 @@ export async function updateClient(id: string, data: Partial<ClientProfile>, opt
     }
     if (data.uniteAccount !== undefined) payload.unite_account = data.uniteAccount || null;
     if (data.history !== undefined) payload.history = data.history || null;
+
+    const ex = existingRow as {
+        service_type?: string | null;
+        produce_vendor_id?: string | null;
+    } | null;
+    if (ex && shouldStampProduceRosterEffectiveAt(ex, data)) {
+        payload.produce_roster_effective_at = new Date().toISOString();
+    }
 
     payload.updated_at = new Date().toISOString();
 
@@ -12966,6 +13000,7 @@ export async function getProduceClientsForVendorToken(vendorToken: string): Prom
         if (pvErr || !pv || pv.is_active === false) return [];
 
         const statusAllowMap = await fetchStatusDeliveriesAllowedMap(admin);
+        const rosterSundayKey = getRosterWeekStartSundayDateKey(new Date());
 
         const PAGE_SIZE = 1000;
         const allRows: any[] = [];
@@ -12998,20 +13033,76 @@ export async function getProduceClientsForVendorToken(vendorToken: string): Prom
             })
             .filter((c): c is ClientProfile => c != null)
             .filter(c => isProduceServiceType(c.serviceType))
-            .filter(c => !isExcludedFromDeliveries(c.paused, c.statusId, statusAllowMap));
+            .filter(c => !isExcludedFromDeliveries(c.paused, c.statusId, statusAllowMap))
+            .filter(c =>
+                isEligibleForRosterWeek(c.produceRosterEffectiveAt ?? c.createdAt, rosterSundayKey)
+            );
     }
 
     const pvList = await getProduceVendors();
     const vendor = pvList.find(p => p.token === trimmed);
     if (!vendor) return [];
     const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabase);
+    const rosterSundayKey = getRosterWeekStartSundayDateKey(new Date());
     const all = await getClientsUnlimited();
     return all.filter(
         c =>
             isProduceServiceType(c.serviceType) &&
             !isExcludedFromDeliveries(c.paused, c.statusId, statusAllowMap) &&
-            c.produceVendorId === vendor.id
+            c.produceVendorId === vendor.id &&
+            isEligibleForRosterWeek(c.produceRosterEffectiveAt ?? c.createdAt, rosterSundayKey)
     );
+}
+
+/**
+ * Pending Produce order numbers for label export (token must match vendor). One row per client (newest pending in roster week).
+ */
+export async function getProducePendingOrderNumbersForVendorToken(
+    vendorToken: string,
+    clientIds: string[],
+    rosterSundayKey?: string
+): Promise<Record<string, string | number>> {
+    const trimmed = (vendorToken || '').trim();
+    if (!trimmed || !clientIds?.length) return {};
+
+    const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
+    const vendor = await getProduceVendorByTokenForBulk(supabaseAdmin, trimmed);
+    if (!vendor) return {};
+
+    const ids = [...new Set(clientIds.map((id) => (id || '').trim()).filter(Boolean))];
+    if (ids.length === 0) return {};
+
+    const { data: clientRows, error: cErr } = await supabaseAdmin
+        .from('clients')
+        .select('id')
+        .in('id', ids)
+        .eq('produce_vendor_id', vendor.id);
+    if (cErr) return {};
+
+    const allowed = new Set((clientRows || []).map((r: { id: string }) => r.id));
+    const allowedIds = ids.filter((id) => allowed.has(id));
+    if (allowedIds.length === 0) return {};
+
+    const rosterSun = rosterSundayKey ?? getRosterWeekStartSundayDateKey(new Date());
+
+    const { data: orders, error: oErr } = await supabaseAdmin
+        .from('orders')
+        .select('client_id, order_number, scheduled_delivery_date, created_at')
+        .in('client_id', allowedIds)
+        .eq('service_type', 'Produce')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+    if (oErr) return {};
+
+    const out: Record<string, string | number> = {};
+    for (const row of orders || []) {
+        const cid = row.client_id as string;
+        if (out[cid] != null) continue;
+        const dk = String(row.scheduled_delivery_date ?? '').slice(0, 10);
+        if (!isDateKeyInRosterWeek(dk, rosterSun)) continue;
+        out[cid] = row.order_number as string | number;
+    }
+    return out;
 }
 
 export async function createProduceVendor(name: string): Promise<ProduceVendor> {
@@ -13081,6 +13172,166 @@ async function getProduceVendorByTokenForBulk(supabaseAdmin: SupabaseClient, ven
     return data as { id: string; name: string; token: string; is_active: boolean };
 }
 
+async function resolveProduceScheduledDeliveryDateKeyForRosterWeek(
+    supabaseAdmin: SupabaseClient,
+    rosterWeekStartSundayKey: string
+): Promise<string> {
+    const defaultVendorId = await getDefaultVendorId();
+    if (!defaultVendorId) return rosterWeekStartSundayKey;
+    const { data: v } = await supabaseAdmin
+        .from('vendors')
+        .select('delivery_days')
+        .eq('id', defaultVendorId)
+        .maybeSingle();
+    const raw = v?.delivery_days;
+    let days: string[] = [];
+    try {
+        days = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw || [];
+    } catch {
+        days = [];
+    }
+    const first = days[0] ?? null;
+    return firstDeliveryDayDateKeyInRosterWeek(rosterWeekStartSundayKey, first);
+}
+
+/**
+ * Weekly cron: create pending Produce orders per produce vendor for the active target roster week (after Friday 11:59 PM ET cutoff model).
+ */
+export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
+    success: boolean;
+    rosterWeekSunday: string;
+    scheduledDeliveryDate: string;
+    vendorsProcessed: number;
+    ordersCreated: number;
+    error?: string;
+}> {
+    try {
+        if (!getSupabaseDbApiKey()) {
+            return {
+                success: false,
+                rosterWeekSunday: '',
+                scheduledDeliveryDate: '',
+                vendorsProcessed: 0,
+                ordersCreated: 0,
+                error: 'Missing database API key'
+            };
+        }
+        const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, getSupabaseDbApiKey()!);
+        const rosterSun = getProduceOrderRosterWeekSundayKey(new Date());
+        const dateKey = await resolveProduceScheduledDeliveryDateKeyForRosterWeek(supabaseAdmin, rosterSun);
+
+        const defaultTemplate = await getDefaultOrderTemplate('Produce');
+        const billAmount = defaultTemplate?.billAmount || 0;
+        if (!billAmount || billAmount <= 0) {
+            return {
+                success: false,
+                rosterWeekSunday: rosterSun,
+                scheduledDeliveryDate: dateKey,
+                vendorsProcessed: 0,
+                ordersCreated: 0,
+                error: 'Default bill amount not configured for Produce.'
+            };
+        }
+
+        const defaultVendorId = await getDefaultVendorId();
+        const statusAllowMap = await fetchStatusDeliveriesAllowedMap(supabaseAdmin);
+
+        const { data: vendorsList, error: pvErr } = await supabaseAdmin
+            .from('produce_vendors')
+            .select('id')
+            .eq('is_active', true);
+        if (pvErr) {
+            return {
+                success: false,
+                rosterWeekSunday: rosterSun,
+                scheduledDeliveryDate: dateKey,
+                vendorsProcessed: 0,
+                ordersCreated: 0,
+                error: pvErr.message
+            };
+        }
+
+        let totalCreated = 0;
+        const list = vendorsList || [];
+        for (const pv of list) {
+            const { data: rows } = await supabaseAdmin
+                .from('clients')
+                .select(
+                    'id, service_type, paused, produce_vendor_id, status_id, produce_roster_effective_at, created_at'
+                )
+                .eq('produce_vendor_id', pv.id)
+                .eq('paused', false);
+
+            const clients = (rows || []).filter(
+                (c: any) =>
+                    isProduceServiceType(c.service_type) &&
+                    !isExcludedFromDeliveries(c.paused, c.status_id, statusAllowMap) &&
+                    isEligibleForRosterWeek(c.produce_roster_effective_at ?? c.created_at, rosterSun)
+            );
+            if (clients.length === 0) continue;
+
+            const clientIds = clients.map((c: any) => c.id);
+            const { data: existingOrders } = await supabaseAdmin
+                .from('orders')
+                .select('client_id')
+                .eq('service_type', 'Produce')
+                .eq('scheduled_delivery_date', dateKey)
+                .in('client_id', clientIds);
+
+            const have = new Set((existingOrders || []).map((o: any) => o.client_id));
+            const need = clients.filter((c: any) => !have.has(c.id));
+            if (need.length === 0) continue;
+
+            const orderNumbers = await generateBatchOrderNumbers(supabaseAdmin, need.length);
+            const nowIso = new Date().toISOString();
+            const insertPayload = need.map((c: any, idx: number) => {
+                const payload: any = {
+                    id: randomUUID(),
+                    client_id: c.id,
+                    service_type: 'Produce',
+                    order_number: orderNumbers[idx],
+                    scheduled_delivery_date: dateKey,
+                    status: 'pending',
+                    total_value: billAmount,
+                    total_items: 1,
+                    bill_amount: billAmount,
+                    proof_of_delivery_url: null,
+                    created_at: nowIso
+                };
+                if (defaultVendorId) payload.vendor_id = defaultVendorId;
+                return payload;
+            });
+
+            const { error: insErr } = await supabaseAdmin.from('orders').insert(insertPayload);
+            if (insErr) {
+                console.error('[ensureWeeklyProduceOrdersFromCron] insert', insErr);
+                continue;
+            }
+            totalCreated += insertPayload.length;
+        }
+
+        revalidatePath('/admin');
+        revalidatePath('/vendors');
+
+        return {
+            success: true,
+            rosterWeekSunday: rosterSun,
+            scheduledDeliveryDate: dateKey,
+            vendorsProcessed: list.length,
+            ordersCreated: totalCreated
+        };
+    } catch (e: any) {
+        return {
+            success: false,
+            rosterWeekSunday: '',
+            scheduledDeliveryDate: '',
+            vendorsProcessed: 0,
+            ordersCreated: 0,
+            error: e?.message || String(e)
+        };
+    }
+}
+
 /** Token link: bulk-create Produce orders for vendor clients (no SMS / billing until POD). */
 export async function bulkCreateProduceOrdersForVendor(
     clientIds: string[],
@@ -13128,7 +13379,9 @@ export async function bulkCreateProduceOrdersForVendor(
 
         const { data: clientRows, error: clientsErr } = await supabaseAdmin
             .from('clients')
-            .select('id, full_name, address, city, state, zip, phone_number, service_type, paused, produce_vendor_id, status_id')
+            .select(
+                'id, full_name, address, city, state, zip, phone_number, service_type, paused, produce_vendor_id, status_id, produce_roster_effective_at, created_at'
+            )
             .in('id', ids);
         if (clientsErr) return { success: false, error: `Failed to load clients: ${clientsErr.message}` };
 
@@ -13139,14 +13392,19 @@ export async function bulkCreateProduceOrdersForVendor(
                 c.produce_vendor_id === vendor.id
         );
 
-        if (validClients.length === 0) {
+        const rosterSun = getRosterWeekStartSundayForCalendarDateKey(dateKey);
+        const rosterEligibleClients = validClients.filter(c =>
+            isEligibleForRosterWeek((c as any).produce_roster_effective_at ?? (c as any).created_at, rosterSun)
+        );
+
+        if (rosterEligibleClients.length === 0) {
             return { success: true, created: 0, errors: [], orders: [] };
         }
 
-        const orderNumbers = await generateBatchOrderNumbers(supabaseAdmin, validClients.length);
+        const orderNumbers = await generateBatchOrderNumbers(supabaseAdmin, rosterEligibleClients.length);
 
         const nowIso = new Date().toISOString();
-        const insertPayload = validClients.map((c, idx) => {
+        const insertPayload = rosterEligibleClients.map((c, idx) => {
             const payload: any = {
                 id: randomUUID(),
                 client_id: c.id,
@@ -13170,7 +13428,7 @@ export async function bulkCreateProduceOrdersForVendor(
             .select('id, client_id, order_number, scheduled_delivery_date');
         if (insertErr) return { success: false, error: `Failed to create orders: ${insertErr.message}` };
 
-        const byClientId = new Map(validClients.map(c => [c.id, c]));
+        const byClientId = new Map(rosterEligibleClients.map(c => [c.id, c]));
         const orders = (insertedOrders || []).map(o => {
             const c: any = byClientId.get(o.client_id);
             return {

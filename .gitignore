@@ -75,3 +75,7 @@ scripts/verify-env.js
 backup/backup.json
 # Secrets only in backup/.env (see backup/.gitignore); tracked files are templates + README.
 
+# Local output from `npm run stamp-proof-preview`
+/stamp-proof-preview-out.jpg
+/stamp-proof-preview-out.png
+

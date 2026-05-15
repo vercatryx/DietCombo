@@ -100,7 +100,35 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
     const preDeletedBasisRef = useRef<'full' | 'search' | 'empty'>('empty');
 
     const [totalClients, setTotalClients] = useState(0);
-    const CLIENT_FETCH_LIMIT = 2000; // Single request loads all clients (avoids many round-trips)
+    /** Max rows per `getClientsPaginated` call; we page until the full `total` is loaded. */
+    const CLIENT_FETCH_LIMIT = 2000;
+
+    /** Load every matching row (parents + dependents); one request is capped at CLIENT_FETCH_LIMIT. */
+    async function fetchAllClientsPaginated(
+        searchQuery: string,
+        options?: { brooklynOnly?: boolean; archivedOnly?: boolean }
+    ): Promise<{ clients: ClientProfile[]; total: number }> {
+        const pageSize = CLIENT_FETCH_LIMIT;
+        let page = 1;
+        let total = 0;
+        const merged: ClientProfile[] = [];
+
+        for (;;) {
+            const cRes = await getClientsPaginated(page, pageSize, searchQuery, undefined, options);
+            if (page === 1) total = cRes.total;
+            const batch = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            merged.push(...batch);
+            if (batch.length === 0) break;
+            if (page * pageSize >= total) break;
+            page += 1;
+            if (page > 500) {
+                console.error('[ClientList] fetchAllClientsPaginated: page safety cap reached');
+                break;
+            }
+        }
+
+        return { clients: merged, total };
+    }
 
     // Prefetching State
     const [detailsCache, setDetailsCache] = useState<Record<string, ClientFullDetails>>({});
@@ -457,8 +485,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
         try {
             await loadReferenceData();
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
-            const cRes = await getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined);
-            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            const cRes = await fetchAllClientsPaginated('', brooklynOnly ? { brooklynOnly: true } : undefined);
+            const clientList = cRes.clients;
             setClients(clientList);
             setTotalClients(cRes.total);
             setDatasetMode('full');
@@ -491,14 +519,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             }
 
             const q = committedSearch.trim();
-            const cRes = await getClientsPaginated(
-                1,
-                CLIENT_FETCH_LIMIT,
-                q,
-                undefined,
-                { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
-            );
-            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            const cRes = await fetchAllClientsPaginated(q, {
+                archivedOnly: true,
+                ...(brooklynOnly ? { brooklynOnly: true } : {}),
+            });
+            const clientList = cRes.clients;
             setClients(clientList);
             setTotalClients(cRes.total);
             setDatasetMode(basis === 'full' ? 'full' : 'search');
@@ -518,14 +543,8 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
 
             if (basis === 'full') {
-                const cRes = await getClientsPaginated(
-                    1,
-                    CLIENT_FETCH_LIMIT,
-                    '',
-                    undefined,
-                    brooklynOnly ? { brooklynOnly: true } : undefined
-                );
-                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                const cRes = await fetchAllClientsPaginated('', brooklynOnly ? { brooklynOnly: true } : undefined);
+                const clientList = cRes.clients;
                 setClients(clientList);
                 setTotalClients(cRes.total);
                 setDatasetMode('full');
@@ -561,14 +580,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                 preDeletedBasisRef.current = 'empty';
                 return;
             }
-            const cRes = await getClientsPaginated(
-                1,
-                CLIENT_FETCH_LIMIT,
-                trimmed,
-                undefined,
-                { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
-            );
-            const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+            const cRes = await fetchAllClientsPaginated(trimmed, {
+                archivedOnly: true,
+                ...(brooklynOnly ? { brooklynOnly: true } : {}),
+            });
+            const clientList = cRes.clients;
             setClients(clientList);
             setTotalClients(cRes.total);
             setDatasetMode('search');
@@ -867,32 +883,26 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
             const brooklynOnly = currentUser?.role === 'brooklyn_admin';
             if (showDeletedClients && datasetMode === 'full') {
-                const cRes = await getClientsPaginated(
-                    1,
-                    CLIENT_FETCH_LIMIT,
-                    committedSearch.trim(),
-                    undefined,
-                    { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
-                );
-                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                const cRes = await fetchAllClientsPaginated(committedSearch.trim(), {
+                    archivedOnly: true,
+                    ...(brooklynOnly ? { brooklynOnly: true } : {}),
+                });
+                const clientList = cRes.clients;
                 setClients(clientList);
                 setTotalClients(cRes.total);
                 hydrateParentNamesForClientList(clientList);
             } else if (showDeletedClients && datasetMode === 'search' && committedSearch.trim()) {
-                const cRes = await getClientsPaginated(
-                    1,
-                    CLIENT_FETCH_LIMIT,
-                    committedSearch.trim(),
-                    undefined,
-                    { archivedOnly: true, ...(brooklynOnly ? { brooklynOnly: true } : {}) }
-                );
-                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                const cRes = await fetchAllClientsPaginated(committedSearch.trim(), {
+                    archivedOnly: true,
+                    ...(brooklynOnly ? { brooklynOnly: true } : {}),
+                });
+                const clientList = cRes.clients;
                 setClients(clientList);
                 setTotalClients(cRes.total);
                 hydrateParentNamesForClientList(clientList);
             } else if (datasetMode === 'full') {
-                const cRes = await getClientsPaginated(1, CLIENT_FETCH_LIMIT, '', undefined, brooklynOnly ? { brooklynOnly: true } : undefined);
-                const clientList = cRes.clients.filter((c): c is NonNullable<typeof c> => c !== null);
+                const cRes = await fetchAllClientsPaginated('', brooklynOnly ? { brooklynOnly: true } : undefined);
+                const clientList = cRes.clients;
                 setClients(clientList);
                 setTotalClients(cRes.total);
                 hydrateParentNamesForClientList(clientList);

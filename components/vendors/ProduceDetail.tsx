@@ -12,10 +12,12 @@ import {
     bulkUpdateProduceProofsForVendor,
     getClientNamesByIds,
     getClientsUnlimited,
-    getProduceClientsForVendorToken
+    getProduceClientsForVendorToken,
+    getProducePendingOrderNumbersForVendorToken
 } from '@/lib/actions';
 import { isProduceServiceType } from '@/lib/isProduceServiceType';
 import { isExcludedFromDeliveries } from '@/lib/deliveryEligibility';
+import { getRosterWeekEndSaturdayDateKey, getRosterWeekStartSundayDateKey } from '@/lib/produce-roster-week';
 import * as XLSX from 'xlsx';
 import styles from './VendorDetail.module.css';
 
@@ -63,6 +65,9 @@ export function ProduceDetail() {
     const [uploadResult, setUploadResult] = useState<{ updated: number; errors: string[] } | null>(null);
     /** Parent / guardian names not present in allClients (token view loads a subset only). */
     const [extraClientNames, setExtraClientNames] = useState<Record<string, string>>({});
+
+    /** Pending weekly Produce order numbers by client id (vendor token view only). */
+    const [pendingOrderByClientId, setPendingOrderByClientId] = useState<Record<string, string | number>>({});
 
     function getLastName(name: string): string {
         const trimmed = (name || '').trim();
@@ -151,6 +156,18 @@ export function ProduceDetail() {
                 setExtraClientNames({});
             }
 
+            if (tokenTrim && produceClientsList.length > 0) {
+                const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+                const pending = await getProducePendingOrderNumbersForVendorToken(
+                    tokenTrim,
+                    produceClientsList.map(c => c.id),
+                    rosterSun
+                );
+                setPendingOrderByClientId(pending);
+            } else {
+                setPendingOrderByClientId({});
+            }
+
             setProduceClients(produceClientsList);
             setMenuItems(menuItemsData);
             setBoxTypes(boxTypesData);
@@ -221,7 +238,7 @@ export function ProduceDetail() {
         const clientOrders = filteredClients.map(client => ({
             id: client.id,
             client_id: client.id,
-            orderNumber: client.id.slice(0, 8),
+            orderNumber: String(pendingOrderByClientId[client.id] ?? client.id.slice(0, 8)),
             service_type: 'Produce'
         }));
 
@@ -412,8 +429,10 @@ export function ProduceDetail() {
     }
 
     const pageTitle = isExternalView ? `Produce - ${tokenVendor!.name}` : 'Produce Clients';
+    const rosterSun = getRosterWeekStartSundayDateKey(new Date());
+    const rosterSat = getRosterWeekEndSaturdayDateKey(rosterSun);
     const subtitle = isExternalView
-        ? `Clients assigned to ${tokenVendor!.name}`
+        ? `Clients assigned to ${tokenVendor!.name}. Roster week ${rosterSun}–${rosterSat} (Eastern). New produce enrollments or vendor changes after the prior Friday 11:59 PM ET appear next week.`
         : 'Clients and dependants with Service Type: Produce';
 
     return (

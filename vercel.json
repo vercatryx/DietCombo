@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/pause-expiring-clients",
       "schedule": "0 9 * * 5"
+    },
+    {
+      "path": "/api/cron/create-weekly-produce-orders",
+      "schedule": "59 3 * * 6"
+    },
+    {
+      "path": "/api/cron/create-weekly-produce-orders",
+      "schedule": "59 4 * * 6"
     }
   ]
 }

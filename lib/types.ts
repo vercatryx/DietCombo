@@ -73,6 +73,8 @@ export interface ClientProfile {
   signToken?: string | null;
   assignedDriverId?: string | null;
   produceVendorId?: string | null;
+  /** When this row became produce-eligible for weekly vendor roster (new produce client or vendor/service change). Eastern business logic compares this to weekly Friday 23:59:59.999 cutoff. */
+  produceRosterEffectiveAt?: string | null;
 
   /** Meal planner data: [{ scheduledDeliveryDate, items: [{ id, name, quantity, value? }] }]. Single source of truth. */
   mealPlannerData?: MealPlannerDateItem[] | null;

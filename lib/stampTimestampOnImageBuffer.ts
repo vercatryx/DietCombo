@@ -49,28 +49,56 @@ function escapeXml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Latin 600 — embedded so SVG text renders on hosts without fontconfig (e.g. many serverless images). */
-let cachedInterLatin600Woff2Base64: string | null | undefined;
+/**
+ * Latin 600 — embedded for consistent branding when Sharp/librsvg loads the face.
+ * Many serverless bundles omit `node_modules/@fontsource/inter/files/*` from the trace, and
+ * some librsvg builds ignore @font-face; we always list system fallbacks on `.proof-stamp-text`.
+ */
+let cachedInterLatin600FontB64: { woff2: string | null; woff: string | null } | undefined;
 
-function interLatin600Woff2Path(): string {
+function interLatin600FontPaths(): { woff2: string; woff: string } {
   try {
     const pkgJson = require.resolve('@fontsource/inter/package.json');
-    return join(dirname(pkgJson), 'files/inter-latin-600-normal.woff2');
+    const dir = join(dirname(pkgJson), 'files');
+    return {
+      woff2: join(dir, 'inter-latin-600-normal.woff2'),
+      woff: join(dir, 'inter-latin-600-normal.woff'),
+    };
   } catch {
-    return join(process.cwd(), 'node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2');
+    const dir = join(process.cwd(), 'node_modules/@fontsource/inter/files');
+    return {
+      woff2: join(dir, 'inter-latin-600-normal.woff2'),
+      woff: join(dir, 'inter-latin-600-normal.woff'),
+    };
   }
 }
 
 function getProofStampFontFaceCss(): string {
-  if (cachedInterLatin600Woff2Base64 === undefined) {
+  if (cachedInterLatin600FontB64 === undefined) {
+    const { woff2, woff } = interLatin600FontPaths();
+    let b2: string | null = null;
+    let bw: string | null = null;
     try {
-      cachedInterLatin600Woff2Base64 = readFileSync(interLatin600Woff2Path()).toString('base64');
+      b2 = readFileSync(woff2).toString('base64');
     } catch {
-      cachedInterLatin600Woff2Base64 = null;
+      /* file missing from deployment trace, etc. */
     }
+    try {
+      bw = readFileSync(woff).toString('base64');
+    } catch {
+      /* same */
+    }
+    cachedInterLatin600FontB64 = { woff2: b2, woff: bw };
   }
-  if (!cachedInterLatin600Woff2Base64) return '';
-  return `@font-face{font-family:'ProofStamp';src:url('data:font/woff2;base64,${cachedInterLatin600Woff2Base64}') format('woff2');font-weight:600;font-style:normal;}`;
+  const { woff2, woff } = cachedInterLatin600FontB64;
+  if (!woff2 && !woff) return '';
+  const src = [
+    woff2 ? `url('data:font/woff2;base64,${woff2}') format('woff2')` : '',
+    woff ? `url('data:font/woff;base64,${woff}') format('woff')` : '',
+  ]
+    .filter(Boolean)
+    .join(',');
+  return `@font-face{font-family:'ProofStamp';src:${src};font-weight:600;font-style:normal;}`;
 }
 
 function stampedOutputMeta(mimeType: string): Pick<StampTimestampResult, 'contentType' | 'fileExtension'> {
@@ -212,8 +240,13 @@ async function stampOntoDecodedBuffer(
           <style type="text/css">
             <![CDATA[
               ${fontCss}
-              /* Only ProofStamp (embedded WOFF2) — DejaVu/sans-serif trigger fontconfig on many hosts */
-              .proof-stamp-text { font-family: 'ProofStamp'; }
+              /*
+               * ProofStamp when embedded bytes are bundled; otherwise librsvg/Pango resolves the
+               * first available system sans (Linux images often ship DejaVu or Liberation).
+               */
+              .proof-stamp-text {
+                font-family: 'ProofStamp', 'DejaVu Sans', 'Liberation Sans', 'Helvetica Neue', Helvetica, Arial, ui-sans-serif, sans-serif;
+              }
             ]]>
           </style>
         </defs>

@@ -228,7 +228,7 @@ export function appTzDateKeysToUtcIsoRangeInclusive(fromKey: string, toKey: stri
 }
 
 /** Wall-clock time in APP_TIMEZONE → UTC instant (handles DST). */
-function easternWallClockToUtcInstant(dateKey: string, hh: number, mm: number, ss: number, ms: number): Date {
+export function easternWallClockToUtcInstant(dateKey: string, hh: number, mm: number, ss: number, ms: number): Date {
   const [y, mo, d] = dateKey.split('-').map(Number);
   let t = Date.UTC(y, mo - 1, d, 17, 0, 0, 0);
   const formatter = new Intl.DateTimeFormat('en-US', {

@@ -25,6 +25,7 @@
     "check-customer-bill": "node scripts/check-customer-api-bill-for-name.mjs",
     "sync-dependants-from-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/sync-dependants-from-parent.ts",
     "diagnose-expired-order-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-expired-order-client.ts",
+    "stamp-proof-preview": "npx tsx scripts/stamp-proof-preview.ts",
     "diagnose-order-items-doubles": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-order-items-doubles.ts",
     "preview-order-for-client-date": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/preview-order-for-client-date.ts",
     "verify-default-order-template": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/verify-default-order-template.ts",
@@ -37,6 +38,7 @@
     "copy-admins-to-brooklyn": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/copy-admins-to-brooklyn-db.ts",
     "import-brooklyn-clients-to-parent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/import-brooklyn-clients-to-parent.ts",
     "diagnose-produce-vendor-client": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-produce-vendor-client.ts",
+    "test-produce-roster": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' lib/produce-roster-week.test.ts",
     "diagnose-id-in-routes": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-id-in-routes.ts",
     "diagnose-client-routes-by-name": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-client-routes-by-name.ts",
     "diagnose-id-in-routes-prisma": "npx ts-node --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' scripts/diagnose-id-in-routes-prisma.ts"
