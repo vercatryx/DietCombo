@@ -13197,6 +13197,15 @@ async function resolveProduceScheduledDeliveryDateKeyForRosterWeek(
 /**
  * Weekly cron: create pending Produce orders per produce vendor for the active target roster week (after Friday 11:59 PM ET cutoff model).
  */
+export type WeeklyProduceCronVendorSummary = {
+    produceVendorId: string;
+    rawClients: number;
+    eligibleClients: number;
+    needCreates: number;
+    created: number;
+    insertError?: string;
+};
+
 export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
     success: boolean;
     rosterWeekSunday: string;
@@ -13204,6 +13213,10 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
     vendorsProcessed: number;
     ordersCreated: number;
     error?: string;
+    /** Per produce-vendor counts so operators can see why `ordersCreated` may be 0. */
+    vendorSummaries?: WeeklyProduceCronVendorSummary[];
+    /** Plain-language hint when the job succeeded but inserted nothing. */
+    hint?: string;
 }> {
     try {
         if (!getSupabaseDbApiKey()) {
@@ -13251,8 +13264,9 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
             };
         }
 
-        let totalCreated = 0;
         const list = vendorsList || [];
+        const vendorSummaries: WeeklyProduceCronVendorSummary[] = [];
+        let totalCreated = 0;
         for (const pv of list) {
             const { data: rows } = await supabaseAdmin
                 .from('clients')
@@ -13268,7 +13282,18 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
                     !isExcludedFromDeliveries(c.paused, c.status_id, statusAllowMap) &&
                     isEligibleForRosterWeek(c.produce_roster_effective_at ?? c.created_at, rosterSun)
             );
-            if (clients.length === 0) continue;
+            const summary: WeeklyProduceCronVendorSummary = {
+                produceVendorId: pv.id,
+                rawClients: (rows || []).length,
+                eligibleClients: clients.length,
+                needCreates: 0,
+                created: 0,
+            };
+
+            if (clients.length === 0) {
+                vendorSummaries.push(summary);
+                continue;
+            }
 
             const clientIds = clients.map((c: any) => c.id);
             const { data: existingOrders } = await supabaseAdmin
@@ -13280,7 +13305,12 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
 
             const have = new Set((existingOrders || []).map((o: any) => o.client_id));
             const need = clients.filter((c: any) => !have.has(c.id));
-            if (need.length === 0) continue;
+            summary.needCreates = need.length;
+
+            if (need.length === 0) {
+                vendorSummaries.push(summary);
+                continue;
+            }
 
             const orderNumbers = await generateBatchOrderNumbers(supabaseAdmin, need.length);
             const nowIso = new Date().toISOString();
@@ -13305,20 +13335,49 @@ export async function ensureWeeklyProduceOrdersFromCron(): Promise<{
             const { error: insErr } = await supabaseAdmin.from('orders').insert(insertPayload);
             if (insErr) {
                 console.error('[ensureWeeklyProduceOrdersFromCron] insert', insErr);
+                summary.insertError = insErr.message;
+                vendorSummaries.push(summary);
                 continue;
             }
+            summary.created = insertPayload.length;
             totalCreated += insertPayload.length;
+            vendorSummaries.push(summary);
         }
 
         revalidatePath('/admin');
         revalidatePath('/vendors');
+        revalidatePath('/orders');
+
+        let hint: string | undefined;
+        if (list.length === 0) {
+            hint =
+                'No active rows in produce_vendors (is_active = true). Assign clients to a produce vendor and mark the vendor active.';
+        } else if (totalCreated === 0) {
+            const anyInsertErr = vendorSummaries.some((s) => s.insertError);
+            if (anyInsertErr) {
+                hint = 'Insert failed for at least one produce vendor; see vendorSummaries[].insertError (check DB constraints, RLS, or column defaults).';
+            } else {
+                hint =
+                    'No new orders: either no clients matched (Produce service type, not paused, roster eligibility, delivery-allowed status) or every eligible client already has a Produce order for scheduledDeliveryDate. The Orders page lists all orders by created_at — search by client name or order # if needed.';
+            }
+        }
+
+        console.log('[ensureWeeklyProduceOrdersFromCron]', {
+            rosterWeekSunday: rosterSun,
+            scheduledDeliveryDate: dateKey,
+            ordersCreated: totalCreated,
+            vendorSummaries,
+            hint,
+        });
 
         return {
             success: true,
             rosterWeekSunday: rosterSun,
             scheduledDeliveryDate: dateKey,
             vendorsProcessed: list.length,
-            ordersCreated: totalCreated
+            ordersCreated: totalCreated,
+            vendorSummaries,
+            hint,
         };
     } catch (e: any) {
         return {
