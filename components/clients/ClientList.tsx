@@ -89,7 +89,7 @@ function countLoadedClientBreakdown(clients: ClientProfile[]): LoadedClientBreak
     for (const c of clients) {
         if (c.parentClientId) dependents++;
         const uniteAccount = (c.uniteAccount || '').trim();
-        if (uniteAccount === 'Brooklyn') brooklyn++;
+        if (!c.parentClientId && uniteAccount === 'Brooklyn') brooklyn++;
         if (uniteAccount === 'DF') df++;
         if (c.bill === false) billingOff++;
     }
