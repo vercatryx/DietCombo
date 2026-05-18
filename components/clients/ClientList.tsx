@@ -74,6 +74,32 @@ type ExpandedTextFilterKey =
     | 'dob' | 'created' | 'apt' | 'city' | 'state' | 'zip' | 'county'
     | 'uniteCase' | 'uniteAccount' | 'voucher' | 'history' | 'authorized' | 'expiration';
 
+type LoadedClientBreakdown = {
+    dependents: number;
+    brooklyn: number;
+    df: number;
+    billingOff: number;
+};
+
+function countLoadedClientBreakdown(clients: ClientProfile[]): LoadedClientBreakdown {
+    let dependents = 0;
+    let brooklyn = 0;
+    let df = 0;
+    let billingOff = 0;
+    for (const c of clients) {
+        if (c.parentClientId) dependents++;
+        const uniteAccount = (c.uniteAccount || '').trim();
+        if (uniteAccount === 'Brooklyn') brooklyn++;
+        if (uniteAccount === 'DF') df++;
+        if (c.bill === false) billingOff++;
+    }
+    return { dependents, brooklyn, df, billingOff };
+}
+
+function formatLoadedClientBreakdown(stats: LoadedClientBreakdown): string {
+    return ` (${stats.dependents} dependent${stats.dependents === 1 ? '' : 's'}, ${stats.brooklyn} Brooklyn, ${stats.df} DF, ${stats.billingOff} billing off)`;
+}
+
 export function ClientList({ currentUser }: ClientListProps = {}) {
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -1424,6 +1450,11 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
 
     // Calculate total clients (excluding dependents)
     const totalRegularClients = clients.filter(c => !c.parentClientId).length;
+    const loadedClientBreakdown = useMemo(() => countLoadedClientBreakdown(clients), [clients]);
+    const loadedBreakdownSuffix =
+        datasetMode !== 'empty' && clients.length > 0
+            ? formatLoadedClientBreakdown(loadedClientBreakdown)
+            : '';
 
     function getStatusName(id: string) {
         return statuses.find(s => s.id === id)?.name || 'Unknown';
@@ -2485,13 +2516,13 @@ export function ClientList({ currentUser }: ClientListProps = {}) {
                                 ? datasetMode === 'empty'
                                     ? 'Deleted mode — search or load all clients first, then use search to list deleted rows'
                                     : datasetMode === 'search'
-                                      ? `Deleted (search): ${totalRegularClients} primary (${clients.length} / ${totalClients})`
-                                      : `Deleted: ${totalRegularClients} primary (${clients.length} / ${totalClients} loaded)`
+                                      ? `Deleted (search): ${totalRegularClients} primary (${clients.length} / ${totalClients})${loadedBreakdownSuffix}`
+                                      : `Deleted: ${totalRegularClients} primary (${clients.length} / ${totalClients} loaded)${loadedBreakdownSuffix}`
                                 : datasetMode === 'empty'
                                   ? 'Search or load all clients to view the list'
                                   : datasetMode === 'search'
-                                    ? `Showing ${clients.length} client${clients.length === 1 ? '' : 's'} (search)`
-                                    : `Total: ${totalRegularClients} clients (${clients.length} / ${totalClients} loaded)`}
+                                    ? `Showing ${clients.length} client${clients.length === 1 ? '' : 's'} (search)${loadedBreakdownSuffix}`
+                                    : `Total: ${totalRegularClients} clients (${clients.length} / ${totalClients} loaded)${loadedBreakdownSuffix}`}
                         </span>
                     )}
                     {isLoading && (

@@ -2242,6 +2242,14 @@ export async function getSavedMealPlanDatesWithItemsFromOrders(
     }
 }
 
+/** Last word of a display name (space-separated), for meal plan edit sorting. */
+function mealPlanEditLastName(name: string): string {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return '';
+    const parts = trimmed.split(/\s+/);
+    return parts[parts.length - 1] || '';
+}
+
 /** One client's meal plan edit for a given delivery date (for meal plan edits report). */
 export type MealPlanEditEntry = {
     clientId: string;
@@ -2250,6 +2258,8 @@ export type MealPlanEditEntry = {
     items: { id: string; name: string; quantity: number; value: number | null }[];
     /** Food-service dependents (household) for this parent client; empty if none. */
     foodDependentNames: string[];
+    /** Route label like "1.4" (driver.stop); null when driver/stop unknown. */
+    driverStopLabel: string | null;
 };
 
 /**
@@ -2270,7 +2280,7 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
 
         let clientsQuery = supabaseClient
             .from('clients')
-            .select('id, full_name, meal_planner_data')
+            .select('id, full_name, meal_planner_data, assigned_driver_id')
             .not('meal_planner_data', 'is', null)
             .is('archived_at', null);
         if (brooklynOnly) {
@@ -2285,6 +2295,7 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
         if (!clients || clients.length === 0) return [];
 
         const result: MealPlanEditEntry[] = [];
+        const assignedDriverByClientId = new Map<string, string | null>();
         for (const c of clients) {
             const mpd = c.meal_planner_data;
             if (!Array.isArray(mpd)) continue;
@@ -2300,12 +2311,18 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
                     value: i.value != null && !Number.isNaN(Number(i.value)) ? Number(i.value) : null
                 }))
                 : [];
+            const clientId = String(c.id);
+            assignedDriverByClientId.set(
+                clientId,
+                c.assigned_driver_id != null ? String(c.assigned_driver_id) : null
+            );
             result.push({
-                clientId: c.id,
+                clientId,
                 clientName: (c.full_name ?? 'Unknown').trim() || 'Unknown',
                 scheduledDeliveryDate: dateOnly,
                 items,
                 foodDependentNames: [],
+                driverStopLabel: null,
             });
         }
 
@@ -2336,12 +2353,61 @@ export async function getMealPlanEditsByDeliveryDate(deliveryDate: string): Prom
             }
         }
 
-        return result
-            .map((r) => ({
-                ...r,
-                foodDependentNames: depsByParent.get(r.clientId) ?? [],
-            }))
-            .sort((a, b) => a.clientName.localeCompare(b.clientName));
+        const withDeps = result.map((r) => ({
+            ...r,
+            foodDependentNames: depsByParent.get(r.clientId) ?? [],
+        }));
+
+        if (withDeps.length === 0) return [];
+
+        const [routeDriverMap, driversList, clientIdToStopNumber] = await Promise.all([
+            getClientIdToRouteDriverMap(),
+            getDriversForDate(dateOnly),
+            getStopNumbersForDeliveryDate(dateOnly),
+        ]);
+        const driverIdToRank = new Map<string, number>();
+        const driverIdToNumber: Record<string, number> = {};
+        let fallbackDriverNum = 0;
+        for (const d of driversList) {
+            const parsed = driverRankByName(d.name);
+            const displayNum =
+                parsed !== Number.MAX_SAFE_INTEGER ? parsed : ++fallbackDriverNum;
+            driverIdToRank.set(d.id, displayNum);
+            driverIdToNumber[d.id] = displayNum;
+        }
+
+        const driverIdForClient = (clientId: string) =>
+            routeDriverMap.get(clientId) ?? assignedDriverByClientId.get(clientId) ?? null;
+
+        const driverRankForClient = (clientId: string) => {
+            const driverId = driverIdForClient(clientId);
+            if (!driverId) return Number.MAX_SAFE_INTEGER;
+            return driverIdToRank.get(driverId) ?? Number.MAX_SAFE_INTEGER;
+        };
+
+        const buildDriverStopLabel = (clientId: string): string | null => {
+            const driverId = driverIdForClient(clientId);
+            const driverNum = driverId != null ? driverIdToNumber[driverId] : null;
+            const stopNum = clientIdToStopNumber[clientId];
+            if (driverNum != null && stopNum != null) return `${driverNum}.${stopNum}`;
+            if (driverNum != null) return String(driverNum);
+            return null;
+        };
+
+        const enriched = withDeps.map((r) => ({
+            ...r,
+            driverStopLabel: buildDriverStopLabel(r.clientId),
+        }));
+
+        return enriched.sort((a, b) => {
+            const byDriver = driverRankForClient(a.clientId) - driverRankForClient(b.clientId);
+            if (byDriver !== 0) return byDriver;
+            return mealPlanEditLastName(a.clientName).localeCompare(
+                mealPlanEditLastName(b.clientName),
+                undefined,
+                { sensitivity: 'base' }
+            );
+        });
     } catch (error) {
         console.error('Error fetching meal plan edits by delivery date:', error);
         return [];

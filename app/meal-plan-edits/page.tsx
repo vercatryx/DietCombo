@@ -15,6 +15,15 @@ function formatDateLong(dateKey: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+function formatMealPlanClientLabel(entry: MealPlanEditEntry): string {
+  const driverPart = entry.driverStopLabel ? ` (${entry.driverStopLabel})` : '';
+  const depPart =
+    entry.foodDependentNames.length > 0
+      ? ` (${entry.foodDependentNames.join(', ')})`
+      : '';
+  return `${entry.clientName}${driverPart}${depPart}`;
+}
+
 export default function MealPlanEditsPage() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -54,12 +63,13 @@ export default function MealPlanEditsPage() {
     const rows: { Client: string; Item: string; Qty: number; Meals: number | string }[] = [];
     for (const entry of edits) {
       const visibleItems = entry.items.filter((i) => i.quantity > 0);
+      const clientLabel = formatMealPlanClientLabel(entry);
       if (visibleItems.length === 0) {
-        rows.push({ Client: entry.clientName, Item: '(no items)', Qty: 0, Meals: '—' });
+        rows.push({ Client: clientLabel, Item: '(no items)', Qty: 0, Meals: '—' });
       } else {
         for (const item of visibleItems) {
           rows.push({
-            Client: entry.clientName,
+            Client: clientLabel,
             Item: item.name,
             Qty: item.quantity,
             Meals: item.value != null ? item.quantity * item.value : '—',
@@ -137,13 +147,7 @@ export default function MealPlanEditsPage() {
     const sectionHeaderH = 14;
     const totalLineH = 6.5;
 
-    const clientHeading = (entry: MealPlanEditEntry) => {
-      const dep =
-        entry.foodDependentNames.length > 0
-          ? ` (${entry.foodDependentNames.join(', ')})`
-          : '';
-      return `${entry.clientName}${dep}`;
-    };
+    const clientHeading = (entry: MealPlanEditEntry) => formatMealPlanClientLabel(entry);
 
     const strokeClientBox = (top: number, bottomY: number) => {
       if (bottomY - top < 4) return;
@@ -412,6 +416,9 @@ export default function MealPlanEditsPage() {
                         <User size={18} aria-hidden />
                         <Link href={`/clients/${entry.clientId}`} className={styles.clientLink}>
                           {entry.clientName}
+                          {entry.driverStopLabel ? (
+                            <span className={styles.dependentsSuffix}> ({entry.driverStopLabel})</span>
+                          ) : null}
                           {entry.foodDependentNames.length > 0 ? (
                             <span className={styles.dependentsSuffix}>
                               {' '}

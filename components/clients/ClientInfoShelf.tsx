@@ -18,6 +18,7 @@ import { buildGeocodeQuery } from '@/lib/addressHelpers';
 import { geocodeOneClient } from '@/lib/geocodeOneClient';
 import { getSingleForm } from '@/lib/form-actions';
 import { formatDateTimeInAppTz } from '@/lib/timezone';
+import { UNITE_ACCOUNT_UI_OPTIONS } from '@/lib/uniteAccount';
 import FormFiller from '@/components/forms/FormFiller';
 import { FormSchema } from '@/lib/form-types';
 import { diffObjects } from '@/lib/audit/clientDiff';
@@ -1080,8 +1081,11 @@ export function ClientInfoShelf({
                                             value={editForm.uniteAccount}
                                             onChange={e => setEditForm({ ...editForm, uniteAccount: e.target.value })}
                                         >
-                                            <option value="Regular">Regular</option>
-                                            <option value="Brooklyn">Brooklyn</option>
+                                            {UNITE_ACCOUNT_UI_OPTIONS.map((opt) => (
+                                                <option key={opt.value} value={opt.value}>
+                                                    {opt.label}
+                                                </option>
+                                            ))}
                                         </select>
                                     ) : (
                                         client.uniteAccount?.trim() || '—'
